@@ -576,7 +576,7 @@
 
 <script>
 const SAMPLE_TICKERS = ['AAPL','NVDA','MSFT','TSLA','GOOGL','META','AMZN'];
-const MY_PORTFOLIO = ['FROG','CRWD','XLE','QQQ','SPY','ROK','KRE','NVDA','ONDS','VRT','MRNA','AA','MDT','CAH','ON','SOXX','TAN','CIBR','FLNG','ITA','IGV'];
+const MY_PORTFOLIO = ['FROG','CRWD','XLE','QQQ','SPY','ROK','KRE','NVDA','ONDS','VRT','MRNA','AA','MDT','CAH','ON','SOXX','TAN','CIBR','FLNG','MU','NFLX','ITA','IGV'];
 let tickers = JSON.parse(localStorage.getItem('pt_tickers') || 'null') || [...MY_PORTFOLIO];
 let results = JSON.parse(localStorage.getItem('pt_results') || '[]');
 let apiKey = localStorage.getItem('pt_apikey') || '';
@@ -720,7 +720,7 @@ sentiment=positive/negative/neutral. עברית בלבד חוץ מticker.`;
     for (let i = 0; i < str.length; i++) {
       const c = str[i];
       if (escape) { escape = false; continue; }
-      if (c === '\' && inStr) { escape = true; continue; }
+      if (c === '\\' && inStr) { escape = true; continue; }
       if (c === '"') { inStr = !inStr; continue; }
       if (inStr) continue;
       if (c === '{' || c === '[') opens++;
