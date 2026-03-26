@@ -792,8 +792,11 @@ async function runAnalysis() {
       const batchResults = await analyzeChunk(batch, today);
       allResults = [...allResults, ...batchResults];
 
-      // Render progressively
+      // Render progressively and save
       const dateStr = new Date().toLocaleString('he-IL');
+      localStorage.setItem('pt_results', JSON.stringify(allResults));
+      localStorage.setItem('pt_date', dateStr);
+      results = allResults;
       renderResults(allResults, dateStr);
 
       // Wait between batches (except after last)
@@ -842,7 +845,7 @@ function renderResults(data, dateStr) {
     const emoji = s === 'positive' ? '▲' : s === 'negative' ? '▼' : '●';
     const label = s === 'positive' ? 'חיובי' : s === 'negative' ? 'שלילי' : 'נייטרלי';
 
-    const alertsHTML = (item.alerts || []).map(a => `
+    const alertsHTML = (item.alerts || []).filter(a => a && typeof a === 'object' && a.text).map(a => `
       <div class="alert-item ${a.type === 'critical' ? 'critical' : ''}">
         <span>${a.type === 'critical' ? '🚨' : '⚡'}</span>
         <span>${a.text}</span>
