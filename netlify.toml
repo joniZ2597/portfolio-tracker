@@ -1,3 +1,8 @@
 [build]
   publish = "."
   command = ""
+
+[[redirects]]
+  from = "/"
+  to = "/portfolio-tracker.html"
+  status = 200
