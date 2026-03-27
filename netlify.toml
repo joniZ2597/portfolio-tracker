@@ -1,8 +1,19 @@
-[build]
-  publish = "."
-  command = ""
+# ✅ Fixes "Build image no longer supported" on Netlify
+# Forces Ubuntu Jammy 22.04 (replaces deprecated Focal 20.04)
 
-[[redirects]]
-  from = "/"
-  to = "/portfolio-tracker.html"
-  status = 200
+[build]
+  publish = "dist"          # ⚠️ Change to "build" if using Create React App
+  command = "npm run build"
+
+[build.environment]
+  NODE_VERSION = "20"
+  NPM_VERSION  = "10"
+
+[context.production]
+  command = "npm run build"
+
+[context.deploy-preview]
+  command = "npm run build"
+
+[context.branch-deploy]
+  command = "npm run build"
