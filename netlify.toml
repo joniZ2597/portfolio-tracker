@@ -8,12 +8,3 @@
 [build.environment]
   NODE_VERSION = "20"
   NPM_VERSION  = "10"
-
-[context.production]
-  command = "npm run build"
-
-[context.deploy-preview]
-  command = "npm run build"
-
-[context.branch-deploy]
-  command = "npm run build"
