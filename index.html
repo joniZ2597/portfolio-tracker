@@ -1,5 +1,4 @@
-<!-- dev test -->
- <!-- dev trigger 2 -->
+<!-- update -->.
 <!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
@@ -838,8 +837,35 @@ function chunkArray(arr, size) {
   return chunks;
 }
 
-async function analyzeChunk(batch, today) {
-  const prompt = `${today}. ניתוח תיק השקעות. טיקרים: ${batch.join(',')}.
+// --- Perplexity: fetch real-time context for a batch of tickers ---
+async function fetchPerplexityContext(batch) {
+  const query = `Latest news, price moves, analyst actions, and key catalysts today for: ${batch.join(', ')}. Be concise and factual.`;
+  const response = await fetch('https://api.perplexity.ai/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${pplxKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'llama-3.1-sonar-small-128k-online',
+      messages: [{ role: 'user', content: query }],
+      max_tokens: 600
+    })
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error('Perplexity: ' + (err.error?.message || 'שגיאת API'));
+  }
+  const data = await response.json();
+  return data.choices[0].message.content.trim();
+}
+
+// --- Anthropic: generate structured JSON analysis ---
+async function fetchAnthropicAnalysis(batch, today, context = '') {
+  const contextBlock = context
+    ? `\nReal-time market context (use this data):\n${context}\n`
+    : '';
+  const prompt = `${today}. ניתוח תיק השקעות. טיקרים: ${batch.join(',')}.${contextBlock}
 JSON בלבד ללא backticks: {"results":[{"ticker":"X","company_name":"שם","sentiment":"positive","sentiment_score":70,"summary":"תקציר קצר על מצב החברה","alerts":[],"news":["חדשה 1","חדשה 2"]}]}
 sentiment=positive/negative/neutral. עברית בלבד חוץ מticker.`;
 
@@ -857,72 +883,109 @@ sentiment=positive/negative/neutral. עברית בלבד חוץ מticker.`;
       messages: [{ role: 'user', content: prompt }]
     })
   });
-
   if (!response.ok) {
     const err = await response.json();
-    throw new Error(err.error?.message || 'שגיאת API');
+    throw new Error('Anthropic: ' + (err.error?.message || 'שגיאת API'));
   }
-
   const data = await response.json();
   let textContent = '';
   for (const block of data.content) {
     if (block.type === 'text') textContent += block.text;
   }
+  return textContent;
+}
 
-  const clean = textContent.replace(/```json|```/g, '').trim();
+// --- Perplexity-only: generate structured JSON directly ---
+async function fetchPerplexityAnalysis(batch, today) {
+  const prompt = `${today}. Portfolio analysis. Tickers: ${batch.join(',')}.
+Return ONLY valid JSON, no backticks:
+{"results":[{"ticker":"X","company_name":"Name","sentiment":"positive","sentiment_score":70,"summary":"brief analysis","alerts":[],"news":["news 1","news 2"]}]}
+sentiment=positive/negative/neutral.`;
+
+  const response = await fetch('https://api.perplexity.ai/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${pplxKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'llama-3.1-sonar-small-128k-online',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1200
+    })
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error('Perplexity: ' + (err.error?.message || 'שגיאת API'));
+  }
+  const data = await response.json();
+  return data.choices[0].message.content.trim();
+}
+
+// --- JSON repair utility ---
+function repairJSON(str) {
+  str = str.replace(/,\s*([\]}])/g, '$1');
+  let opens = 0, inStr = false, escape = false;
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i];
+    if (escape) { escape = false; continue; }
+    if (c === '\\' && inStr) { escape = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{' || c === '[') opens++;
+    if (c === '}' || c === ']') opens--;
+  }
+  const lastComplete = str.lastIndexOf('}]');
+  if (opens > 0 && lastComplete > 0) str = str.slice(0, lastComplete + 2) + '}';
+  return str;
+}
+
+// --- Parse JSON from raw text ---
+function parseJSON(raw) {
+  const clean = raw.replace(/```json|```/g, '').trim();
   const start = clean.indexOf('{');
   const end = clean.lastIndexOf('}');
   let jsonStr = clean.slice(start, end + 1);
-
-  // Robust JSON repair: fix truncated arrays/objects
-  function repairJSON(str) {
-    // Remove trailing commas before ] or }
-    str = str.replace(/,\s*([\]}])/g, '$1');
-    // Try to close any unclosed structures
-    let opens = 0;
-    let inStr = false;
-    let escape = false;
-    for (let i = 0; i < str.length; i++) {
-      const c = str[i];
-      if (escape) { escape = false; continue; }
-      if (c === '\\' && inStr) { escape = true; continue; }
-      if (c === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (c === '{' || c === '[') opens++;
-      if (c === '}' || c === ']') opens--;
-    }
-    // Close any unclosed brackets — truncate to last valid result
-    const lastResult = str.lastIndexOf('{"ticker"');
-    const lastComplete = str.lastIndexOf('}]');
-    if (opens > 0 && lastComplete > 0) {
-      str = str.slice(0, lastComplete + 2) + '}';
-    }
-    return str;
-  }
-
-  let parsed;
   try {
-    parsed = JSON.parse(jsonStr);
+    return JSON.parse(jsonStr);
   } catch(e) {
     jsonStr = repairJSON(jsonStr);
     try {
-      parsed = JSON.parse(jsonStr);
+      return JSON.parse(jsonStr);
     } catch(e2) {
-      // Last resort: extract individual ticker objects
       const items = [];
       const re = /\{"ticker"\s*:\s*"([^"]+)"[^{}]*(?:\{[^{}]*\}[^{}]*)*/g;
       let m;
       while ((m = re.exec(jsonStr)) !== null) {
         try { items.push(JSON.parse(m[0].replace(/,\s*$/,''))); } catch(e3) {}
       }
-      parsed = { results: items };
+      return { results: items };
     }
   }
+}
+
+// --- Smart dual-API chunk analysis ---
+async function analyzeChunk(batch, today) {
+  let rawText = '';
+
+  if (apiKey && pplxKey) {
+    // Both: Perplexity fetches real-time context, Anthropic refines into structured JSON
+    const context = await fetchPerplexityContext(batch);
+    rawText = await fetchAnthropicAnalysis(batch, today, context);
+  } else if (apiKey) {
+    // Anthropic only
+    rawText = await fetchAnthropicAnalysis(batch, today);
+  } else if (pplxKey) {
+    // Perplexity only
+    rawText = await fetchPerplexityAnalysis(batch, today);
+  }
+
+  const parsed = parseJSON(rawText);
   return parsed.results || [];
 }
 
 async function runAnalysis() {
-  if (!apiKey) { showError('נא להכניס Anthropic API Key'); return; }
+  if (!apiKey && !pplxKey) { showError('נא להכניס לפחות מפתח API אחד (Anthropic או Perplexity)'); return; }
   if (tickers.length === 0) { showError('נא להוסיף לפחות טיקר אחד'); return; }
 
   const btn = document.getElementById('runBtn');
