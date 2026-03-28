@@ -674,29 +674,48 @@ async function deepDive(ticker) {
   btn.disabled = true;
   btn.textContent = '⏳ מנתח...';
 
-  const prompt = `You are a professional equity research analyst.
+  const prompt = `You are a senior sell-side equity research analyst at a top-tier investment bank (Goldman Sachs style).
 
 Task:
-Generate a concise daily market summary for a single ticker.
+Write a concise, institutional-grade daily market note for a single ticker, including trading context, rating, and price target.
 
-Requirements:
-- Maximum 100 words
+Constraints:
+- Max 150 words
 - One paragraph only
 - No bullet points
-- No fluff, no generic statements
-- High signal, analytical tone
+- No fluff or generic language
 
 Content:
-- Opening: stock move (% and direction) with context vs market/sector if relevant
-- Core: key drivers (macro + company-specific catalysts)
-- Include only material events (earnings, analyst actions, insider activity, major news)
-- If no news, explain movement via macro/sector flows
-- Closing: one short sentence on overall sentiment
+- Start with price action (% move), daily close, and intraday high/low
+- Include reference to key technical levels:
+  - Relation to November low
+  - Relation to April low
+- Explain key drivers:
+  - Macro (rates, oil, geopolitics, flows)
+  - Company-specific (earnings, guidance, analysts, insiders, regulation)
+- Explicitly highlight conflicting signals if they exist
+- Include both bullish and bearish factors
+
+Trading context:
+- Mention whether price is extended or near support
+- Include a disciplined positioning tone (avoid chasing)
+
+Mandatory ending (same paragraph):
+- Rating: Buy / Neutral / Sell
+- Price Target: realistic 12-month estimate
+- Include the phrase: "Do not chase strength"
+
+Guidelines:
+- Buy → upside >15% with solid fundamentals
+- Neutral → mixed signals / balanced risk
+- Sell → downside risk or weak structure
+- Price target must align with narrative and levels
 
 Style:
-- Institutional (hedge fund / trading desk)
-- Clear cause → effect reasoning
-- Precise and information-dense
+- Institutional, precise, analytical
+- Cause → effect reasoning
+- Balanced and disciplined
+- Written for professional investors
 
 Output:
 Only the final paragraph. No explanations.
