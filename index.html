@@ -884,9 +884,66 @@ async function fetchAnthropicAnalysis(batch, today, context = '') {
   const contextBlock = context
     ? `\nReal-time market context (use this data):\n${context}\n`
     : '';
-  const prompt = `${today}. ניתוח תיק השקעות. טיקרים: ${batch.join(',')}.${contextBlock}
-JSON בלבד ללא backticks: {"results":[{"ticker":"X","company_name":"שם","sentiment":"positive","sentiment_score":70,"summary":"תקציר קצר על מצב החברה","alerts":[],"news":["חדשה 1","חדשה 2"]}]}
-sentiment=positive/negative/neutral. עברית בלבד חוץ מticker.`;
+  const prompt = `You are a senior sell-side equity research analyst at a top-tier investment bank (Goldman Sachs style).
+
+Task:
+Generate a structured daily analysis for the following tickers.
+
+Requirements:
+- Institutional tone, concise, analytical
+- Cause → effect reasoning
+- Always include both bullish and bearish factors
+- Never return empty or "no data"
+
+For each ticker:
+- Start with price action: % move, close, intraday high/low
+- Reference key levels:
+  - November low
+  - April low
+  - Distance (%) from nearest support
+- Explain drivers:
+  - Macro (rates, commodities, flows, geopolitics)
+  - Company-specific (earnings, analysts, insiders, news)
+- Explicitly highlight conflicting signals if they exist
+- Include trading context:
+  - Extended vs near support
+  - Risk/reward at current levels
+
+Fallback:
+If no recent news is available:
+- Do NOT say "no data"
+- Provide analysis based on sector behavior and macro sensitivity
+- State that visibility is limited but still give directional view
+
+Mandatory ending (inside summary):
+- Rating: Buy / Neutral / Sell
+- Price Target (12-month realistic estimate)
+- Include exact phrase: "Do not chase strength"
+
+Output format (STRICT JSON only, no backticks):
+{
+  "results": [
+    {
+      "ticker": "X",
+      "company_name": "Name",
+      "sentiment": "positive/negative/neutral",
+      "sentiment_score": 0-100,
+      "summary": "One professional paragraph in English",
+      "alerts": [
+        { "type": "critical/normal", "text": "Alert if relevant" }
+      ],
+      "news": ["News 1", "News 2"]
+    }
+  ]
+}
+
+Rules:
+- summary must be in English
+- sentiment must match the narrative
+- price target must be consistent with analysis
+- return valid JSON only
+${contextBlock}
+Tickers: ${batch.join(',')}`;
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -916,10 +973,34 @@ sentiment=positive/negative/neutral. עברית בלבד חוץ מticker.`;
 
 // --- Perplexity-only: generate structured JSON directly ---
 async function fetchPerplexityAnalysis(batch, today) {
-  const prompt = `${today}. Portfolio analysis. Tickers: ${batch.join(',')}.
-Return ONLY valid JSON, no backticks:
-{"results":[{"ticker":"X","company_name":"Name","sentiment":"positive","sentiment_score":70,"summary":"brief analysis","alerts":[],"news":["news 1","news 2"]}]}
-sentiment=positive/negative/neutral.`;
+  const prompt = `You are a senior sell-side equity research analyst at a top-tier investment bank (Goldman Sachs style).
+
+Task:
+Generate a structured daily analysis for the following tickers.
+
+Requirements:
+- Institutional tone, concise, analytical
+- Cause → effect reasoning
+- Always include both bullish and bearish factors
+- Never return empty or "no data"
+
+For each ticker:
+- Start with price action: % move, close, intraday high/low
+- Reference key levels (November low, April low, distance % from nearest support)
+- Explain drivers: Macro (rates, commodities, flows, geopolitics) + Company-specific
+- Highlight conflicting signals if they exist
+- Include trading context: extended vs near support, risk/reward
+
+Fallback: If no recent news, use sector behavior and macro sensitivity. State limited visibility but give directional view.
+
+Mandatory ending (inside summary): Rating: Buy/Neutral/Sell, Price Target (12-month), include exact phrase: "Do not chase strength"
+
+Output format (STRICT JSON only, no backticks):
+{"results":[{"ticker":"X","company_name":"Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"One professional paragraph in English","alerts":[{"type":"critical/normal","text":"Alert"}],"news":["News 1","News 2"]}]}
+
+Rules: summary in English, sentiment matches narrative, valid JSON only.
+
+Tickers: ${batch.join(',')}`;
 
   const response = await fetch('https://api.perplexity.ai/chat/completions', {
     method: 'POST',
