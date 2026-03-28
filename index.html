@@ -713,7 +713,7 @@ Ticker: ${ticker}`;
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'llama-3.1-sonar-small-128k-online',
+        model: 'sonar',
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 200
       })
@@ -847,7 +847,7 @@ async function fetchPerplexityContext(batch) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: 'llama-3.1-sonar-small-128k-online',
+      model: 'sonar',
       messages: [{ role: 'user', content: query }],
       max_tokens: 600
     })
@@ -909,7 +909,7 @@ sentiment=positive/negative/neutral.`;
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: 'llama-3.1-sonar-small-128k-online',
+      model: 'sonar',
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 1200
     })
