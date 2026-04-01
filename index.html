@@ -602,6 +602,14 @@
     <span id="pplxKeyStatus" style="font-size:12px; color: var(--muted);"></span>
   </div>
 
+  <!-- Alpha Vantage API Key -->
+  <div class="pplx-key-section">
+    <span class="apikey-label">📊 Alpha Vantage Key <span style="font-size:11px;opacity:0.6;">(fallback לנתוני מניות)</span></span>
+    <input type="password" id="avKey" placeholder="הכנס Alpha Vantage API Key..." style="min-width:280px;" />
+    <button class="btn btn-secondary" onclick="saveAvKey()">שמור</button>
+    <span id="avKeyStatus" style="font-size:12px; color: var(--muted);"></span>
+  </div>
+
   <!-- Ticker Input -->
   <div class="input-section">
     <div class="section-title">הוסף טיקרים לתיק</div>
@@ -653,6 +661,116 @@ let tickers = JSON.parse(localStorage.getItem('pt_tickers') || 'null') || [...MY
 let results = JSON.parse(localStorage.getItem('pt_results') || '[]');
 let apiKey = localStorage.getItem('pt_apikey') || '';
 let pplxKey = localStorage.getItem('pt_pplxkey') || '';
+
+// ─── STOCK DATA LAYER ────────────────────────────────────────────────────────
+
+const YAHOO_PROXY = 'https://api.allorigins.win/raw?url=';
+const AV_BASE     = 'https://www.alphavantage.co/query';
+let avKey = localStorage.getItem('pt_avkey') || '';
+
+function saveAvKey() {
+  avKey = document.getElementById('avKey').value.trim();
+  localStorage.setItem('pt_avkey', avKey);
+  document.getElementById('avKeyStatus').textContent = '✓ שמור';
+  document.getElementById('avKeyStatus').style.color = 'var(--green)';
+}
+
+// Validate a stock data object — returns true if all required fields present
+function isValidStockData(d) {
+  return d &&
+    typeof d.price === 'number' && d.price > 0 &&
+    typeof d.change_percent === 'number' &&
+    typeof d.high === 'number' &&
+    typeof d.low === 'number' &&
+    d.timestamp;
+}
+
+// Fetch from Yahoo Finance via proxy
+async function fetchYahoo(symbol) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`;
+  const proxied = YAHOO_PROXY + encodeURIComponent(url);
+  const res = await fetch(proxied, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error('Yahoo HTTP ' + res.status);
+  const json = await res.json();
+  const meta = json?.chart?.result?.[0]?.meta;
+  if (!meta) throw new Error('Yahoo: no meta for ' + symbol);
+  return {
+    symbol:         symbol,
+    price:          parseFloat(meta.regularMarketPrice),
+    change_percent: parseFloat(((meta.regularMarketPrice - meta.previousClose) / meta.previousClose * 100).toFixed(2)),
+    high:           parseFloat(meta.regularMarketDayHigh),
+    low:            parseFloat(meta.regularMarketDayLow),
+    open:           parseFloat(meta.regularMarketOpen),
+    previous_close: parseFloat(meta.previousClose),
+    volume:         parseInt(meta.regularMarketVolume),
+    timestamp:      new Date(meta.regularMarketTime * 1000).toISOString(),
+    source:         'yahoo'
+  };
+}
+
+// Fetch from Alpha Vantage (fallback)
+async function fetchAlphaVantage(symbol) {
+  if (!avKey) throw new Error('Alpha Vantage key missing');
+  const url = `${AV_BASE}?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${avKey}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error('AV HTTP ' + res.status);
+  const json = await res.json();
+  const q = json?.['Global Quote'];
+  if (!q || !q['05. price']) throw new Error('AV: no data for ' + symbol);
+  return {
+    symbol:         symbol,
+    price:          parseFloat(q['05. price']),
+    change_percent: parseFloat(q['10. change percent'].replace('%','')),
+    high:           parseFloat(q['03. high']),
+    low:            parseFloat(q['04. low']),
+    open:           parseFloat(q['02. open']),
+    previous_close: parseFloat(q['08. previous close']),
+    volume:         parseInt(q['06. volume']),
+    timestamp:      new Date().toISOString(),
+    source:         'alphavantage'
+  };
+}
+
+// Main: fetch with Yahoo → fallback Alpha Vantage
+async function fetchStockData(symbol) {
+  try {
+    const data = await fetchYahoo(symbol);
+    if (isValidStockData(data)) return data;
+    throw new Error('Yahoo data invalid');
+  } catch(e) {
+    console.warn(`Yahoo failed for ${symbol}: ${e.message} — trying Alpha Vantage`);
+    try {
+      const data = await fetchAlphaVantage(symbol);
+      if (isValidStockData(data)) return data;
+      throw new Error('AV data invalid');
+    } catch(e2) {
+      console.warn(`Alpha Vantage failed for ${symbol}: ${e2.message}`);
+      return null; // graceful null — AI will handle without real data
+    }
+  }
+}
+
+// Fetch data for a full batch in parallel
+async function fetchBatchStockData(symbols) {
+  const results = await Promise.allSettled(symbols.map(s => fetchStockData(s)));
+  const map = {};
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled' && r.value) map[symbols[i]] = r.value;
+  });
+  return map; // { AAPL: {...}, NVDA: {...}, ... }
+}
+
+// Format stock data into a context string for AI prompts
+function formatStockContext(stockMap) {
+  if (!Object.keys(stockMap).length) return '';
+  const lines = Object.values(stockMap).map(d =>
+    `${d.symbol}: price=$${d.price} change=${d.change_percent}% high=$${d.high} low=$${d.low} open=$${d.open} prev_close=$${d.previous_close} vol=${d.volume} [${d.source}]`
+  );
+  return '\nLive market data (use for price action section):\n' + lines.join('\n');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 
 function savePplxKey() {
   pplxKey = document.getElementById('pplxKey').value.trim();
@@ -769,6 +887,11 @@ function init() {
     document.getElementById('pplxKey').value = pplxKey;
     document.getElementById('pplxKeyStatus').textContent = '✓ שמור';
     document.getElementById('pplxKeyStatus').style.color = 'var(--green)';
+  }
+  if (avKey) {
+    document.getElementById('avKey').value = avKey;
+    document.getElementById('avKeyStatus').textContent = '✓ שמור';
+    document.getElementById('avKeyStatus').style.color = 'var(--green)';
   }
   // Save portfolio on first load if not already saved
   if (!localStorage.getItem('pt_tickers')) {
@@ -955,7 +1078,7 @@ Tickers: ${batch.join(',')}`;
 }
 
 // --- Perplexity-only: generate structured JSON directly ---
-async function fetchPerplexityAnalysis(batch, today) {
+async function fetchPerplexityAnalysis(batch, today, stockContext = '') {
   const prompt = `You are a senior sell-side equity research analyst at a top-tier investment bank (Goldman Sachs style) with trading desk awareness.
 Task:
 Generate a concise, institutional-grade analysis for the following tickers using available market data and news context.
@@ -998,7 +1121,8 @@ Rules:
 - Sentiment must align with narrative
 - Output valid JSON only
 - No explanations outside JSON
-Tickers: ${batch.join(',')}`;
+Tickers: ${batch.join(',')}
+${stockContext}`;
 
   const response = await fetch('https://api.perplexity.ai/chat/completions', {
     method: 'POST',
@@ -1066,16 +1190,20 @@ function parseJSON(raw) {
 async function analyzeChunk(batch, today) {
   let rawText = '';
 
+  // Always fetch real market data first (Yahoo → Alpha Vantage fallback)
+  const stockData = await fetchBatchStockData(batch);
+  const stockContext = formatStockContext(stockData);
+
   if (apiKey && pplxKey) {
-    // Both: Perplexity fetches real-time context, Anthropic refines into structured JSON
-    const context = await fetchPerplexityContext(batch);
-    rawText = await fetchAnthropicAnalysis(batch, today, context);
+    // Both: Perplexity fetches news context, Anthropic refines with real data
+    const newsContext = await fetchPerplexityContext(batch);
+    rawText = await fetchAnthropicAnalysis(batch, today, stockContext + '\n' + newsContext);
   } else if (apiKey) {
-    // Anthropic only
-    rawText = await fetchAnthropicAnalysis(batch, today);
+    // Anthropic only + real market data
+    rawText = await fetchAnthropicAnalysis(batch, today, stockContext);
   } else if (pplxKey) {
-    // Perplexity only
-    rawText = await fetchPerplexityAnalysis(batch, today);
+    // Perplexity only + real market data injected into prompt
+    rawText = await fetchPerplexityAnalysis(batch, today, stockContext);
   }
 
   const parsed = parseJSON(rawText);
