@@ -708,26 +708,52 @@ async function fetchYahoo(symbol) {
   };
 }
 
-// Fetch from Alpha Vantage (fallback)
+// Fetch from Alpha Vantage using TIME_SERIES_INTRADAY (real intraday high/low)
 async function fetchAlphaVantage(symbol) {
   if (!avKey) throw new Error('Alpha Vantage key missing');
-  const url = `${AV_BASE}?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${avKey}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) throw new Error('AV HTTP ' + res.status);
-  const json = await res.json();
-  const q = json?.['Global Quote'];
+
+  // Step 1: get previous close via GLOBAL_QUOTE
+  const gqUrl = `${AV_BASE}?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${avKey}`;
+  const gqRes = await fetch(gqUrl, { signal: AbortSignal.timeout(8000) });
+  if (!gqRes.ok) throw new Error('AV GQ HTTP ' + gqRes.status);
+  const gqJson = await gqRes.json();
+  const q = gqJson?.['Global Quote'];
   if (!q || !q['05. price']) throw new Error('AV: no data for ' + symbol);
+
+  const price          = parseFloat(q['05. price']);
+  const previous_close = parseFloat(q['08. previous close']);
+  const change_percent = parseFloat(q['10. change percent'].replace('%', ''));
+  const open           = parseFloat(q['02. open']);
+  const volume         = parseInt(q['06. volume']);
+
+  // Step 2: get real intraday high/low from TIME_SERIES_INTRADAY (15min)
+  let high = parseFloat(q['03. high']);
+  let low  = parseFloat(q['04. low']);
+  try {
+    const tsUrl = `${AV_BASE}?function=TIME_SERIES_INTRADAY&symbol=${symbol}&interval=15min&outputsize=compact&apikey=${avKey}`;
+    const tsRes = await fetch(tsUrl, { signal: AbortSignal.timeout(8000) });
+    if (tsRes.ok) {
+      const tsJson = await tsRes.json();
+      const series = tsJson?.['Time Series (15min)'];
+      if (series) {
+        const candles = Object.values(series);
+        // Calculate true intraday high/low from all 15min candles today
+        const highs = candles.map(c => parseFloat(c['2. high'])).filter(v => !isNaN(v));
+        const lows  = candles.map(c => parseFloat(c['3. low'])).filter(v => !isNaN(v));
+        if (highs.length) high = Math.max(...highs);
+        if (lows.length)  low  = Math.min(...lows);
+      }
+    }
+  } catch(e) {
+    // Keep GLOBAL_QUOTE high/low as fallback — already set above
+    console.warn('AV intraday fallback for ' + symbol + ':', e.message);
+  }
+
   return {
-    symbol:         symbol,
-    price:          parseFloat(q['05. price']),
-    change_percent: parseFloat(q['10. change percent'].replace('%','')),
-    high:           parseFloat(q['03. high']),
-    low:            parseFloat(q['04. low']),
-    open:           parseFloat(q['02. open']),
-    previous_close: parseFloat(q['08. previous close']),
-    volume:         parseInt(q['06. volume']),
-    timestamp:      new Date().toISOString(),
-    source:         'alphavantage'
+    symbol, price, change_percent, high, low,
+    open, previous_close, volume,
+    timestamp: new Date().toISOString(),
+    source: 'alphavantage'
   };
 }
 
@@ -763,10 +789,16 @@ async function fetchBatchStockData(symbols) {
 // Format stock data into a context string for AI prompts
 function formatStockContext(stockMap) {
   if (!Object.keys(stockMap).length) return '';
-  const lines = Object.values(stockMap).map(d =>
-    `${d.symbol}: price=$${d.price} change=${d.change_percent}% high=$${d.high} low=$${d.low} open=$${d.open} prev_close=$${d.previous_close} vol=${d.volume} [${d.source}]`
-  );
-  return '\nLive market data (use for price action section):\n' + lines.join('\n');
+  const lines = Object.values(stockMap).map(d => {
+    const chg = d.change_percent >= 0 ? `+${d.change_percent}%` : `${d.change_percent}%`;
+    return (
+      `${d.symbol} [source: ${d.source}]\n` +
+      `  Price: $${d.price} (${chg}) | Open: $${d.open} | Prev Close: $${d.previous_close}\n` +
+      `  Intraday High: $${d.high} | Intraday Low: $${d.low} | Volume: ${d.volume.toLocaleString()}\n` +
+      `  NOTE: Do NOT estimate or infer November low / April low — mark as "not available" if unknown.`
+    );
+  });
+  return '\n=== LIVE MARKET DATA (verified, use exactly as provided) ===\n' + lines.join('\n\n') + '\n=== END MARKET DATA ===';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1017,10 +1049,9 @@ Constraints:
 - No fluff or generic language
 Content:
 - Start with price action: % move, close, intraday high/low
-- Reference key levels:
-  - November low
-  - April low
-  - Distance (%) from nearest support
+- Reference key technical levels ONLY if provided in the live market data block above
+  - Do NOT estimate or fabricate November low / April low — if not in data, write "support levels not available"
+  - If intraday high/low are provided, use them exactly as given
 - Explain drivers:
   - Macro (rates, commodities, flows, geopolitics)
   - Company-specific (earnings, analysts, insiders, news, pricing actions)
@@ -1089,10 +1120,9 @@ Constraints:
 - No fluff or generic language
 Content:
 - Start with price action: % move, close, intraday high/low
-- Reference key levels:
-  - November low
-  - April low
-  - Distance (%) from nearest support
+- Reference key technical levels ONLY if provided in the live market data block above
+  - Do NOT estimate or fabricate November low / April low — if not in data, write "support levels not available"
+  - If intraday high/low are provided, use them exactly as given
 - Explain drivers:
   - Macro (rates, commodities, flows, geopolitics)
   - Company-specific (earnings, analysts, insiders, news, pricing actions)
