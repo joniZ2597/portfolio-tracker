@@ -1086,6 +1086,31 @@ Output format (STRICT JSON only, no backticks, no text outside JSON):
 
 Tickers: ${batch.join(',')}`;
 
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1500,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error('Anthropic: ' + (err.error?.message || 'שגיאת API'));
+  }
+  const data = await response.json();
+  let textContent = '';
+  for (const block of data.content) {
+    if (block.type === 'text') textContent += block.text;
+  }
+  return textContent;
+}
 
 async function fetchPerplexityAnalysis(batch, today, stockContext = '') {
   const prompt = `You are a senior sell-side equity research analyst at a top-tier investment bank (Goldman Sachs style) with trading desk awareness.
