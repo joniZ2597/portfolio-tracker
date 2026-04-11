@@ -719,7 +719,7 @@ async function fetchYahoo(symbol) {
   return {
     symbol:         symbol,
     price:          parseFloat(meta.regularMarketPrice),
-    change_percent: parseFloat(((meta.regularMarketPrice - meta.previousClose) / meta.previousClose * 100).toFixed(2)),
+    change_percent: meta.previousClose ? parseFloat(((meta.regularMarketPrice - meta.previousClose) / meta.previousClose * 100).toFixed(2)) : 0,
     high:           parseFloat(meta.regularMarketDayHigh),
     low:            parseFloat(meta.regularMarketDayLow),
     open:           parseFloat(meta.regularMarketOpen),
@@ -812,7 +812,8 @@ async function fetchBatchStockData(symbols) {
 function formatStockContext(stockMap) {
   if (!Object.keys(stockMap).length) return '';
   const lines = Object.values(stockMap).map(d => {
-    const chg = d.change_percent >= 0 ? `+${d.change_percent}%` : `${d.change_percent}%`;
+    const chg = isNaN(d.change_percent) ? 'N/A' : (d.change_percent >= 0 ? `+${d.change_percent}%` : `${d.change_percent}%`);
+    const pct = isNaN(d.change_percent) ? 'N/A' : (d.change_percent >= 0 ? `+${d.change_percent}%` : `${d.change_percent}%`);
     return (
       `${d.symbol} [source: ${d.source}]\n` +
       `  Price: $${d.price} (${chg}) | Open: $${d.open} | Prev Close: $${d.previous_close}\n` +
