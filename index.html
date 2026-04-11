@@ -1077,36 +1077,26 @@ async function fetchAnthropicAnalysis(batch, today, context = '') {
     : '';
   const newsBlock  = hasStock ? context.replace(stockBlock, '').trim() : context.trim();
 
-  const prompt = `You are a High-Conviction Hedge Fund Strategy Analyst. Your job is to find profit opportunities.
+  // SYSTEM prompt — short and decisive
+  const system = `You are a high-conviction hedge fund analyst.
+RULES YOU MUST FOLLOW:
+1. The RESEARCH CONTEXT below is your primary source. It contains analyst PTs, earnings data, sector catalysts. USE IT.
+2. If research context mentions analyst upgrades, PT hikes, revenue beats, or AI demand — these MUST be in your summary as the lead drivers.
+3. NEVER write "no catalysts" or "absence of catalysts" if the research context has any bullish data.
+4. Score rules: PT upside >15% → score 70-90. Tier 1 catalyst (PT hike, earnings beat) → score 75-95. Truly no data → 40-64.
+5. PT must be anchored to verified price ±30%. If analyst PT is in context, align to it.
+6. End every summary: "Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength"
+Output STRICT JSON only — no backticks, no text outside JSON.`;
 
-[MANDATORY HIERARCHY OF TRUTH]
-1. FORWARD CATALYSTS (from Perplexity context below) = 80% weight
-2. INSTITUTIONAL ACTION (analyst upgrades/PTs) = 15% weight
-3. STATIC VALUATION (DCF, historical multiples) = 5% weight
-RULE: If catalysts are strong, ignore valuation gaps.
+  // USER prompt — data first, then task
+  const user = `VERIFIED PRICE DATA:
+${stockBlock || 'No price data available — write "data not available" for price figures'}
 
-[VERIFIED PRICE DATA — use ONLY these numbers, never invent]
-${stockBlock || 'NO PRICE DATA — write "data not available" for all figures'}
+RESEARCH CONTEXT (your PRIMARY input — analyst actions, earnings, sector catalysts):
+${newsBlock || 'No research context available. Note limited visibility. Analyze on sector/macro basis.'}
 
-[PERPLEXITY RESEARCH CONTEXT — this is your PRIMARY input, not an appendix]
-${newsBlock || 'No context provided. Note limited visibility and analyze on sector/macro basis.'}
-
-[STRICT NEGATIVE CONSTRAINTS — DO NOT VIOLATE]
-- NEVER write "absence of catalysts" or "no clear catalysts" if the context above mentions revenue growth, AI demand, sector tailwinds, or analyst upgrades
-- NEVER give Neutral (40-64) if upside to analyst PT is >10%
-- NEVER ignore Perplexity context — it MUST be the core of your summary
-
-[REQUIRED LOGIC STEPS]
-1. Extract the specific catalyst from context (e.g., "TSMC reported 49% revenue surge")
-2. Link it to the ticker (e.g., "This confirms massive HBM demand for Micron")
-3. Set score: upside >15% → score MUST be 75-95. upside >10% → score MUST be >= 65.
-
-[FINAL CHECKLIST before outputting]
-- Does my summary contradict my score? If Perplexity is bullish → summary AND score must be bullish.
-- Is my PT anchored to the verified price above? If analyst PT is in context, align within 15%.
-
-Output STRICT JSON only — no backticks, no text outside JSON:
-{"results":[{"ticker":"X","company_name":"Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"paragraph ending with: Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength","alerts":[{"type":"critical/normal","text":"text"}],"news":["catalyst 1","catalyst 2"]}]}
+Task: For each ticker below, write one institutional paragraph using the data above.
+JSON format: {"results":[{"ticker":"X","company_name":"Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"paragraph","alerts":[{"type":"critical/normal","text":"text"}],"news":["catalyst 1","catalyst 2"]}]}
 
 Tickers: ${batch.join(',')}`;
 
@@ -1121,7 +1111,8 @@ Tickers: ${batch.join(',')}`;
     body: JSON.stringify({
       model: 'claude-sonnet-4-5',
       max_tokens: 2000,
-      messages: [{ role: 'user', content: prompt }]
+      system: system,
+      messages: [{ role: 'user', content: user }]
     })
   });
   if (!response.ok) {
