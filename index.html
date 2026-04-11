@@ -1036,7 +1036,6 @@ async function fetchPerplexityContext(batch) {
 
 // --- Anthropic: generate structured JSON analysis ---
 async function fetchAnthropicAnalysis(batch, today, context = '') {
-  // Split verified market data from news context
   const hasStock   = context.includes('=== LIVE MARKET DATA');
   const stockBlock = hasStock
     ? context.slice(context.indexOf('=== LIVE MARKET DATA'), context.indexOf('=== END MARKET DATA') + 19)
@@ -1044,80 +1043,93 @@ async function fetchAnthropicAnalysis(batch, today, context = '') {
   const newsBlock  = hasStock ? context.replace(stockBlock, '').trim() : context.trim();
 
   const dataSection = stockBlock
-    ? `VERIFIED REAL MARKET DATA — USE THESE EXACT NUMBERS:\n${stockBlock}\nRULE: Any price/high/low/change% not in this block is FABRICATED. Do NOT use it.`
-    : `NO VERIFIED MARKET DATA. Do NOT invent any price figures. Write "data not available" where figures would appear.`;
+    ? `VERIFIED REAL MARKET DATA (single source of truth for all price figures):\n${stockBlock}\nRULE: Any price/high/low/change% not in this block is FABRICATED. Do NOT use it.`
+    : `NO VERIFIED MARKET DATA. Write "data not available" for any price figure. Do NOT invent.`;
 
-  const prompt = `You are an elite Hedge Fund Strategy Analyst — decisive, high-conviction, catalyst-driven.
-Your job is to find the DOMINANT NARRATIVE for each ticker and commit to it.
-Avoid vague "balanced" language. If the evidence leans one way, say so clearly.
+  const prompt = `You are an elite Hedge Fund Strategy Analyst. Decisive, high-conviction, catalyst-driven.
+Your PRIMARY job is to synthesize ALL available data into a coherent, accurate narrative.
 
-=== VERIFIED MARKET DATA (single source of truth for all price figures) ===
+==== STEP 1: READ ALL DATA (mandatory before writing anything) ====
+
+[VERIFIED MARKET DATA]
 ${dataSection}
-=== END VERIFIED DATA ===
 
-=== REAL-TIME CONTEXT FROM PERPLEXITY (catalysts, news, sector events) ===
-${newsBlock || 'No real-time context provided. Use sector/macro reasoning and state visibility is limited.'}
-=== END CONTEXT ===
+[PERPLEXITY REAL-TIME CONTEXT — catalysts, news, analyst actions, sector events]
+${newsBlock || 'No real-time context available.'}
 
-=== CATALYST HIERARCHY (apply in this order) ===
-Tier 1 — DECISIVE (overrides all macro headwinds):
-  - Institutional price target hike >10% from a major bank (GS, MS, JPM, UBS, Citi, BofA)
-  - Direct earnings beat/miss by the company itself
-  - M&A announcement, buyout, or strategic partnership
+==== STEP 2: MANDATORY PRE-FLIGHT CHECKS (run before writing summary) ====
+
+CHECK A — CONTEXT SYNTHESIS:
+- Does Perplexity mention ANY analyst upgrade, PT hike, or earnings beat? YES/NO
+- If YES: this MUST appear in the summary as a primary driver
+- Writing "no catalysts" when Perplexity lists catalysts = CRITICAL ERROR → banned
+
+CHECK B — ECOSYSTEM INFERENCE:
+- If direct news is sparse, scan context for:
+  * Direct customer news (Apple sales = iPhone demand)
+  * Direct supplier news (TSMC beat = memory/chip demand)
+  * Peer earnings (AMD guidance = read-through for Intel)
+- If inference found: state explicitly "While no direct news for [X], [peer Y] reported [event], implying [impact] because [reason]"
+
+CHECK C — LOGICAL CONSISTENCY (run LAST before outputting):
+- What is the verified current price?
+- What is the Price Target you will assign?
+- Upside % = (PT - price) / price * 100
+- Upside > 15% AND strong catalyst present → sentiment_score MUST be >= 70
+- Upside > 25% AND Tier 1 catalyst → sentiment_score MUST be >= 80
+- Score of 50 with a $100+ PT hike = LOGIC ERROR → banned
+- Verify: does your score match your own narrative? If not, fix the score.
+
+==== STEP 3: CATALYST HIERARCHY ====
+
+Tier 1 — DECISIVE (overrides ALL macro headwinds):
+  - PT hike >10% from major bank (GS, MS, JPM, UBS, Citi, BofA, Barclays)
+  - Direct earnings beat/miss by the company
+  - M&A, buyout, strategic deal announcement
 
 Tier 2 — HIGH WEIGHT:
-  - Earnings from a direct ecosystem peer (e.g. TSMC beat = bullish for NVDA, MU, AMD)
-  - Analyst initiations or upgrades with specific PT
-  - Major macro regime shift (Fed pivot, oil shock, tariff escalation)
+  - Peer/supplier earnings with direct read-through (e.g. TSMC beat = MU/NVDA bullish)
+  - Analyst initiation/upgrade with specific PT
+  - Major macro regime shift (Fed pivot, oil shock, tariff change)
 
-Tier 3 — SUPPORTING:
-  - Sector rotation signals, ETF flows
-  - Macro data (CPI, jobs, PMI)
-  - General commentary without specific PT
+Tier 3 — SUPPORTING ONLY:
+  - General macro commentary, ETF flows, PMI/CPI
+  - Valuation metrics (P/E, DCF) without catalyst
 
-RULE: A Tier 1 catalyst CANNOT be overridden by Tier 3 headwinds.
-If a Tier 1 event exists, it must be the opening driver of the summary.
+RULE: Tier 1 catalyst CANNOT be negated by Tier 3 headwinds.
+RULE: In growth/AI sectors, forward-looking catalysts outweigh static valuation.
+RULE: If high valuation conflicts with strong AI tailwinds → explain the TENSION, do not default to Neutral.
 
-=== ECOSYSTEM REASONING ===
-If direct news for a ticker is sparse, look at the provided context for:
-- Direct customers (e.g. Apple revenue = iPhone demand)
-- Direct suppliers (e.g. TSMC production = chip availability)
-- Sector peers (e.g. AMD guidance = read-through for Intel)
-- End-market demand signals (e.g. hyperscaler capex = AI chip demand)
-Explicitly state the ecosystem inference: "While no direct news exists for [X], [peer Y] reported [event], which implies [impact] for [X] because [reason]."
+==== STEP 4: SENTIMENT SCORE SCALE ====
+85-100 : Explosive Tier 1 catalyst, PT hike >20%, strong momentum
+70-84  : Clear Buy — Tier 1 or strong Tier 2 catalyst, >15% upside to PT
+55-69  : Mild Buy — positive lean, upside present, some uncertainty
+40-54  : Neutral — ONLY if zero catalysts AND balanced risk/reward
+25-39  : Mild Sell — negative lean, downside risk outweighs upside
+10-24  : Clear Sell — Tier 1 negative catalyst, deteriorating fundamentals
 
-=== SENTIMENT SCORE CALIBRATION ===
-90-100 : Explosive catalyst, PT hike >20%, strong momentum
-75-89  : Clear Buy — Tier 1 catalyst, solid fundamentals, >15% upside to PT
-65-74  : Mild Buy — positive lean, some uncertainty
-40-64  : Neutral — ONLY if genuine data absence OR perfectly balanced bull/bear
-25-39  : Mild Sell — negative lean, risk outweighs reward
-10-24  : Clear Sell — deteriorating fundamentals, downside catalyst
-RULE: If upside to Price Target exceeds 15%, score MUST be >= 65 (Buy territory).
-RULE: Score of 50 is BANNED unless there is literally zero information available.
+BANNED SCORES:
+- Score 50 when PT upside > 15% and catalyst exists → BANNED
+- Score < 40 when Tier 1 positive catalyst present → BANNED
+- Score > 60 when Tier 1 negative catalyst (miss, downgrade) present → BANNED
 
-=== DATA RULES ===
-- Use ONLY verified market data above for price, high, low, % change
-- NEVER estimate or fabricate price figures
-- If price data missing: write "data not available" — do NOT invent
-
-=== PRICE TARGET RULES ===
-- Anchor to verified current price (typical 10-30% upside for Buy)
-- Align with institutional consensus PT if mentioned in context
-- If Tier 1 PT hike exists, use that as anchor for your own PT
+==== STEP 5: PRICE TARGET RULES ====
+- Anchor ONLY to verified current price from market data block
+- Typical range: 10-30% upside for Buy
+- If institutional PT mentioned in context → align your PT within ±15% of theirs
+- If PT hike to $535 mentioned → your PT should be in range $480-$535, NOT $92
 - NEVER reference a price not in the verified data block
 
-=== OUTPUT REQUIREMENTS ===
-- One paragraph per ticker, max 150 words
-- No bullet points, no headers
-- Open with the dominant catalyst (Tier 1 if exists)
-- Include: price action → catalyst → ecosystem inference (if needed) → bull/bear tension → positioning
-- End with exactly: "Rating: [Buy/Neutral/Sell] | PT: $[X] | Do not chase strength"
+==== STEP 6: OUTPUT FORMAT ====
+One paragraph per ticker, max 150 words, no bullet points.
+Structure: [Dominant catalyst] → [Price action with real numbers] → [Ecosystem inference if needed] → [Bull/Bear tension] → [Positioning]
+End with exactly: "Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength"
 
-Output format — STRICT JSON only, no backticks, no text outside JSON:
-{"results":[{"ticker":"X","company_name":"Full Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"One paragraph in English","alerts":[{"type":"critical/normal","text":"Alert text"}],"news":["Catalyst 1","Catalyst 2"]}]}
+STRICT JSON only — no backticks, no text outside JSON:
+{"results":[{"ticker":"X","company_name":"Full Company Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"One paragraph in English ending with Rating/PT/Do not chase strength","alerts":[{"type":"critical/normal","text":"Alert text"}],"news":["Key catalyst 1","Key catalyst 2"]}]}
 
-FINAL RULE: Be decisive. A hedge fund analyst who writes "Neutral 50/100" on a stock with a $100 PT hike gets fired.
+FINAL SANITY CHECK before outputting:
+For each ticker ask: "Does my score match my own summary?" If summary says 'strong AI tailwinds and UBS PT hike to $535' but score is 28 → that is a contradiction. Fix it.
 
 Tickers: ${batch.join(',')}`;
 
