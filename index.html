@@ -1042,94 +1042,34 @@ async function fetchAnthropicAnalysis(batch, today, context = '') {
     : '';
   const newsBlock  = hasStock ? context.replace(stockBlock, '').trim() : context.trim();
 
-  const dataSection = stockBlock
-    ? `VERIFIED REAL MARKET DATA (single source of truth for all price figures):\n${stockBlock}\nRULE: Any price/high/low/change% not in this block is FABRICATED. Do NOT use it.`
-    : `NO VERIFIED MARKET DATA. Write "data not available" for any price figure. Do NOT invent.`;
+  // Build a compact, explicit data pill for each ticker
+  const dataSection = stockBlock || 'NO PRICE DATA — write "data not available" for all price figures.';
 
-  const prompt = `You are an elite Hedge Fund Strategy Analyst. Decisive, high-conviction, catalyst-driven.
-Your PRIMARY job is to synthesize ALL available data into a coherent, accurate narrative.
+  const prompt = `You are a hedge fund analyst. Be decisive. Your output is JSON only.
 
-==== STEP 1: READ ALL DATA (mandatory before writing anything) ====
-
-[VERIFIED MARKET DATA]
+PRICE DATA (verified — use these exact numbers, never invent):
 ${dataSection}
 
-[PERPLEXITY REAL-TIME CONTEXT — catalysts, news, analyst actions, sector events]
-${newsBlock || 'No real-time context available.'}
+CATALYST CONTEXT (from real-time research):
+${newsBlock || 'No context. Base on sector/macro and note limited visibility.'}
 
-==== STEP 2: MANDATORY PRE-FLIGHT CHECKS (run before writing summary) ====
+RULES — READ CAREFULLY:
+1. SYNTHESIS IS MANDATORY: If the context mentions an analyst PT hike, earnings beat, or sector catalyst — it MUST appear in the summary as the lead driver. Writing "no catalysts" when context lists catalysts = critical error.
+2. ECOSYSTEM: If no direct news, infer from peers/suppliers. State: "[Peer] reported [X], implying [Y] for [ticker] because [reason]."
+3. SCORE LOGIC — apply strictly:
+   - Tier 1 catalyst (PT hike >10%, earnings beat, M&A): score 75-95
+   - Tier 2 catalyst (peer beat, initiation, upgrade): score 65-80
+   - No catalyst, balanced: score 40-64
+   - Negative catalyst: score 10-45
+   - If PT upside >15%: score MUST be >= 70. No exceptions.
+   - Score 50 with a known PT hike = logic error. Fix it.
+4. PRICE TARGET: anchor to verified price. If analyst PT mentioned in context, align within 15% of that number.
+5. CONFLICT: If strong catalyst + extended valuation — explain the tension. Do not default to neutral.
+6. END every summary with: "Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength"
+7. SELF-CHECK before outputting: does your score match your own summary? Fix mismatches.
 
-CHECK A — CONTEXT SYNTHESIS:
-- Does Perplexity mention ANY analyst upgrade, PT hike, or earnings beat? YES/NO
-- If YES: this MUST appear in the summary as a primary driver
-- Writing "no catalysts" when Perplexity lists catalysts = CRITICAL ERROR → banned
-
-CHECK B — ECOSYSTEM INFERENCE:
-- If direct news is sparse, scan context for:
-  * Direct customer news (Apple sales = iPhone demand)
-  * Direct supplier news (TSMC beat = memory/chip demand)
-  * Peer earnings (AMD guidance = read-through for Intel)
-- If inference found: state explicitly "While no direct news for [X], [peer Y] reported [event], implying [impact] because [reason]"
-
-CHECK C — LOGICAL CONSISTENCY (run LAST before outputting):
-- What is the verified current price?
-- What is the Price Target you will assign?
-- Upside % = (PT - price) / price * 100
-- Upside > 15% AND strong catalyst present → sentiment_score MUST be >= 70
-- Upside > 25% AND Tier 1 catalyst → sentiment_score MUST be >= 80
-- Score of 50 with a $100+ PT hike = LOGIC ERROR → banned
-- Verify: does your score match your own narrative? If not, fix the score.
-
-==== STEP 3: CATALYST HIERARCHY ====
-
-Tier 1 — DECISIVE (overrides ALL macro headwinds):
-  - PT hike >10% from major bank (GS, MS, JPM, UBS, Citi, BofA, Barclays)
-  - Direct earnings beat/miss by the company
-  - M&A, buyout, strategic deal announcement
-
-Tier 2 — HIGH WEIGHT:
-  - Peer/supplier earnings with direct read-through (e.g. TSMC beat = MU/NVDA bullish)
-  - Analyst initiation/upgrade with specific PT
-  - Major macro regime shift (Fed pivot, oil shock, tariff change)
-
-Tier 3 — SUPPORTING ONLY:
-  - General macro commentary, ETF flows, PMI/CPI
-  - Valuation metrics (P/E, DCF) without catalyst
-
-RULE: Tier 1 catalyst CANNOT be negated by Tier 3 headwinds.
-RULE: In growth/AI sectors, forward-looking catalysts outweigh static valuation.
-RULE: If high valuation conflicts with strong AI tailwinds → explain the TENSION, do not default to Neutral.
-
-==== STEP 4: SENTIMENT SCORE SCALE ====
-85-100 : Explosive Tier 1 catalyst, PT hike >20%, strong momentum
-70-84  : Clear Buy — Tier 1 or strong Tier 2 catalyst, >15% upside to PT
-55-69  : Mild Buy — positive lean, upside present, some uncertainty
-40-54  : Neutral — ONLY if zero catalysts AND balanced risk/reward
-25-39  : Mild Sell — negative lean, downside risk outweighs upside
-10-24  : Clear Sell — Tier 1 negative catalyst, deteriorating fundamentals
-
-BANNED SCORES:
-- Score 50 when PT upside > 15% and catalyst exists → BANNED
-- Score < 40 when Tier 1 positive catalyst present → BANNED
-- Score > 60 when Tier 1 negative catalyst (miss, downgrade) present → BANNED
-
-==== STEP 5: PRICE TARGET RULES ====
-- Anchor ONLY to verified current price from market data block
-- Typical range: 10-30% upside for Buy
-- If institutional PT mentioned in context → align your PT within ±15% of theirs
-- If PT hike to $535 mentioned → your PT should be in range $480-$535, NOT $92
-- NEVER reference a price not in the verified data block
-
-==== STEP 6: OUTPUT FORMAT ====
-One paragraph per ticker, max 150 words, no bullet points.
-Structure: [Dominant catalyst] → [Price action with real numbers] → [Ecosystem inference if needed] → [Bull/Bear tension] → [Positioning]
-End with exactly: "Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength"
-
-STRICT JSON only — no backticks, no text outside JSON:
-{"results":[{"ticker":"X","company_name":"Full Company Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"One paragraph in English ending with Rating/PT/Do not chase strength","alerts":[{"type":"critical/normal","text":"Alert text"}],"news":["Key catalyst 1","Key catalyst 2"]}]}
-
-FINAL SANITY CHECK before outputting:
-For each ticker ask: "Does my score match my own summary?" If summary says 'strong AI tailwinds and UBS PT hike to $535' but score is 28 → that is a contradiction. Fix it.
+OUTPUT — strict JSON, no backticks, no text outside JSON:
+{"results":[{"ticker":"X","company_name":"Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"paragraph","alerts":[{"type":"critical/normal","text":"text"}],"news":["catalyst 1","catalyst 2"]}]}
 
 Tickers: ${batch.join(',')}`;
 
@@ -1142,8 +1082,8 @@ Tickers: ${batch.join(',')}`;
       'anthropic-dangerous-direct-browser-access': 'true'
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1500,
+      model: 'claude-sonnet-4-5',
+      max_tokens: 2000,
       messages: [{ role: 'user', content: prompt }]
     })
   });
