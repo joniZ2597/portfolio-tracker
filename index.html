@@ -561,6 +561,24 @@
     flex-wrap: wrap;
   }
 
+  /* Debug panel */
+  .debug-panel {
+    background: rgba(0,229,255,0.04);
+    border: 1px solid rgba(0,229,255,0.15);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    display: none;
+    white-space: pre-wrap;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .debug-panel.visible { display: block; }
+  .debug-title { color: var(--accent); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+
   /* Scrollbar */
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: var(--bg); }
@@ -631,6 +649,10 @@
     <span class="run-hint">מחפש חדשות + מנתח סנטימנט לכל טיקר</span>
   </div>
 
+  <div class="debug-panel" id="debugPanel">
+    <div class="debug-title">🔍 Context שנשלח ל-Claude (לצורך בדיקה)</div>
+    <div id="debugContent"></div>
+  </div>
   <div class="error-box" id="errorBox"></div>
   <div class="progress-bar-wrap" id="progressWrap">
     <div class="progress-bar" id="progressBar"></div>
@@ -1049,47 +1071,36 @@ async function fetchAnthropicAnalysis(batch, today, context = '') {
     : '';
   const newsBlock  = hasStock ? context.replace(stockBlock, '').trim() : context.trim();
 
-  const dataSection = stockBlock
-    ? stockBlock
-    : 'NO VERIFIED PRICE DATA — write "data not available" for all price figures.';
+  const prompt = `You are a High-Conviction Hedge Fund Strategy Analyst. Your job is to find profit opportunities.
 
-  // Build a compact per-ticker data summary to lead the prompt
-  const prompt = `You are a hedge fund analyst. Decisive. Catalyst-driven. Your output is JSON only.
+[MANDATORY HIERARCHY OF TRUTH]
+1. FORWARD CATALYSTS (from Perplexity context below) = 80% weight
+2. INSTITUTIONAL ACTION (analyst upgrades/PTs) = 15% weight
+3. STATIC VALUATION (DCF, historical multiples) = 5% weight
+RULE: If catalysts are strong, ignore valuation gaps.
 
-VERIFIED PRICE DATA (use ONLY these numbers — never invent):
-${dataSection}
+[VERIFIED PRICE DATA — use ONLY these numbers, never invent]
+${stockBlock || 'NO PRICE DATA — write "data not available" for all figures'}
 
-RESEARCH CONTEXT (from real-time sources — you MUST use this):
-${newsBlock || 'No context provided. Analyze based on sector/macro and state limited visibility.'}
+[PERPLEXITY RESEARCH CONTEXT — this is your PRIMARY input, not an appendix]
+${newsBlock || 'No context provided. Note limited visibility and analyze on sector/macro basis.'}
 
-YOUR TASK: For each ticker, write ONE paragraph that synthesizes BOTH the price data AND the research context above.
+[STRICT NEGATIVE CONSTRAINTS — DO NOT VIOLATE]
+- NEVER write "absence of catalysts" or "no clear catalysts" if the context above mentions revenue growth, AI demand, sector tailwinds, or analyst upgrades
+- NEVER give Neutral (40-64) if upside to analyst PT is >10%
+- NEVER ignore Perplexity context — it MUST be the core of your summary
 
-HARD RULES:
-1. SYNTHESIS IS NOT OPTIONAL: Every catalyst in the research context MUST appear in the summary.
-   - If context says "UBS raised PT to $535" → your summary MUST mention this as the primary driver.
-   - If context says "TSMC beat signals HBM demand" → your summary MUST use this ecosystem inference.
-   - Writing "no catalysts found" when the context lists catalysts = wrong answer. Redo it.
+[REQUIRED LOGIC STEPS]
+1. Extract the specific catalyst from context (e.g., "TSMC reported 49% revenue surge")
+2. Link it to the ticker (e.g., "This confirms massive HBM demand for Micron")
+3. Set score: upside >15% → score MUST be 75-95. upside >10% → score MUST be >= 65.
 
-2. SCORE CALIBRATION (strict):
-   - Tier 1 catalyst (PT hike >10%, earnings beat, M&A): score 75-95
-   - Tier 2 (peer beat with read-through, upgrade, initiation): score 65-80
-   - No catalyst, neutral data: score 40-64
-   - Negative catalyst: score 15-45
-   - RULE: PT upside >15% from verified price → score MUST be >= 70. No exceptions.
-   - RULE: score=50 when a PT hike exists in context = logic error. Fix before outputting.
+[FINAL CHECKLIST before outputting]
+- Does my summary contradict my score? If Perplexity is bullish → summary AND score must be bullish.
+- Is my PT anchored to the verified price above? If analyst PT is in context, align within 15%.
 
-3. PRICE TARGET: anchor to verified price. If analyst PT is in context (e.g. "UBS PT $535"),
-   your PT should be within 15% of that number, not some unrelated value.
-
-4. CONFLICT: if strong catalyst + extended valuation → explain the tension explicitly.
-   Do NOT silently default to neutral.
-
-5. SELF-CHECK (mandatory before outputting JSON):
-   Re-read your summary. Does the score match the narrative?
-   If summary mentions a $100+ PT hike but score is below 70 → fix the score.
-
-OUTPUT — strict JSON, no backticks, no text outside JSON:
-{"results":[{"ticker":"X","company_name":"Full Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"paragraph ending with: Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength","alerts":[{"type":"critical/normal","text":"text"}],"news":["key catalyst 1","key catalyst 2"]}]}
+Output STRICT JSON only — no backticks, no text outside JSON:
+{"results":[{"ticker":"X","company_name":"Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"paragraph ending with: Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength","alerts":[{"type":"critical/normal","text":"text"}],"news":["catalyst 1","catalyst 2"]}]}
 
 Tickers: ${batch.join(',')}`;
 
@@ -1229,10 +1240,18 @@ async function analyzeChunk(batch, today) {
 
   if (apiKey && pplxKey) {
     // Both: Perplexity fetches news context, Anthropic refines with real data
-    const newsContext = await fetchPerplexityContext(batch);
-    // DEBUG: expose to console so we can verify data is flowing
-    window._debugStockContext = stockContext;
-    window._debugNewsContext  = newsContext;
+    let newsContext = '';
+    try {
+      newsContext = await fetchPerplexityContext(batch);
+    } catch(pplxErr) {
+      console.warn('[PT] Perplexity failed:', pplxErr.message);
+      newsContext = '';
+    }
+    // Show context in UI so user can verify data is flowing
+    const fullCtx = (stockContext || '(no price data)') + '\n\n' + (newsContext || '(no Perplexity context — check API key or quota)');
+    const dbg = document.getElementById('debugPanel');
+    document.getElementById('debugContent').textContent = fullCtx;
+    dbg.classList.add('visible');
     console.log('[PT-DEBUG] stockContext:', stockContext || '(empty)');
     console.log('[PT-DEBUG] newsContext:', newsContext || '(empty)');
     rawText = await fetchAnthropicAnalysis(batch, today, stockContext + '\n' + newsContext);
