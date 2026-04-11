@@ -1313,9 +1313,9 @@ async function analyzeChunk(batch, today) {
 
   const parsed = parseJSON(rawText);
   const raw = parsed.results || [];
-  // Post-process: correct score if Claude ignored strong Perplexity context
-  const newsBlock = context || '';
-  return enforceScoreConsistency(raw, newsBlock);
+  // Post-process: fix score if Claude ignored Perplexity context
+  const _news = (typeof newsContext !== 'undefined') ? newsContext : '';
+  return enforceScoreConsistency(raw, _news);
 }
 
 async function runAnalysis() {
