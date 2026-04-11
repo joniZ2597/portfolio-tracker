@@ -1036,53 +1036,88 @@ async function fetchPerplexityContext(batch) {
 
 // --- Anthropic: generate structured JSON analysis ---
 async function fetchAnthropicAnalysis(batch, today, context = '') {
-  // Separate live market data block from news context
-  const hasStock = context.includes('=== LIVE MARKET DATA');
+  // Split verified market data from news context
+  const hasStock   = context.includes('=== LIVE MARKET DATA');
   const stockBlock = hasStock
     ? context.slice(context.indexOf('=== LIVE MARKET DATA'), context.indexOf('=== END MARKET DATA') + 19)
     : '';
-  const newsBlock = hasStock ? context.replace(stockBlock, '').trim() : context.trim();
+  const newsBlock  = hasStock ? context.replace(stockBlock, '').trim() : context.trim();
 
   const dataSection = stockBlock
-    ? `VERIFIED REAL MARKET DATA — USE THESE EXACT NUMBERS ONLY:
-${stockBlock}
-RULE: Any price/high/low/change% NOT in the block above is FABRICATED. Do NOT use it.`
-    : `NO VERIFIED MARKET DATA AVAILABLE.
-Do NOT invent any price, high, low, or % change. Write "price data not available" where figures would appear.`;
+    ? `VERIFIED REAL MARKET DATA — USE THESE EXACT NUMBERS:\n${stockBlock}\nRULE: Any price/high/low/change% not in this block is FABRICATED. Do NOT use it.`
+    : `NO VERIFIED MARKET DATA. Do NOT invent any price figures. Write "data not available" where figures would appear.`;
 
-  const prompt = `You are a senior sell-side equity research analyst at a top-tier investment bank (Goldman Sachs style) with trading desk awareness.
+  const prompt = `You are an elite Hedge Fund Strategy Analyst — decisive, high-conviction, catalyst-driven.
+Your job is to find the DOMINANT NARRATIVE for each ticker and commit to it.
+Avoid vague "balanced" language. If the evidence leans one way, say so clearly.
 
-CRITICAL DATA INTEGRITY RULE:
+=== VERIFIED MARKET DATA (single source of truth for all price figures) ===
 ${dataSection}
+=== END VERIFIED DATA ===
 
-${newsBlock ? 'News/context (use for drivers and catalysts ONLY — NOT for prices):\n' + newsBlock + '\n' : ''}
-Task:
-Generate a concise, institutional-grade analysis for each ticker.
+=== REAL-TIME CONTEXT FROM PERPLEXITY (catalysts, news, sector events) ===
+${newsBlock || 'No real-time context provided. Use sector/macro reasoning and state visibility is limited.'}
+=== END CONTEXT ===
 
-Constraints:
-- Max 150 words per ticker
-- One paragraph only per ticker
-- No bullet points
-- No fluff or generic language
+=== CATALYST HIERARCHY (apply in this order) ===
+Tier 1 — DECISIVE (overrides all macro headwinds):
+  - Institutional price target hike >10% from a major bank (GS, MS, JPM, UBS, Citi, BofA)
+  - Direct earnings beat/miss by the company itself
+  - M&A announcement, buyout, or strategic partnership
 
-Content:
-- Start with price action using ONLY the verified numbers above (price, % change, high, low)
-- Do NOT reference November low or April low unless explicitly provided in the data block — if absent, omit or write "not available"
-- Explain drivers: Macro (rates, commodities, flows, geopolitics) + Company-specific (earnings, analysts, insiders, news)
-- Highlight conflicting signals (bull vs bear) if they exist
-- Include trading context: extended vs near support, risk/reward
+Tier 2 — HIGH WEIGHT:
+  - Earnings from a direct ecosystem peer (e.g. TSMC beat = bullish for NVDA, MU, AMD)
+  - Analyst initiations or upgrades with specific PT
+  - Major macro regime shift (Fed pivot, oil shock, tariff escalation)
 
-Price Target Rules:
-- MUST be anchored to the verified current price (10-30% range typical)
-- Do NOT use any price figure not in the data block above
+Tier 3 — SUPPORTING:
+  - Sector rotation signals, ETF flows
+  - Macro data (CPI, jobs, PMI)
+  - General commentary without specific PT
 
-Mandatory ending (inside summary):
-- Rating: Buy / Neutral / Sell
-- Price Target (12-month, anchored to verified price)
-- Exact phrase: "Do not chase strength"
+RULE: A Tier 1 catalyst CANNOT be overridden by Tier 3 headwinds.
+If a Tier 1 event exists, it must be the opening driver of the summary.
 
-Output format (STRICT JSON only, no backticks, no text outside JSON):
-{"results":[{"ticker":"X","company_name":"Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"One professional paragraph in English","alerts":[{"type":"critical/normal","text":"Alert"}],"news":["News 1","News 2"]}]}
+=== ECOSYSTEM REASONING ===
+If direct news for a ticker is sparse, look at the provided context for:
+- Direct customers (e.g. Apple revenue = iPhone demand)
+- Direct suppliers (e.g. TSMC production = chip availability)
+- Sector peers (e.g. AMD guidance = read-through for Intel)
+- End-market demand signals (e.g. hyperscaler capex = AI chip demand)
+Explicitly state the ecosystem inference: "While no direct news exists for [X], [peer Y] reported [event], which implies [impact] for [X] because [reason]."
+
+=== SENTIMENT SCORE CALIBRATION ===
+90-100 : Explosive catalyst, PT hike >20%, strong momentum
+75-89  : Clear Buy — Tier 1 catalyst, solid fundamentals, >15% upside to PT
+65-74  : Mild Buy — positive lean, some uncertainty
+40-64  : Neutral — ONLY if genuine data absence OR perfectly balanced bull/bear
+25-39  : Mild Sell — negative lean, risk outweighs reward
+10-24  : Clear Sell — deteriorating fundamentals, downside catalyst
+RULE: If upside to Price Target exceeds 15%, score MUST be >= 65 (Buy territory).
+RULE: Score of 50 is BANNED unless there is literally zero information available.
+
+=== DATA RULES ===
+- Use ONLY verified market data above for price, high, low, % change
+- NEVER estimate or fabricate price figures
+- If price data missing: write "data not available" — do NOT invent
+
+=== PRICE TARGET RULES ===
+- Anchor to verified current price (typical 10-30% upside for Buy)
+- Align with institutional consensus PT if mentioned in context
+- If Tier 1 PT hike exists, use that as anchor for your own PT
+- NEVER reference a price not in the verified data block
+
+=== OUTPUT REQUIREMENTS ===
+- One paragraph per ticker, max 150 words
+- No bullet points, no headers
+- Open with the dominant catalyst (Tier 1 if exists)
+- Include: price action → catalyst → ecosystem inference (if needed) → bull/bear tension → positioning
+- End with exactly: "Rating: [Buy/Neutral/Sell] | PT: $[X] | Do not chase strength"
+
+Output format — STRICT JSON only, no backticks, no text outside JSON:
+{"results":[{"ticker":"X","company_name":"Full Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"One paragraph in English","alerts":[{"type":"critical/normal","text":"Alert text"}],"news":["Catalyst 1","Catalyst 2"]}]}
+
+FINAL RULE: Be decisive. A hedge fund analyst who writes "Neutral 50/100" on a stock with a $100 PT hike gets fired.
 
 Tickers: ${batch.join(',')}`;
 
@@ -1102,7 +1137,7 @@ Tickers: ${batch.join(',')}`;
   });
   if (!response.ok) {
     const err = await response.json();
-    throw new Error('Anthropic: ' + (err.error?.message || 'שגיאת API'));
+    throw new Error('Anthropic: ' + (err.error?.message || 'API error'));
   }
   const data = await response.json();
   let textContent = '';
@@ -1113,47 +1148,40 @@ Tickers: ${batch.join(',')}`;
 }
 
 async function fetchPerplexityAnalysis(batch, today, stockContext = '') {
-  const prompt = `You are a senior sell-side equity research analyst at a top-tier investment bank (Goldman Sachs style) with trading desk awareness.
-Task:
-Generate a concise, institutional-grade analysis for the following tickers using available market data and news context.
-Constraints:
-- Max 150 words per ticker
-- One paragraph only per ticker
-- No bullet points
-- No fluff or generic language
-Content:
-- Start with price action: % move, close, intraday high/low
-- Start with ONLY the verified price/high/low/change% from the market data block
-- Do NOT invent or estimate any price figures
-- Do NOT reference November low or April low unless explicitly in the data block — if absent, omit or write "not available"
-- Explain drivers:
-  - Macro (rates, commodities, flows, geopolitics)
-  - Company-specific (earnings, analysts, insiders, news, pricing actions)
-- Explicitly highlight conflicting signals (bull vs bear)
-- Include trading context:
-  - Extended vs near support
-  - Risk/reward at current levels
-Fallback:
-If no recent news is available:
-- Do NOT say "no data"
-- Provide analysis based on sector dynamics and macro sensitivity
-- State that visibility is limited but still give directional view
-Price Target Rules:
-- Must be anchored to current price
-- Typical range: 10-30% upside unless strongly justified
-- If external analyst targets exist, align within a reasonable range
-- Avoid unrealistic or extreme values
-Mandatory ending (inside summary):
-- Rating: Buy / Neutral / Sell
-- Price Target (12-month estimate)
-- Include exact phrase: "Do not chase strength"
-Output format (STRICT JSON only, no backticks):
-{"results":[{"ticker":"X","company_name":"Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"One professional paragraph in English","alerts":[{"type":"critical/normal","text":"Alert if relevant"}],"news":["News 1","News 2"]}]}
-Rules:
-- Summary must be in English
-- Sentiment must align with narrative
-- Output valid JSON only
-- No explanations outside JSON
+  const prompt = `You are a senior sell-side equity research analyst with trading desk awareness.
+
+[EVENT PRIORITY]
+If you have real-time news or a clear catalyst, it MUST be the primary driver of analysis.
+Do NOT replace it with generic macro explanations.
+Connect: What happened -> Market impact -> Stock reaction.
+
+[DATA RULES]
+Use ONLY verified market data for prices. NEVER estimate.
+If data missing -> write "data not available".
+
+[VERIFIED MARKET DATA]
+${stockContext}
+
+[ANALYSIS REQUIREMENTS]
+- Price action: use ONLY verified close, % change, high, low
+- Do NOT reference November low or April low unless explicitly in data; if absent write "not available"
+- Macro drivers (rates, commodities, flows, geopolitics)
+- Company-specific drivers (earnings, guidance, analysts, insiders, news)
+- Bull vs Bear forces — highlight conflicting signals
+- Trading context: extended vs near support, risk/reward
+
+[PRICE TARGET RULES]
+- Anchor to verified current price (10-30% typical range)
+- Align with analyst consensus if available
+- NEVER use a price not in the data block
+
+[OUTPUT FORMAT]
+One paragraph only. Institutional tone. No bullet points.
+Must end with: Rating: Buy/Neutral/Sell | Price Target: $X | "Do not chase strength"
+
+Output format (STRICT JSON only, no backticks, no text outside JSON):
+{"results":[{"ticker":"X","company_name":"Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"One professional paragraph in English","alerts":[{"type":"critical/normal","text":"Alert"}],"news":["News 1","News 2"]}]}
+
 Tickers: ${batch.join(',')}
 ${stockContext}`;
 
