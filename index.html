@@ -1038,7 +1038,7 @@ function chunkArray(arr, size) {
 // --- Perplexity: fetch real-time context for a batch of tickers ---
 async function fetchPerplexityContext(batch) {
   // Use the same institutional-grade prompt that deepDive uses — not a generic summary
-  const query = `You are a sell-side research analyst. For each of these tickers: ${batch.join(', ')}
+  const query = `For each of these tickers: ${batch.join(', ')}
 
 For EACH ticker provide ALL of the following if available:
 1. PRICE ACTION: exact % move today, closing price, intraday high/low
