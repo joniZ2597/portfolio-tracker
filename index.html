@@ -957,8 +957,9 @@ function init() {
 }
 
 function saveKey() {
-  apiKey = document.getElementById('apiKey').value.trim();
-  localStorage.setItem('pt_apikey', apiKey);
+  const val = document.getElementById('apiKey').value.trim();
+  apiKey = val;
+  localStorage.setItem('pt_apikey', val);
   document.getElementById('keyStatus').textContent = '✓ שמור';
   document.getElementById('keyStatus').style.color = 'var(--green)';
 }
