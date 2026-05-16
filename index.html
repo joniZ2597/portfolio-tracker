@@ -1078,7 +1078,7 @@ Rules:
     body: JSON.stringify({
       model: 'sonar',
       messages: [{ role: 'user', content: query }],
-      max_tokens: 1500
+      max_tokens: 2500
     })
   });
   if (!response.ok) {
@@ -1098,8 +1098,33 @@ function parsePerplexityContext(raw) {
     const clean = raw.replace(/```json|```/g, '').trim();
     const start = clean.indexOf('{');
     const end = clean.lastIndexOf('}');
-    const parsed = JSON.parse(clean.slice(start, end + 1));
-    return parsed.tickers || {};
+    if (start === -1) throw new Error('No JSON found');
+    let jsonStr = clean.slice(start, end + 1);
+    // Attempt direct parse
+    try {
+      const parsed = JSON.parse(jsonStr);
+      return parsed.tickers || {};
+    } catch(e1) {
+      // Truncated JSON — try to extract per-ticker blocks
+      console.warn('[PT] Full JSON parse failed, attempting partial extraction:', e1.message);
+      const result = {};
+      const tickerRe = /"([A-Z]{1,5})"\s*:\s*\{/g;
+      let m;
+      while ((m = tickerRe.exec(jsonStr)) !== null) {
+        const sym = m[1];
+        const blockStart = m.index + m[0].length - 1;
+        // Find matching closing brace
+        let depth = 0, i = blockStart;
+        for (; i < jsonStr.length; i++) {
+          if (jsonStr[i] === '{') depth++;
+          if (jsonStr[i] === '}') { depth--; if (depth === 0) break; }
+        }
+        try {
+          result[sym] = JSON.parse(jsonStr.slice(blockStart, i + 1));
+        } catch(e2) { console.warn('[PT] Could not parse block for', sym); }
+      }
+      return result;
+    }
   } catch(e) {
     console.warn('[PT] Perplexity parse failed:', e.message);
     return {};
@@ -1454,7 +1479,7 @@ Be specific with numbers and dates. One labeled section per ticker.`;
     body: JSON.stringify({
       model: 'sonar',
       messages: [{ role: 'user', content: query }],
-      max_tokens: 1500
+      max_tokens: 2500
     })
   });
   if (!response.ok) {
