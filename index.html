@@ -1040,17 +1040,17 @@ function chunkArray(arr, size) {
 
 // --- Perplexity: fetch real-time context for a batch of tickers ---
 async function fetchPerplexityContext(batch) {
-  const query = `For each ticker in: ${batch.join(', ')}
-Search the past 7 days. For EACH ticker, use this EXACT format with these EXACT headers:
+  const ticker = batch[0]; // single ticker focus
+  const query = `Report on ${ticker} using EXACTLY this format. No markdown. No hedging.
 
-TICKER: SYMBOL
-ANALYST_ACTIONS: [bank] [raised/cut/initiated] PT $[number] on [date] | [bank2]...
+TICKER: ${ticker}
+ANALYST_ACTIONS: [bank] [raised/cut/initiated] PT $[number] ([date]) | [more if any]
 BULLISH: [specific catalyst] | [specific catalyst]
-BEARISH: [specific risk] | [specific risk]  
+BEARISH: [specific risk] | [specific risk]
 MACRO: [macro factor] | [macro factor]
-PRICE_TODAY: [close price] [change%]
+PRICE_TODAY: $[close] [change%]
 
-Use "NONE" if no data. One block per ticker. No prose outside blocks.`;
+Use NONE for any field with no data. Search past 7 days. Be specific with numbers.`;
 
   const response = await fetch('https://api.perplexity.ai/chat/completions', {
     method: 'POST',
@@ -1059,9 +1059,9 @@ Use "NONE" if no data. One block per ticker. No prose outside blocks.`;
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: 'sonar',
+      model: 'sonar-pro',
       messages: [{ role: 'user', content: query }],
-      max_tokens: 2500
+      max_tokens: 1000
     })
   });
   if (!response.ok) {
@@ -1074,78 +1074,6 @@ Use "NONE" if no data. One block per ticker. No prose outside blocks.`;
   console.log('[PT] Perplexity preview:', raw.slice(0, 300));
   return raw;
 }
-
-// Parse structured Perplexity JSON
-function parsePerplexityContext(raw) {
-  const result = {};
-  // Split by TICKER: blocks
-  const blocks = raw.split(/TICKER:\s*/);
-  for (const block of blocks) {
-    if (!block.trim()) continue;
-    const lines = block.split('\n');
-    const sym = lines[0].trim().toUpperCase();
-    if (!sym || sym.length > 6) continue;
-
-    const get = (label) => {
-      const line = lines.find(l => l.startsWith(label + ':'));
-      if (!line) return [];
-      const val = line.slice(label.length + 1).trim();
-      if (val === 'NONE' || !val) return [];
-      return val.split('|').map(s => s.trim()).filter(Boolean);
-    };
-
-    // Parse analyst actions
-    const analystRaw = get('ANALYST_ACTIONS');
-    const analystActions = analystRaw.map(a => {
-      const ptMatch = a.match(/\$([\d,]+)/);
-      const bankMatch = a.match(/^([A-Za-z\s&]+?)\s+(raised|cut|initiated|reiterated)/i);
-      const dateMatch = a.match(/on\s+([A-Za-z]+\s+\d+)/i);
-      return {
-        bank: bankMatch?.[1]?.trim() || 'Unknown',
-        action: bankMatch?.[2] || 'mentioned',
-        target: ptMatch ? parseFloat(ptMatch[1].replace(',','')) : null,
-        date: dateMatch?.[1] || 'recent',
-        raw: a
-      };
-    }).filter(a => a.target);
-
-    const priceRaw = get('PRICE_TODAY');
-    const priceMatch = priceRaw[0]?.match(/\$?([\d.]+)\s+([+-]?[\d.]+)%?/);
-
-    result[sym] = {
-      analystActions,
-      bullishCatalysts: get('BULLISH'),
-      bearishCatalysts: get('BEARISH'),
-      macroDrivers:     get('MACRO'),
-      institutionalFlows: [],
-      risks:            get('BEARISH'),
-      priceAction: priceMatch ? {
-        close: parseFloat(priceMatch[1]),
-        change_pct: parseFloat(priceMatch[2])
-      } : null
-    };
-    console.log(`[PT] Parsed ${sym}: ${analystActions.length} analyst actions, ${result[sym].bullishCatalysts.length} bullish`);
-  }
-  return result;
-}
-
-// Format structured context
-
-// Format structured context for Claude prompt
-function formatNewsContext(tickerData, symbol) {
-  const d = tickerData[symbol];
-  if (!d) return `No structured research data available for ${symbol}.`;
-
-  const lines = [];
-  if (d.analystActions?.length)    lines.push('ANALYST ACTIONS: ' + d.analystActions.map(a => `${a.bank} ${a.action} PT $${a.target} (${a.date})`).join(', '));
-  if (d.bullishCatalysts?.length)  lines.push('BULLISH: ' + d.bullishCatalysts.join(' | '));
-  if (d.bearishCatalysts?.length)  lines.push('BEARISH: ' + d.bearishCatalysts.join(' | '));
-  if (d.macroDrivers?.length)      lines.push('MACRO: ' + d.macroDrivers.join(' | '));
-  if (d.institutionalFlows?.length) lines.push('FLOWS: ' + d.institutionalFlows.join(' | '));
-  if (d.risks?.length)             lines.push('RISKS: ' + d.risks.join(' | '));
-  return lines.length ? lines.join('\n') : `No specific catalysts found for ${symbol}.`;
-}
-
 
 async function fetchAlphaVantage(symbol) {
   if (!avKey) throw new Error('Alpha Vantage key missing');
