@@ -1641,6 +1641,116 @@ function enforceScoreConsistency(results, newsContext) {
   });
 }
 
+
+// Parse Perplexity markdown response into structured object
+function parsePerplexityContext(raw) {
+  const result = {};
+  if (!raw || raw.length < 10) return result;
+
+  // Try to find ticker sections — handle both "TICKER: X" and "## X" formats
+  const lines = raw.split('\n');
+  let currentTicker = null;
+  let currentLines = [];
+
+  const flushTicker = () => {
+    if (!currentTicker || !currentLines.length) return;
+    const block = currentLines.join('\n');
+    const get = (patterns) => {
+      for (const pat of patterns) {
+        const m = block.match(pat);
+        if (m) return m[1].trim();
+      }
+      return '';
+    };
+
+    // Extract analyst actions — look for PT numbers near bank names
+    const analystActions = [];
+    const ptRe = /\b(Goldman|GS|Morgan Stanley|MS|JPMorgan|JPM|UBS|BofA|Bank of America|CFRA|Citi|Barclays|Jefferies|Wedbush|Needham|Oppenheimer|KeyBanc|Wells Fargo|Deutsche|Credit Suisse|Raymond James|Piper Sandler)[^\n]*?\$([0-9,]+)/gi;
+    let ptMatch;
+    while ((ptMatch = ptRe.exec(block)) !== null) {
+      const target = parseFloat(ptMatch[2].replace(',',''));
+      if (target > 0 && target < 5000) {
+        analystActions.push({ bank: ptMatch[1], target, raw: ptMatch[0].slice(0,80) });
+      }
+    }
+
+    // Extract bullish/bearish signals
+    const bullish = [], bearish = [];
+    lines.forEach(l => {
+      const ll = l.toLowerCase();
+      if (ll.includes('bullish') || ll.includes('upside') || ll.includes('beat') || ll.includes('strong demand') || ll.includes('ai demand') || ll.includes('hbm')) {
+        const clean = l.replace(/^[-*•#>\s]+/, '').trim();
+        if (clean.length > 10) bullish.push(clean.slice(0, 100));
+      }
+      if (ll.includes('bearish') || ll.includes('downside') || ll.includes('risk') || ll.includes('pressure') || ll.includes('declining') || ll.includes('cut')) {
+        const clean = l.replace(/^[-*•#>\s]+/, '').trim();
+        if (clean.length > 10) bearish.push(clean.slice(0, 100));
+      }
+    });
+
+    result[currentTicker] = {
+      analystActions: analystActions.slice(0, 5),
+      bullishCatalysts: bullish.slice(0, 4),
+      bearishCatalysts: bearish.slice(0, 4),
+      macroDrivers: [],
+      institutionalFlows: [],
+      risks: bearish.slice(0, 3)
+    };
+    console.log(`[PT] Parsed ${currentTicker}: ${analystActions.length} analyst actions, ${bullish.length} bullish signals`);
+    if (analystActions.length) console.log('[PT] Analyst actions:', JSON.stringify(analystActions));
+  };
+
+  for (const line of lines) {
+    // Detect ticker header: "TICKER: MU" or "## MU" or "**MU**"
+    const tickerMatch = line.match(/^(?:TICKER:|##|\*\*)\s*([A-Z]{1,6})(?:\b|\*\*)/);
+    if (tickerMatch) {
+      flushTicker();
+      currentTicker = tickerMatch[1];
+      currentLines = [];
+    } else if (currentTicker) {
+      currentLines.push(line);
+    }
+  }
+  flushTicker();
+
+  // Fallback: if no ticker headers found, treat entire text as for batch[0]
+  if (Object.keys(result).length === 0 && raw.length > 50) {
+    console.warn('[PT] No ticker headers found, using full text as context');
+    result['__raw__'] = { rawText: raw, analystActions: [], bullishCatalysts: [], bearishCatalysts: [], macroDrivers: [], risks: [] };
+    // Still try to extract PTs from full text
+    const ptRe2 = /\b(Goldman|GS|Morgan Stanley|UBS|BofA|CFRA|Citi|Barclays|Jefferies|Wedbush)[^\n]*?\$([0-9,]+)/gi;
+    let m2;
+    while ((m2 = ptRe2.exec(raw)) !== null) {
+      const t = parseFloat(m2[2].replace(',',''));
+      if (t > 0 && t < 5000) result['__raw__'].analystActions.push({ bank: m2[1], target: t, raw: m2[0].slice(0,80) });
+    }
+    if (result['__raw__'].analystActions.length) {
+      console.log('[PT] Fallback PT extraction:', JSON.stringify(result['__raw__'].analystActions));
+    }
+  }
+
+  return result;
+}
+
+// Format parsed context for Claude prompt
+function formatNewsContext(pplxData, symbol) {
+  // Check exact symbol or fallback to __raw__
+  const d = pplxData[symbol] || pplxData['__raw__'];
+  if (!d) return `No research data for ${symbol}.`;
+
+  const lines = [];
+  if (d.analystActions?.length) {
+    lines.push('ANALYST ACTIONS: ' + d.analystActions.map(a => `${a.bank} PT $${a.target}`).join(' | '));
+  }
+  if (d.bullishCatalysts?.length)  lines.push('BULLISH: ' + d.bullishCatalysts.join(' | '));
+  if (d.bearishCatalysts?.length)  lines.push('BEARISH: ' + d.bearishCatalysts.join(' | '));
+  if (d.macroDrivers?.length)      lines.push('MACRO: ' + d.macroDrivers.join(' | '));
+  if (d.risks?.length)             lines.push('RISKS: ' + d.risks.join(' | '));
+  if (d.rawText)                   lines.push('RAW CONTEXT: ' + d.rawText.slice(0, 400));
+
+  return lines.length ? lines.join('\n') : `No specific catalysts found for ${symbol}.`;
+}
+
 // --- Pipeline: isolated per-ticker, stale-data-checked ---
 // Track last fetch timestamps to detect stale data
 const _fetchTimestamps = {};
