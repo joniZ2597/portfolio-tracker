@@ -1449,14 +1449,19 @@ async function fetchAnthropicAnalysis(batch, today, context = '') {
 
   const system = `You are a high-conviction hedge fund analyst. Decisive. Data-driven.
 
-ABSOLUTE RULES:
-1. Use ONLY the verified price data for all price figures. Never infer or estimate prices.
-2. Use ONLY explicitly stated analyst actions from the research section. Never fabricate PTs.
-3. If analystActions lists a PT hike — it MUST be the lead driver of the summary.
-4. NEVER write "no catalysts" if bullishCatalysts or analystActions are non-empty.
-5. Score: PT upside >15% → score ≥70. Tier1 catalyst → score 75-95. Zero data → 40-64.
-6. End every summary: "Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength"
-Output STRICT JSON only.`;
+OUTPUT FORMAT — CRITICAL:
+- Return ONLY raw JSON. No backticks. No markdown. No code fences. No prose before or after.
+- First character of response MUST be {
+- Last character of response MUST be }
+- Never truncate. Complete the full JSON for all tickers.
+
+ANALYSIS RULES:
+1. Use ONLY verified price data for price figures. Never infer prices.
+2. If analystActions has entries → they MUST be the lead driver of the summary.
+3. Preserve macro and catalyst signals — do not compress or omit them.
+4. Score: down >3% day AND no Tier1 catalyst → score 30-50. PT upside >15% → score ≥70.
+5. Summary MUST end with: "Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength"
+6. PT must be a real number anchored to verified price ±30%.`;
 
   const user = `VERIFIED PRICE DATA:
 ${dataSection}
@@ -1480,7 +1485,7 @@ Tickers: ${batch.join(',')}`;
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-5',
-      max_tokens: 2000,
+      max_tokens: 3000,
       system: system,
       messages: [{ role: 'user', content: user }]
     })
@@ -1576,26 +1581,52 @@ function repairJSON(str) {
 
 // --- Parse JSON from raw text ---
 function parseJSON(raw) {
-  const clean = raw.replace(/```json|```/g, '').trim();
+  // Strip all markdown fences
+  let clean = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+
+  // Find JSON boundaries
   const start = clean.indexOf('{');
-  const end = clean.lastIndexOf('}');
-  let jsonStr = clean.slice(start, end + 1);
-  try {
-    return JSON.parse(jsonStr);
-  } catch(e) {
-    jsonStr = repairJSON(jsonStr);
+  const end   = clean.lastIndexOf('}');
+  if (start === -1) {
+    console.warn('[PT] parseJSON: no { found in response');
+    return { results: [] };
+  }
+  let jsonStr = end > start ? clean.slice(start, end + 1) : clean.slice(start);
+
+  // Attempt 1: direct parse
+  try { return JSON.parse(jsonStr); } catch(e1) {}
+
+  // Attempt 2: repair and parse
+  try { return JSON.parse(repairJSON(jsonStr)); } catch(e2) {}
+
+  // Attempt 3: extract individual ticker objects
+  console.warn('[PT] parseJSON: falling back to per-ticker extraction');
+  const items = [];
+  const tickerRe = /\{[^{}]*"ticker"\s*:\s*"([^"]+)"[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
+  let m;
+  while ((m = tickerRe.exec(jsonStr)) !== null) {
     try {
-      return JSON.parse(jsonStr);
-    } catch(e2) {
-      const items = [];
-      const re = /\{"ticker"\s*:\s*"([^"]+)"[^{}]*(?:\{[^{}]*\}[^{}]*)*/g;
-      let m;
-      while ((m = re.exec(jsonStr)) !== null) {
-        try { items.push(JSON.parse(m[0].replace(/,\s*$/,''))); } catch(e3) {}
+      const obj = JSON.parse(m[0].replace(/,\s*$/, ''));
+      if (obj.ticker) items.push(obj);
+    } catch(e3) {}
+  }
+
+  // Attempt 4: extract from results array manually
+  if (!items.length) {
+    const arrStart = jsonStr.indexOf('"results"');
+    if (arrStart > -1) {
+      const arrMatch = jsonStr.slice(arrStart).match(/"results"\s*:\s*(\[.*)/s);
+      if (arrMatch) {
+        try {
+          const arr = JSON.parse(repairJSON(arrMatch[1].replace(/\}\s*\}\s*$/, ']')));
+          if (Array.isArray(arr)) items.push(...arr.filter(x=>x.ticker));
+        } catch(e4) {}
       }
-      return { results: items };
     }
   }
+
+  console.log('[PT] parseJSON: extracted', items.length, 'items via fallback');
+  return { results: items };
 }
 
 // --- Post-process: enforce score consistency with summary text ---
