@@ -1600,41 +1600,37 @@ function parseJSON(raw) {
 
 // --- Post-process: enforce score consistency with summary text ---
 function enforceScoreConsistency(results, newsContext) {
-  const bullishSignals = [
-    'revenue surge', 'revenue up', 'eps explosion', 'price target hike',
-    'pt hike', 'raised pt', 'raised price target', 'buy rating',
-    'hbm demand', 'ai demand', 'blowout', 'beat', 'upgrade',
-    'strong demand', 'tailwind', '49%', '35%', 'ubs', 'bullish'
+  // Only boost score if there are EXPLICIT institutional catalysts (PT hikes, earnings beats)
+  // Never boost on a large negative price day regardless of background bullishness
+  const tierOneBullish = [
+    'raised pt', 'raised price target', 'pt hike', 'price target hike',
+    'eps beat', 'earnings beat', 'revenue beat', 'blowout earnings',
+    'upgrade', 'initiated buy', 'buy rating initiated'
   ];
-  const bearishSignals = [
-    'downgrade', 'cut pt', 'missed', 'below estimates',
-    'guidance cut', 'layoffs', 'investigation', 'sell rating'
+  const tierOneBearish = [
+    'downgrade', 'cut pt', 'sell rating', 'missed earnings',
+    'guidance cut', 'below estimates'
   ];
 
   const ctxLower = (newsContext || '').toLowerCase();
-  const bullishCount = bullishSignals.filter(s => ctxLower.includes(s)).length;
-  const bearishCount = bearishSignals.filter(s => ctxLower.includes(s)).length;
+  const bullishCount = tierOneBullish.filter(s => ctxLower.includes(s)).length;
+  const bearishCount = tierOneBearish.filter(s => ctxLower.includes(s)).length;
 
   return results.map(item => {
-    const summaryLower = (item.summary || '').toLowerCase();
     const score = item.sentiment_score || 50;
+    const chgPct = item._changePct || 0; // injected by analyzeChunk if available
 
-    // If Perplexity context has strong bullish signals but score is neutral/low
-    if (bullishCount >= 3 && bearishCount < 2 && score < 65) {
-      console.warn(`[PT-SCORE] ${item.ticker}: Correcting score ${score} → 72 (bullish context detected)`);
-      return {
-        ...item,
-        sentiment: 'positive',
-        sentiment_score: 72,
-        summary: item.summary + ' [Score adjusted: strong institutional catalysts detected in research context]'
-      };
+    // NEVER boost if price is down >3% — market is telling us something
+    const isLargeDownDay = (typeof chgPct === 'number') && chgPct < -3;
+    if (isLargeDownDay) {
+      console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (down day ${chgPct}%)`);
+      return item;
     }
 
-    // If summary mentions strong positive catalysts but score is neutral
-    const summaryBullish = bullishSignals.filter(s => summaryLower.includes(s)).length;
-    if (summaryBullish >= 2 && score < 65) {
-      console.warn(`[PT-SCORE] ${item.ticker}: Summary bullish but score ${score} — correcting to 70`);
-      return { ...item, sentiment: 'positive', sentiment_score: 70 };
+    // Only boost on Tier 1 explicit catalysts (PT hike, earnings beat, upgrade)
+    if (bullishCount >= 2 && bearishCount === 0 && score < 65) {
+      console.warn(`[PT-SCORE] ${item.ticker}: Tier1 boost ${score} → 72`);
+      return { ...item, sentiment: 'positive', sentiment_score: 72 };
     }
 
     return item;
@@ -1841,8 +1837,13 @@ async function analyzeChunk(batch, today) {
     console.log(`[PT] Score OK: ${item.ticker} ${sent} ${s}/100`);
   });
 
+  // Inject real price change into each result for score guard
   const _news = pplxKey ? (typeof pplxData !== 'undefined' ? JSON.stringify(pplxData) : '') : '';
-  return enforceScoreConsistency(raw, _news);
+  const resultsWithPct = raw.map(item => {
+    const mkt = stockData[item.ticker];
+    return mkt ? { ...item, _changePct: mkt.change_percent } : item;
+  });
+  return enforceScoreConsistency(resultsWithPct, _news);
 }
 
 
