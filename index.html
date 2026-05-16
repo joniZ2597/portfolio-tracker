@@ -1851,6 +1851,16 @@ async function runAnalysis() {
   if (!apiKey && !pplxKey) { showError('נא להכניס לפחות מפתח API אחד (Anthropic או Perplexity)'); return; }
   if (tickers.length === 0) { showError('נא להוסיף לפחות טיקר אחד'); return; }
 
+  // ── HARD STATE RESET ──────────────────────────────────────────────────────
+  results = [];                                    // clear module-level results
+  localStorage.removeItem('pt_results');           // wipe stale localStorage
+  localStorage.removeItem('pt_date');
+  window._lastPplxRaw   = null;                    // clear Perplexity cache
+  window._lastStockData = null;                    // clear market data cache
+  window._fetchTimestamps && Object.keys(window._fetchTimestamps).forEach(k => delete window._fetchTimestamps[k]);
+  console.log('[PT] State reset complete');
+  // ─────────────────────────────────────────────────────────────────────────
+
   const btn = document.getElementById('runBtn');
   btn.disabled = true;
   btn.textContent = '⏳ מנתח...';
@@ -1883,11 +1893,9 @@ async function runAnalysis() {
       const batchResults = await analyzeChunk(batch, today);
       allResults = [...allResults, ...batchResults];
 
-      // Render progressively and save
-      const dateStr = new Date().toLocaleString('he-IL');
-      localStorage.setItem('pt_results', JSON.stringify(allResults));
-      localStorage.setItem('pt_date', dateStr);
+      // Render progressively (DO NOT save to localStorage mid-run — wait for complete)
       results = allResults;
+      const dateStr = new Date().toLocaleString('he-IL');
       renderResults(allResults, dateStr);
 
       // Wait between batches (except after last)
@@ -1901,8 +1909,26 @@ async function runAnalysis() {
 
     setProgress(100, 'הניתוח הושלם!');
     const dateStr = new Date().toLocaleString('he-IL');
-    localStorage.setItem('pt_results', JSON.stringify(allResults));
+
+    // Validate — reject malformed results before saving
+    const validResults = allResults.filter(r => {
+      const ok = r.ticker && typeof r.sentiment_score === 'number' && r.summary && r.summary.length > 50;
+      if (!ok) console.warn('[PT] REJECTED malformed result:', JSON.stringify(r).slice(0,100));
+      return ok;
+    });
+
+    // Deduplicate — keep only the LAST result per ticker (prevents stale contamination)
+    const seen = new Set();
+    const dedupedResults = [...validResults].reverse().filter(r => {
+      if (seen.has(r.ticker)) { console.warn('[PT] DEDUP: dropped stale result for', r.ticker); return false; }
+      seen.add(r.ticker); return true;
+    }).reverse();
+
+    console.log(`[PT] Saving ${dedupedResults.length} validated results (${allResults.length - dedupedResults.length} dropped)`);
+    localStorage.setItem('pt_results', JSON.stringify(dedupedResults));
     localStorage.setItem('pt_date', dateStr);
+    results = dedupedResults;
+    renderResults(dedupedResults, dateStr);
     document.getElementById('lastUpdated').textContent = 'עודכן: ' + dateStr;
     results = allResults;
 
