@@ -2194,7 +2194,7 @@ function renderResults(data, dateStr) {
         <button class="btn-deepdive" id="dd-btn-${item.ticker}" onclick="deepDive('${item.ticker}')">
           🔮 Deep Dive — ניתוח מוסדי מעמיק
         </button>
-        <div class="deepdive-result" id="dd-${item.ticker}">
+        <div class="deepdive-result" id="dd-${item.ticker}" style="display:none">
           <div class="deepdive-label">⚡ Institutional Analysis · Perplexity</div>
           <div id="dd-text-${item.ticker}"></div>
         </div>
