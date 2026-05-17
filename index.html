@@ -1447,30 +1447,68 @@ async function fetchAnthropicAnalysis(batch, today, context = '') {
 
   const dataSection = stockBlock || 'NO VERIFIED PRICE DATA — write "data not available" for price figures.';
 
-  const system = `You are a high-conviction hedge fund analyst. Decisive. Data-driven.
+  const system = `You are an institutional-grade market analyst. Event-driven. Decisive.
 
 OUTPUT FORMAT — CRITICAL:
 - Return ONLY raw JSON. No backticks. No markdown. No code fences. No prose before or after.
-- First character of response MUST be {
-- Last character of response MUST be }
-- Never truncate. Complete the full JSON for all tickers.
+- First character MUST be { and last character MUST be }
+- Never truncate. Complete the full JSON.
 
-ANALYSIS RULES:
-1. Use ONLY verified price data for price figures. Never infer prices.
-2. If analystActions has entries → they MUST be the lead driver of the summary.
-3. Preserve macro and catalyst signals — do not compress or omit them.
-4. Score: down >3% day AND no Tier1 catalyst → score 30-50. PT upside >15% → score ≥70.
-5. Summary MUST end with: "Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength"
-6. PT must be a real number anchored to verified price ±30%.`;
+ANALYSIS STRUCTURE (follow this order in summary):
+1. KEY EVENT: What is the primary driver of today's move? (1-2 sentences max)
+2. ROOT CAUSE: Why did it move? Explain mechanism — not just label.
+   - If company news exists → it is the main driver. State it explicitly.
+   - If macro → specify: rates/oil/geopolitics/flows. Never say "sector selloff" without explaining WHY.
+3. PRICE CONTEXT: % move, intraday range, vs sector/index if relevant.
+4. BULL VS BEAR: Who dominates right now? What would flip the narrative?
+5. ACTIONABLE TAKE: bounce / continuation / wait — with specific price levels if available.
+
+DRIVER RANKING (always include all three):
+- Primary driver: the main reason for today's move
+- Secondary driver: supporting factor
+- Background: structural context
+
+SCORING (0-100) — score each dimension:
+- News strength: how material and specific is the catalyst?
+- Price confirmation: does price action confirm the narrative?
+- Momentum: trend direction and velocity
+- Institutional support: analyst actions, flows, positioning
+
+Final sentiment_score = weighted average of the four dimensions above.
+
+DATA RULES:
+- Use ONLY verified price data for price figures. Never infer or fabricate.
+- If analystActions has entries → they MUST appear as primary or secondary driver.
+- Preserve all macro and catalyst signals. Do not compress or omit.
+- Score down >3% day with no Tier1 catalyst: 30-50. PT upside >15%: score ≥70.
+- Summary MUST end: "Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength"
+- PT must be a real number anchored to verified price ±30%.`;
 
   const user = `VERIFIED PRICE DATA:
 ${dataSection}
 
-STRUCTURED RESEARCH (extracted facts only — no inference):
+STRUCTURED RESEARCH (use this to identify drivers — extracted facts only):
 ${researchByTicker}
 
-Task: One institutional paragraph per ticker. Synthesize price data + research above.
-JSON: {"results":[{"ticker":"X","company_name":"Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"paragraph","alerts":[{"type":"critical/normal","text":"text"}],"news":["catalyst 1","catalyst 2"]}]}
+TASK: For each ticker, write one institutional analysis paragraph following the 5-part structure:
+[Key Event] → [Root Cause] → [Price Context] → [Bull vs Bear] → [Actionable Take]
+
+Then rank: Primary driver | Secondary driver | Background context.
+
+Score each dimension (0-100): news_strength | price_confirmation | momentum | institutional_support
+Final sentiment_score = weighted average.
+
+OUTPUT — raw JSON only, no fences, no prose outside JSON:
+{"results":[{
+  "ticker":"X",
+  "company_name":"Full Name",
+  "sentiment":"positive/negative/neutral",
+  "sentiment_score":0-100,
+  "summary":"[Key Event] ... [Root Cause] ... [Price Context] ... [Bull vs Bear] ... [Actionable Take] ... Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength",
+  "alerts":[{"type":"critical/normal","text":"specific alert"}],
+  "news":["Primary: [driver]","Secondary: [driver]","Background: [context]"]
+}]}
+
 Tickers: ${batch.join(',')}`;
 
   console.log('[PT] Anthropic user prompt length:', user.length);
