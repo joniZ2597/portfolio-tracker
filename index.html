@@ -1525,7 +1525,10 @@ Tickers: ${batch.join(',')}`;
       model: 'claude-sonnet-4-5',
       max_tokens: 3000,
       system: system,
-      messages: [{ role: 'user', content: user }]
+      messages: [
+        { role: 'user',      content: user },
+        { role: 'assistant', content: '{"results":[' }
+      ]
     })
   });
   if (!response.ok) {
@@ -1537,8 +1540,12 @@ Tickers: ${batch.join(',')}`;
   for (const block of data.content) {
     if (block.type === 'text') textContent += block.text;
   }
-  console.log('[PT] Anthropic response OK, length:', textContent.length);
-  return textContent;
+  // Prepend prefill so parseJSON gets complete JSON
+  const fullResponse = textContent.startsWith('{"results":[') || textContent.startsWith('{')
+    ? textContent
+    : '{"results":[' + textContent;
+  console.log('[PT] Anthropic response OK, length:', fullResponse.length);
+  return fullResponse;
 }
 
 async function fetchPerplexityAnalysis(batch, today, stockContext = '') {
