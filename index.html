@@ -1540,21 +1540,29 @@ Tickers: ${batch.join(',')}`;
   for (const block of data.content) {
     if (block.type === 'text') textContent += block.text;
   }
-  // Prepend prefill prefix — Claude continues from {"results":[
-  // Claude returns: {"ticker":"MU",...}]} — we complete the wrapper
-  let fullResponse = textContent;
-  if (!textContent.startsWith('{')) {
-    // Claude continued from prefill — wrap it
-    fullResponse = '{"results":[' + textContent;
-    // Ensure closing
-    if (!fullResponse.trimEnd().endsWith('}')) {
-      fullResponse = fullResponse.trimEnd();
-      if (!fullResponse.endsWith(']')) fullResponse += ']';
-      if (!fullResponse.endsWith('}')) fullResponse += '}';
-    }
+  // Handle prefill continuation: Claude returns ticker object(s) directly
+  // Prefill was: {"results":[ so Claude continues with: {"ticker":"MU",...}]}
+  let fullResponse = textContent.trim();
+
+  // Case 1: Claude returned complete {"results":[...]} — use as is
+  if (fullResponse.startsWith('{"results"')) {
+    // already complete
   }
+  // Case 2: Claude returned ticker object(s) — wrap in results array
+  else if (fullResponse.startsWith('{"ticker"') || fullResponse.startsWith('[{"ticker"')) {
+    const arr = fullResponse.startsWith('[') ? fullResponse : '[' + fullResponse + ']';
+    // Ensure array is closed
+    const fixed = arr.endsWith(']') ? arr : (arr.endsWith('}') ? arr + ']' : arr + '}]');
+    fullResponse = '{"results":' + fixed + '}';
+  }
+  // Case 3: partial/other — attempt wrap
+  else if (!fullResponse.startsWith('{')) {
+    fullResponse = '{"results":[' + fullResponse;
+    if (!fullResponse.endsWith('}')) fullResponse += ']}';
+  }
+
   console.log('[PT] Anthropic response OK, length:', fullResponse.length);
-  console.log('[PT] Response first chars:', fullResponse.slice(0,50));
+  console.log('[PT] Response first chars:', fullResponse.slice(0,60));
   return fullResponse;
 }
 
@@ -1933,9 +1941,12 @@ async function analyzeChunk(batch, today) {
 }
 
 
+let _analysisRunning = false;
 async function runAnalysis() {
-  if (!apiKey && !pplxKey) { showError('נא להכניס לפחות מפתח API אחד (Anthropic או Perplexity)'); return; }
-  if (tickers.length === 0) { showError('נא להוסיף לפחות טיקר אחד'); return; }
+  if (_analysisRunning) { console.warn('[PT] runAnalysis: already running, ignoring duplicate call'); return; }
+  _analysisRunning = true;
+  if (!apiKey && !pplxKey) { _analysisRunning = false; showError('נא להכניס לפחות מפתח API אחד (Anthropic או Perplexity)'); return; }
+  if (tickers.length === 0) { _analysisRunning = false; showError('נא להוסיף לפחות טיקר אחד'); return; }
 
   // ── HARD STATE RESET ──────────────────────────────────────────────────────
   results = [];                                    // clear module-level results
@@ -2033,6 +2044,8 @@ async function runAnalysis() {
     document.getElementById('resultsSection').style.display = results.length > 0 ? 'block' : 'none';
     document.getElementById('emptyState').style.display = results.length > 0 ? 'none' : 'block';
     if (results.length > 0) renderResults(results, localStorage.getItem('pt_date') || '');
+  } finally {
+    _analysisRunning = false;
   }
 }
 
