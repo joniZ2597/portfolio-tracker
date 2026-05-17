@@ -1105,22 +1105,32 @@ SOURCE VERIFICATION:
 - Distinguish: "research reports X" vs "this implies Y"
 - Sparse context → "limited near-term catalysts visible" not fabricated detail
 
-CONFIDENCE LANGUAGE:
-- Use specific numbers: "85% YoY revenue growth" not "massive growth"
-- Avoid without evidence: "institutional buying", "smart money", "order book"
-- Use when verified: "elevated volume", "analyst consensus", "per research"
+LANGUAGE RULES — PROBABILISTIC NOT NARRATIVE:
+- BANNED words: "collapsed", "falling knife", "fundamental deterioration", "institutional distribution", "capitulation", "crash", "imploding"
+- These require verified evidence: earnings miss, confirmed guidance cut, multiple downgrades, order-flow data
+- USE INSTEAD: "pulled back", "profit-taking", "positioning reset", "valuation compression"
+- Distinguish: valuation correction ≠ thesis deterioration. State which it is explicitly.
+- A single analyst PT does NOT constitute "fundamental deterioration"
+- Price down on high volume = positioning event, NOT confirmed thesis break, unless earnings/guidance confirm
+
+PROBABILISTIC FRAMING:
+- Instead of: "stock is a falling knife" → "risk/reward skewed near-term pending catalyst"
+- Instead of: "institutional distribution" → "elevated volume suggests active repositioning"
+- Instead of: "fundamental deterioration" → "near-term valuation compression vs intact secular thesis"
+- Always separate: (1) what happened today vs (2) what the 12-month thesis is
 
 DRIVER RANKING in news[] field:
 - "Primary: [verified specific event]"
-- "Secondary: [supporting factor]"  
+- "Secondary: [supporting factor]"
 - "Background: [structural context]"
 
 SCORING (0-100):
 - Strong consensus Buy + secular tailwind + positive price: 70-85
-- Consensus Buy + valuation risk + flat price: 55-68
-- Mixed signals (bull fundamentals vs bear technicals): 45-60
-- Bearish catalyst + negative price: 25-45
-- PT: anchor to consensus, not single outlier. Within ±30% of verified price.
+- Consensus Buy + valuation compression + flat/down price: 52-65
+- Mixed signals (bull fundamentals vs bear technicals): 45-58
+- Single bearish outlier PT without consensus support: max -8pts, not thesis-defining
+- Confirmed Tier1 negative (earnings miss, guidance cut): 25-45
+- PT: anchor to consensus mean, not single outlier. Within ±30% of verified price.
 
 Summary MUST end: "Rating: Buy/Neutral/Sell | PT: $[consensus-anchor] | Do not chase strength"`;
 
