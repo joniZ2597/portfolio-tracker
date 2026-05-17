@@ -1948,7 +1948,74 @@ async function analyzeChunk(batch, today) {
 
   // Inject real price change into each result for score guard
   const _news = pplxKey ? (typeof pplxData !== 'undefined' ? JSON.stringify(pplxData) : '') : '';
-  const resultsWithPct = raw.map(item => {
+  // ── ORCHESTRATION LAYER ────────────────────────────────────────────────────
+  // Merge Perplexity structured signals into Claude results
+  // Resolve conflicts, normalize, produce single authoritative output
+  function orchestrate(claudeResults, pplxData, stockData) {
+    return claudeResults.map(item => {
+      const sym    = item.ticker;
+      const mkt    = stockData?.[sym];
+      const pplx   = pplxData?.[sym] || pplxData?.['__raw__'];
+
+      // 1. Normalize price data — always use verified market data
+      if (mkt) {
+        item._verifiedPrice     = mkt.price;
+        item._verifiedChangePct = mkt.change_percent;
+        item._verifiedHigh      = mkt.high;
+        item._verifiedLow       = mkt.low;
+        item._dataSource        = mkt.source;
+      }
+
+      // 2. Merge analyst actions from Perplexity if not in summary
+      if (pplx?.analystActions?.length) {
+        const ptMentioned = pplx.analystActions.some(a =>
+          item.summary?.includes(a.bank) || item.summary?.includes('$' + a.target)
+        );
+        if (!ptMentioned) {
+          const ptStr = pplx.analystActions.map(a => `${a.bank} PT $${a.target}`).join(', ');
+          console.warn(`[PT] Orchestrate: injecting missing analyst actions for ${sym}: ${ptStr}`);
+          item.alerts = item.alerts || [];
+          pplx.analystActions.forEach(a => {
+            item.alerts.push({ type: 'critical', text: `${a.bank} price target $${a.target} — verify if recent` });
+          });
+        }
+      }
+
+      // 3. Deduplicate alerts — keep unique by first 50 chars
+      if (item.alerts?.length) {
+        const seen = new Set();
+        item.alerts = item.alerts.filter(a => {
+          const key = (a.text||'').slice(0,50);
+          if (seen.has(key)) return false;
+          seen.add(key); return true;
+        });
+      }
+
+      // 4. Validate score vs price action — hard override if needed
+      const chg = mkt?.change_percent ?? 0;
+      if (chg < -5 && item.sentiment_score > 60) {
+        console.warn(`[PT] Orchestrate: score override for ${sym} — down ${chg}% but score was ${item.sentiment_score}`);
+        item.sentiment_score = Math.min(item.sentiment_score, 45);
+        item.sentiment = 'negative';
+      }
+      if (chg > 5 && item.sentiment_score < 40) {
+        console.warn(`[PT] Orchestrate: score override for ${sym} — up ${chg}% but score was ${item.sentiment_score}`);
+        item.sentiment_score = Math.max(item.sentiment_score, 55);
+        item.sentiment = 'positive';
+      }
+
+      // 5. Tag result as authoritative — single source of truth
+      item._orchestrated = true;
+      item._orchestratedAt = new Date().toISOString();
+
+      return item;
+    });
+  }
+
+  const orchestrated = orchestrate(raw, typeof pplxData !== 'undefined' ? pplxData : {}, stockData);
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const resultsWithPct = orchestrated.map(item => {
     const mkt = stockData[item.ticker];
     return mkt ? { ...item, _changePct: mkt.change_percent } : item;
   });
@@ -1967,6 +2034,20 @@ async function runAnalysis() {
   results = [];                                    // clear module-level results
   localStorage.removeItem('pt_results');           // wipe stale localStorage
   localStorage.removeItem('pt_date');
+  // Reset all deep dive blocks from previous run
+  document.querySelectorAll('[class*="deepdive-result"]').forEach(el => {
+    el.style.display = 'none';
+    const txt = el.querySelector('[id^="dd-text-"]');
+    if (txt) txt.textContent = '';
+  });
+  document.querySelectorAll('[id^="dd-btn-"]').forEach(btn => {
+    btn.textContent = '🔮 Deep Dive — ניתוח מוסדי מעמיק';
+    btn.disabled = false;
+  });
+  // Clear results section entirely
+  const resultsGrid = document.getElementById('resultsGrid');
+  if (resultsGrid) resultsGrid.innerHTML = '';
+  console.log('[PT] State reset complete — UI cleared');
   window._lastPplxRaw   = null;                    // clear Perplexity cache
   window._lastStockData = null;                    // clear market data cache
   window._fetchTimestamps && Object.keys(window._fetchTimestamps).forEach(k => delete window._fetchTimestamps[k]);
@@ -2023,6 +2104,11 @@ async function runAnalysis() {
     const dateStr = new Date().toLocaleString('he-IL');
 
     // Validate — reject malformed results before saving
+    // Normalize timestamps — add runId to each result for traceability
+    const runId = Date.now();
+    const runTimestamp = new Date().toISOString();
+    allResults.forEach(r => { r._runId = runId; r._timestamp = runTimestamp; });
+
     const validResults = allResults.filter(r => {
       const ok = r.ticker && typeof r.sentiment_score === 'number' && r.summary && r.summary.length > 50;
       if (!ok) console.warn('[PT] REJECTED malformed result:', JSON.stringify(r).slice(0,100));
@@ -2076,7 +2162,7 @@ function renderResults(data, dateStr) {
     const emoji = s === 'positive' ? '▲' : s === 'negative' ? '▼' : '●';
     const label = s === 'positive' ? 'חיובי' : s === 'negative' ? 'שלילי' : 'נייטרלי';
 
-    const alertsHTML = (item.alerts || []).filter(a => a && typeof a === 'object' && a.text).map(a => `
+    const alertsHTML = [...new Map((item.alerts || []).filter(a => a && typeof a === 'object' && a.text).map(a => [a.text.slice(0,40), a])).values()].map(a => `
       <div class="alert-item ${a.type === 'critical' ? 'critical' : ''}">
         <span>${a.type === 'critical' ? '🚨' : '⚡'}</span>
         <span>${a.text}</span>
