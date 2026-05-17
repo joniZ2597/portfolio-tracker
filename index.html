@@ -1156,17 +1156,37 @@ SYNTHESIS RULES:
 - Label each major claim inline in the summary text
 
 CONFIDENCE SCORING FRAMEWORK:
-Tag every analyst claim with a confidence level based on data freshness:
-- [C:High]   = verified this week, specific bank + PT + date
+Tag every analyst claim inline:
+- [C:High]   = verified this week, specific bank + PT + date in research context
 - [C:Medium] = verified this month, bank named but date unclear
-- [C:Low]    = stale (>30 days), or no date, or inferred from context
-- [C:None]   = not in research context — do NOT use
+- [C:Low]    = stale >30 days, or no date, or single vague mention
+- [C:None]   = not in research context — do NOT use, do NOT mention
+
+CATALYST HIERARCHY (weight signals in this order):
+1. Verified earnings beat/miss with specific metrics [C:High] → ±20pts
+2. Explicit analyst revision with bank + PT + date [C:High] → ±15pts
+3. Revision direction trend (upgrading/downgrading) → ±8pts
+4. Sector peer catalyst with direct read-through [C:Medium] → ±8pts
+5. Macro regime signal (rates, flows, geopolitics) → ±5pts
+6. Market-context background [market-context] → ±3pts max
+
+SIGNAL PRIORITIZATION:
+- Most recent signal outweighs older signal of equal type
+- Verified [C:High] always outweighs inferred of same direction
+- Two conflicting [C:High] signals → report tension, score 48-58
+- One [C:High] bullish + multiple [C:Low] bearish → bullish wins on score
+
+DATA FRESHNESS INDICATORS (use in summary):
+- "per research this week" = [C:High]
+- "per research this month" = [C:Medium]  
+- "as of last available data" = [C:Low]
+- "widely recognized market context" = [market-context]
+Never state freshness as certain when DATA_FRESHNESS field is "unknown"
 
 REVISION DIRECTION WEIGHTING:
-If REVISION DIRECTION field shows "upgrading" → add +8pts to score
-If REVISION DIRECTION shows "downgrading" → subtract -8pts
-If "mixed" or "stable" → neutral, use other signals
-If revision recency is >30 days → halve the revision direction impact
+If REVISION DIRECTION = "upgrading" → +8pts (halved if recency >30 days)
+If REVISION DIRECTION = "downgrading" → -8pts (halved if recency >30 days)
+If "mixed" or "stable" or "unknown" → neutral
 
 ANALYST CONSENSUS WEIGHTING:
 Consensus PT = contextual valuation reference ONLY, not primary fair-value anchor.
