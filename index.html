@@ -561,8 +561,9 @@
     flex-wrap: wrap;
   }
 
-  /* Debug panel */
+  /* Debug panel — always hidden, internal use only */
   .debug-panel {
+    display: none !important;
     background: rgba(0,229,255,0.04);
     border: 1px solid rgba(0,229,255,0.15);
     border-radius: 10px;
@@ -1240,12 +1241,9 @@ async function analyzeChunk(batch, today) {
     }
     console.log(`[PT] Perplexity parsed tickers: ${Object.keys(pplxData).join(',') || 'none'}`);
 
-    const dbgEl = document.getElementById('debugPanel');
-    const dbgContent = document.getElementById('debugContent');
-    if (dbgEl && dbgContent) {
-      dbgContent.textContent = '=== MARKET DATA ===\n' + (stockContext || '(none)') + '\n\n=== PERPLEXITY STRUCTURED ===\n' + JSON.stringify(pplxData, null, 2);
-      dbgEl.classList.add('visible');
-    }
+    // Debug: console only — never expose to UI
+    console.log('[PT] stockContext length:', stockContext.length);
+    console.log('[PT] pplxData keys:', Object.keys(pplxData).join(','));
 
     rawText = await fetchAnthropicAnalysis(batch, today, stockContext + '\n%%NEWS_CONTEXT_START%%\n' + JSON.stringify(pplxData));
   } else if (apiKey) {
@@ -1271,7 +1269,7 @@ async function analyzeChunk(batch, today) {
 
 // ── renderResults ────────────────────────────────────────────────────────────
 function renderResults(allResults, dateStr) {
-  const grid = document.getElementById('resultsGrid');
+  const grid = document.getElementById('cardsGrid');
   const section = document.getElementById('resultsSection');
   const dateEl = document.getElementById('resultsDate');
   if (!grid) return;
@@ -1351,7 +1349,7 @@ async function runAnalysis() {
   if (window._fetchTimestamps) Object.keys(window._fetchTimestamps).forEach(k => delete window._fetchTimestamps[k]);
   document.querySelectorAll('[class*="deepdive-result"]').forEach(el => { el.style.display = 'none'; const txt = el.querySelector('[id^="dd-text-"]'); if (txt) txt.textContent = ''; });
   document.querySelectorAll('[id^="dd-btn-"]').forEach(btn => { btn.textContent = 'Deep Dive — ניתוח מוסדי מעמיק'; btn.disabled = false; });
-  const resultsGrid = document.getElementById('resultsGrid');
+  const resultsGrid = document.getElementById('cardsGrid');
   if (resultsGrid) resultsGrid.innerHTML = '';
   console.log('[PT] State reset complete — UI cleared');
 
@@ -1382,8 +1380,17 @@ async function runAnalysis() {
     const dateStr = new Date().toLocaleString('he-IL');
 
     const validResults = allResults.filter(r => {
-      const ok = r.ticker && typeof r.sentiment_score === 'number' && r.summary && r.summary.length > 50;
-      if (!ok) console.warn('[PT] REJECTED malformed result:', JSON.stringify(r).slice(0,100));
+      // Strict schema: must have ticker, numeric score, non-empty summary
+      const ok = r &&
+        typeof r.ticker === 'string' && r.ticker.length > 0 &&
+        typeof r.sentiment_score === 'number' && r.sentiment_score >= 0 && r.sentiment_score <= 100 &&
+        typeof r.summary === 'string' && r.summary.length > 50 &&
+        ['positive','negative','neutral'].includes(r.sentiment) &&
+        // Summary must not contain raw pipeline state
+        !r.summary.includes('=== PERPLEXITY') &&
+        !r.summary.includes('%%NEWS_CONTEXT') &&
+        !r.summary.includes('__raw__');
+      if (!ok) console.warn('[PT] REJECTED malformed result:', JSON.stringify(r).slice(0,120));
       return ok;
     });
 
@@ -1401,7 +1408,12 @@ async function runAnalysis() {
     localStorage.setItem('pt_results', JSON.stringify(dedupedResults));
     localStorage.setItem('pt_date', dateStr);
     results = dedupedResults;
-    renderResults(dedupedResults, dateStr);
+    try {
+      renderResults(dedupedResults, dateStr);
+    } catch(renderErr) {
+      console.error('[PT] renderResults failed:', renderErr.message);
+      showError('שגיאה בהצגת התוצאות: ' + renderErr.message);
+    }
 
   } catch (err) {
     hideProgress();
