@@ -1540,11 +1540,21 @@ Tickers: ${batch.join(',')}`;
   for (const block of data.content) {
     if (block.type === 'text') textContent += block.text;
   }
-  // Prepend prefill so parseJSON gets complete JSON
-  const fullResponse = textContent.startsWith('{"results":[') || textContent.startsWith('{')
-    ? textContent
-    : '{"results":[' + textContent;
+  // Prepend prefill prefix — Claude continues from {"results":[
+  // Claude returns: {"ticker":"MU",...}]} — we complete the wrapper
+  let fullResponse = textContent;
+  if (!textContent.startsWith('{')) {
+    // Claude continued from prefill — wrap it
+    fullResponse = '{"results":[' + textContent;
+    // Ensure closing
+    if (!fullResponse.trimEnd().endsWith('}')) {
+      fullResponse = fullResponse.trimEnd();
+      if (!fullResponse.endsWith(']')) fullResponse += ']';
+      if (!fullResponse.endsWith('}')) fullResponse += '}';
+    }
+  }
   console.log('[PT] Anthropic response OK, length:', fullResponse.length);
+  console.log('[PT] Response first chars:', fullResponse.slice(0,50));
   return fullResponse;
 }
 
