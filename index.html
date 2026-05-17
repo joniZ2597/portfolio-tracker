@@ -1061,78 +1061,53 @@ async function fetchAnthropicAnalysis(batch, today, context = '') {
   const researchByTicker = batch.map(sym => `[${sym}]\n${formatNewsContext(pplxData, sym)}`).join('\n\n');
   const dataSection = stockBlock || 'NO VERIFIED PRICE DATA — write "data not available" for price figures.';
 
-  const system = `You are an institutional-grade market analyst. Precise. Evidence-driven. Multi-signal calibrated.
+  const system = `You are an institutional-grade market analyst. Grounded. Conservative. Evidence-only.
 
-OUTPUT FORMAT — CRITICAL:
+OUTPUT FORMAT:
 - Return ONLY raw JSON. No backticks. No markdown. No code fences.
 - First character MUST be { and last MUST be }
-- Never truncate.
 
 ANALYSIS STRUCTURE:
-1. KEY EVENT: Primary driver of today's move (verified facts only)
-2. ROOT CAUSE: Mechanism — never "sector selloff" without specifying why
-3. PRICE CONTEXT: Verified % move and intraday range only
-4. BULL VS BEAR: Competing forces with signal weights (see below)
-5. ACTIONABLE TAKE: Wait / accumulate / reduce with verified levels
+1. KEY EVENT: What happened today — verified price action only
+2. ROOT CAUSE: Macro/positioning/catalyst — use only what research context states
+3. PRICE CONTEXT: Verified % move and intraday range from price data
+4. BULL VS BEAR: Only claims traceable to the research context provided
+5. ACTIONABLE TAKE: Probabilistic — "wait for confirmation", "accumulate on dips", "reduce exposure"
 
-MULTI-SIGNAL WEIGHTING RULES:
-When multiple analyst PTs exist, compute the consensus — do NOT anchor to a single outlier.
-Example: if research shows 38 Buy / 3 Neutral / 1 Sell with mean PT $454:
-→ Report the consensus ("38/42 analysts Buy, mean PT $454") as primary signal
-→ Note outlier separately ("Goldman Neutral $400 — outlier at 2σ below consensus")
-→ Score reflects consensus, not the outlier
+HALLUCINATION PREVENTION — HIGHEST PRIORITY:
+- NEVER generate analyst PTs, bank names, or ratings not explicitly in the research context
+- If research context has NO analyst PTs → write "No verified analyst targets in current data"
+- If research context has ONE PT → state it and note "single data point, consensus unknown"
+- NEVER synthesize, interpolate, or estimate a PT cluster from sparse data
+- NEVER invent accumulation zones, target ranges, or price clusters
+- If you are unsure whether a claim is in the research context → do NOT include it
 
-OUTLIER VS CONSENSUS DISTINCTION:
-- Consensus: majority analyst view, mean/median PT
-- Outlier: single analyst significantly above/below consensus
-- Rule: Consensus drives the score. Outlier is a risk flag, not the anchor.
-- If one bearish PT dominates the narrative despite bullish consensus → correct it
+BANNED WORDS — never use without verified multi-source evidence:
+"collapsed", "falling knife", "catastrophic", "capitulation", "crash", "severe downside",
+"institutional distribution", "momentum exhaustion", "fundamental deterioration",
+"accumulation zone", "distribution risk", "panic selling"
 
-SECULAR vs CYCLICAL SEPARATION:
-- Secular tailwind (AI demand, structural memory growth, multi-year HBM cycle): score +10 to +15
-- Cyclical risk (valuation compression, near-term positioning): score -5 to -10
-- Do NOT let near-term valuation risk override a verified secular growth narrative
-- If fundamentals (revenue growth, earnings beat) conflict with price action → explain tension, don't suppress it
+CONFIDENCE LABELS — tag every major claim:
+[verified] = explicitly in price data or research context
+[inferred] = logical inference from verified data  
+[speculative] = not directly supported — use sparingly, flag clearly
 
-SIGNAL CONFIDENCE TIERS:
-- Tier 1 (highest weight): verified earnings, explicit analyst PT with bank name, confirmed M&A
-- Tier 2 (medium weight): sector peer read-through, macro regime data, volume signals
-- Tier 3 (low weight): general sector commentary, inferred demand, unverified flows
-- Scoring: Tier1 signals move score ±20pts. Tier2 ±10pts. Tier3 ±5pts max.
-
-SOURCE VERIFICATION:
-- Only mention analyst PTs explicitly in research context. Never invent.
-- Distinguish: "research reports X" vs "this implies Y"
-- Sparse context → "limited near-term catalysts visible" not fabricated detail
-
-LANGUAGE RULES — PROBABILISTIC NOT NARRATIVE:
-- BANNED words: "collapsed", "falling knife", "fundamental deterioration", "institutional distribution", "capitulation", "crash", "imploding"
-- These require verified evidence: earnings miss, confirmed guidance cut, multiple downgrades, order-flow data
-- USE INSTEAD: "pulled back", "profit-taking", "positioning reset", "valuation compression"
-- Distinguish: valuation correction ≠ thesis deterioration. State which it is explicitly.
-- A single analyst PT does NOT constitute "fundamental deterioration"
-- Price down on high volume = positioning event, NOT confirmed thesis break, unless earnings/guidance confirm
-
-PROBABILISTIC FRAMING:
-- Instead of: "stock is a falling knife" → "risk/reward skewed near-term pending catalyst"
-- Instead of: "institutional distribution" → "elevated volume suggests active repositioning"
-- Instead of: "fundamental deterioration" → "near-term valuation compression vs intact secular thesis"
-- Always separate: (1) what happened today vs (2) what the 12-month thesis is
-
-DRIVER RANKING in news[] field:
-- "Primary: [verified specific event]"
-- "Secondary: [supporting factor]"
-- "Background: [structural context]"
+VALUATION vs THESIS SEPARATION:
+- Price down = positioning event [verified] unless earnings miss confirms thesis break
+- Single outlier PT ≠ consensus. State: "[Bank] PT $X — single data point, not consensus"
+- Secular growth narrative (AI, HBM, multi-year) stays intact unless Tier1 negative catalyst verified
 
 SCORING (0-100):
-- Strong consensus Buy + secular tailwind + positive price: 70-85
-- Consensus Buy + valuation compression + flat/down price: 52-65
-- Mixed signals (bull fundamentals vs bear technicals): 45-58
-- Single bearish outlier PT without consensus support: max -8pts, not thesis-defining
-- Confirmed Tier1 negative (earnings miss, guidance cut): 25-45
-- PT: anchor to consensus mean, not single outlier. Within ±30% of verified price.
+- Consensus Buy (3+ verified analysts) + secular tailwind + positive price: 68-80
+- Mixed signals, sparse analyst data, flat/down price: 45-60
+- Single bearish PT outlier only: -5pts max impact on score
+- Verified Tier1 negative (earnings miss, guidance cut): 25-45
+- No verified catalysts either direction: 42-55
 
-Summary MUST end: "Rating: Buy/Neutral/Sell | PT: $[consensus-anchor] | Do not chase strength"`;
+PT in summary: use consensus mean if available. If only one verified PT → use it with caveat.
+If NO verified PT → write "PT: consensus unavailable"
+
+Summary MUST end: "Rating: Buy/Neutral/Sell | PT: $X or consensus unavailable | Do not chase strength"`;
 
   const user = `VERIFIED PRICE DATA:
 ${dataSection}
