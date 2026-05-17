@@ -908,16 +908,20 @@ function hideProgress() { setProgress(100, ''); }
 // ── Perplexity: fetch structured context ────────────────────────────────────
 async function fetchPerplexityContext(batch) {
   const ticker = batch[0];
-  const query = `Report on ${ticker} using EXACTLY this format. No markdown. No hedging.
+  const query = `Report on ${ticker} for the past 7 days. EXACTLY this format. No markdown. No hedging.
 
 TICKER: ${ticker}
-ANALYST_ACTIONS: [bank] [raised/cut/initiated] PT $[number] ([date]) | [more if any]
-BULLISH: [specific catalyst] | [specific catalyst]
-BEARISH: [specific risk] | [specific risk]
-MACRO: [macro factor] | [macro factor]
+ANALYST_ACTIONS: [bank] [raised/cut/initiated] PT $[number] ([date e.g. May 14]) | [next action if any]
+REVISION_DIRECTION: [upgrading/downgrading/mixed/stable] — analyst revision trend past 30 days
+REVISION_RECENCY: [date of most recent revision]
+EARNINGS: [last quarter — beat/miss/in-line and key metric e.g. "Q2 beat, revenue +49% YoY"]
+BULLISH: [specific catalyst with date if known] | [next]
+BEARISH: [specific risk] | [next]
+MACRO: [macro factor] | [next]
 PRICE_TODAY: $[close] [change%]
+DATA_FRESHNESS: [today/this week/this month]
 
-Use NONE for any field with no data. Search past 7 days. Be specific with numbers.`;
+Use NONE for any field with no data. Be specific with numbers and dates.`;
 
   const response = await fetch('https://api.perplexity.ai/chat/completions', {
     method: 'POST',
@@ -961,7 +965,26 @@ function parsePerplexityContext(raw) {
         if (clean.length > 10) bearish.push(clean.slice(0, 100));
       }
     });
-    result[currentTicker] = { analystActions: analystActions.slice(0, 5), bullishCatalysts: bullish.slice(0, 4), bearishCatalysts: bearish.slice(0, 4), macroDrivers: [], institutionalFlows: [], risks: bearish.slice(0, 3) };
+    // Extract revision direction
+    const revLine = currentLines.find(l => l.startsWith('REVISION_DIRECTION:'));
+    const revDir = revLine ? revLine.replace('REVISION_DIRECTION:', '').trim() : 'unknown';
+    const recLine = currentLines.find(l => l.startsWith('REVISION_RECENCY:'));
+    const revRecency = recLine ? recLine.replace('REVISION_RECENCY:', '').trim() : 'unknown';
+    const freshLine = currentLines.find(l => l.startsWith('DATA_FRESHNESS:'));
+    const dataFreshness = freshLine ? freshLine.replace('DATA_FRESHNESS:', '').trim() : 'unknown';
+    const earnLine = currentLines.find(l => l.startsWith('EARNINGS:'));
+    const earnings = earnLine ? earnLine.replace('EARNINGS:', '').trim() : 'NONE';
+
+    result[currentTicker] = {
+      analystActions: analystActions.slice(0, 5),
+      bullishCatalysts: bullish.slice(0, 4),
+      bearishCatalysts: bearish.slice(0, 4),
+      macroDrivers: [], institutionalFlows: [], risks: bearish.slice(0, 3),
+      revisionDirection: revDir,
+      revisionRecency: revRecency,
+      dataFreshness,
+      earnings
+    };
     console.log(`[PT] Parsed ${currentTicker}: ${analystActions.length} analyst actions, ${bullish.length} bullish`);
     if (analystActions.length) console.log('[PT] Analyst actions:', JSON.stringify(analystActions));
   };
@@ -990,7 +1013,19 @@ function formatNewsContext(pplxData, symbol) {
   const d = pplxData[symbol] || pplxData['__raw__'];
   if (!d) return `No research data for ${symbol}.`;
   const lines = [];
-  if (d.analystActions?.length)   lines.push('ANALYST ACTIONS: ' + d.analystActions.map(a => `${a.bank} PT $${a.target}`).join(' | '));
+  // Analyst actions with freshness context
+  if (d.analystActions?.length) {
+    const ptStr = d.analystActions.map(a => `${a.bank} PT $${a.target}`).join(' | ');
+    const freshTag = d.dataFreshness && d.dataFreshness !== 'unknown' ? ` [data: ${d.dataFreshness}]` : '';
+    lines.push('ANALYST ACTIONS: ' + ptStr + freshTag);
+  } else {
+    lines.push('ANALYST ACTIONS: No verified analyst PTs in current data');
+  }
+  // Revision direction — critical for weighting
+  if (d.revisionDirection && d.revisionDirection !== 'unknown' && d.revisionDirection !== 'NONE') {
+    lines.push('REVISION DIRECTION: ' + d.revisionDirection + (d.revisionRecency !== 'unknown' ? ' (most recent: ' + d.revisionRecency + ')' : ''));
+  }
+  if (d.earnings && d.earnings !== 'NONE') lines.push('EARNINGS: ' + d.earnings);
   if (d.bullishCatalysts?.length) lines.push('BULLISH: ' + d.bullishCatalysts.join(' | '));
   if (d.bearishCatalysts?.length) lines.push('BEARISH: ' + d.bearishCatalysts.join(' | '));
   if (d.macroDrivers?.length)     lines.push('MACRO: ' + d.macroDrivers.join(' | '));
@@ -1096,6 +1131,19 @@ VALUATION vs THESIS SEPARATION:
 - Price down = positioning event [verified] unless earnings miss confirms thesis break
 - Single outlier PT ≠ consensus. State: "[Bank] PT $X — single data point, not consensus"
 - Secular growth narrative (AI, HBM, multi-year) stays intact unless Tier1 negative catalyst verified
+
+CONFIDENCE SCORING FRAMEWORK:
+Tag every analyst claim with a confidence level based on data freshness:
+- [C:High]   = verified this week, specific bank + PT + date
+- [C:Medium] = verified this month, bank named but date unclear
+- [C:Low]    = stale (>30 days), or no date, or inferred from context
+- [C:None]   = not in research context — do NOT use
+
+REVISION DIRECTION WEIGHTING:
+If REVISION DIRECTION field shows "upgrading" → add +8pts to score
+If REVISION DIRECTION shows "downgrading" → subtract -8pts
+If "mixed" or "stable" → neutral, use other signals
+If revision recency is >30 days → halve the revision direction impact
 
 ANALYST CONSENSUS WEIGHTING:
 Consensus PT = contextual valuation reference ONLY, not primary fair-value anchor.
