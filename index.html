@@ -1527,7 +1527,7 @@ Tickers: ${batch.join(',')}`;
       system: system,
       messages: [
         { role: 'user',      content: user },
-        { role: 'assistant', content: '{"results":[' }
+        { role: 'assistant', content: '[{' }
       ]
     })
   });
@@ -1549,7 +1549,7 @@ Tickers: ${batch.join(',')}`;
     // already complete
   }
   // Case 2: Claude returned ticker object(s) — wrap in results array
-  else if (fullResponse.startsWith('{"ticker"') || fullResponse.startsWith('[{"ticker"')) {
+  else if (fullResponse.startsWith('{"ticker"') || fullResponse.startsWith('[{"ticker"') || fullResponse.startsWith('[{')) {
     const arr = fullResponse.startsWith('[') ? fullResponse : '[' + fullResponse + ']';
     // Ensure array is closed
     const fixed = arr.endsWith(']') ? arr : (arr.endsWith('}') ? arr + ']' : arr + '}]');
