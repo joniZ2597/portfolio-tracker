@@ -388,23 +388,32 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 
 /* ─── TICKER ACTION MENU ────────────────────────────────── */
 .ticker-menu{
-  position:fixed;z-index:500;
+  position:fixed;z-index:900;
   background:var(--card);border:1px solid var(--border2);
-  border-radius:4px;min-width:168px;
-  box-shadow:0 4px 16px rgba(0,0,0,.45);
+  border-radius:6px;min-width:200px;
+  box-shadow:0 8px 24px rgba(0,0,0,.55);
   overflow:hidden;
+  padding:4px 0;
+}
+.ticker-menu-header{
+  padding:8px 14px 6px;
+  font-family:var(--mono);font-size:9px;font-weight:700;
+  color:var(--text3);letter-spacing:1px;text-transform:uppercase;
+  border-bottom:1px solid var(--border);
+  margin-bottom:4px;
 }
 .ticker-menu-item{
-  display:flex;align-items:center;gap:8px;
-  padding:9px 14px;
-  font-size:12px;cursor:pointer;
+  display:flex;align-items:center;gap:10px;
+  padding:11px 16px;
+  font-size:13px;cursor:pointer;
   color:var(--text2);
   border:none;background:none;width:100%;text-align:left;
+  font-family:var(--sans);
 }
-.ticker-menu-item:hover{background:rgba(255,255,255,.05);color:var(--text)}
+.ticker-menu-item:hover{background:rgba(255,255,255,.06);color:var(--text)}
 .ticker-menu-item.danger{color:var(--red2)}
-.ticker-menu-item.danger:hover{background:rgba(220,38,38,.10);color:var(--red2)}
-.ticker-menu-sep{height:1px;background:var(--border);margin:2px 0}
+.ticker-menu-item.danger:hover{background:rgba(220,38,38,.12);color:var(--red2)}
+.ticker-menu-sep{height:1px;background:var(--border);margin:4px 0}
 
 /* Hide legacy chip/config UI */
 .sb-chips,.sb-config,.chip{display:none!important}
@@ -1092,19 +1101,27 @@ function addTicker() {
 
 function removeTicker(sym) {
   const upper = sym.toUpperCase();
+  // Remove only from watchlist — do NOT touch _cockpitResults or pt_results
   watchlist = watchlist.filter(e => e.symbol !== upper);
   saveWatchlist();
   renderWatchlistRows();
   updateRunScanCount();
-  // If the removed ticker was selected, select next available or clear panel
+  // If the removed ticker was selected, pick next intelligently
   if (_activeTicker === upper) {
-    const next = watchlist[0];
+    // Prefer next ticker that already has a scan result
+    const withResult = watchlist.find(e => _cockpitResults.some(r => r.ticker === e.symbol));
+    const fallback   = watchlist[0];
+    const next       = withResult || fallback;
     if (next) {
       selectTicker(next.symbol);
     } else {
       _activeTicker = null;
       const panel = document.getElementById('mainPanel');
-      if (panel) panel.innerHTML = '<div class="main-empty"><div class="main-empty-icon">[ ]</div><div class="main-empty-text" style="color:var(--text3)">Select a ticker from the watchlist</div></div>';
+      if (panel) panel.innerHTML =
+        '<div class="main-empty">' +
+          '<div class="main-empty-icon">[ ]</div>' +
+          '<div class="main-empty-text" style="color:var(--text3)">Select a ticker from the watchlist</div>' +
+        '</div>';
     }
   }
 }
@@ -1671,18 +1688,15 @@ let _openMenu = null; // currently open menu DOM element
 
 function openTickerMenu(sym, event) {
   event.stopPropagation();
-  closeTickerMenu(); // close any previously open menu
+  closeTickerMenu();
 
   const menu = document.createElement('div');
   menu.className = 'ticker-menu';
   menu.id = 'tickerMenu';
 
-  // Position near the dots button
-  const rect = event.currentTarget.getBoundingClientRect();
-  menu.style.top  = (rect.bottom + 4) + 'px';
-  menu.style.left = Math.max(4, rect.right - 172) + 'px';
-
+  // Build menu content — sym is already upper-case from the row template
   menu.innerHTML =
+    '<div class="ticker-menu-header">' + sym + '</div>' +
     '<button class="ticker-menu-item" onclick="event.stopPropagation();selectTicker(\'' + sym + '\');closeTickerMenu()">' +
       '▶&nbsp; View details' +
     '</button>' +
@@ -1691,16 +1705,47 @@ function openTickerMenu(sym, event) {
       '✕&nbsp; Remove from watchlist' +
     '</button>';
 
+  // Append off-screen first so we can measure its height
+  menu.style.visibility = 'hidden';
   document.body.appendChild(menu);
   _openMenu = menu;
 
-  // Close on any outside click
-  setTimeout(() => document.addEventListener('click', closeTickerMenu, { once: true }), 0);
+  // Viewport-aware positioning
+  const rect       = event.currentTarget.getBoundingClientRect();
+  const menuH      = menu.offsetHeight;
+  const menuW      = menu.offsetWidth;
+  const spaceBelow = window.innerHeight - rect.bottom - 8;
+  const spaceAbove = rect.top - 8;
+  const openUp     = spaceBelow < menuH && spaceAbove >= menuH;
+  const top  = openUp ? (rect.top - menuH - 4) : (rect.bottom + 4);
+  const left = Math.max(8, Math.min(rect.right - menuW, window.innerWidth - menuW - 8));
+  menu.style.top        = top + 'px';
+  menu.style.left       = left + 'px';
+  menu.style.visibility = 'visible';
+
+  // Close on outside click (deferred so this event does not immediately close it)
+  setTimeout(() => document.addEventListener('click', _onMenuOutsideClick), 0);
+}
+
+function _onMenuOutsideClick(e) {
+  if (_openMenu && !_openMenu.contains(e.target)) closeTickerMenu();
+}
+
+function _onMenuEscape(e) {
+  if (e.key === 'Escape') closeTickerMenu();
 }
 
 function closeTickerMenu() {
-  if (_openMenu) { _openMenu.remove(); _openMenu = null; }
+  if (_openMenu) {
+    _openMenu.remove();
+    _openMenu = null;
+    document.removeEventListener('click', _onMenuOutsideClick);
+    document.removeEventListener('keydown', _onMenuEscape);
+  }
 }
+
+// Wire Escape globally (safe: no-op when menu is closed)
+document.addEventListener('keydown', _onMenuEscape);
 
 function confirmRemoveTicker(sym) {
   closeTickerMenu();
@@ -2156,6 +2201,18 @@ function exportJSON() {
   a.click();
 }
 
+// ── mergeResultsByTicker ────────────────────────────────────────────────────
+// Merges new results over previous, replacing per-ticker. Previous results
+// for tickers NOT in newResults are kept unchanged.
+function mergeResultsByTicker(previousResults, newResults) {
+  const map = new Map();
+  // Load previous first (older baseline)
+  (previousResults || []).forEach(r => { if (r && r.ticker) map.set(r.ticker, r); });
+  // Overwrite with any new valid result for the same ticker
+  (newResults || []).forEach(r => { if (r && r.ticker) map.set(r.ticker, r); });
+  return Array.from(map.values());
+}
+
 // ── cancelScan ──────────────────────────────────────────────────────────────
 function cancelScan() {
   if (!_analysisRunning) return;
@@ -2183,10 +2240,9 @@ async function runAnalysis() {
   const scanSymbols = getScanSymbols();
   if (scanSymbols.length === 0) { _analysisRunning = false; showError('No tickers checked for scan. Check at least one ticker.'); return; }
 
-  // HARD STATE RESET
-  results = [];
-  localStorage.removeItem('pt_results');
-  localStorage.removeItem('pt_date');
+  // Preserve previous results — new results will be merged in per-ticker, not wiped
+  const previousResults = Array.isArray(results) ? [...results] : [];
+  // Reset only in-memory pipeline state (not localStorage)
   window._lastPplxRaw = null;
   window._lastStockData = null;
   if (window._fetchTimestamps) Object.keys(window._fetchTimestamps).forEach(k => delete window._fetchTimestamps[k]);
@@ -2194,7 +2250,7 @@ async function runAnalysis() {
   document.querySelectorAll('[id^="dd-btn-"]').forEach(btn => { btn.textContent = 'Deep Dive — ניתוח מוסדי מעמיק'; btn.disabled = false; });
   const resultsGrid = document.getElementById('cardsGrid');
   if (resultsGrid) resultsGrid.innerHTML = '';
-  console.log('[PT] State reset complete — UI cleared');
+  console.log('[PT] Scan start — preserving ' + previousResults.length + ' previous results');
 
   const btn = document.getElementById('runBtn');
   btn.disabled = false;
@@ -2206,7 +2262,7 @@ async function runAnalysis() {
 
   const today = new Date().toLocaleDateString('he-IL');
   const BATCH_SIZE = 1; // 1 ticker per batch — ensures _cancelRequested is checked before each ticker
-  const allResults = [];
+  const newResults = []; // accumulates results for this scan run only
 
   try {
     setProgress(5, 'מאתחל...');
@@ -2221,23 +2277,26 @@ async function runAnalysis() {
       setProgress(pct, `מנתח ${batch.join(', ')}...`);
       const batchResults = await analyzeChunk(batch, today);
       _currentScanTicker = null;
-      allResults.push(...batchResults);
-      results = [...allResults];
+      newResults.push(...batchResults);
+      // Merge new results over previous — preserves results for tickers not yet rescanned
+      const merged = mergeResultsByTicker(previousResults, newResults);
+      results = merged;
       const dateStr = new Date().toLocaleString('he-IL');
-      renderResults(allResults, dateStr);
+      localStorage.setItem('pt_results', JSON.stringify(merged));
+      localStorage.setItem('pt_date', dateStr);
+      renderResults(merged, dateStr);
     }
 
     setProgress(100, 'הניתוח הושלם!');
     const dateStr = new Date().toLocaleString('he-IL');
 
-    const validResults = allResults.filter(r => {
-      // Strict schema: must have ticker, numeric score, non-empty summary
+    // Validate only the newly scanned results
+    const validNew = newResults.filter(r => {
       const ok = r &&
         typeof r.ticker === 'string' && r.ticker.length > 0 &&
         typeof r.sentiment_score === 'number' && r.sentiment_score >= 0 && r.sentiment_score <= 100 &&
         typeof r.summary === 'string' && r.summary.length > 50 &&
         ['positive','negative','neutral'].includes(r.sentiment) &&
-        // Summary must not contain raw pipeline state
         !r.summary.includes('=== PERPLEXITY') &&
         !r.summary.includes('%%NEWS_CONTEXT') &&
         !r.summary.includes('__raw__');
@@ -2245,22 +2304,25 @@ async function runAnalysis() {
       return ok;
     });
 
+    // Dedup within new results (keep latest)
     const seen = new Set();
-    const dedupedResults = [...validResults].reverse().filter(r => {
+    const dedupedNew = [...validNew].reverse().filter(r => {
       if (seen.has(r.ticker)) { console.warn('[PT] DEDUP: dropped stale result for', r.ticker); return false; }
       seen.add(r.ticker); return true;
     }).reverse();
 
     const runId = Date.now();
     const runTimestamp = new Date().toISOString();
-    dedupedResults.forEach(r => { r._runId = runId; r._timestamp = runTimestamp; });
+    dedupedNew.forEach(r => { r._runId = runId; r._timestamp = runTimestamp; });
 
-    console.log(`[PT] Saving ${dedupedResults.length} validated results (${allResults.length - dedupedResults.length} dropped)`);
-    localStorage.setItem('pt_results', JSON.stringify(dedupedResults));
+    // Final merge: new validated results replace previous per-ticker
+    const finalResults = mergeResultsByTicker(previousResults, dedupedNew);
+    console.log(`[PT] Scan complete — ${dedupedNew.length} new results merged with ${previousResults.length} previous (${finalResults.length} total)`);
+    localStorage.setItem('pt_results', JSON.stringify(finalResults));
     localStorage.setItem('pt_date', dateStr);
-    results = dedupedResults;
+    results = finalResults;
     try {
-      renderResults(dedupedResults, dateStr);
+      renderResults(finalResults, dateStr);
     } catch(renderErr) {
       console.error('[PT] renderResults failed:', renderErr.message);
       showError('שגיאה בהצגת התוצאות: ' + renderErr.message);
@@ -2269,6 +2331,11 @@ async function runAnalysis() {
   } catch (err) {
     hideProgress();
     showError(err.message || 'שגיאה לא ידועה');
+    // On error: restore previous results so the user does not lose saved data
+    if (previousResults.length && !results.length) {
+      results = previousResults;
+      console.log('[PT] Scan error — restored', previousResults.length, 'previous results');
+    }
     btn.className = 'btn-run-scan';
     btn.onclick = runAnalysis;
     btn.disabled = false;
