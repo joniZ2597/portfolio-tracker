@@ -604,9 +604,201 @@ function getHistoricalCacheStats() {
 
 
 
-const SAMPLE_TICKERS = ['AAPL','NVDA','MSFT','TSLA','GOOGL','META','AMZN'];
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 1 — v1.1 Watchlist Data Model
+// Replaces the old plain string[] with a per-ticker object model.
+// The rest of the app continues to work unchanged via getSymbols() /
+// getScanSymbols(), which return plain string[] exactly as before.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Default metadata for known symbols ──────────────────────────────────────
+// ETF tickers use sectorEtf: '' — they are their own benchmark.
+const TICKER_DEFAULTS = {
+  // Equities
+  NVDA:  { name: 'NVIDIA Corp.',            exchange: 'NASDAQ', sector: 'Semiconductors',       sectorEtf: 'SMH'  },
+  AAPL:  { name: 'Apple Inc.',              exchange: 'NASDAQ', sector: 'Technology',            sectorEtf: 'XLK'  },
+  MSFT:  { name: 'Microsoft Corp.',         exchange: 'NASDAQ', sector: 'Technology',            sectorEtf: 'XLK'  },
+  TSLA:  { name: 'Tesla, Inc.',             exchange: 'NASDAQ', sector: 'Cons. Discretionary',   sectorEtf: 'XLY'  },
+  GOOGL: { name: 'Alphabet Inc.',           exchange: 'NASDAQ', sector: 'Communication',         sectorEtf: 'XLC'  },
+  META:  { name: 'Meta Platforms',          exchange: 'NASDAQ', sector: 'Communication',         sectorEtf: 'XLC'  },
+  AMZN:  { name: 'Amazon.com Inc.',         exchange: 'NASDAQ', sector: 'Cons. Discretionary',   sectorEtf: 'XLY'  },
+  MU:    { name: 'Micron Technology',       exchange: 'NASDAQ', sector: 'Semiconductors',        sectorEtf: 'SMH'  },
+  ON:    { name: 'ON Semiconductor',        exchange: 'NASDAQ', sector: 'Semiconductors',        sectorEtf: 'SMH'  },
+  CRWD:  { name: 'CrowdStrike Holdings',    exchange: 'NASDAQ', sector: 'Software',              sectorEtf: 'IGV'  },
+  FROG:  { name: 'JFrog Ltd.',              exchange: 'NASDAQ', sector: 'Software',              sectorEtf: 'IGV'  },
+  VRT:   { name: 'Vertiv Holdings',         exchange: 'NYSE',   sector: 'Industrials',           sectorEtf: 'XLI'  },
+  ROK:   { name: 'Rockwell Automation',     exchange: 'NYSE',   sector: 'Industrials',           sectorEtf: 'XLI'  },
+  MRNA:  { name: 'Moderna Inc.',            exchange: 'NASDAQ', sector: 'Biotechnology',         sectorEtf: 'XBI'  },
+  AA:    { name: 'Alcoa Corp.',             exchange: 'NYSE',   sector: 'Materials',             sectorEtf: 'XLB'  },
+  MDT:   { name: 'Medtronic plc',           exchange: 'NYSE',   sector: 'Health Care',           sectorEtf: 'XLV'  },
+  CAH:   { name: 'Cardinal Health',         exchange: 'NYSE',   sector: 'Health Care',           sectorEtf: 'XLV'  },
+  NFLX:  { name: 'Netflix Inc.',            exchange: 'NASDAQ', sector: 'Communication',         sectorEtf: 'XLC'  },
+  ONDS:  { name: 'Ondas Holdings',          exchange: 'NASDAQ', sector: 'Technology',            sectorEtf: 'XLK'  },
+  FLNG:  { name: 'Flex LNG Ltd.',           exchange: 'NYSE',   sector: 'Energy',               sectorEtf: 'XLE'  },
+  KRE:   { name: 'SPDR S&P Regional Banking ETF', exchange: 'NYSE', sector: 'ETF',              sectorEtf: ''     },
+  // ETFs — sectorEtf blank; they are their own benchmark
+  SPY:   { name: 'SPDR S&P 500 ETF',        exchange: 'NYSE',   sector: 'ETF',                  sectorEtf: ''     },
+  QQQ:   { name: 'Invesco QQQ Trust',       exchange: 'NASDAQ', sector: 'ETF',                  sectorEtf: ''     },
+  XLE:   { name: 'Energy Select Sector ETF',exchange: 'NYSE',   sector: 'ETF',                  sectorEtf: ''     },
+  SOXX:  { name: 'iShares Semiconductor ETF',exchange:'NASDAQ', sector: 'ETF',                  sectorEtf: ''     },
+  SMH:   { name: 'VanEck Semiconductor ETF',exchange: 'NASDAQ', sector: 'ETF',                  sectorEtf: ''     },
+  TAN:   { name: 'Invesco Solar ETF',       exchange: 'NYSE',   sector: 'ETF',                  sectorEtf: ''     },
+  CIBR:  { name: 'First Trust Cyber ETF',   exchange: 'NASDAQ', sector: 'ETF',                  sectorEtf: ''     },
+  ITA:   { name: 'iShares U.S. Aerospace ETF',exchange:'NYSE',  sector: 'ETF',                  sectorEtf: ''     },
+  IGV:   { name: 'iShares Expanded Tech-Software ETF',exchange:'NYSE',sector:'ETF',             sectorEtf: ''     },
+};
+
+// Default portfolio symbols (used by loadSample / first-run)
 const MY_PORTFOLIO = ['FROG','CRWD','XLE','QQQ','SPY','ROK','KRE','NVDA','ONDS','VRT','MRNA','AA','MDT','CAH','ON','SOXX','TAN','CIBR','FLNG','MU','NFLX','ITA','IGV'];
-let tickers = JSON.parse(localStorage.getItem('pt_tickers') || 'null') || [...MY_PORTFOLIO];
+const SAMPLE_TICKERS = ['AAPL','NVDA','MSFT','TSLA','GOOGL','META','AMZN'];
+
+// ── getTickerDefaults(symbol) ────────────────────────────────────────────────
+// Returns the known metadata for a symbol, or safe empty-string defaults.
+function getTickerDefaults(symbol) {
+  const sym = (symbol || '').toUpperCase().trim();
+  return Object.assign(
+    { name: '', exchange: '', sector: '', sectorEtf: '' },
+    TICKER_DEFAULTS[sym] || {}
+  );
+}
+
+// ── migrateWatchlist(raw) ────────────────────────────────────────────────────
+// Accepts whatever is in localStorage and always returns a clean object[].
+//   • string[]  → migrates each string to the v1.1 object shape
+//   • object[]  → forward-fills any missing fields
+//   • null/bad  → returns default MY_PORTFOLIO objects
+function migrateWatchlist(raw) {
+  let parsed;
+  try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch(e) { parsed = null; }
+
+  // null / undefined / unparseable → first run, seed with MY_PORTFOLIO
+  if (parsed === null || parsed === undefined) {
+    return MY_PORTFOLIO.map(sym => _buildEntry(sym));
+  }
+
+  // Valid empty array → user deliberately cleared the list; preserve it
+  if (Array.isArray(parsed) && parsed.length === 0) {
+    return [];
+  }
+
+  // Not an array at all → treat as corrupt, seed MY_PORTFOLIO
+  if (!Array.isArray(parsed)) {
+    return MY_PORTFOLIO.map(sym => _buildEntry(sym));
+  }
+
+  // Detect format: string[] (old) vs object[] (new/partial)
+  if (typeof parsed[0] === 'string') {
+    // Old format: plain string array
+    console.log('[PT] migrateWatchlist: upgrading string[] →', parsed.length, 'entries');
+    return parsed.map(sym => _buildEntry(sym));
+  }
+
+  // New or partial object format — forward-fill missing fields
+  return parsed.map(item => {
+    if (!item || typeof item !== 'object') return _buildEntry('');
+    const sym = (item.symbol || '').toUpperCase().trim();
+    const defaults = getTickerDefaults(sym);
+    return {
+      symbol:       sym,
+      name:         item.name       !== undefined ? item.name       : defaults.name,
+      exchange:     item.exchange   !== undefined ? item.exchange   : defaults.exchange,
+      sector:       item.sector     !== undefined ? item.sector     : defaults.sector,
+      sectorEtf:    item.sectorEtf  !== undefined ? item.sectorEtf  : defaults.sectorEtf,
+      personalNote: item.personalNote !== undefined ? item.personalNote : '',
+      inScan:       item.inScan     !== undefined ? Boolean(item.inScan) : true,
+    };
+  }).filter(item => item.symbol); // drop any entry with no symbol
+}
+
+// Internal: build a clean entry for a single symbol string
+function _buildEntry(sym) {
+  const s = (sym || '').toUpperCase().trim();
+  const d = getTickerDefaults(s);
+  return {
+    symbol:       s,
+    name:         d.name,
+    exchange:     d.exchange,
+    sector:       d.sector,
+    sectorEtf:    d.sectorEtf,
+    personalNote: '',
+    inScan:       true,
+  };
+}
+
+// ── Watchlist state ──────────────────────────────────────────────────────────
+// `watchlist` is the single source of truth for all ticker state.
+// `tickers` is a legacy alias kept so that no other code breaks.
+let watchlist = migrateWatchlist(localStorage.getItem('pt_tickers'));
+
+// ── loadWatchlist() / saveWatchlist() ────────────────────────────────────────
+function loadWatchlist() {
+  const raw = localStorage.getItem('pt_tickers');
+  watchlist = migrateWatchlist(raw);
+  // Write normalized/migrated result back so future reads are already in object[] format.
+  // Skipped only when raw was already a valid object[] with no missing fields — but
+  // a redundant write is safe and cheaper than checking every field.
+  localStorage.setItem('pt_tickers', JSON.stringify(watchlist));
+  return watchlist;
+}
+
+function saveWatchlist() {
+  localStorage.setItem('pt_tickers', JSON.stringify(watchlist));
+}
+
+// ── Accessor helpers ─────────────────────────────────────────────────────────
+
+// Returns a plain string[] of ALL watchlist symbols (order preserved).
+// Used anywhere the old `tickers` array was referenced for display.
+function getSymbols() {
+  return watchlist.map(w => w.symbol);
+}
+
+// Returns a plain string[] of symbols with inScan === true.
+// This is the exact replacement for the old `tickers` slice passed to the AI pipeline.
+function getScanSymbols() {
+  return watchlist.filter(w => w.inScan).map(w => w.symbol);
+}
+
+// Returns the watchlist entry for a symbol, or null if not found.
+function findTicker(symbol) {
+  const sym = (symbol || '').toUpperCase().trim();
+  return watchlist.find(w => w.symbol === sym) || null;
+}
+
+// Inserts or updates a watchlist entry.
+// If the symbol already exists, merges `fields` into it.
+// If it does not exist, creates a new entry (defaults inScan: true).
+function upsertTicker(symbol, fields) {
+  const sym = (symbol || '').toUpperCase().trim();
+  if (!sym) return;
+  const idx = watchlist.findIndex(w => w.symbol === sym);
+  if (idx !== -1) {
+    watchlist[idx] = Object.assign({}, watchlist[idx], fields);
+  } else {
+    watchlist.push(Object.assign(_buildEntry(sym), fields || {}));
+  }
+  saveWatchlist();
+}
+
+// Flips the inScan flag for a single symbol. No-op if symbol not found.
+function setInScan(symbol, bool) {
+  const sym = (symbol || '').toUpperCase().trim();
+  const entry = watchlist.find(w => w.symbol === sym);
+  if (entry) { entry.inScan = Boolean(bool); saveWatchlist(); }
+}
+
+// Legacy alias so any remaining references to `tickers` still resolve.
+// Points at the live watchlist array — kept in sync by saveWatchlist().
+// Treat as READ-ONLY outside this data layer.
+Object.defineProperty(window, 'tickers', {
+  get() { return getSymbols(); },
+  configurable: true,
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// END Phase 1 data model
+// ───────────────────────────────────────────────────────────────────────────
+
 let results = JSON.parse(localStorage.getItem('pt_results') || '[]');
 let apiKey = localStorage.getItem('pt_apikey') || '';
 let pplxKey = localStorage.getItem('pt_pplxkey') || '';
@@ -783,34 +975,36 @@ function addTicker() {
   const inp = document.getElementById('tickerInput');
   const val = (inp.value || '').trim().toUpperCase();
   if (!val) return;
-  if (!tickers.includes(val)) { tickers.push(val); localStorage.setItem('pt_tickers', JSON.stringify(tickers)); }
+  if (!findTicker(val)) { upsertTicker(val, { inScan: true }); }
   inp.value = '';
   renderChips();
 }
 
 function removeTicker(t) {
-  tickers = tickers.filter(x => x !== t);
-  localStorage.setItem('pt_tickers', JSON.stringify(tickers));
+  const sym = (t || '').toUpperCase().trim();
+  watchlist = watchlist.filter(w => w.symbol !== sym);
+  saveWatchlist();
   renderChips();
 }
 
 function clearAll() {
-  tickers = [];
-  localStorage.setItem('pt_tickers', JSON.stringify(tickers));
+  watchlist = [];
+  saveWatchlist();
   renderChips();
 }
 
 function loadSample() {
-  tickers = [...MY_PORTFOLIO];
-  localStorage.setItem('pt_tickers', JSON.stringify(tickers));
+  watchlist = MY_PORTFOLIO.map(sym => _buildEntry(sym));
+  saveWatchlist();
   renderChips();
 }
 
 function renderChips() {
   const el = document.getElementById('tickerChips');
   if (!el) return;
-  if (!tickers.length) { el.innerHTML = '<span style="color:var(--muted);font-size:13px">עוד לא הוספת טיקרים...</span>'; return; }
-  el.innerHTML = tickers.map(t => `
+  const syms = getSymbols();
+  if (!syms.length) { el.innerHTML = '<span style="color:var(--muted);font-size:13px">עוד לא הוספת טיקרים...</span>'; return; }
+  el.innerHTML = syms.map(t => `
     <span class="chip">${t}<button class="chip-remove" onclick="removeTicker('${t}')">×</button></span>
   `).join('');
 }
@@ -1647,7 +1841,8 @@ async function runAnalysis() {
   if (_analysisRunning) { console.warn('[PT] runAnalysis: already running, ignoring duplicate call'); return; }
   _analysisRunning = true;
   if (!apiKey && !pplxKey) { _analysisRunning = false; showError('נא להכניס לפחות מפתח API אחד (Anthropic או Perplexity)'); return; }
-  if (tickers.length === 0) { _analysisRunning = false; showError('נא להוסיף לפחות טיקר אחד'); return; }
+  const _scanSymbols = getScanSymbols();
+  if (_scanSymbols.length === 0) { _analysisRunning = false; showError('נא להוסיף לפחות טיקר אחד'); return; }
 
   // HARD STATE RESET
   results = [];
@@ -1674,9 +1869,9 @@ async function runAnalysis() {
 
   try {
     setProgress(5, 'מאתחל...');
-    for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
-      const batch = tickers.slice(i, i + BATCH_SIZE);
-      const pct = Math.round(10 + (i / tickers.length) * 80);
+    for (let i = 0; i < _scanSymbols.length; i += BATCH_SIZE) {
+      const batch = _scanSymbols.slice(i, i + BATCH_SIZE);
+      const pct = Math.round(10 + (i / _scanSymbols.length) * 80);
       setProgress(pct, `מנתח ${batch.join(', ')}...`);
       const batchResults = await analyzeChunk(batch, today);
       allResults.push(...batchResults);
@@ -1740,6 +1935,7 @@ async function runAnalysis() {
 
 // ── init ──────────────────────────────────────────────────────────────────────
 function init() {
+  loadWatchlist(); // ensure watchlist is current from localStorage
   if (apiKey) { document.getElementById('apiKey').value = apiKey; document.getElementById('keyStatus').textContent = '✓ שמור'; document.getElementById('keyStatus').style.color = 'var(--green)'; }
   else { document.getElementById('keyStatus').textContent = '⚠ נדרש — הכנס key ולחץ שמור'; document.getElementById('keyStatus').style.color = 'orange'; }
   if (pplxKey) { document.getElementById('pplxKey').value = pplxKey; document.getElementById('pplxKeyStatus').textContent = '✓ שמור'; document.getElementById('pplxKeyStatus').style.color = 'var(--green)'; }
