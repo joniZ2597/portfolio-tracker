@@ -173,6 +173,45 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .mp-state-val{font-family:var(--mono);font-size:15px;font-weight:700;display:block;margin-bottom:2px}
 .mp-state-sub{font-size:10px;color:var(--text3);display:block}
 
+/* ─── PULSE v1.1 TICKER HEADER ──────────────────────────── */
+.ph-bar{
+  display:flex;align-items:center;gap:0;
+  padding:10px 20px;border-bottom:1px solid var(--border);
+  background:var(--sidebar);flex-shrink:0;
+}
+.ph-avatar{
+  width:36px;height:36px;border-radius:6px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:12px;font-weight:700;color:#fff;
+  margin-right:12px;
+}
+.ph-avatar.sent-pos{background:linear-gradient(135deg,#166534,#16A34A)}
+.ph-avatar.sent-neg{background:linear-gradient(135deg,#7F1D1D,#DC2626)}
+.ph-avatar.sent-neu{background:linear-gradient(135deg,#1E3A5F,#2563EB)}
+.ph-id{display:flex;flex-direction:column;gap:1px;margin-right:20px;min-width:0}
+.ph-sym{font-family:var(--mono);font-size:17px;font-weight:700;color:var(--text);line-height:1.2}
+.ph-meta{font-size:10px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ph-price-block{display:flex;align-items:baseline;gap:10px;margin-left:4px}
+.ph-price{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--text)}
+.ph-chg{font-family:var(--mono);font-size:13px;font-weight:600}
+.ph-chg.pos{color:var(--green2)}.ph-chg.neg{color:var(--red2)}.ph-chg.neu{color:var(--text3)}
+.ph-today{font-size:10px;color:var(--text3);margin-left:2px}
+.ph-spacer{flex:1}
+.ph-mkt-pill{
+  display:flex;align-items:center;gap:5px;
+  font-family:var(--mono);font-size:9px;font-weight:600;
+  padding:4px 10px;border-radius:10px;border:1px solid;
+  white-space:nowrap;
+}
+.ph-mkt-pill.open{color:var(--green2);border-color:rgba(34,197,94,.3);background:rgba(34,197,94,.08)}
+.ph-mkt-pill.closed{color:var(--text3);border-color:var(--border2);background:transparent}
+.ph-mkt-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+.ph-refresh{
+  background:none;border:none;color:var(--text3);cursor:pointer;
+  font-size:14px;padding:4px 8px;margin-left:8px;border-radius:3px;
+}
+.ph-refresh:hover{color:var(--text2);background:rgba(255,255,255,.04)}
+
 /* Color utilities */
 .pos      {color:var(--green2)}
 .neg      {color:var(--red2)}
@@ -1656,9 +1695,42 @@ function selectTicker(ticker) {
   document.querySelectorAll('.wl-row').forEach(r => r.classList.remove('active'));
   const row = document.getElementById('pwl-' + ticker);
   if (row) row.classList.add('active');
-  // Render main panel (unchanged — Phase 2b)
-  const item = _cockpitResults.find(r=>r.ticker===ticker);
-  if (item) renderMainPanel(item);
+  // Always update the main panel — use scan result if available, else placeholder
+  const item = _cockpitResults.find(r => r.ticker === ticker);
+  if (item) {
+    renderMainPanel(item);
+  } else {
+    renderTickerPlaceholder(ticker);
+  }
+}
+
+function renderTickerPlaceholder(ticker) {
+  const panel = document.getElementById('mainPanel');
+  if (!panel) return;
+  const entry = findTicker(ticker);
+  const name     = (entry && entry.name)     || '';
+  const exchange = (entry && entry.exchange) || '';
+  const sector   = (entry && entry.sector)   || '';
+  const etf      = (entry && entry.sectorEtf)|| '';
+  const metaParts = [exchange, sector].filter(Boolean);
+  const metaStr   = metaParts.length ? metaParts.join(' · ') : '';
+  const hintParts = [etf ? 'Sector ETF: ' + etf : ''].filter(Boolean);
+  panel.innerHTML = `
+    <div class="ph-bar">
+      <div class="ph-avatar sent-neu">${ticker.slice(0,2)}</div>
+      <div class="ph-id">
+        <span class="ph-sym">${ticker}${name ? `<span style="font-size:13px;font-weight:400;color:var(--text2);margin-left:10px">${name}</span>` : ''}</span>
+        ${metaStr ? `<span class="ph-meta">${metaStr}</span>` : ''}
+      </div>
+      <div class="ph-spacer"></div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:260px;gap:12px;color:var(--text3)">
+      <div style="font-family:var(--mono);font-size:28px;opacity:.15">[ ]</div>
+      <div style="font-family:var(--mono);font-size:11px;letter-spacing:.5px">No scan result yet</div>
+      <div style="font-size:12px;color:var(--text3)">Check this ticker and run scan to generate analysis.</div>
+      ${hintParts.length ? `<div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-top:4px">${hintParts.join(' · ')}</div>` : ''}
+    </div>
+  `;
 }
 
 function renderMainPanel(item) {
@@ -1685,14 +1757,9 @@ function renderMainPanel(item) {
   const pt     = pM&&pM[1]!=='consensus unavailable'?'$'+pM[1]:'—';
   const rCls   = rating.toLowerCase()==='buy'?'pos':rating.toLowerCase()==='sell'?'neg':'neutral-v';
 
-  // Setup
+  // Setup grade — removed from header in Phase 2b; kept as dead vars to avoid refactor
+  // of lower body panels that may still reference sc/sg (safe: not rendered in header)
   const hasCrit = (item.alerts||[]).some(a=>a.type==='critical');
-  let sg='C',sc='c';
-  if(score>=78&&!hasCrit){sg='A+';sc='ap'}
-  else if(score>=68&&!hasCrit){sg='A';sc='a'}
-  else if(score>=55){sg='B';sc='b'}
-  else if(score>=42){sg='C';sc='c'}
-  else{sg='AVOID';sc='avoid'}
 
   // Trend
   let phase='RANGE',phCls='neutral-v';
@@ -1744,71 +1811,53 @@ function renderMainPanel(item) {
     [sl.includes('macro')||sl.includes('tariff'), 'Macro Risk', 'WATCH', 'warn'],
   ].filter(([c])=>c).slice(0,5);
 
-  // Sparkline
-  const sparkW=120,sparkH=36;
-  const pts=[50,50,score>=55?53:47,score];
-  if(chg!==null) pts[2]=Math.max(5,Math.min(95,50+chg*1.5));
-  const coords=pts.map((v,i)=>`${Math.round(i*(sparkW/(pts.length-1)))},${Math.round(sparkH-(v/100)*sparkH)}`).join(' ');
-  const sCol=sent==='positive'?'#22C55E':sent==='negative'?'#F87171':'#60A5FA';
-  const spark=`<svg width="${sparkW}" height="${sparkH}" viewBox="0 0 ${sparkW} ${sparkH}">
-    <polyline points="${coords}" fill="none" stroke="${sCol}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-    <circle cx="${sparkW}" cy="${Math.round(sparkH-(score/100)*sparkH)}" r="3" fill="${sCol}"/>
-  </svg>`;
+  // Sparkline removed in Phase 2b header
+
+  // Watchlist metadata for name / exchange / sector (Phase 1 schema)
+  const wlEntry   = findTicker(item.ticker);
+  const dispName  = (item.company_name || (wlEntry && wlEntry.name) || '').trim();
+  const dispExch  = (wlEntry && wlEntry.exchange) || '';
+  const dispSect  = (wlEntry && wlEntry.sector)   || '';
+  const metaParts = [dispExch, dispSect].filter(Boolean);
+  const metaStr   = metaParts.length ? metaParts.join(' · ') : '';
+
+  // Market status (simple time-based heuristic, US Eastern)
+  const _now     = new Date();
+  const _etHour  = (_now.getUTCHours() - 4 + 24) % 24; // rough ET offset
+  const _isOpen  = _etHour >= 9.5 && _etHour < 16 && _now.getUTCDay() >= 1 && _now.getUTCDay() <= 5;
+  const mktLabel = _isOpen ? 'Market open · closes 4:00 PM ET' : 'Market closed';
+  const mktCls   = _isOpen ? 'open' : 'closed';
+
+  // Avatar initials (up to 2 chars)
+  const avatarTxt = item.ticker.slice(0, 2);
+  const avatarCls = sent === 'positive' ? 'sent-pos' : sent === 'negative' ? 'sent-neg' : 'sent-neu';
+
+  // Change string
+  const chgSign   = chg === null ? '' : chg >= 0 ? '+' : '';
+  const chgAmt    = chg !== null && item._verifiedPrice
+    ? (chg >= 0 ? '+' : '') + ((item._verifiedPrice - item._verifiedPrice / (1 + chg/100))).toFixed(2)
+    : null;
+  const chgAmtStr = chgAmt !== null ? `▲${Math.abs(parseFloat(chgAmt)).toFixed(2)}` : '';
+  const chgPctStr = chg !== null ? `(${chgSign}${chg.toFixed(2)}%)` : '—';
+  const chgDir    = chg !== null && chg < 0 ? '▼' : chg !== null && chg > 0 ? '▲' : '';
+  const chgCls2   = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
 
   panel.innerHTML = `
-    <!-- MAIN HEADER -->
-    <div class="mp-header">
-      <div class="mp-logo ${sent}">${item.ticker.slice(0,2)}</div>
-      <div class="mp-id">
-        <div class="mp-ticker-row">
-          <span class="mp-ticker">${item.ticker}</span>
-          <span class="mp-company">${item.company_name||''}</span>
-        </div>
-        <div class="mp-sector">Technology · Semiconductors · Memory</div>
+    <!-- PULSE v1.1 TICKER HEADER -->
+    <div class="ph-bar">
+      <div class="ph-avatar ${avatarCls}">${avatarTxt}</div>
+      <div class="ph-id">
+        <span class="ph-sym">${item.ticker}<span style="font-size:13px;font-weight:400;color:var(--text2);margin-left:10px">${dispName}</span></span>
+        ${metaStr ? `<span class="ph-meta">${metaStr}</span>` : ''}
       </div>
-      <div class="mp-price-block">
-        <span class="mp-price">${price}</span>
-        <span class="mp-chg ${chgCls}">${chgStr} (${chg!==null?Math.abs(chg).toFixed(2):'—'})</span>
+      <div class="ph-price-block">
+        <span class="ph-price">${price}</span>
+        <span class="ph-chg ${chgCls2}">${chgDir}${chg !== null ? Math.abs(chg * (item._verifiedPrice||0)/100).toFixed(2) : '—'} ${chgPctStr}</span>
+        <span class="ph-today">today</span>
       </div>
-      <div class="mp-spark">${spark}</div>
-      <div class="mp-grade-block">
-        <span class="mp-grade ${sc}">${sg}</span>
-        <span class="mp-grade-lbl">SETUP GRADE</span>
-        <span class="mp-grade-sub">Strong Setup</span>
-      </div>
-      <div class="mp-vol-block">
-        <span class="mp-vol-val ${volCls}">${volChar}</span>
-        <span class="mp-vol-lbl">Volume State</span>
-      </div>
-    </div>
-
-    <!-- STATE STRIP -->
-    <div class="mp-state-strip">
-      <div class="mp-state-cell">
-        <span class="mp-state-lbl">RISK STATE</span>
-        <span class="mp-state-val ${riskCls}">${riskState}</span>
-        <span class="mp-state-sub">Favorable environment</span>
-      </div>
-      <div class="mp-state-cell">
-        <span class="mp-state-lbl">TREND STATE</span>
-        <span class="mp-state-val ${phCls}">${phase}</span>
-        <span class="mp-state-sub">Price vs key MAs</span>
-      </div>
-      <div class="mp-state-cell">
-        <span class="mp-state-lbl">RELATIVE STRENGTH</span>
-        <span class="mp-state-val ${rsCls}">${rs}</span>
-        <span class="mp-state-sub">vs Sector</span>
-      </div>
-      <div class="mp-state-cell">
-        <span class="mp-state-lbl">CATALYST STATE</span>
-        <span class="mp-state-val ${catCls}">${cat}</span>
-        <span class="mp-state-sub">${sl.includes('ai demand')||sl.includes('hbm')?'AI Memory Demand':sl.includes('downgrade')?'Analyst action':'Monitoring'}</span>
-      </div>
-      <div class="mp-state-cell">
-        <span class="mp-state-lbl">OVERALL SCORE</span>
-        <span class="mp-state-val">${score} <span style="font-size:14px;color:var(--text3)">/ 100</span></span>
-        <span class="mp-state-sub">${score>=65?'Above Average':score>=45?'Average':'Below Average'}</span>
-      </div>
+      <div class="ph-spacer"></div>
+      <div class="ph-mkt-pill ${mktCls}"><div class="ph-mkt-dot"></div>${mktLabel}</div>
+      <button class="ph-refresh" title="Refresh" onclick="selectTicker('${item.ticker}')">↻</button>
     </div>
 
     <!-- BODY PANELS -->
@@ -1908,22 +1957,7 @@ function renderMainPanel(item) {
       <div class="mp-action-time">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
     </div>`:''}
 
-    <!-- DEEP DIVE -->
-    <div class="mp-dd-bar">
-      <button class="mp-dd-btn" id="dd-btn-${item.ticker}" onclick="
-        const d=document.getElementById('dd-${item.ticker}');
-        const open=d.style.display==='block';
-        d.style.display=open?'none':'block';
-        this.textContent=open?'↓ FULL ANALYSIS':'↑ HIDE';
-      ">↓ FULL ANALYSIS</button>
-      <div id="dd-${item.ticker}" style="display:none;padding:14px 0">
-        ${keyEvent?`<div class="dd-detail-row"><span class="dd-detail-tag">EVENT</span><span class="dd-detail-body">${keyEvent}</span></div>`:''}
-        ${(item.news||[]).map(n=>`<div class="dd-detail-row"><span class="dd-detail-tag">${n.startsWith('Primary')?'PRIMARY':n.startsWith('Secondary')?'SECONDARY':'CONTEXT'}</span><span class="dd-detail-body">${n.replace(/^(Primary|Secondary|Background):\s*/i,'')}</span></div>`).join('')}
-        <button class="run-dd-btn" onclick="deepDive('${item.ticker}')">RUN DEEP DIVE ANALYSIS ↓</button>
-        <div id="dd-text-${item.ticker}" style="font-size:13px;color:var(--text2);line-height:1.7;margin-top:10px"></div>
-      </div>
-    </div>
-  `;
+  `; /* Deep Dive deferred to v1.2 — not rendered */
 }
 
 
