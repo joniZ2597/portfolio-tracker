@@ -315,6 +315,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .btn-run-scan{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;font-family:var(--mono);font-size:10px;font-weight:700;background:var(--blue);color:#fff;border:none;border-radius:3px;padding:9px;cursor:pointer;letter-spacing:.8px;text-transform:uppercase}
 .btn-run-scan:hover{background:#1D4ED8}
 .btn-run-scan:disabled{opacity:.35;cursor:not-allowed}
+.btn-cancel-scan{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;font-family:var(--mono);font-size:10px;font-weight:700;background:rgba(220,38,38,.15);color:#F87171;border:1px solid rgba(248,113,113,.35);border-radius:3px;padding:9px;cursor:pointer;letter-spacing:.8px;text-transform:uppercase}
+.btn-cancel-scan:hover{background:rgba(220,38,38,.28);border-color:rgba(248,113,113,.6)}
 .scan-badge{background:rgba(255,255,255,.2);border-radius:10px;font-size:9px;font-weight:700;padding:1px 7px;letter-spacing:0;min-width:20px;text-align:center}
 .scan-note{font-size:9px;color:var(--text3);line-height:1.5;margin-top:6px;padding:0 2px}
 
@@ -1707,30 +1709,53 @@ function selectTicker(ticker) {
 function renderTickerPlaceholder(ticker) {
   const panel = document.getElementById('mainPanel');
   if (!panel) return;
-  const entry = findTicker(ticker);
-  const name     = (entry && entry.name)     || '';
-  const exchange = (entry && entry.exchange) || '';
-  const sector   = (entry && entry.sector)   || '';
-  const etf      = (entry && entry.sectorEtf)|| '';
+  const entry     = findTicker(ticker);
+  const name      = (entry && entry.name)      || '';
+  const exchange  = (entry && entry.exchange)  || '';
+  const sector    = (entry && entry.sector)    || '';
+  const etf       = (entry && entry.sectorEtf) || '';
   const metaParts = [exchange, sector].filter(Boolean);
   const metaStr   = metaParts.length ? metaParts.join(' · ') : '';
-  const hintParts = [etf ? 'Sector ETF: ' + etf : ''].filter(Boolean);
-  panel.innerHTML = `
-    <div class="ph-bar">
-      <div class="ph-avatar sent-neu">${ticker.slice(0,2)}</div>
-      <div class="ph-id">
-        <span class="ph-sym">${ticker}${name ? `<span style="font-size:13px;font-weight:400;color:var(--text2);margin-left:10px">${name}</span>` : ''}</span>
-        ${metaStr ? `<span class="ph-meta">${metaStr}</span>` : ''}
-      </div>
-      <div class="ph-spacer"></div>
-    </div>
-    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:260px;gap:12px;color:var(--text3)">
-      <div style="font-family:var(--mono);font-size:28px;opacity:.15">[ ]</div>
-      <div style="font-family:var(--mono);font-size:11px;letter-spacing:.5px">No scan result yet</div>
-      <div style="font-size:12px;color:var(--text3)">Check this ticker and run scan to generate analysis.</div>
-      ${hintParts.length ? `<div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-top:4px">${hintParts.join(' · ')}</div>` : ''}
-    </div>
-  `;
+  const hintStr   = etf ? 'Sector ETF: ' + etf : '';
+
+  // Determine placeholder message based on scan state
+  const isQueued  = _analysisRunning && getScanSymbols().includes(ticker);
+  const isCurrent = _analysisRunning && _currentScanTicker === ticker;
+
+  let icon, headline, subline;
+  if (isCurrent) {
+    icon     = '⧖'; // hourglass-style
+    headline = 'Scanning this ticker…';
+    subline  = 'Analysis in progress. Results will appear when complete.';
+  } else if (isQueued) {
+    icon     = '[ … ]';
+    headline = 'Analysis pending';
+    subline  = 'This ticker is queued and will be analyzed in the current scan.';
+  } else {
+    icon     = '[ ]';
+    headline = 'No scan result yet';
+    subline  = 'Check this ticker and run scan to generate analysis.';
+  }
+
+  const nameSpan  = name ? '<span style="font-size:13px;font-weight:400;color:var(--text2);margin-left:10px">' + name + '</span>' : '';
+  const metaSpan  = metaStr ? '<span class="ph-meta">' + metaStr + '</span>' : '';
+  const hintSpan  = hintStr ? '<div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-top:4px">' + hintStr + '</div>' : '';
+
+  panel.innerHTML =
+    '<div class="ph-bar">' +
+      '<div class="ph-avatar sent-neu">' + ticker.slice(0,2) + '</div>' +
+      '<div class="ph-id">' +
+        '<span class="ph-sym">' + ticker + nameSpan + '</span>' +
+        metaSpan +
+      '</div>' +
+      '<div class="ph-spacer"></div>' +
+    '</div>' +
+    '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:260px;gap:12px;color:var(--text3)">' +
+      '<div style="font-family:var(--mono);font-size:28px;opacity:.15">' + icon + '</div>' +
+      '<div style="font-family:var(--mono);font-size:11px;letter-spacing:.5px">' + headline + '</div>' +
+      '<div style="font-size:12px;color:var(--text3)">' + subline + '</div>' +
+      hintSpan +
+    '</div>';
 }
 
 function renderMainPanel(item) {
@@ -1970,11 +1995,29 @@ function exportJSON() {
   a.click();
 }
 
+// ── cancelScan ──────────────────────────────────────────────────────────────
+function cancelScan() {
+  if (!_analysisRunning) return;
+  _cancelRequested = true;
+  console.log('[PT] Scan cancelled by user.');
+  const btn = document.getElementById('runBtn');
+  if (btn) {
+    btn.className = 'btn-run-scan';
+    btn.onclick = runAnalysis;
+    btn.disabled = true;
+    btn.innerHTML = '<span>⟳ Cancelling…</span>';
+  }
+}
+
 // ── runAnalysis ───────────────────────────────────────────────────────────────
-let _analysisRunning = false;
+let _analysisRunning    = false;
+let _cancelRequested    = false;
+let _currentScanTicker  = null;   // ticker currently being analyzed
 async function runAnalysis() {
   if (_analysisRunning) { console.warn('[PT] runAnalysis: already running, ignoring duplicate call'); return; }
-  _analysisRunning = true;
+  _analysisRunning   = true;
+  _cancelRequested   = false;
+  _currentScanTicker = null;
   if (!apiKey && !pplxKey) { _analysisRunning = false; showError('נא להכניס לפחות מפתח API אחד (Anthropic או Perplexity)'); return; }
   const scanSymbols = getScanSymbols();
   if (scanSymbols.length === 0) { _analysisRunning = false; showError('No tickers checked for scan. Check at least one ticker.'); return; }
@@ -1993,23 +2036,30 @@ async function runAnalysis() {
   console.log('[PT] State reset complete — UI cleared');
 
   const btn = document.getElementById('runBtn');
-  btn.disabled = true;
-  // Keep inner HTML with badge but update scan text
-  btn.innerHTML = '<span>⟳ Scanning…</span><span class="scan-badge">' + scanSymbols.length + '</span>';
+  btn.disabled = false;
+  btn.className = 'btn-cancel-scan';
+  btn.onclick = cancelScan;
+  btn.innerHTML = '<span>✕ Cancel scan</span><span class="scan-badge">' + scanSymbols.length + '</span>';
   document.getElementById('errorBox').style.display = 'none';
   if (document.getElementById('emptyState')) document.getElementById('emptyState').style.display = 'none';
 
   const today = new Date().toLocaleDateString('he-IL');
-  const BATCH_SIZE = 5;
+  const BATCH_SIZE = 1; // 1 ticker per batch — ensures _cancelRequested is checked before each ticker
   const allResults = [];
 
   try {
     setProgress(5, 'מאתחל...');
     for (let i = 0; i < scanSymbols.length; i += BATCH_SIZE) {
+      if (_cancelRequested) {
+        console.log('[PT] Scan loop stopped — cancellation confirmed.');
+        break;
+      }
       const batch = scanSymbols.slice(i, i + BATCH_SIZE);
+      _currentScanTicker = batch[0]; // track first ticker of current batch
       const pct = Math.round(10 + (i / scanSymbols.length) * 80);
       setProgress(pct, `מנתח ${batch.join(', ')}...`);
       const batchResults = await analyzeChunk(batch, today);
+      _currentScanTicker = null;
       allResults.push(...batchResults);
       results = [...allResults];
       const dateStr = new Date().toLocaleString('he-IL');
@@ -2058,11 +2108,16 @@ async function runAnalysis() {
   } catch (err) {
     hideProgress();
     showError(err.message || 'שגיאה לא ידועה');
+    btn.className = 'btn-run-scan';
+    btn.onclick = runAnalysis;
     btn.disabled = false;
     btn.innerHTML = '<span>⟳ Run scan</span><span class="scan-badge" id="scanCount">' + getScanSymbols().length + '</span>';
     document.getElementById('resultsSection').style.display = results.length ? 'block' : 'none';
   } finally {
-    _analysisRunning = false;
+    _analysisRunning   = false;
+    _currentScanTicker = null;
+    btn.className = 'btn-run-scan';
+    btn.onclick = runAnalysis;
     btn.disabled = getScanSymbols().length === 0;
     btn.innerHTML = '<span>⟳ Run scan</span><span class="scan-badge" id="scanCount">' + getScanSymbols().length + '</span>';
     hideProgress();
