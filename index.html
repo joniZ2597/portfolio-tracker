@@ -253,6 +253,48 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 /* regime bar (hidden, used by JS) */
 #regimeBar{display:none}
 #progressLabel{font-family:var(--mono);font-size:8px;color:var(--text3);display:block;margin-top:4px}
+
+/* ─── API STATUS PANEL ───────────────────────────── */
+.api-status-btn{width:100%;font-family:var(--mono);font-size:9px;font-weight:600;background:rgba(34,211,238,.07);border:1px solid rgba(34,211,238,.22);color:var(--cyan2);border-radius:2px;padding:6px;cursor:pointer;text-transform:uppercase;letter-spacing:1px;margin-bottom:2px}
+.api-status-btn:hover{background:rgba(34,211,238,.14)}
+.api-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:none;align-items:center;justify-content:center}
+.api-overlay.open{display:flex}
+.api-modal{background:var(--card);border:1px solid var(--border);border-radius:8px;width:900px;max-width:95vw;max-height:90vh;overflow:hidden;display:flex;flex-direction:column}
+.api-modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)}
+.api-modal-title{font-size:20px;font-weight:700;color:var(--text)}
+.api-modal-sub{font-size:12px;color:var(--text3);margin-top:2px}
+.api-close-btn{font-family:var(--mono);font-size:13px;color:var(--text3);background:none;border:1px solid var(--border2);border-radius:2px;padding:4px 10px;cursor:pointer}
+.api-close-btn:hover{color:var(--text)}
+.btn-check-all{font-family:var(--mono);font-size:10px;font-weight:600;background:none;border:1px solid var(--green2);color:var(--green2);border-radius:3px;padding:7px 14px;cursor:pointer;display:flex;align-items:center;gap:6px}
+.btn-check-all:hover{background:rgba(34,197,94,.08)}
+.api-table-wrap{overflow-y:auto;flex:1}
+.api-table{width:100%;border-collapse:collapse}
+.api-table th{font-family:var(--mono);font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:10px 16px;border-bottom:2px solid var(--border);text-align:left}
+.api-table td{padding:14px 16px;border-bottom:1px solid var(--border);vertical-align:top}
+.api-provider{display:flex;align-items:center;gap:10px}
+.api-logo{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;font-weight:700;color:#fff;flex-shrink:0}
+.api-name{font-size:13px;font-weight:600;color:var(--text)}
+.api-type{font-size:10px;color:var(--text3);margin-top:1px}
+.api-purpose{font-size:12px;color:var(--text2)}
+.api-status-badge{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;font-weight:600;padding:4px 10px;border-radius:3px;border:1px solid;white-space:nowrap}
+.api-status-badge.connected{color:var(--green2);border-color:rgba(34,197,94,.3);background:rgba(34,197,94,.08)}
+.api-status-badge.failed{color:var(--red2);border-color:rgba(248,113,113,.3);background:rgba(248,113,113,.08)}
+.api-status-badge.timeout{color:var(--yellow2);border-color:rgba(252,211,77,.3);background:rgba(252,211,77,.08)}
+.api-status-badge.checking{color:var(--cyan2);border-color:rgba(34,211,238,.3);background:rgba(34,211,238,.08)}
+.api-status-badge.unknown{color:var(--text3);border-color:var(--border2);background:transparent}
+.api-last-check{font-family:var(--mono);font-size:10px;color:var(--text3);margin-top:4px}
+.api-preview{font-family:var(--mono);font-size:10px;background:var(--card2);border:1px solid var(--border2);border-radius:3px;padding:8px;max-width:260px;max-height:80px;overflow:hidden;line-height:1.5;color:var(--text2)}
+.api-preview.ok{border-color:rgba(34,197,94,.2)}
+.api-preview.err{color:var(--red2);border-color:rgba(248,113,113,.2)}
+.btn-check{font-family:var(--mono);font-size:9px;font-weight:600;background:none;border:1px solid var(--green2);color:var(--green2);border-radius:2px;padding:6px 12px;cursor:pointer;display:flex;align-items:center;gap:5px;white-space:nowrap}
+.btn-check:hover{background:rgba(34,197,94,.08)}
+.btn-check:disabled{opacity:.4;cursor:not-allowed}
+.api-info-box{padding:14px 20px;border-top:1px solid var(--border);background:rgba(37,99,235,.04);display:flex;gap:10px;align-items:flex-start}
+.api-info-icon{color:var(--blue2);font-size:16px;flex-shrink:0}
+.api-info-title{font-size:13px;font-weight:600;color:var(--blue2);margin-bottom:3px}
+.api-info-text{font-size:12px;color:var(--text2);line-height:1.6}
+.all-ok-badge{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9px;font-weight:600;color:var(--green2)}
+.all-ok-dot{width:7px;height:7px;border-radius:50%;background:var(--green2)}
 </style>
 </head>
 <body>
@@ -321,7 +363,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
     </div>
 
     <div class="sb-footer">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <button class="api-status-btn" onclick="toggleApiStatus()">⚡ API STATUS</button>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;margin-top:8px">
         <span class="sb-footer-lbl">MARKET STATE</span>
         <span class="sidebar-regime inf" id="mktState">—</span>
       </div>
@@ -1503,6 +1546,238 @@ init();
 
 
 
+// ═══ API STATUS MONITOR — read-only monitoring layer ════════════════
+// DOES NOT modify any existing fetch/analysis/render logic
+
+const API_DEFINITIONS = [
+  {
+    id:      'yahoo',
+    name:    'Yahoo Finance',
+    sub:     'Market Data',
+    purpose: 'Price, Volume, Market Data',
+    color:   '#7C3AED',
+    letter:  'Y!',
+    check: async () => {
+      const url = 'https://query1.finance.yahoo.com/v8/finance/chart/NVDA?interval=1d&range=1d';
+      const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+      const r = await fetch(proxy, {signal: AbortSignal.timeout(8000)});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      const data = JSON.parse(d.contents);
+      const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+      if (!price) throw new Error('No price in response');
+      return { preview: `{\n  "symbol": "NVDA",\n  "price": ${price.toFixed(2)},\n  "source": "yahoo"\n}`, ok: true };
+    }
+  },
+  {
+    id:      'alphavantage',
+    name:    'Alpha Vantage',
+    sub:     'Market Data Fallback',
+    purpose: 'Price, Volume, Intraday',
+    color:   '#059669',
+    letter:  'AV',
+    check: async () => {
+      const avKey = localStorage.getItem('pt_avkey');
+      if (!avKey) return { preview: '// No Alpha Vantage key saved', ok: false, status: 'No Key' };
+      const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=NVDA&apikey=${avKey}`;
+      const r = await fetch(url, {signal: AbortSignal.timeout(10000)});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      if (d['Note'] || d['Information']) throw new Error('Rate limit / invalid key');
+      const q = d['Global Quote'];
+      if (!q || !q['05. price']) throw new Error('Invalid response');
+      return { preview: `{\n  "symbol": "NVDA",\n  "price": ${parseFloat(q['05. price']).toFixed(2)},\n  "change": ${q['09. change']}\n}`, ok: true };
+    }
+  },
+  {
+    id:      'perplexity',
+    name:    'Perplexity AI',
+    sub:     'News & Research',
+    purpose: 'News, Research, Web Search',
+    color:   '#0891B2',
+    letter:  'PX',
+    check: async () => {
+      const key = localStorage.getItem('pt_pplxkey');
+      if (!key) return { preview: '// No Perplexity key saved', ok: false, status: 'No Key' };
+      const r = await fetch('https://api.perplexity.ai/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'sonar', messages: [{role:'user',content:'Reply with only: {"status":"ok"}'}], max_tokens: 20 }),
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error?.message || 'HTTP ' + r.status); }
+      const d = await r.json();
+      const content = d.choices?.[0]?.message?.content || '';
+      return { preview: `{\n  "model": "${d.model||'sonar'}",\n  "status": "ok",\n  "tokens": ${d.usage?.total_tokens||'—'}\n}`, ok: true };
+    }
+  },
+  {
+    id:      'anthropic',
+    name:    'Claude AI',
+    sub:     'AI Analysis',
+    purpose: 'AI Analysis, Summaries',
+    color:   '#D97706',
+    letter:  '✳',
+    check: async () => {
+      const key = localStorage.getItem('pt_apikey');
+      if (!key) return { preview: '// No Anthropic key saved', ok: false, status: 'No Key' };
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
+        body: JSON.stringify({ model:'claude-haiku-4-5-20251001', max_tokens:20, messages:[{role:'user',content:'Reply only: ok'}] }),
+        signal: AbortSignal.timeout(12000)
+      });
+      if (!r.ok) { const e = await r.json(); throw new Error(e.error?.message || 'HTTP ' + r.status); }
+      const d = await r.json();
+      return { preview: `{\n  "status": "success",\n  "model": "${d.model||'claude'}",\n  "tokens": ${d.usage?.input_tokens||'—'}\n}`, ok: true };
+    }
+  }
+];
+
+const _apiState = {};
+
+function toggleApiStatus() {
+  const overlay = document.getElementById('apiOverlay');
+  const isOpen = overlay.classList.contains('open');
+  overlay.classList.toggle('open');
+  if (!isOpen) renderApiTable();
+}
+
+function renderApiTable() {
+  const tbody = document.getElementById('apiTableBody');
+  if (!tbody) return;
+  tbody.innerHTML = API_DEFINITIONS.map(api => {
+    const state = _apiState[api.id] || { status: 'unknown', preview: null, lastCheck: null };
+    return `<tr>
+      <td>
+        <div class="api-provider">
+          <div class="api-logo" style="background:${api.color}">${api.letter}</div>
+          <div><div class="api-name">${api.name}</div><div class="api-type">${api.sub}</div></div>
+        </div>
+      </td>
+      <td><span class="api-purpose">${api.purpose}</span></td>
+      <td>
+        <div>
+          <span class="api-status-badge ${state.status}" id="badge-${api.id}">
+            <span>${state.status==='connected'?'● Connected':state.status==='failed'?'● Failed':state.status==='timeout'?'● Timeout':state.status==='checking'?'⟳ Checking...':state.status==='no key'?'⚠ No Key Set':'○ Unknown'}</span>
+          </span>
+          ${state.lastCheck?`<div class="api-last-check">${state.lastCheck}</div>`:''}
+        </div>
+      </td>
+      <td>
+        <div class="api-preview ${state.preview&&state.status==='connected'?'ok':state.preview&&state.status==='failed'?'err':''}" id="preview-${api.id}">
+          ${state.preview||'<span style="color:var(--text3)">— not checked yet —</span>'}
+        </div>
+      </td>
+      <td>
+        <button class="btn-check" id="btn-${api.id}" onclick="checkApi('${api.id}')">▷ Check</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function checkApi(id) {
+  const api = API_DEFINITIONS.find(a=>a.id===id);
+  if (!api) return;
+  const badge   = document.getElementById('badge-'+id);
+  const preview = document.getElementById('preview-'+id);
+  const btn     = document.getElementById('btn-'+id);
+  if (!badge||!preview||!btn) return;
+
+  // Set checking state
+  _apiState[id] = { status:'checking', preview:null, lastCheck:null };
+  badge.className = 'api-status-badge checking';
+  badge.innerHTML = '<span>⟳ Checking...</span>';
+  preview.innerHTML = '<span style="color:var(--text3)">Sending request...</span>';
+  preview.className = 'api-preview';
+  btn.disabled = true;
+
+  try {
+    const result = await api.check();
+    const now = new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) + '\n' + new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    const statusKey = result.status ? result.status.toLowerCase().replace(' ','') :
+                      result.ok ? 'connected' : 'failed';
+    _apiState[id] = { status: statusKey, preview: result.preview, lastCheck: now };
+    badge.className = 'api-status-badge ' + statusKey;
+    badge.innerHTML = `<span>${statusKey==='connected'?'● Connected':statusKey==='nok'?'⚠ No Key Set':'● '+statusKey}</span>`;
+    preview.innerHTML = `<pre style="margin:0;white-space:pre-wrap;word-break:break-all">${result.preview}</pre>`;
+    preview.className = 'api-preview ' + (result.ok?'ok':'err');
+    if (result.lastCheck) {
+      const lc = document.createElement('div');
+      lc.className = 'api-last-check';
+      lc.textContent = now;
+      badge.parentElement.appendChild(lc);
+    }
+  } catch (err) {
+    const isTimeout = err.name==='TimeoutError'||err.message.includes('timeout');
+    const statusKey = isTimeout ? 'timeout' : 'failed';
+    const now = new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    _apiState[id] = { status:statusKey, preview:`// Error: ${err.message}`, lastCheck:now };
+    badge.className = 'api-status-badge ' + statusKey;
+    badge.innerHTML = `<span>${isTimeout?'● Timeout':'● Failed'}</span>`;
+    preview.innerHTML = `<pre style="margin:0;color:var(--red2)">// ${err.message}</pre>`;
+    preview.className = 'api-preview err';
+  } finally {
+    btn.disabled = false;
+    // Check if all connected
+    const allConnected = API_DEFINITIONS.every(a=>!_apiState[a.id]||_apiState[a.id].status==='connected'||_apiState[a.id].status==='nokey');
+    const allChecked = API_DEFINITIONS.every(a=>_apiState[a.id]&&_apiState[a.id].status!=='unknown'&&_apiState[a.id].status!=='checking');
+    const badge2 = document.getElementById('allOkBadge');
+    if (badge2) badge2.style.display = (allChecked && allConnected) ? 'flex' : 'none';
+  }
+}
+
+async function checkAllApis() {
+  for (const api of API_DEFINITIONS) {
+    await checkApi(api.id);
+    await new Promise(r=>setTimeout(r,300)); // small delay between checks
+  }
+}
+// ════════════════════════════════════════════════════════════════════
+
 </script>
+
+<!-- ─── API STATUS OVERLAY ─────────────────────── -->
+<div class="api-overlay" id="apiOverlay" onclick="if(event.target===this)toggleApiStatus()">
+  <div class="api-modal">
+    <div class="api-modal-hdr">
+      <div>
+        <div class="api-modal-title">API Status</div>
+        <div class="api-modal-sub">Monitor the health and connectivity of all data providers</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="all-ok-badge" id="allOkBadge" style="display:none">
+          <div class="all-ok-dot"></div>All Systems Operational
+        </div>
+        <button class="btn-check-all" onclick="checkAllApis()">↺ Check All APIs</button>
+        <button class="api-close-btn" onclick="toggleApiStatus()">✕</button>
+      </div>
+    </div>
+    <div class="api-table-wrap">
+      <table class="api-table">
+        <thead>
+          <tr>
+            <th>API</th>
+            <th>Purpose</th>
+            <th>Status</th>
+            <th>Response Preview</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="apiTableBody">
+          <!-- rows injected by JS -->
+        </tbody>
+      </table>
+    </div>
+    <div class="api-info-box">
+      <div class="api-info-icon">ℹ</div>
+      <div>
+        <div class="api-info-title">About API Status</div>
+        <div class="api-info-text">This section lets you verify all data providers are working correctly. Each check sends a minimal test request. If an API fails, enter the correct key in the sidebar and re-check.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
