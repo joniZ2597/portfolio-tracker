@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>MSE // MARKET STATE ENGINE</title>
+<title>Pulse // Portfolio Tracker</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
@@ -254,6 +254,87 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 #regimeBar{display:none}
 #progressLabel{font-family:var(--mono);font-size:8px;color:var(--text3);display:block;margin-top:4px}
 
+/* ─── PULSE TOPBAR BRAND ──────────────────────────── */
+.pulse-brand{display:flex;align-items:center;gap:10px}
+.pulse-mark{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text);letter-spacing:.5px}
+.pulse-sub{font-size:10px;color:var(--text3);margin-top:1px}
+.btn-gear{background:none;border:1px solid var(--border2);border-radius:3px;color:var(--text3);padding:5px 8px;cursor:pointer;font-size:13px;line-height:1}
+.btn-gear:hover{color:var(--text2);border-color:var(--text3)}
+
+/* ─── PULSE SIDEBAR SHELL ─────────────────────────── */
+/* Search row */
+.sb-search-row{padding:10px 10px 6px;border-bottom:1px solid var(--border);flex-shrink:0}
+.sb-search-wrap{display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--border2);border-radius:3px;padding:0 8px}
+.sb-search-wrap:focus-within{border-color:var(--blue2)}
+.sb-search-icon{color:var(--text3);font-size:11px;flex-shrink:0}
+.sb-search-inp{background:transparent;border:none;outline:none;color:var(--text);font-family:var(--sans);font-size:12px;padding:6px 0;flex:1;min-width:0}
+.sb-search-inp::placeholder{color:var(--text3)}
+.sb-search-kbd{font-family:var(--mono);font-size:8px;color:var(--text3);border:1px solid var(--border2);border-radius:2px;padding:1px 4px;white-space:nowrap}
+
+/* Run scan section */
+.sb-scan-section{padding:8px 10px;border-bottom:1px solid var(--border);flex-shrink:0}
+.btn-run-scan{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;font-family:var(--mono);font-size:10px;font-weight:700;background:var(--blue);color:#fff;border:none;border-radius:3px;padding:9px;cursor:pointer;letter-spacing:.8px;text-transform:uppercase}
+.btn-run-scan:hover{background:#1D4ED8}
+.btn-run-scan:disabled{opacity:.35;cursor:not-allowed}
+.scan-badge{background:rgba(255,255,255,.2);border-radius:10px;font-size:9px;font-weight:700;padding:1px 7px;letter-spacing:0;min-width:20px;text-align:center}
+.scan-note{font-size:9px;color:var(--text3);line-height:1.5;margin-top:6px;padding:0 2px}
+
+/* Watchlist header row */
+.sb-wl-header{display:flex;align-items:center;justify-content:space-between;padding:8px 12px 4px;flex-shrink:0;border-bottom:1px solid var(--border)}
+.sb-wl-tabs{display:flex;gap:0}
+.sb-wl-tab{font-family:var(--mono);font-size:9px;font-weight:600;color:var(--text3);background:none;border:none;cursor:pointer;padding:3px 8px 3px 0;text-transform:uppercase;letter-spacing:.8px}
+.sb-wl-tab.active{color:var(--text)}
+.sb-wl-tab-count{font-size:8px;opacity:.7;margin-left:3px}
+.sb-wl-filter{background:none;border:none;color:var(--text3);cursor:pointer;font-size:11px;padding:2px 4px}
+.sb-wl-filter:hover{color:var(--text2)}
+
+/* Column header */
+.sb-col-header{display:flex;align-items:center;padding:4px 12px 3px;flex-shrink:0}
+.sb-col-scan{font-family:var(--mono);font-size:7px;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;width:20px;flex-shrink:0}
+.sb-col-ticker{font-family:var(--mono);font-size:7px;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;flex:1;padding-left:6px}
+.sb-col-chg{font-family:var(--mono);font-size:7px;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;min-width:44px;text-align:right}
+
+/* Pulse watchlist rows */
+.pwl-row{
+  display:flex;align-items:center;gap:0;
+  padding:7px 12px;cursor:pointer;
+  border-bottom:1px solid rgba(30,41,59,.4);
+  position:relative;
+}
+.pwl-row:hover{background:rgba(255,255,255,.025)}
+.pwl-row.active{background:rgba(37,99,235,.10);border-right:2px solid var(--blue2)}
+.pwl-row.active .pwl-sym{color:var(--blue2)}
+
+/* Checkbox */
+.pwl-cb{width:20px;flex-shrink:0;display:flex;align-items:center}
+.pwl-cb input[type=checkbox]{
+  width:13px;height:13px;cursor:pointer;
+  accent-color:var(--blue2);
+  border-radius:2px;
+  flex-shrink:0;
+}
+
+/* Ticker info */
+.pwl-info{flex:1;min-width:0;padding-left:6px}
+.pwl-sym{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text);display:block;line-height:1.2}
+.pwl-name{font-size:9px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;max-width:130px}
+
+/* CHG % */
+.pwl-chg{font-family:var(--mono);font-size:10px;font-weight:600;min-width:44px;text-align:right;flex-shrink:0}
+.pwl-chg.pos{color:var(--green2)}
+.pwl-chg.neg{color:var(--red2)}
+.pwl-chg.neu{color:var(--text3)}
+
+/* Three-dot placeholder */
+.pwl-dots{opacity:0;width:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text3);cursor:pointer;padding-left:4px}
+.pwl-row:hover .pwl-dots{opacity:1}
+.pwl-dots:hover{color:var(--text2)}
+
+/* Hide legacy chip/config UI */
+.sb-chips,.sb-config,.chip{display:none!important}
+/* Keep legacy sb-header hidden by overriding to 0 height once replaced */
+.sb-header-legacy{display:none!important}
+
 /* ─── API STATUS PANEL ───────────────────────────── */
 .api-status-btn{width:100%;font-family:var(--mono);font-size:9px;font-weight:600;background:rgba(34,211,238,.07);border:1px solid rgba(34,211,238,.22);color:var(--cyan2);border-radius:2px;padding:6px;cursor:pointer;text-transform:uppercase;letter-spacing:1px;margin-bottom:2px}
 .api-status-btn:hover{background:rgba(34,211,238,.14)}
@@ -301,16 +382,16 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 
 <!-- APP TOP BAR -->
 <div class="app-topbar">
-  <div class="app-brand">
-    <div class="app-mark">MSE</div>
+  <div class="pulse-brand">
     <div>
-      <div class="app-name">MARKET STATE ENGINE</div>
-      <div class="app-sub">Institutional Signal Dashboard</div>
+      <div class="pulse-mark">Pulse</div>
+      <div class="pulse-sub">Portfolio · Tracker</div>
     </div>
   </div>
   <div class="app-topbar-right">
     <span id="resultsDate"></span>
     <button class="btn-export" onclick="exportJSON()">EXPORT ↓</button>
+    <button class="btn-gear" onclick="toggleApiStatus()" title="Settings / API Status">⚙</button>
   </div>
 </div>
 
@@ -319,19 +400,60 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 
   <!-- LEFT SIDEBAR -->
   <div class="sidebar">
-    <div class="sb-header">
-      <div class="sb-title">WATCHLIST</div>
-      <div class="sb-add-row">
-        <input class="sb-inp" type="text" id="tickerInput" placeholder="AAPL" maxlength="10"
-          onkeydown="if(event.key==='Enter') addTicker()"/>
-        <button class="sb-btn-add" onclick="addTicker()">+</button>
-        <button class="sb-btn-ghost" onclick="loadSample()">↺</button>
-        <button class="sb-btn-ghost" onclick="clearAll()">CLR</button>
+
+    <!-- Search / Add ticker -->
+    <div class="sb-search-row">
+      <div class="sb-search-wrap">
+        <span class="sb-search-icon">⌕</span>
+        <input class="sb-search-inp" type="text" id="tickerInput"
+          placeholder="Search ticker or company…"
+          maxlength="10"
+          onkeydown="if(event.key==='Enter') addTicker()"
+          oninput="filterWatchlistRows(this.value)"/>
+        <span class="sb-search-kbd">⌘K</span>
       </div>
-      <div class="sb-chips" id="tickerChips"></div>
     </div>
 
-    <div class="sb-config">
+    <!-- Run scan + note -->
+    <div class="sb-scan-section">
+      <button class="btn-run-scan" id="runBtn" onclick="runAnalysis()">
+        <span>⟳ Run scan</span>
+        <span class="scan-badge" id="scanCount">0</span>
+      </button>
+      <div class="prog-wrap" id="progressWrap"><div class="prog-bar" id="progressBar"></div></div>
+      <span id="progressLabel"></span>
+      <div class="scan-note" id="scanNote">Checked tickers are included in the next scan. Unchecking does not remove them from the watchlist.</div>
+    </div>
+
+    <!-- Watchlist header + tabs -->
+    <div class="sb-wl-header">
+      <div class="sb-wl-tabs">
+        <button class="sb-wl-tab active" id="tabWatchlist" onclick="switchTab('watchlist')">
+          Watchlist <span class="sb-wl-tab-count" id="countWatchlist">0</span>
+        </button>
+        <button class="sb-wl-tab" id="tabAll" onclick="switchTab('all')">
+          All <span class="sb-wl-tab-count" id="countAll">0</span>
+        </button>
+      </div>
+      <button class="sb-wl-filter" title="Filter">⇅</button>
+    </div>
+
+    <!-- Column header -->
+    <div class="sb-col-header">
+      <span class="sb-col-scan">✓</span>
+      <span class="sb-col-ticker">Ticker</span>
+      <span class="sb-col-chg">Chg %</span>
+      <span style="width:22px"></span><!-- dots spacer -->
+    </div>
+
+    <!-- Watchlist rows (rendered by JS) -->
+    <div class="sb-watchlist" id="watchlistRows">
+      <div class="wl-empty">Add tickers to get started</div>
+    </div>
+
+    <!-- Legacy hidden elements preserved for init() compatibility -->
+    <div class="sb-chips" id="tickerChips" style="display:none"></div>
+    <div class="sb-config" style="display:none">
       <div class="cfg-row">
         <span class="cfg-lbl">ANT</span>
         <input class="cfg-inp" type="password" id="apiKey" placeholder="sk-ant-..."/>
@@ -352,19 +474,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
       </div>
     </div>
 
-    <div class="sb-run">
-      <button class="btn-run" id="runBtn" onclick="runAnalysis()">RUN ANALYSIS</button>
-      <div class="prog-wrap" id="progressWrap"><div class="prog-bar" id="progressBar"></div></div>
-      <span id="progressLabel"></span>
-    </div>
-
-    <div class="sb-watchlist" id="watchlistRows">
-      <div class="wl-empty">Add tickers and run analysis</div>
-    </div>
-
-    <div class="sb-footer">
-      <button class="api-status-btn" onclick="toggleApiStatus()">⚡ API STATUS</button>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;margin-top:8px">
+    <!-- Legacy MSE footer elements — hidden in Phase 2a, kept for JS compat -->
+    <div class="sb-footer" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
         <span class="sb-footer-lbl">MARKET STATE</span>
         <span class="sidebar-regime inf" id="mktState">—</span>
       </div>
@@ -604,139 +716,89 @@ function getHistoricalCacheStats() {
 
 
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PHASE 1 — v1.1 Watchlist Data Model
-// Replaces the old plain string[] with a per-ticker object model.
-// The rest of the app continues to work unchanged via getSymbols() /
-// getScanSymbols(), which return plain string[] exactly as before.
-// ═══════════════════════════════════════════════════════════════════════════
+const SAMPLE_TICKERS = ['AAPL','NVDA','MSFT','TSLA','GOOGL','META','AMZN'];
+const MY_PORTFOLIO = ['FROG','CRWD','XLE','QQQ','SPY','ROK','KRE','NVDA','ONDS','VRT','MRNA','AA','MDT','CAH','ON','SOXX','TAN','CIBR','FLNG','MU','NFLX','ITA','IGV'];
 
-// ── Default metadata for known symbols ──────────────────────────────────────
-// ETF tickers use sectorEtf: '' — they are their own benchmark.
+// ─── Phase 1: Approved watchlist data model ───────────────────────────────────
+// Schema: { symbol, name, exchange, sector, sectorEtf, personalNote, inScan }
+// localStorage key: pt_tickers (unchanged)
+
 const TICKER_DEFAULTS = {
-  // Equities
-  NVDA:  { name: 'NVIDIA Corp.',            exchange: 'NASDAQ', sector: 'Semiconductors',       sectorEtf: 'SMH'  },
-  AAPL:  { name: 'Apple Inc.',              exchange: 'NASDAQ', sector: 'Technology',            sectorEtf: 'XLK'  },
-  MSFT:  { name: 'Microsoft Corp.',         exchange: 'NASDAQ', sector: 'Technology',            sectorEtf: 'XLK'  },
-  TSLA:  { name: 'Tesla, Inc.',             exchange: 'NASDAQ', sector: 'Cons. Discretionary',   sectorEtf: 'XLY'  },
-  GOOGL: { name: 'Alphabet Inc.',           exchange: 'NASDAQ', sector: 'Communication',         sectorEtf: 'XLC'  },
-  META:  { name: 'Meta Platforms',          exchange: 'NASDAQ', sector: 'Communication',         sectorEtf: 'XLC'  },
-  AMZN:  { name: 'Amazon.com Inc.',         exchange: 'NASDAQ', sector: 'Cons. Discretionary',   sectorEtf: 'XLY'  },
-  MU:    { name: 'Micron Technology',       exchange: 'NASDAQ', sector: 'Semiconductors',        sectorEtf: 'SMH'  },
-  ON:    { name: 'ON Semiconductor',        exchange: 'NASDAQ', sector: 'Semiconductors',        sectorEtf: 'SMH'  },
-  CRWD:  { name: 'CrowdStrike Holdings',    exchange: 'NASDAQ', sector: 'Software',              sectorEtf: 'IGV'  },
-  FROG:  { name: 'JFrog Ltd.',              exchange: 'NASDAQ', sector: 'Software',              sectorEtf: 'IGV'  },
-  VRT:   { name: 'Vertiv Holdings',         exchange: 'NYSE',   sector: 'Industrials',           sectorEtf: 'XLI'  },
-  ROK:   { name: 'Rockwell Automation',     exchange: 'NYSE',   sector: 'Industrials',           sectorEtf: 'XLI'  },
-  MRNA:  { name: 'Moderna Inc.',            exchange: 'NASDAQ', sector: 'Biotechnology',         sectorEtf: 'XBI'  },
-  AA:    { name: 'Alcoa Corp.',             exchange: 'NYSE',   sector: 'Materials',             sectorEtf: 'XLB'  },
-  MDT:   { name: 'Medtronic plc',           exchange: 'NYSE',   sector: 'Health Care',           sectorEtf: 'XLV'  },
-  CAH:   { name: 'Cardinal Health',         exchange: 'NYSE',   sector: 'Health Care',           sectorEtf: 'XLV'  },
-  NFLX:  { name: 'Netflix Inc.',            exchange: 'NASDAQ', sector: 'Communication',         sectorEtf: 'XLC'  },
-  ONDS:  { name: 'Ondas Holdings',          exchange: 'NASDAQ', sector: 'Technology',            sectorEtf: 'XLK'  },
-  FLNG:  { name: 'Flex LNG Ltd.',           exchange: 'NYSE',   sector: 'Energy',               sectorEtf: 'XLE'  },
-  KRE:   { name: 'SPDR S&P Regional Banking ETF', exchange: 'NYSE', sector: 'ETF',              sectorEtf: ''     },
-  // ETFs — sectorEtf blank; they are their own benchmark
-  SPY:   { name: 'SPDR S&P 500 ETF',        exchange: 'NYSE',   sector: 'ETF',                  sectorEtf: ''     },
-  QQQ:   { name: 'Invesco QQQ Trust',       exchange: 'NASDAQ', sector: 'ETF',                  sectorEtf: ''     },
-  XLE:   { name: 'Energy Select Sector ETF',exchange: 'NYSE',   sector: 'ETF',                  sectorEtf: ''     },
-  SOXX:  { name: 'iShares Semiconductor ETF',exchange:'NASDAQ', sector: 'ETF',                  sectorEtf: ''     },
-  SMH:   { name: 'VanEck Semiconductor ETF',exchange: 'NASDAQ', sector: 'ETF',                  sectorEtf: ''     },
-  TAN:   { name: 'Invesco Solar ETF',       exchange: 'NYSE',   sector: 'ETF',                  sectorEtf: ''     },
-  CIBR:  { name: 'First Trust Cyber ETF',   exchange: 'NASDAQ', sector: 'ETF',                  sectorEtf: ''     },
-  ITA:   { name: 'iShares U.S. Aerospace ETF',exchange:'NYSE',  sector: 'ETF',                  sectorEtf: ''     },
-  IGV:   { name: 'iShares Expanded Tech-Software ETF',exchange:'NYSE',sector:'ETF',             sectorEtf: ''     },
+  NVDA:  { name:'NVIDIA Corp.',          exchange:'NASDAQ', sector:'Semiconductors',    sectorEtf:'SOXX' },
+  AAPL:  { name:'Apple Inc.',            exchange:'NASDAQ', sector:'Technology',         sectorEtf:'QQQ'  },
+  MSFT:  { name:'Microsoft Corp.',       exchange:'NASDAQ', sector:'Technology',         sectorEtf:'QQQ'  },
+  TSLA:  { name:'Tesla Inc.',            exchange:'NASDAQ', sector:'Consumer Cyclical',  sectorEtf:'XLY'  },
+  GOOGL: { name:'Alphabet Inc.',         exchange:'NASDAQ', sector:'Communication',      sectorEtf:'QQQ'  },
+  META:  { name:'Meta Platforms',        exchange:'NASDAQ', sector:'Communication',      sectorEtf:'QQQ'  },
+  AMZN:  { name:'Amazon.com Inc.',       exchange:'NASDAQ', sector:'Consumer Cyclical',  sectorEtf:'XLY'  },
+  MU:    { name:'Micron Technology',     exchange:'NASDAQ', sector:'Semiconductors',     sectorEtf:'SOXX' },
+  ON:    { name:'ON Semiconductor',      exchange:'NASDAQ', sector:'Semiconductors',     sectorEtf:'SOXX' },
+  CRWD:  { name:'CrowdStrike Holdings',  exchange:'NASDAQ', sector:'Cybersecurity',      sectorEtf:'CIBR' },
+  FROG:  { name:'JFrog Ltd.',            exchange:'NASDAQ', sector:'Software',           sectorEtf:'IGV'  },
+  VRT:   { name:'Vertiv Holdings',       exchange:'NYSE',   sector:'Industrials',        sectorEtf:'XLI'  },
+  ROK:   { name:'Rockwell Automation',   exchange:'NYSE',   sector:'Industrials',        sectorEtf:'XLI'  },
+  MRNA:  { name:'Moderna Inc.',          exchange:'NASDAQ', sector:'Biotechnology',      sectorEtf:'XLV'  },
+  MDT:   { name:'Medtronic plc',         exchange:'NYSE',   sector:'Medical Devices',    sectorEtf:'XLV'  },
+  CAH:   { name:'Cardinal Health',       exchange:'NYSE',   sector:'Healthcare',         sectorEtf:'XLV'  },
+  AA:    { name:'Alcoa Corp.',           exchange:'NYSE',   sector:'Materials',          sectorEtf:'XLB'  },
+  ONDS:  { name:'Ondas Holdings',        exchange:'NASDAQ', sector:'Technology',         sectorEtf:'IGV'  },
+  NFLX:  { name:'Netflix Inc.',          exchange:'NASDAQ', sector:'Communication',      sectorEtf:'QQQ'  },
+  FLNG:  { name:'FLEX LNG Ltd.',         exchange:'NYSE',   sector:'Energy',             sectorEtf:'XLE'  },
+  // ETFs — sectorEtf intentionally empty (no benchmark against themselves)
+  SPY:   { name:'SPDR S&P 500 ETF',      exchange:'NYSE',   sector:'ETF',               sectorEtf:''     },
+  QQQ:   { name:'Invesco QQQ Trust',     exchange:'NASDAQ', sector:'ETF',               sectorEtf:''     },
+  XLE:   { name:'Energy Select SPDR',    exchange:'NYSE',   sector:'ETF',               sectorEtf:''     },
+  SOXX:  { name:'iShares Semi ETF',      exchange:'NASDAQ', sector:'ETF',               sectorEtf:''     },
+  TAN:   { name:'Invesco Solar ETF',     exchange:'NYSE',   sector:'ETF',               sectorEtf:''     },
+  ITA:   { name:'iShares Defense ETF',   exchange:'NYSE',   sector:'ETF',               sectorEtf:''     },
+  IGV:   { name:'iShares Software ETF',  exchange:'NYSE',   sector:'ETF',               sectorEtf:''     },
+  CIBR:  { name:'First Trust Cyber ETF', exchange:'NASDAQ', sector:'ETF',               sectorEtf:''     },
+  KRE:   { name:'SPDR Regional Banks',   exchange:'NYSE',   sector:'ETF',               sectorEtf:''     },
 };
 
-// Default portfolio symbols (used by loadSample / first-run)
-const MY_PORTFOLIO = ['FROG','CRWD','XLE','QQQ','SPY','ROK','KRE','NVDA','ONDS','VRT','MRNA','AA','MDT','CAH','ON','SOXX','TAN','CIBR','FLNG','MU','NFLX','ITA','IGV'];
-const SAMPLE_TICKERS = ['AAPL','NVDA','MSFT','TSLA','GOOGL','META','AMZN'];
-
-// ── getTickerDefaults(symbol) ────────────────────────────────────────────────
-// Returns the known metadata for a symbol, or safe empty-string defaults.
 function getTickerDefaults(symbol) {
-  const sym = (symbol || '').toUpperCase().trim();
-  return Object.assign(
-    { name: '', exchange: '', sector: '', sectorEtf: '' },
-    TICKER_DEFAULTS[sym] || {}
-  );
+  return TICKER_DEFAULTS[symbol.toUpperCase()] || { name:'', exchange:'', sector:'', sectorEtf:'' };
 }
 
-// ── migrateWatchlist(raw) ────────────────────────────────────────────────────
-// Accepts whatever is in localStorage and always returns a clean object[].
-//   • string[]  → migrates each string to the v1.1 object shape
-//   • object[]  → forward-fills any missing fields
-//   • null/bad  → returns default MY_PORTFOLIO objects
-function migrateWatchlist(raw) {
-  let parsed;
-  try { parsed = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch(e) { parsed = null; }
-
-  // null / undefined / unparseable → first run, seed with MY_PORTFOLIO
-  if (parsed === null || parsed === undefined) {
-    return MY_PORTFOLIO.map(sym => _buildEntry(sym));
-  }
-
-  // Valid empty array → user deliberately cleared the list; preserve it
-  if (Array.isArray(parsed) && parsed.length === 0) {
-    return [];
-  }
-
-  // Not an array at all → treat as corrupt, seed MY_PORTFOLIO
-  if (!Array.isArray(parsed)) {
-    return MY_PORTFOLIO.map(sym => _buildEntry(sym));
-  }
-
-  // Detect format: string[] (old) vs object[] (new/partial)
-  if (typeof parsed[0] === 'string') {
-    // Old format: plain string array
-    console.log('[PT] migrateWatchlist: upgrading string[] →', parsed.length, 'entries');
-    return parsed.map(sym => _buildEntry(sym));
-  }
-
-  // New or partial object format — forward-fill missing fields
-  return parsed.map(item => {
-    if (!item || typeof item !== 'object') return _buildEntry('');
-    const sym = (item.symbol || '').toUpperCase().trim();
-    const defaults = getTickerDefaults(sym);
-    return {
-      symbol:       sym,
-      name:         item.name       !== undefined ? item.name       : defaults.name,
-      exchange:     item.exchange   !== undefined ? item.exchange   : defaults.exchange,
-      sector:       item.sector     !== undefined ? item.sector     : defaults.sector,
-      sectorEtf:    item.sectorEtf  !== undefined ? item.sectorEtf  : defaults.sectorEtf,
-      personalNote: item.personalNote !== undefined ? item.personalNote : '',
-      inScan:       item.inScan     !== undefined ? Boolean(item.inScan) : true,
-    };
-  }).filter(item => item.symbol); // drop any entry with no symbol
-}
-
-// Internal: build a clean entry for a single symbol string
 function _buildEntry(sym) {
-  const s = (sym || '').toUpperCase().trim();
+  const s = sym.trim().toUpperCase();
   const d = getTickerDefaults(s);
-  return {
-    symbol:       s,
-    name:         d.name,
-    exchange:     d.exchange,
-    sector:       d.sector,
-    sectorEtf:    d.sectorEtf,
-    personalNote: '',
-    inScan:       true,
-  };
+  return { symbol: s, name: d.name, exchange: d.exchange, sector: d.sector, sectorEtf: d.sectorEtf, personalNote: '', inScan: true };
 }
 
-// ── Watchlist state ──────────────────────────────────────────────────────────
-// `watchlist` is the single source of truth for all ticker state.
-// `tickers` is a legacy alias kept so that no other code breaks.
-let watchlist = migrateWatchlist(localStorage.getItem('pt_tickers'));
+function migrateWatchlist(raw) {
+  // null / missing / unparseable → seed with MY_PORTFOLIO
+  if (raw === null || raw === undefined) return MY_PORTFOLIO.map(_buildEntry);
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch(e) { return MY_PORTFOLIO.map(_buildEntry); }
+  // Not an array → seed
+  if (!Array.isArray(parsed)) return MY_PORTFOLIO.map(_buildEntry);
+  // Explicitly empty → preserve (user cleared intentionally)
+  if (parsed.length === 0) return [];
+  // Legacy string[] → upgrade each to object
+  if (typeof parsed[0] === 'string') return parsed.map(_buildEntry);
+  // Already object[] → forward-fill any missing fields
+  return parsed.map(e => {
+    if (!e || typeof e !== 'object' || !e.symbol) return null;
+    const d = getTickerDefaults(e.symbol);
+    return {
+      symbol:       e.symbol,
+      name:         e.name        ?? d.name,
+      exchange:     e.exchange    ?? d.exchange,
+      sector:       e.sector      ?? d.sector,
+      sectorEtf:    e.sectorEtf   ?? d.sectorEtf,
+      personalNote: e.personalNote ?? '',
+      inScan:       e.inScan      ?? true,
+    };
+  }).filter(Boolean);
+}
 
-// ── loadWatchlist() / saveWatchlist() ────────────────────────────────────────
+let watchlist = [];
+
 function loadWatchlist() {
   const raw = localStorage.getItem('pt_tickers');
   watchlist = migrateWatchlist(raw);
-  // Write normalized/migrated result back so future reads are already in object[] format.
-  // Skipped only when raw was already a valid object[] with no missing fields — but
-  // a redundant write is safe and cheaper than checking every field.
+  // Write normalized result back so future reads are already in object[] format
   localStorage.setItem('pt_tickers', JSON.stringify(watchlist));
   return watchlist;
 }
@@ -745,60 +807,31 @@ function saveWatchlist() {
   localStorage.setItem('pt_tickers', JSON.stringify(watchlist));
 }
 
-// ── Accessor helpers ─────────────────────────────────────────────────────────
+function getSymbols()     { return watchlist.map(e => e.symbol); }
+function getScanSymbols() { return watchlist.filter(e => e.inScan).map(e => e.symbol); }
+function findTicker(symbol) { return watchlist.find(e => e.symbol === symbol.toUpperCase()) || null; }
 
-// Returns a plain string[] of ALL watchlist symbols (order preserved).
-// Used anywhere the old `tickers` array was referenced for display.
-function getSymbols() {
-  return watchlist.map(w => w.symbol);
-}
-
-// Returns a plain string[] of symbols with inScan === true.
-// This is the exact replacement for the old `tickers` slice passed to the AI pipeline.
-function getScanSymbols() {
-  return watchlist.filter(w => w.inScan).map(w => w.symbol);
-}
-
-// Returns the watchlist entry for a symbol, or null if not found.
-function findTicker(symbol) {
-  const sym = (symbol || '').toUpperCase().trim();
-  return watchlist.find(w => w.symbol === sym) || null;
-}
-
-// Inserts or updates a watchlist entry.
-// If the symbol already exists, merges `fields` into it.
-// If it does not exist, creates a new entry (defaults inScan: true).
 function upsertTicker(symbol, fields) {
-  const sym = (symbol || '').toUpperCase().trim();
-  if (!sym) return;
-  const idx = watchlist.findIndex(w => w.symbol === sym);
-  if (idx !== -1) {
-    watchlist[idx] = Object.assign({}, watchlist[idx], fields);
+  const sym = symbol.toUpperCase();
+  const existing = findTicker(sym);
+  if (existing) {
+    Object.assign(existing, fields);
   } else {
-    watchlist.push(Object.assign(_buildEntry(sym), fields || {}));
+    watchlist.push(Object.assign(_buildEntry(sym), fields));
   }
   saveWatchlist();
 }
 
-// Flips the inScan flag for a single symbol. No-op if symbol not found.
 function setInScan(symbol, bool) {
-  const sym = (symbol || '').toUpperCase().trim();
-  const entry = watchlist.find(w => w.symbol === sym);
-  if (entry) { entry.inScan = Boolean(bool); saveWatchlist(); }
+  const entry = findTicker(symbol);
+  if (entry) { entry.inScan = bool; saveWatchlist(); }
 }
 
-// Legacy alias so any remaining references to `tickers` still resolve.
-// Points at the live watchlist array — kept in sync by saveWatchlist().
-// Treat as READ-ONLY outside this data layer.
+// Legacy `tickers` compat — read-only snapshot for any residual references
 Object.defineProperty(window, 'tickers', {
   get() { return getSymbols(); },
   configurable: true,
 });
-
-// ───────────────────────────────────────────────────────────────────────────
-// END Phase 1 data model
-// ───────────────────────────────────────────────────────────────────────────
-
 let results = JSON.parse(localStorage.getItem('pt_results') || '[]');
 let apiKey = localStorage.getItem('pt_apikey') || '';
 let pplxKey = localStorage.getItem('pt_pplxkey') || '';
@@ -975,39 +1008,36 @@ function addTicker() {
   const inp = document.getElementById('tickerInput');
   const val = (inp.value || '').trim().toUpperCase();
   if (!val) return;
-  if (!findTicker(val)) { upsertTicker(val, { inScan: true }); }
+  upsertTicker(val, {});  // no-op if exists; inserts with defaults if new
   inp.value = '';
-  renderChips();
+  renderWatchlistRows();
+  updateRunScanCount();
 }
 
-function removeTicker(t) {
-  const sym = (t || '').toUpperCase().trim();
-  watchlist = watchlist.filter(w => w.symbol !== sym);
+function removeTicker(sym) {
+  // Destructive — called only from three-dot menu (Phase 2b stub for now)
+  watchlist = watchlist.filter(e => e.symbol !== sym.toUpperCase());
   saveWatchlist();
-  renderChips();
+  renderWatchlistRows();
+  updateRunScanCount();
 }
 
 function clearAll() {
   watchlist = [];
   saveWatchlist();
-  renderChips();
+  renderWatchlistRows();
+  updateRunScanCount();
 }
 
 function loadSample() {
-  watchlist = MY_PORTFOLIO.map(sym => _buildEntry(sym));
+  watchlist = MY_PORTFOLIO.map(_buildEntry);
   saveWatchlist();
-  renderChips();
+  renderWatchlistRows();
+  updateRunScanCount();
 }
 
-function renderChips() {
-  const el = document.getElementById('tickerChips');
-  if (!el) return;
-  const syms = getSymbols();
-  if (!syms.length) { el.innerHTML = '<span style="color:var(--muted);font-size:13px">עוד לא הוספת טיקרים...</span>'; return; }
-  el.innerHTML = syms.map(t => `
-    <span class="chip">${t}<button class="chip-remove" onclick="removeTicker('${t}')">×</button></span>
-  `).join('');
-}
+// Legacy stub — chip UI removed in Phase 2a
+function renderChips() { /* no-op */ }
 
 function showError(msg) {
   const el = document.getElementById('errorBox');
@@ -1491,6 +1521,101 @@ async function analyzeChunk(batch, today) {
 let _cockpitResults = [];
 let _activeTicker   = null;
 
+// ─── Phase 2a: Pulse sidebar functions ───────────────────────────────────────
+
+let _activeTab   = 'watchlist';
+let _filterQuery = '';
+
+function toggleScanInclusion(symbol) {
+  const entry = findTicker(symbol);
+  if (!entry) return;
+  setInScan(symbol, !entry.inScan);
+  updateRunScanCount();
+  // Update checkbox in place — avoids full re-render and focus loss
+  const cb = document.getElementById('cb-' + symbol);
+  if (cb) cb.checked = entry.inScan;
+}
+
+function updateRunScanCount() {
+  const count = getScanSymbols().length;
+  const badge = document.getElementById('scanCount');
+  if (badge) badge.textContent = count;
+  const btn = document.getElementById('runBtn');
+  if (btn) btn.disabled = count === 0;
+  const wlCount = document.getElementById('countWatchlist');
+  const allCount = document.getElementById('countAll');
+  if (wlCount) wlCount.textContent = watchlist.length;
+  if (allCount) allCount.textContent = watchlist.length;
+}
+
+function switchTab(tab) {
+  _activeTab = tab;
+  document.querySelectorAll('.sb-wl-tab').forEach(t => t.classList.remove('active'));
+  const el = document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1));
+  if (el) el.classList.add('active');
+  renderWatchlistRows();
+}
+
+function filterWatchlistRows(query) {
+  _filterQuery = (query || '').trim().toUpperCase();
+  renderWatchlistRows();
+}
+
+function renderWatchlistRows(scanResults) {
+  const list = document.getElementById('watchlistRows');
+  if (!list) return;
+
+  const resultMap = {};
+  const cockpit = (typeof _cockpitResults !== 'undefined') ? _cockpitResults : [];
+  (scanResults || cockpit).forEach(r => { resultMap[r.ticker] = r; });
+
+  let rows = watchlist;
+  if (_filterQuery) {
+    rows = rows.filter(e =>
+      e.symbol.includes(_filterQuery) ||
+      (e.name     || '').toUpperCase().includes(_filterQuery) ||
+      (e.exchange  || '').toUpperCase().includes(_filterQuery) ||
+      (e.sector    || '').toUpperCase().includes(_filterQuery) ||
+      (e.sectorEtf || '').toUpperCase().includes(_filterQuery)
+    );
+  }
+
+  if (!rows.length) {
+    list.innerHTML = watchlist.length === 0
+      ? '<div class="wl-empty">Add tickers to get started</div>'
+      : '<div class="wl-empty">No tickers match</div>';
+    return;
+  }
+
+  list.innerHTML = rows.map(entry => {
+    const sym     = entry.symbol;
+    const res     = resultMap[sym];
+    const chg     = (res && typeof res._verifiedChangePct === 'number') ? res._verifiedChangePct : null;
+    const chgStr  = chg !== null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
+    const chgCls  = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
+    // Phase 1 schema: entry.name, entry.exchange, entry.sector, entry.sectorEtf
+    const name    = (res && res.company_name) || entry.name || '';
+    const hint    = entry.sectorEtf || entry.sector || '';
+    const sub     = name
+      ? (hint ? name.slice(0,14) + ' · ' + hint : name.slice(0,22))
+      : hint;
+    const active  = (typeof _activeTicker !== 'undefined') && _activeTicker === sym;
+
+    return `<div class="pwl-row${active ? ' active' : ''}" id="pwl-${sym}" onclick="selectTicker('${sym}')">
+      <div class="pwl-cb" onclick="event.stopPropagation()">
+        <input type="checkbox" id="cb-${sym}" ${entry.inScan ? 'checked' : ''}
+          onchange="toggleScanInclusion('${sym}')"/>
+      </div>
+      <div class="pwl-info">
+        <span class="pwl-sym">${sym}</span>
+        ${sub ? `<span class="pwl-name">${sub}</span>` : ''}
+      </div>
+      <span class="pwl-chg ${chgCls}">${chgStr}</span>
+      <span class="pwl-dots" onclick="event.stopPropagation()" title="More options">···</span>
+    </div>`;
+  }).join('');
+}
+
 function renderResults(allResults, dateStr) {
   _cockpitResults = allResults;
   const section = document.getElementById('resultsSection');
@@ -1510,52 +1635,28 @@ function renderResults(allResults, dateStr) {
     document.getElementById('avgScore').textContent = avg + ' / 100';
   }
 
-  // Render sidebar watchlist
-  renderSidebar(allResults, dateStr);
+  // Render Pulse sidebar rows (Phase 2a: replaces renderSidebar)
+  renderWatchlistRows(allResults);
+  updateRunScanCount();
 
-  // Auto-select first ticker
-  const first = allResults.sort((a,b)=>(b.sentiment_score||50)-(a.sentiment_score||50))[0];
+  // Auto-select first ticker (by score)
+  const first = [...allResults].sort((a,b)=>(b.sentiment_score||50)-(a.sentiment_score||50))[0];
   if (first) selectTicker(first.ticker);
 }
 
+// Legacy renderSidebar kept as no-op so any stale call doesn't throw
 function renderSidebar(allResults, dateStr) {
-  const list = document.getElementById('watchlistRows');
-  if (!list) return;
-  const sorted = [...allResults].sort((a,b)=>(b.sentiment_score||50)-(a.sentiment_score||50));
-  list.innerHTML = sorted.map((item, i) => {
-    const score = item.sentiment_score || 50;
-    const sent  = item.sentiment==='positive'?'positive':item.sentiment==='negative'?'negative':'neutral';
-    const chg   = typeof item._verifiedChangePct==='number' ? item._verifiedChangePct : null;
-    const hasCrit = (item.alerts||[]).some(a=>a.type==='critical');
-    let sg='C',sc='c';
-    if(score>=78&&!hasCrit){sg='A+';sc='ap'}
-    else if(score>=68&&!hasCrit){sg='A';sc='a'}
-    else if(score>=55){sg='B';sc='b'}
-    else if(score>=42){sg='C';sc='c'}
-    else{sg='AVOID';sc='avoid'}
-    const dotCls = sent==='positive'?'dot-green':sent==='negative'?'dot-red':'dot-blue';
-    return `<div class="wl-row" id="wl-${item.ticker}" onclick="selectTicker('${item.ticker}')">
-      <span class="wl-grade ${sc}">${sg}</span>
-      <div class="wl-info">
-        <span class="wl-sym">${item.ticker}</span>
-        <span class="wl-name">${(item.company_name||'').slice(0,18)}</span>
-      </div>
-      <div class="wl-right">
-        <span class="wl-price">${item._verifiedPrice?'$'+item._verifiedPrice.toFixed(2):''}</span>
-        <span class="wl-chg ${chg===null?'':chg>0?'pos':chg<0?'neg':''}">${chg!==null?(chg>=0?'+':'')+chg.toFixed(2)+'%':'—'}</span>
-      </div>
-      <div class="wl-dot ${dotCls}"></div>
-    </div>`;
-  }).join('');
+  renderWatchlistRows(allResults);
 }
 
 function selectTicker(ticker) {
   _activeTicker = ticker;
-  // Highlight sidebar row
+  // Highlight Pulse watchlist row (pwl-); also clear any legacy wl- rows
+  document.querySelectorAll('.pwl-row').forEach(r => r.classList.remove('active'));
   document.querySelectorAll('.wl-row').forEach(r => r.classList.remove('active'));
-  const row = document.getElementById('wl-'+ticker);
+  const row = document.getElementById('pwl-' + ticker);
   if (row) row.classList.add('active');
-  // Render main panel
+  // Render main panel (unchanged — Phase 2b)
   const item = _cockpitResults.find(r=>r.ticker===ticker);
   if (item) renderMainPanel(item);
 }
@@ -1841,8 +1942,8 @@ async function runAnalysis() {
   if (_analysisRunning) { console.warn('[PT] runAnalysis: already running, ignoring duplicate call'); return; }
   _analysisRunning = true;
   if (!apiKey && !pplxKey) { _analysisRunning = false; showError('נא להכניס לפחות מפתח API אחד (Anthropic או Perplexity)'); return; }
-  const _scanSymbols = getScanSymbols();
-  if (_scanSymbols.length === 0) { _analysisRunning = false; showError('נא להוסיף לפחות טיקר אחד'); return; }
+  const scanSymbols = getScanSymbols();
+  if (scanSymbols.length === 0) { _analysisRunning = false; showError('No tickers checked for scan. Check at least one ticker.'); return; }
 
   // HARD STATE RESET
   results = [];
@@ -1859,7 +1960,8 @@ async function runAnalysis() {
 
   const btn = document.getElementById('runBtn');
   btn.disabled = true;
-  btn.textContent = 'מנתח...';
+  // Keep inner HTML with badge but update scan text
+  btn.innerHTML = '<span>⟳ Scanning…</span><span class="scan-badge">' + scanSymbols.length + '</span>';
   document.getElementById('errorBox').style.display = 'none';
   if (document.getElementById('emptyState')) document.getElementById('emptyState').style.display = 'none';
 
@@ -1869,9 +1971,9 @@ async function runAnalysis() {
 
   try {
     setProgress(5, 'מאתחל...');
-    for (let i = 0; i < _scanSymbols.length; i += BATCH_SIZE) {
-      const batch = _scanSymbols.slice(i, i + BATCH_SIZE);
-      const pct = Math.round(10 + (i / _scanSymbols.length) * 80);
+    for (let i = 0; i < scanSymbols.length; i += BATCH_SIZE) {
+      const batch = scanSymbols.slice(i, i + BATCH_SIZE);
+      const pct = Math.round(10 + (i / scanSymbols.length) * 80);
       setProgress(pct, `מנתח ${batch.join(', ')}...`);
       const batchResults = await analyzeChunk(batch, today);
       allResults.push(...batchResults);
@@ -1923,24 +2025,27 @@ async function runAnalysis() {
     hideProgress();
     showError(err.message || 'שגיאה לא ידועה');
     btn.disabled = false;
-    btn.textContent = 'הפעל ניתוח יומי';
+    btn.innerHTML = '<span>⟳ Run scan</span><span class="scan-badge" id="scanCount">' + getScanSymbols().length + '</span>';
     document.getElementById('resultsSection').style.display = results.length ? 'block' : 'none';
   } finally {
     _analysisRunning = false;
-    btn.disabled = false;
-    btn.textContent = 'הפעל ניתוח יומי';
+    btn.disabled = getScanSymbols().length === 0;
+    btn.innerHTML = '<span>⟳ Run scan</span><span class="scan-badge" id="scanCount">' + getScanSymbols().length + '</span>';
     hideProgress();
   }
 }
 
 // ── init ──────────────────────────────────────────────────────────────────────
 function init() {
-  loadWatchlist(); // ensure watchlist is current from localStorage
-  if (apiKey) { document.getElementById('apiKey').value = apiKey; document.getElementById('keyStatus').textContent = '✓ שמור'; document.getElementById('keyStatus').style.color = 'var(--green)'; }
-  else { document.getElementById('keyStatus').textContent = '⚠ נדרש — הכנס key ולחץ שמור'; document.getElementById('keyStatus').style.color = 'orange'; }
-  if (pplxKey) { document.getElementById('pplxKey').value = pplxKey; document.getElementById('pplxKeyStatus').textContent = '✓ שמור'; document.getElementById('pplxKeyStatus').style.color = 'var(--green)'; }
-  if (avKey) { document.getElementById('avKey').value = avKey; document.getElementById('avKeyStatus').textContent = '✓ שמור'; document.getElementById('avKeyStatus').style.color = 'var(--green)'; }
-  renderChips();
+  // Phase 1: load + normalize watchlist from localStorage on startup
+  loadWatchlist();
+  // Keys still read from localStorage; inputs live in hidden .sb-config (Phase 2a)
+  if (apiKey) { const k = document.getElementById('apiKey'); if(k) { k.value = apiKey; } const s = document.getElementById('keyStatus'); if(s){s.textContent='✓';s.style.color='var(--green)';} }
+  if (pplxKey) { const k = document.getElementById('pplxKey'); if(k) { k.value = pplxKey; } const s = document.getElementById('pplxKeyStatus'); if(s){s.textContent='✓';s.style.color='var(--green)';} }
+  if (avKey)   { const k = document.getElementById('avKey');   if(k) { k.value = avKey;   } const s = document.getElementById('avKeyStatus');   if(s){s.textContent='✓';s.style.color='var(--green)';} }
+  // Phase 2a: render sidebar rows on load (before any scan)
+  renderWatchlistRows();
+  updateRunScanCount();
   if (results.length) { const dateStr = localStorage.getItem('pt_date') || ''; renderResults(results, dateStr); }
 }
 
