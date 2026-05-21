@@ -1559,14 +1559,26 @@ const API_DEFINITIONS = [
     letter:  'Y!',
     check: async () => {
       const url = 'https://query1.finance.yahoo.com/v8/finance/chart/NVDA?interval=1d&range=1d';
-      const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-      const r = await fetch(proxy, {signal: AbortSignal.timeout(8000)});
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const d = await r.json();
-      const data = JSON.parse(d.contents);
-      const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
-      if (!price) throw new Error('No price in response');
-      return { preview: `{\n  "symbol": "NVDA",\n  "price": ${price.toFixed(2)},\n  "source": "yahoo"\n}`, ok: true };
+      // Try multiple CORS proxies in sequence
+      const proxies = [
+        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+        `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+      ];
+      let lastErr = null;
+      for (const proxy of proxies) {
+        try {
+          const r = await fetch(proxy, {signal: AbortSignal.timeout(15000)});
+          if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
+          const d = await r.json();
+          // allorigins wraps in .contents, corsproxy returns directly
+          const raw = d.contents !== undefined ? d.contents : (typeof d === 'string' ? d : JSON.stringify(d));
+          const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+          if (!price) { lastErr = new Error('No price in response'); continue; }
+          return { preview: `{\n  "symbol": "NVDA",\n  "price": ${price.toFixed(2)},\n  "source": "yahoo"\n}`, ok: true };
+        } catch(e) { lastErr = e; }
+      }
+      throw lastErr || new Error('All proxies failed');
     }
   },
   {
@@ -1580,7 +1592,7 @@ const API_DEFINITIONS = [
       const avKey = localStorage.getItem('pt_avkey');
       if (!avKey) return { preview: '// No Alpha Vantage key saved', ok: false, status: 'No Key' };
       const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=NVDA&apikey=${avKey}`;
-      const r = await fetch(url, {signal: AbortSignal.timeout(10000)});
+      const r = await fetch(url, {signal: AbortSignal.timeout(15000)});
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const d = await r.json();
       if (d['Note'] || d['Information']) throw new Error('Rate limit / invalid key');
@@ -1603,7 +1615,7 @@ const API_DEFINITIONS = [
         method: 'POST',
         headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'sonar', messages: [{role:'user',content:'Reply with only: {"status":"ok"}'}], max_tokens: 20 }),
-        signal: AbortSignal.timeout(10000)
+        signal: AbortSignal.timeout(15000)
       });
       if (!r.ok) { const e = await r.json(); throw new Error(e.error?.message || 'HTTP ' + r.status); }
       const d = await r.json();
@@ -1625,7 +1637,7 @@ const API_DEFINITIONS = [
         method: 'POST',
         headers: { 'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' },
         body: JSON.stringify({ model:'claude-haiku-4-5-20251001', max_tokens:20, messages:[{role:'user',content:'Reply only: ok'}] }),
-        signal: AbortSignal.timeout(12000)
+        signal: AbortSignal.timeout(15000)
       });
       if (!r.ok) { const e = await r.json(); throw new Error(e.error?.message || 'HTTP ' + r.status); }
       const d = await r.json();
