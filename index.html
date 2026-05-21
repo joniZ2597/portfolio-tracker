@@ -386,6 +386,26 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .pwl-row:hover .pwl-dots{opacity:1}
 .pwl-dots:hover{color:var(--text2)}
 
+/* ─── TICKER ACTION MENU ────────────────────────────────── */
+.ticker-menu{
+  position:fixed;z-index:500;
+  background:var(--card);border:1px solid var(--border2);
+  border-radius:4px;min-width:168px;
+  box-shadow:0 4px 16px rgba(0,0,0,.45);
+  overflow:hidden;
+}
+.ticker-menu-item{
+  display:flex;align-items:center;gap:8px;
+  padding:9px 14px;
+  font-size:12px;cursor:pointer;
+  color:var(--text2);
+  border:none;background:none;width:100%;text-align:left;
+}
+.ticker-menu-item:hover{background:rgba(255,255,255,.05);color:var(--text)}
+.ticker-menu-item.danger{color:var(--red2)}
+.ticker-menu-item.danger:hover{background:rgba(220,38,38,.10);color:var(--red2)}
+.ticker-menu-sep{height:1px;background:var(--border);margin:2px 0}
+
 /* Hide legacy chip/config UI */
 .sb-chips,.sb-config,.chip{display:none!important}
 /* Keep legacy sb-header hidden by overriding to 0 height once replaced */
@@ -1071,11 +1091,22 @@ function addTicker() {
 }
 
 function removeTicker(sym) {
-  // Destructive — called only from three-dot menu (Phase 2b stub for now)
-  watchlist = watchlist.filter(e => e.symbol !== sym.toUpperCase());
+  const upper = sym.toUpperCase();
+  watchlist = watchlist.filter(e => e.symbol !== upper);
   saveWatchlist();
   renderWatchlistRows();
   updateRunScanCount();
+  // If the removed ticker was selected, select next available or clear panel
+  if (_activeTicker === upper) {
+    const next = watchlist[0];
+    if (next) {
+      selectTicker(next.symbol);
+    } else {
+      _activeTicker = null;
+      const panel = document.getElementById('mainPanel');
+      if (panel) panel.innerHTML = '<div class="main-empty"><div class="main-empty-icon">[ ]</div><div class="main-empty-text" style="color:var(--text3)">Select a ticker from the watchlist</div></div>';
+    }
+  }
 }
 
 function clearAll() {
@@ -1635,9 +1666,58 @@ function switchTab(tab) {
   renderWatchlistRows();
 }
 
+// ─── Ticker action menu ─────────────────────────────────────────────────────
+let _openMenu = null; // currently open menu DOM element
+
+function openTickerMenu(sym, event) {
+  event.stopPropagation();
+  closeTickerMenu(); // close any previously open menu
+
+  const menu = document.createElement('div');
+  menu.className = 'ticker-menu';
+  menu.id = 'tickerMenu';
+
+  // Position near the dots button
+  const rect = event.currentTarget.getBoundingClientRect();
+  menu.style.top  = (rect.bottom + 4) + 'px';
+  menu.style.left = Math.max(4, rect.right - 172) + 'px';
+
+  menu.innerHTML =
+    '<button class="ticker-menu-item" onclick="event.stopPropagation();selectTicker(\'' + sym + '\');closeTickerMenu()">' +
+      '▶&nbsp; View details' +
+    '</button>' +
+    '<div class="ticker-menu-sep"></div>' +
+    '<button class="ticker-menu-item danger" onclick="event.stopPropagation();confirmRemoveTicker(\'' + sym + '\')">' +
+      '✕&nbsp; Remove from watchlist' +
+    '</button>';
+
+  document.body.appendChild(menu);
+  _openMenu = menu;
+
+  // Close on any outside click
+  setTimeout(() => document.addEventListener('click', closeTickerMenu, { once: true }), 0);
+}
+
+function closeTickerMenu() {
+  if (_openMenu) { _openMenu.remove(); _openMenu = null; }
+}
+
+function confirmRemoveTicker(sym) {
+  closeTickerMenu();
+  // Single confirmation — native confirm keeps scope clean for Phase 2a
+  if (window.confirm('Remove ' + sym + ' from watchlist?')) {
+    removeTicker(sym);
+  }
+}
+
 function filterWatchlistRows(query) {
-  _filterQuery = (query || '').trim().toUpperCase();
+  const normalised = (query || '').trim().toUpperCase();
+  if (normalised === _filterQuery) return; // no change — skip re-render
+  _filterQuery = normalised;
   renderWatchlistRows();
+  // Restore focus to input so user can keep typing after re-render
+  const inp = document.getElementById('tickerInput');
+  if (inp && document.activeElement !== inp) inp.focus();
 }
 
 function toggleAllVisibleScanInclusion() {
@@ -1711,7 +1791,7 @@ function renderWatchlistRows(scanResults) {
         ${sub ? `<span class="pwl-name">${sub}</span>` : ''}
       </div>
       <span class="pwl-chg ${chgCls}">${chgStr}</span>
-      <span class="pwl-dots" onclick="event.stopPropagation()" title="More options">···</span>
+      <span class="pwl-dots" onclick="openTickerMenu('${sym}', event)" title="More options">···</span>
     </div>`;
   }).join('');
   updateScanColToggle();
