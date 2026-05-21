@@ -173,6 +173,13 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .mp-state-val{font-family:var(--mono);font-size:15px;font-weight:700;display:block;margin-bottom:2px}
 .mp-state-sub{font-size:10px;color:var(--text3);display:block}
 
+/* ─── DATA QUALITY WARNING BANNER ──────────────────────── */
+.dq-warn{display:flex;align-items:flex-start;gap:10px;padding:8px 16px;background:rgba(217,119,6,.07);border-bottom:1px solid rgba(217,119,6,.25);flex-shrink:0;}
+.dq-warn-icon{color:var(--yellow2);font-size:13px;flex-shrink:0;padding-top:1px}
+.dq-warn-text{font-family:var(--mono);font-size:9px;color:var(--yellow2);line-height:1.5;letter-spacing:.3px;}
+/* unavailable panel row */
+.unavail-row{padding:10px 0;font-family:var(--mono);font-size:10px;color:var(--text3);text-align:center;letter-spacing:.5px;}
+
 /* ─── PULSE v1.1 TICKER HEADER ──────────────────────────── */
 .ph-bar{
   display:flex;align-items:center;gap:0;
@@ -1811,6 +1818,14 @@ function renderTickerPlaceholder(ticker) {
     '</div>';
 }
 
+// ── Data-quality guard ────────────────────────────────────────────────────
+function hasVerifiedMarketData(item) {
+  return (
+    typeof item._verifiedPrice    === 'number' && item._verifiedPrice > 0 &&
+    typeof item._verifiedChangePct === 'number'
+  );
+}
+
 function renderMainPanel(item) {
   const panel = document.getElementById('mainPanel');
   if (!panel) return;
@@ -1834,6 +1849,9 @@ function renderMainPanel(item) {
   const rating = rM?rM[1]:'Neutral';
   const pt     = pM&&pM[1]!=='consensus unavailable'?'$'+pM[1]:'—';
   const rCls   = rating.toLowerCase()==='buy'?'pos':rating.toLowerCase()==='sell'?'neg':'neutral-v';
+
+  // Data-quality flag — gates all derived technical/RS/volume metrics
+  const hasData = hasVerifiedMarketData(item);
 
   // Setup grade — removed from header in Phase 2b; kept as dead vars to avoid refactor
   // of lower body panels that may still reference sc/sg (safe: not rendered in header)
@@ -1929,8 +1947,8 @@ function renderMainPanel(item) {
         ${metaStr ? `<span class="ph-meta">${metaStr}</span>` : ''}
       </div>
       <div class="ph-price-block">
-        <span class="ph-price">${price}</span>
-        <span class="ph-chg ${chgCls2}">${chgDir}${chg !== null ? Math.abs(chg * (item._verifiedPrice||0)/100).toFixed(2) : '—'} ${chgPctStr}</span>
+        <span class="ph-price">${hasData ? price : '—'}</span>
+        <span class="ph-chg ${hasData ? chgCls2 : 'neu'}">${hasData ? (chgDir + (chg !== null ? Math.abs(chg * (item._verifiedPrice||0)/100).toFixed(2) : '—') + ' ' + chgPctStr) : '—'}</span>
         <span class="ph-today">today</span>
       </div>
       <div class="ph-spacer"></div>
@@ -1938,13 +1956,19 @@ function renderMainPanel(item) {
       <button class="ph-refresh" title="Refresh" onclick="selectTicker('${item.ticker}')">↻</button>
     </div>
 
+    ${!hasData ? `
+    <div class="dq-warn">
+      <span class="dq-warn-icon">⚠</span>
+      <span class="dq-warn-text">Verified price unavailable — analysis based on research context only. Technical, RS, and volume metrics are not shown.</span>
+    </div>` : ''}
+
     <!-- BODY PANELS -->
     <div class="mp-body">
 
       <!-- TREND & MA STRUCTURE -->
       <div class="mp-panel">
         <div class="mp-panel-title">TREND & MARKET STRUCTURE</div>
-        <div class="mp-ma-table">
+        ${hasData ? `<div class="mp-ma-table">
           ${[['20DMA','$—',maChg20,ma20],['50DMA','$—',maChg50,ma50],['150DMA','$—',maChg150,ma150],['200DMA','$—',maChg200,ma200]].map(([lbl,val,pct,state])=>`
           <div class="ma-row">
             <span class="ma-lbl">${lbl}</span>
@@ -1953,13 +1977,13 @@ function renderMainPanel(item) {
             <div class="ma-arrow ${maCls(state)}">${state==='Above'?'↗':state==='Near'?'→':'↘'}</div>
             <span class="ma-state ${maCls(state)}">${state}</span>
           </div>`).join('')}
-        </div>
+        </div>` : '<div class="unavail-row">No verified price data — MA levels unavailable</div>'}
       </div>
 
       <!-- RELATIVE STRENGTH -->
       <div class="mp-panel">
         <div class="mp-panel-title">RELATIVE STRENGTH</div>
-        <div class="rs-table">
+        ${hasData ? `<div class="rs-table">
           ${[['vs SOXX',rs,score],['vs QQQ',rs,score-3],['vs SPY',score>=60?'OUTPERFORM':'IN LINE',score-5]].map(([lbl,val,sc2])=>`
           <div class="rs-row">
             <span class="rs-lbl">${lbl}</span>
@@ -1970,30 +1994,30 @@ function renderMainPanel(item) {
             <span class="rs-rank-lbl">RS RANK (vs Universe)</span>
             <span class="rs-rank-val">${score} <span style="color:var(--text3)">/ 100</span></span>
           </div>
-        </div>
+        </div>` : '<div class="unavail-row">No verified price data — RS unavailable</div>'}
       </div>
 
       <!-- VOLUME ANALYSIS -->
       <div class="mp-panel">
         <div class="mp-panel-title">VOLUME ANALYSIS</div>
-        <div class="vol-table">
+        ${hasData ? `<div class="vol-table">
           <div class="vol-row"><span class="vol-lbl">Volume vs 20D Avg</span><span class="vol-metric">${Math.abs(chg||0)>3?'1.4x':'1.0x'}</span><span class="vol-state ${volCls}">${Math.abs(chg||0)>3?'HIGH':'AVERAGE'}</span></div>
           <div class="vol-row"><span class="vol-lbl">Trend</span><span class="vol-metric"></span><span class="vol-state ${volCls}">${volChar}</span></div>
           <div class="vol-row"><span class="vol-lbl">Distribution Days (20D)</span><span class="vol-metric">${hasCrit?'4':'2'}</span><span class="vol-state ${hasCrit?'warn':'pos'}">${hasCrit?'ELEVATED':'LOW'}</span></div>
           <div class="vol-row"><span class="vol-lbl">Up Volume Ratio</span><span class="vol-metric">${score>=55?'58%':'42%'}</span><span class="vol-state ${score>=55?'pos':'warn'}">${score>=55?'Above Avg':'Below Avg'}</span></div>
-        </div>
+        </div>` : '<div class="unavail-row">No verified price data — volume metrics unavailable</div>'}
       </div>
 
       <!-- PRICE POSITIONING -->
       <div class="mp-panel">
         <div class="mp-panel-title">PRICE POSITIONING</div>
-        <div class="pos-table">
+        ${hasData ? `<div class="pos-table">
           <div class="pos-row"><span class="pos-lbl">Distance from ATH</span><span class="pos-val ${chg!==null&&chg<-5?'warn':'neutral-v'}">${chg!==null?'-'+(Math.abs(chg)*1.5).toFixed(1)+'%':'—'}</span></div>
           <div class="pos-row"><span class="pos-lbl">Above 20DMA</span><span class="pos-val ${maCls(ma20)}">${maChg20}</span></div>
           <div class="pos-row"><span class="pos-lbl">Above 50DMA</span><span class="pos-val ${maCls(ma50)}">${maChg50}</span></div>
           <div class="pos-row"><span class="pos-lbl">Above 150DMA</span><span class="pos-val ${maCls(ma150)}">${maChg150}</span></div>
           <div class="pos-row"><span class="pos-lbl">Support Proximity</span><span class="pos-val ${score>=55?'pos':'warn'}">${score>=55?'NEAR':'EXTENDED'}</span></div>
-        </div>
+        </div>` : '<div class="unavail-row">No verified price data — positioning unavailable</div>'}
       </div>
 
       <!-- CATALYSTS -->
@@ -2012,13 +2036,17 @@ function renderMainPanel(item) {
       <!-- RISK / REWARD -->
       <div class="mp-panel">
         <div class="mp-panel-title">RISK / REWARD</div>
-        <div class="rr-table">
+        ${hasData ? `<div class="rr-table">
           <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val ${riskCls}">${riskState.replace(' RISK','')}</span></div>
           <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val ${score>=65?'pos':score>=48?'neutral-v':'neg'}">${score>=65?'HIGH':score>=48?'MODERATE':'LIMITED'}</span></div>
           <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase.includes('UP')||phase.includes('ACCUM')?'BULLISH':phase.includes('CORR')?'BEARISH':'NEUTRAL'}</span></div>
           <div class="rr-row"><span class="rr-lbl">Setup Quality</span><span class="rr-val">${score} / 100</span></div>
           <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
-        </div>
+        </div>` : `<div class="rr-table">
+          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val neutral-v">Limited confidence</span></div>
+          <div class="rr-row"><span class="rr-lbl">Confidence</span><span class="rr-val warn">Research-only</span></div>
+          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
+        </div>`}
       </div>
 
     </div>
@@ -2028,7 +2056,7 @@ function renderMainPanel(item) {
       <div class="mp-action-left">
         <div class="mp-action-icon">◎</div>
         <div>
-          <div class="mp-action-label">ACTIONABLE TAKE</div>
+          <div class="mp-action-label">${hasData ? 'ACTIONABLE TAKE' : 'RESEARCH-CONTEXT ANALYSIS — NO VERIFIED MARKET PRICE'}</div>
           <div class="mp-action-text">${actionable.replace(/Rating:.*$/s,'').replace(/\*\*/g,'').trim()}</div>
         </div>
       </div>
