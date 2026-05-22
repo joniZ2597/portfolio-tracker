@@ -845,32 +845,22 @@ async function fetchHistoricalCandles(symbol, range = '6mo') {
   return fetchPromise;
 }
 
-// ─── YAHOO SOURCE — multi-proxy sequential fallback ─────────────────────────
+// ─── YAHOO SOURCE — delegates to shared fetchYahooChart helper ──────────────
 
 async function _fetchYahooWithProxies(sym, yr) {
-  const yahooUrl = 'https://query1.finance.yahoo.com/v8/finance/chart/' + sym + '?interval=1d&range=' + yr;
-
-  for (let i = 0; i < _YAHOO_PROXIES.length; i++) {
-    const proxied = _YAHOO_PROXIES[i](yahooUrl);
-    try {
-      const res = await fetch(proxied, { signal: AbortSignal.timeout(20000) });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const raw  = await res.json();
-      // allorigins /get wraps body in { contents: "...", status: {...} }
-      const data = (raw && typeof raw.contents === 'string')
-        ? JSON.parse(raw.contents)
-        : raw;
-      const candles = _parseYahooChart(data, sym);
-      if (candles.length > 0) {
-        console.log('[history] Yahoo proxy ' + i + ': ' + candles.length + ' candles for ' + sym + ' (' + yr + ')');
-        return candles;
-      }
-      console.warn('[history] Yahoo proxy ' + i + ' returned 0 candles for ' + sym);
-    } catch (err) {
-      console.warn('[history] Yahoo proxy ' + i + ' failed for ' + sym + ':', err.message ?? err);
+  try {
+    const data = await fetchYahooChart(sym, '1d', yr, 20000);
+    const candles = _parseYahooChart(data, sym);
+    if (candles.length > 0) {
+      console.log('[history] Yahoo: ' + candles.length + ' candles for ' + sym + ' (' + yr + ')');
+    } else {
+      console.warn('[history] Yahoo: 0 candles for ' + sym);
     }
+    return candles;
+  } catch(err) {
+    console.warn('[history] Yahoo failed for ' + sym + ':', err.message ?? err);
+    return [];
   }
-  return []; // all proxies failed
 }
 
 function _parseYahooChart(data, sym) {
@@ -1108,8 +1098,41 @@ let pplxKey = localStorage.getItem('pt_pplxkey') || '';
 
 // ────────────────────────────────────── STOCK DATA LAYER ──────────────────────────────────────
 
-const YAHOO_PROXY = 'https://api.allorigins.win/raw?url=';
+const YAHOO_PROXY = 'https://api.allorigins.win/raw?url='; // kept for reference
 const AV_BASE     = 'https://www.alphavantage.co/query';
+
+// ── fetchYahooChart: shared multi-proxy Yahoo chart helper ──────────────────
+// Used by both fetchYahoo (daily price) and _fetchYahooWithProxies (historical).
+// Tries _YAHOO_PROXIES sequentially; returns parsed JSON or throws on all failure.
+async function fetchYahooChart(symbol, interval, range, timeoutMs = 10000) {
+  const yahooUrl = 'https://query1.finance.yahoo.com/v8/finance/chart/'
+    + symbol + '?interval=' + interval + '&range=' + range;
+
+  const proxies = (typeof _YAHOO_PROXIES !== 'undefined')
+    ? _YAHOO_PROXIES
+    : [url => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)];
+
+  for (let i = 0; i < proxies.length; i++) {
+    const proxied = proxies[i](yahooUrl);
+    try {
+      const res = await fetch(proxied, { signal: AbortSignal.timeout(timeoutMs) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const raw = await res.json();
+      // allorigins /get wraps response in { contents: "...", status: {...} }
+      const data = (raw && typeof raw.contents === 'string')
+        ? JSON.parse(raw.contents)
+        : raw;
+      if (data?.chart?.result?.[0]) {
+        console.log('[yahoo] proxy ' + i + ' OK for ' + symbol);
+        return data;
+      }
+      console.warn('[yahoo] proxy ' + i + ' returned no chart data for ' + symbol);
+    } catch (err) {
+      console.warn('[yahoo] proxy ' + i + ' failed for ' + symbol + ':', err.message ?? err);
+    }
+  }
+  throw new Error('Yahoo: all proxies failed for ' + symbol);
+}
 
 function saveAvKey() {
   avKey = document.getElementById('avKey').value.trim();
@@ -1128,13 +1151,9 @@ function isValidStockData(d) {
     d.timestamp;
 }
 
-// Fetch from Yahoo Finance via proxy
+// Fetch daily price from Yahoo Finance — uses multi-proxy fallback via fetchYahooChart
 async function fetchYahoo(symbol) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`;
-  const proxied = YAHOO_PROXY + encodeURIComponent(url);
-  const res = await fetch(proxied, { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) throw new Error('Yahoo HTTP ' + res.status);
-  const json = await res.json();
+  const json = await fetchYahooChart(symbol, '1d', '1d', 10000);
   const meta = json?.chart?.result?.[0]?.meta;
   if (!meta) throw new Error('Yahoo: no meta for ' + symbol);
   return {
@@ -1279,7 +1298,9 @@ function addTicker() {
   const val = (inp.value || '').trim().toUpperCase();
   if (!val) return;
   upsertTicker(val, {});  // no-op if exists; inserts with defaults if new
+  // Clear search filter so the full watchlist is visible after adding
   inp.value = '';
+  _filterQuery = '';
   renderWatchlistRows();
   updateRunScanCount();
 }
