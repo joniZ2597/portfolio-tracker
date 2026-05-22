@@ -851,14 +851,16 @@ async function _fetchYahooWithProxies(sym, yr) {
   try {
     const data = await fetchYahooChart(sym, '1d', yr, 20000);
     const candles = _parseYahooChart(data, sym);
+    // Read _provider set by the Netlify function when Polygon was used
+    const provider = data?.chart?.result?.[0]?.meta?._provider || 'yahoo';
     if (candles.length > 0) {
-      console.log('[history] Yahoo: ' + candles.length + ' candles for ' + sym + ' (' + yr + ')');
+      console.log('[history] ' + provider + ': ' + candles.length + ' candles for ' + sym + ' (' + yr + ')');
     } else {
-      console.warn('[history] Yahoo: 0 candles for ' + sym);
+      console.warn('[history] ' + provider + ': 0 candles for ' + sym);
     }
     return candles;
   } catch(err) {
-    console.warn('[history] Yahoo failed for ' + sym + ':', err.message ?? err);
+    console.warn('[history] fetch failed for ' + sym + ':', err.message ?? err);
     return [];
   }
 }
@@ -2138,14 +2140,16 @@ function renderResults(allResults, dateStr) {
 
   // Preserve _activeTicker across incremental scan renders.
   // Only auto-select when no ticker is currently selected.
+  // Only refresh the tech panel if the ACTIVE ticker's result was in this batch.
   const activeInWatchlist = _activeTicker && watchlist.some(e => e.symbol === _activeTicker);
   if (activeInWatchlist) {
-    // Re-render the active ticker panel with its latest result (may have just arrived)
     const updatedItem = allResults.find(r => r.ticker === _activeTicker);
     if (updatedItem) {
+      // Active ticker received a new result in this batch — re-render panel
       renderMainPanel(updatedItem);
     }
-    // If no result yet, placeholder is already showing — leave it
+    // No result for active ticker in this batch → leave panel as-is
+    // (prevents unrelated batch completions from triggering tech refreshes)
   } else {
     // No active ticker — auto-select first by score
     const first = [...allResults].sort((a,b) => (b.sentiment_score||50) - (a.sentiment_score||50))[0];
@@ -2809,34 +2813,27 @@ init();
 
 const API_DEFINITIONS = [
   {
-    id:      'yahoo',
-    name:    'Yahoo Finance',
-    sub:     'Market Data',
-    purpose: 'Price, Volume, Market Data',
+    id:      'market_data_fn',
+    name:    'Market Data Function',
+    sub:     'Daily Price · Yahoo-first',
+    purpose: 'Price, Change, Daily data via Netlify Function',
     color:   '#7C3AED',
-    letter:  'Y!',
+    letter:  'MD',
     check: async () => {
-      const url = 'https://query1.finance.yahoo.com/v8/finance/chart/NVDA?interval=1d&range=1d';
-      // Try multiple CORS proxies in sequence
-      const proxies = [
-        `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-        `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
-      ];
-      let lastErr = null;
-      for (const proxy of proxies) {
-        try {
-          const r = await fetch(proxy, {signal: AbortSignal.timeout(15000)});
-          if (!r.ok) { lastErr = new Error('HTTP ' + r.status); continue; }
-          const d = await r.json();
-          // allorigins wraps in .contents, corsproxy returns directly
-          const raw = d.contents !== undefined ? d.contents : (typeof d === 'string' ? d : JSON.stringify(d));
-          const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-          const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
-          if (!price) { lastErr = new Error('No price in response'); continue; }
-          return { preview: `{\n  "symbol": "NVDA",\n  "price": ${price.toFixed(2)},\n  "source": "yahoo"\n}`, ok: true };
-        } catch(e) { lastErr = e; }
-      }
-      throw lastErr || new Error('All proxies failed');
+      // Check the Netlify function — daily policy: Yahoo first, Polygon fallback
+      const r = await fetch('/.netlify/functions/market-data?symbol=SPY&interval=1d&range=5d',
+        { signal: AbortSignal.timeout(12000) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      const meta = data?.chart?.result?.[0]?.meta;
+      if (!meta) throw new Error('No chart meta in response');
+      const price    = meta.regularMarketPrice;
+      const provider = meta._provider || 'yahoo';
+      if (!price) throw new Error('No price in response');
+      return {
+        preview: `{\n  "symbol": "SPY",\n  "price": ${parseFloat(price).toFixed(2)},\n  "provider": "${provider}",\n  "policy": "daily -> yahoo-first"\n}`,
+        ok: true
+      };
     }
   },
   {
@@ -2903,18 +2900,20 @@ const API_DEFINITIONS = [
     }
   },
   {
-    id:      'yahoo_history',
-    name:    'Yahoo Finance History',
-    sub:     'Historical Candles',
-    purpose: 'Daily OHLCV, 1M/3M/6M/1Y',
-    color:   '#7C3AED',
-    letter:  'Y↓',
+    id:      'historical_candles',
+    name:    'Historical Candles',
+    sub:     'Polygon-first · Yahoo fallback',
+    purpose: 'Daily OHLCV 1Y for MA / RS / Volume',
+    color:   '#059669',
+    letter:  'HC',
     check: async () => {
-      const candles = await fetchHistoricalCandles('AAPL', '1M');
+      const candles = await fetchHistoricalCandles('AAPL', '1Y');
       if (!candles || candles.length === 0) throw new Error('No candles returned');
       const first = candles[0], last = candles[candles.length - 1];
+      // Detect provider from cache if available
+      const cached = (window._techCache && window._techCache['AAPL']) ? 'cached' : 'live';
       return {
-        preview: `{\n  "symbol": "AAPL",\n  "candles": ${candles.length},\n  "from": "${first.date}",\n  "to": "${last.date}",\n  "lastClose": ${last.close}\n}`,
+        preview: `{\n  "symbol": "AAPL",\n  "candles": ${candles.length},\n  "from": "${first.date}",\n  "to": "${last.date}",\n  "lastClose": ${last.close},\n  "policy": "1y -> polygon-first"\n}`,
         ok: true
       };
     }
