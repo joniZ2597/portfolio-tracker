@@ -623,22 +623,35 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
  */
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
-// Matches YAHOO_PROXY in main codebase
-const _HIST_YAHOO_PROXY = 'https://api.allorigins.win/raw?url=';
-const _HIST_AV_BASE     = 'https://www.alphavantage.co/query';
+const _HIST_AV_BASE = 'https://www.alphavantage.co/query';
+
+// Yahoo proxy list — tried sequentially on failure
+const _YAHOO_PROXIES = [
+  // allorigins raw — returns body as-is
+  url => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+  // allorigins get — returns JSON wrapper { contents, status }
+  url => 'https://api.allorigins.win/get?url=' + encodeURIComponent(url),
+  // corsproxy.io — straightforward CORS proxy
+  url => 'https://corsproxy.io/?' + encodeURIComponent(url),
+];
 
 const RANGE_MAP = {
   '1M': '1mo', '3M': '3mo', '6M': '6mo', '1Y': '1y',
-  // pass-through
   '1mo': '1mo', '3mo': '3mo', '6mo': '6mo', '1y': '1y',
 };
 
 // Approximate trading days per range — for AV compact vs full output
 const _AV_OUTPUT_SIZE = { '1mo': 'compact', '3mo': 'compact', '6mo': 'full', '1y': 'full' };
 
+const CACHE_EMPTY_TTL_MS = 90 * 1000; // 90s negative-cache for empty results
+
 // ─── CACHE ───────────────────────────────────────────────────────────────────
 const historicalCache = {};
 const CACHE_TTL_MS    = 15 * 60 * 1000; // 15 minutes
+
+// In-flight dedup: prevents parallel fetches for the same symbol+range
+// key: "SYM:range" → Promise<candle[]>
+const _inflight = {};
 
 // ── Technical snapshot cache ─────────────────────────────────────────────────
 // key: ticker symbol → { snap, computedAt }
@@ -795,50 +808,69 @@ async function fetchHistoricalCandles(symbol, range = '6mo') {
 
   const sym      = symbol.trim().toUpperCase();
   const yr       = RANGE_MAP[range] ?? '6mo';
-  const cacheKey = `${sym}:${yr}`;
+  const cacheKey = sym + ':' + yr;
 
-  // Cache hit
+  // Positive cache hit (non-empty, within full TTL)
   const cached = historicalCache[cacheKey];
-  if (cached && (Date.now() - cached.fetchedAt) < CACHE_TTL_MS) {
-    console.log(`[history] cache hit: ${cacheKey} (${cached.candles.length} candles)`);
+  if (cached && cached.candles.length > 0 && (Date.now() - cached.fetchedAt) < CACHE_TTL_MS) {
     return cached.candles;
   }
-
-  // Try Yahoo first (same proxy as existing pipeline)
-  let candles = await _fetchYahooCandles(sym, yr);
-
-  // Fallback to Alpha Vantage if Yahoo fails and AV key exists
-  if (candles.length === 0) {
-    candles = await _fetchAVCandles(sym, yr);
-  }
-
-  if (candles.length === 0) {
-    console.warn(`[history] all sources failed for ${sym} — returning []`);
+  // Negative cache: empty result cached — allow retry after short cooldown only
+  if (cached && cached.candles.length === 0 && (Date.now() - cached.fetchedAt) < CACHE_EMPTY_TTL_MS) {
     return [];
   }
 
-  historicalCache[cacheKey] = { candles, fetchedAt: Date.now() };
-  return candles;
-}
+  // In-flight dedup: reuse an existing promise if one is already running
+  if (_inflight[cacheKey]) {
+    console.log('[history] dedup in-flight:', cacheKey);
+    return _inflight[cacheKey];
+  }
 
-// ─── YAHOO SOURCE ────────────────────────────────────────────────────────────
+  // Start fetch — store promise so parallel callers share it
+  const fetchPromise = (async () => {
+    let candles = await _fetchYahooWithProxies(sym, yr);
+    if (candles.length === 0) candles = await _fetchAVCandles(sym, yr);
 
-async function _fetchYahooCandles(sym, yr) {
-  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=${yr}`;
-  const proxied  = _HIST_YAHOO_PROXY + encodeURIComponent(yahooUrl);
-  try {
-    const res = await fetch(proxied, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data    = await res.json();
-    const candles = _parseYahooChart(data, sym);
-    if (candles.length > 0) {
-      console.log(`[history] Yahoo: ${candles.length} candles for ${sym} (${yr})`);
+    // Cache result regardless (empty = negative cache)
+    historicalCache[cacheKey] = { candles, fetchedAt: Date.now() };
+    delete _inflight[cacheKey];
+
+    if (candles.length === 0) {
+      console.warn('[history] all sources failed for', sym, '— negative-cached for 90s');
     }
     return candles;
-  } catch (err) {
-    console.warn(`[history] Yahoo failed for ${sym}:`, err.message ?? err);
-    return [];
+  })();
+
+  _inflight[cacheKey] = fetchPromise;
+  return fetchPromise;
+}
+
+// ─── YAHOO SOURCE — multi-proxy sequential fallback ─────────────────────────
+
+async function _fetchYahooWithProxies(sym, yr) {
+  const yahooUrl = 'https://query1.finance.yahoo.com/v8/finance/chart/' + sym + '?interval=1d&range=' + yr;
+
+  for (let i = 0; i < _YAHOO_PROXIES.length; i++) {
+    const proxied = _YAHOO_PROXIES[i](yahooUrl);
+    try {
+      const res = await fetch(proxied, { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const raw  = await res.json();
+      // allorigins /get wraps body in { contents: "...", status: {...} }
+      const data = (raw && typeof raw.contents === 'string')
+        ? JSON.parse(raw.contents)
+        : raw;
+      const candles = _parseYahooChart(data, sym);
+      if (candles.length > 0) {
+        console.log('[history] Yahoo proxy ' + i + ': ' + candles.length + ' candles for ' + sym + ' (' + yr + ')');
+        return candles;
+      }
+      console.warn('[history] Yahoo proxy ' + i + ' returned 0 candles for ' + sym);
+    } catch (err) {
+      console.warn('[history] Yahoo proxy ' + i + ' failed for ' + sym + ':', err.message ?? err);
+    }
   }
+  return []; // all proxies failed
 }
 
 function _parseYahooChart(data, sym) {
