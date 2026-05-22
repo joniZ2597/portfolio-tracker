@@ -1178,17 +1178,46 @@ function isValidStockData(d) {
 
 // Fetch daily price from Yahoo Finance — uses multi-proxy fallback via fetchYahooChart
 async function fetchYahoo(symbol) {
-  const json = await fetchYahooChart(symbol, '1d', '1d', 10000);
-  const meta = json?.chart?.result?.[0]?.meta;
+  // 5d range guarantees multiple daily candles so prev/current close comparison always works
+  const json   = await fetchYahooChart(symbol, '1d', '5d', 10000);
+  const result = json?.chart?.result?.[0];
+  const meta   = result?.meta;
   if (!meta) throw new Error('Yahoo: no meta for ' + symbol);
+
+  // Prefer meta.regularMarketPrice for displayed price
+  const price = parseFloat(meta.regularMarketPrice);
+
+  // ── Daily change from chart candles (most reliable across market states) ──
+  let change_percent = 0;
+  let previous_close = 0;
+
+  const closes = result?.indicators?.quote?.[0]?.close || [];
+  const validCloses = closes.filter(c => c !== null && !isNaN(c) && c > 0);
+
+  if (validCloses.length >= 2) {
+    // Use last two valid daily closes from the 5d candle array
+    const prevClose  = validCloses[validCloses.length - 2];
+    const lastClose  = validCloses[validCloses.length - 1];
+    previous_close   = prevClose;
+    change_percent   = parseFloat(((lastClose - prevClose) / prevClose * 100).toFixed(2));
+  } else {
+    // Last resort: try meta fields (may be absent in market-closed state)
+    previous_close = parseFloat(meta.chartPreviousClose) || parseFloat(meta.previousClose) || 0;
+    if (previous_close > 0 && previous_close !== price) {
+      change_percent = parseFloat(((price - previous_close) / previous_close * 100).toFixed(2));
+    } else {
+      console.warn('[market-data] daily change fallback unavailable for ' + symbol);
+    }
+  }
+
   return {
-    symbol:         symbol,
-    price:          parseFloat(meta.regularMarketPrice),
-    change_percent: meta.previousClose ? parseFloat(((meta.regularMarketPrice - meta.previousClose) / meta.previousClose * 100).toFixed(2)) : 0,
+    symbol,
+    price,
+    change_percent,
     high:           parseFloat(meta.regularMarketDayHigh),
     low:            parseFloat(meta.regularMarketDayLow),
     open:           parseFloat(meta.regularMarketOpen),
-    previous_close: parseFloat(meta.previousClose),
+    previous_close,
     volume:         parseInt(meta.regularMarketVolume),
     timestamp:      new Date(meta.regularMarketTime * 1000).toISOString(),
     source:         'yahoo'
@@ -2331,16 +2360,22 @@ function renderMainPanel(item) {
   // Re-renders the panel when data arrives if this ticker is still selected
   refreshTechPanel(item.ticker, dispEtf, item._verifiedPrice);
 
-  // Catalysts list
+  // Catalysts list — conservative: negative events require explicit phrases
+  const _hasBeat = sl.includes('earnings beat') || sl.includes('beat estimates') || sl.includes('beat expectations');
+  const _hasMiss = sl.includes('earnings miss') || sl.includes('missed estimates') || sl.includes('missed expectations') || sl.includes('earnings disappointment');
+  const _hasDowngrade = sl.includes('analyst downgrade') || sl.includes('rating cut') || sl.includes('downgraded to') || (sl.includes('downgrade') && !sl.includes('no downgrade'));
+  const _hasUpgrade   = (sl.includes('upgrade')||sl.includes('analyst upgrade')||sl.includes('rating raised')) && !_hasDowngrade;
+  // Only show miss if beat is NOT also present, unless both are explicitly stated
+  const _showMiss = _hasMiss && (!_hasBeat || (sl.includes('earnings miss') && sl.includes('earnings beat')));
   const catalysts = [
     [sl.includes('hbm')||sl.includes('ai demand')||sl.includes('ai-driven'), 'AI Memory Demand', 'HIGH', 'pos'],
     [sl.includes('hbm'), 'HBM Cycle', 'POSITIVE', 'pos'],
-    [sl.includes('earnings beat'), 'Earnings Beat', 'POSITIVE', 'pos'],
-    [sl.includes('upgrade')&&!sl.includes('downgrade'), 'Analyst Upgrades', '+UPGRADE', 'pos'],
-    [sl.includes('earnings miss'), 'Earnings Miss', 'NEGATIVE', 'neg'],
-    [sl.includes('downgrade'), 'Analyst Downgrade', 'RISK', 'neg'],
+    [_hasBeat, 'Earnings Beat', 'POSITIVE', 'pos'],
+    [_hasUpgrade, 'Analyst Upgrades', '+UPGRADE', 'pos'],
+    [_showMiss, 'Earnings Miss', 'NEGATIVE', 'neg'],
+    [_hasDowngrade, 'Analyst Downgrade', 'RISK', 'neg'],
     [sl.includes('sector rotation'), 'Sector Rotation', 'WATCH', 'warn'],
-    [sl.includes('profit-taking'), 'Profit Taking', 'WATCH', 'warn'],
+    [sl.includes('profit-taking')||sl.includes('profit taking'), 'Profit Taking', 'WATCH', 'warn'],
     [sl.includes('macro')||sl.includes('tariff'), 'Macro Risk', 'WATCH', 'warn'],
   ].filter(([c])=>c).slice(0,5);
 
@@ -2546,7 +2581,7 @@ function renderMainPanel(item) {
         <div class="mp-action-icon">◎</div>
         <div>
           <div class="mp-action-label">${hasData ? 'ACTIONABLE TAKE' : 'RESEARCH-CONTEXT ANALYSIS — NO VERIFIED MARKET PRICE'}</div>
-          <div class="mp-action-text">${actionable.replace(/Rating:.*$/s,'').replace(/\*\*/g,'').trim()}</div>
+          <div class="mp-action-text">${actionable.replace(/Rating:.*$/s,'').replace(/\*\*/g,'').replace(/^[\]\[:\-"'\s]+/,'').trim()}</div>
         </div>
       </div>
       <div class="mp-action-time">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
