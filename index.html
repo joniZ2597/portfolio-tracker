@@ -1101,10 +1101,35 @@ let pplxKey = localStorage.getItem('pt_pplxkey') || '';
 const YAHOO_PROXY = 'https://api.allorigins.win/raw?url='; // kept for reference
 const AV_BASE     = 'https://www.alphavantage.co/query';
 
-// ── fetchYahooChart: shared multi-proxy Yahoo chart helper ──────────────────
-// Used by both fetchYahoo (daily price) and _fetchYahooWithProxies (historical).
-// Tries _YAHOO_PROXIES sequentially; returns parsed JSON or throws on all failure.
+// ── fetchYahooChart: shared Yahoo chart helper ───────────────────────────────
+// Priority 1: Netlify Function (server-side, no CORS).
+// Priority 2: public CORS proxy fallback list.
+// Returns parsed Yahoo chart JSON or throws when all sources fail.
 async function fetchYahooChart(symbol, interval, range, timeoutMs = 10000) {
+  const qs = '?symbol=' + encodeURIComponent(symbol)
+    + '&interval=' + encodeURIComponent(interval)
+    + '&range='    + encodeURIComponent(range);
+  const netlifyUrl = '/.netlify/functions/market-data' + qs;
+
+  // ── Step 1: Netlify Function (primary — no browser CORS issues) ───────────
+  try {
+    const res = await fetch(netlifyUrl, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (data?.chart?.result?.[0]) {
+      console.log('[market-data] netlify OK for ' + symbol + ' range=' + range);
+      return data;
+    }
+    // Netlify returned 200 but no chart result (e.g. invalid ticker)
+    const errMsg = data?.error || 'no chart result';
+    console.warn('[market-data] netlify no chart for ' + symbol + ':', errMsg);
+    throw new Error(errMsg);
+  } catch (netlifyErr) {
+    console.warn('[market-data] netlify failed for ' + symbol + ':', netlifyErr.message ?? netlifyErr);
+    console.log('[market-data] falling back to public proxies for ' + symbol);
+  }
+
+  // ── Step 2: public CORS proxy fallback list ───────────────────────────────
   const yahooUrl = 'https://query1.finance.yahoo.com/v8/finance/chart/'
     + symbol + '?interval=' + interval + '&range=' + range;
 
