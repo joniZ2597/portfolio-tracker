@@ -1958,14 +1958,25 @@ function openTickerMenu(sym, event) {
   menu.id = 'tickerMenu';
 
   // Build menu content — sym is already upper-case from the row template
+  // Check current scan inclusion so we can show the right label
+  const _menuEntry  = findTicker(sym);
+  const _inScanNow  = _menuEntry ? _menuEntry.inScan : false;
+  const _scanLabel  = _inScanNow
+    ? '☐&nbsp; Remove from scan'
+    : '☑&nbsp; Add to scan';
+
   menu.innerHTML =
     '<div class="ticker-menu-header">' + sym + '</div>' +
     '<button class="ticker-menu-item" onclick="event.stopPropagation();selectTicker(\'' + sym + '\');closeTickerMenu()">' +
       '▶&nbsp; View details' +
     '</button>' +
     '<div class="ticker-menu-sep"></div>' +
-    '<button class="ticker-menu-item danger" onclick="event.stopPropagation();confirmRemoveTicker(\'' + sym + '\')">' +
-      '✕&nbsp; Remove from watchlist' +
+    '<button class="ticker-menu-item" onclick="event.stopPropagation();toggleScanFromMenu(\'' + sym + '\')">' +
+      _scanLabel +
+    '</button>' +
+    '<div class="ticker-menu-sep"></div>' +
+    '<button class="ticker-menu-item danger" onclick="event.stopPropagation();confirmDeleteTicker(\'' + sym + '\')">' +
+      '🗑&nbsp; Delete from portfolio' +
     '</button>';
 
   // Append off-screen first so we can measure dimensions
@@ -2020,13 +2031,28 @@ function closeTickerMenu() {
 // Wire Escape globally (safe: no-op when menu is closed)
 document.addEventListener('keydown', _onMenuEscape);
 
-function confirmRemoveTicker(sym) {
+// Toggle scan inclusion from the three-dot menu (does NOT delete from portfolio)
+function toggleScanFromMenu(sym) {
   closeTickerMenu();
-  // Single confirmation — native confirm keeps scope clean for Phase 2a
-  if (window.confirm('Remove ' + sym + ' from watchlist?')) {
+  const entry = findTicker(sym);
+  if (!entry) return;
+  setInScan(sym, !entry.inScan);
+  // Sync checkbox in-place
+  const cb = document.getElementById('cb-' + sym);
+  if (cb) cb.checked = entry.inScan;
+  updateRunScanCount();
+}
+
+// Permanent delete — requires explicit confirmation
+function confirmDeleteTicker(sym) {
+  closeTickerMenu();
+  if (window.confirm('Delete ' + sym + ' from your portfolio? This cannot be undone.')) {
     removeTicker(sym);
   }
 }
+
+// Legacy alias — kept so any stale references don't throw
+function confirmRemoveTicker(sym) { confirmDeleteTicker(sym); }
 
 function filterWatchlistRows(query) {
   const normalised = (query || '').trim().toUpperCase();
