@@ -181,41 +181,56 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .unavail-row{padding:10px 0;font-family:var(--mono);font-size:10px;color:var(--text3);text-align:center;letter-spacing:.5px;}
 
 /* ─── PULSE v1.1 TICKER HEADER ──────────────────────────── */
+/* ─── PULSE v1.1 TICKER HEADER — two-row layout ─── */
 .ph-bar{
-  display:flex;align-items:center;gap:0;
-  padding:10px 20px;border-bottom:1px solid var(--border);
+  display:flex;flex-direction:column;gap:0;
+  padding:0;border-bottom:1px solid var(--border);
   background:var(--sidebar);flex-shrink:0;
 }
+.ph-row1{
+  display:flex;align-items:center;gap:0;
+  padding:10px 20px 6px;
+}
+.ph-row2{
+  display:flex;align-items:center;gap:0;
+  padding:4px 20px 9px;
+  border-top:1px solid rgba(255,255,255,.04);
+}
 .ph-avatar{
-  width:36px;height:36px;border-radius:6px;flex-shrink:0;
+  width:34px;height:34px;border-radius:6px;flex-shrink:0;
   display:flex;align-items:center;justify-content:center;
-  font-family:var(--mono);font-size:12px;font-weight:700;color:#fff;
+  font-family:var(--mono);font-size:11px;font-weight:700;color:#fff;
   margin-right:12px;
 }
 .ph-avatar.sent-pos{background:linear-gradient(135deg,#166534,#16A34A)}
 .ph-avatar.sent-neg{background:linear-gradient(135deg,#7F1D1D,#DC2626)}
 .ph-avatar.sent-neu{background:linear-gradient(135deg,#1E3A5F,#2563EB)}
-.ph-id{display:flex;flex-direction:column;gap:1px;margin-right:20px;min-width:0}
-.ph-sym{font-family:var(--mono);font-size:17px;font-weight:700;color:var(--text);line-height:1.2}
+.ph-id{display:flex;flex-direction:column;gap:2px;min-width:0}
+.ph-sym{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--text);line-height:1.2;white-space:nowrap}
+.ph-name{font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ph-meta{font-size:10px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ph-price-block{display:flex;align-items:baseline;gap:10px;margin-left:4px}
+/* row 2 price area */
+.ph-price-block{display:flex;align-items:baseline;gap:8px}
 .ph-price{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--text)}
-.ph-chg{font-family:var(--mono);font-size:13px;font-weight:600}
+.ph-chg{font-family:var(--mono);font-size:12px;font-weight:600}
 .ph-chg.pos{color:var(--green2)}.ph-chg.neg{color:var(--red2)}.ph-chg.neu{color:var(--text3)}
-.ph-today{font-size:10px;color:var(--text3);margin-left:2px}
+.ph-today{font-size:9px;color:var(--text3)}
+.ph-divider{width:1px;height:12px;background:var(--border2);margin:0 10px;flex-shrink:0}
+.ph-source{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.3px}
+.ph-updated{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.3px}
 .ph-spacer{flex:1}
 .ph-mkt-pill{
   display:flex;align-items:center;gap:5px;
-  font-family:var(--mono);font-size:9px;font-weight:600;
-  padding:4px 10px;border-radius:10px;border:1px solid;
+  font-family:var(--mono);font-size:8px;font-weight:600;
+  padding:3px 8px;border-radius:10px;border:1px solid;
   white-space:nowrap;
 }
 .ph-mkt-pill.open{color:var(--green2);border-color:rgba(34,197,94,.3);background:rgba(34,197,94,.08)}
 .ph-mkt-pill.closed{color:var(--text3);border-color:var(--border2);background:transparent}
-.ph-mkt-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+.ph-mkt-dot{width:5px;height:5px;border-radius:50%;background:currentColor;flex-shrink:0}
 .ph-refresh{
   background:none;border:none;color:var(--text3);cursor:pointer;
-  font-size:14px;padding:4px 8px;margin-left:8px;border-radius:3px;
+  font-size:13px;padding:3px 7px;margin-left:6px;border-radius:3px;
 }
 .ph-refresh:hover{color:var(--text2);background:rgba(255,255,255,.04)}
 
@@ -1705,22 +1720,32 @@ function openTickerMenu(sym, event) {
       '✕&nbsp; Remove from watchlist' +
     '</button>';
 
-  // Append off-screen first so we can measure its height
+  // Append off-screen first so we can measure dimensions
   menu.style.visibility = 'hidden';
   document.body.appendChild(menu);
   _openMenu = menu;
 
-  // Viewport-aware positioning
-  const rect       = event.currentTarget.getBoundingClientRect();
-  const menuH      = menu.offsetHeight;
-  const menuW      = menu.offsetWidth;
-  const spaceBelow = window.innerHeight - rect.bottom - 8;
-  const spaceAbove = rect.top - 8;
-  const openUp     = spaceBelow < menuH && spaceAbove >= menuH;
-  const top  = openUp ? (rect.top - menuH - 4) : (rect.bottom + 4);
-  const left = Math.max(8, Math.min(rect.right - menuW, window.innerWidth - menuW - 8));
-  menu.style.top        = top + 'px';
+  // Preferred: open to the RIGHT of the row dots, aligned to row top
+  const rect  = event.currentTarget.getBoundingClientRect();
+  const menuH = menu.offsetHeight;
+  const menuW = menu.offsetWidth;
+  const GAP   = 8; // px gap from trigger
+
+  // Horizontal: prefer right of sidebar; clamp so menu stays inside viewport
+  let left = rect.right + GAP;
+  if (left + menuW > window.innerWidth - GAP) {
+    // Not enough room to the right — try left of the dots instead
+    left = rect.left - menuW - GAP;
+  }
+  // Final clamp: never go off either edge
+  left = Math.max(GAP, Math.min(left, window.innerWidth - menuW - GAP));
+
+  // Vertical: align top of menu to top of row; clamp within viewport
+  let top = rect.top;
+  top = Math.max(GAP, Math.min(top, window.innerHeight - menuH - GAP));
+
   menu.style.left       = left + 'px';
+  menu.style.top        = top  + 'px';
   menu.style.visibility = 'visible';
 
   // Close on outside click (deferred so this event does not immediately close it)
@@ -1865,9 +1890,21 @@ function renderResults(allResults, dateStr) {
   renderWatchlistRows(allResults);
   updateRunScanCount();
 
-  // Auto-select first ticker (by score)
-  const first = [...allResults].sort((a,b)=>(b.sentiment_score||50)-(a.sentiment_score||50))[0];
-  if (first) selectTicker(first.ticker);
+  // Preserve _activeTicker across incremental scan renders.
+  // Only auto-select when no ticker is currently selected.
+  const activeInWatchlist = _activeTicker && watchlist.some(e => e.symbol === _activeTicker);
+  if (activeInWatchlist) {
+    // Re-render the active ticker panel with its latest result (may have just arrived)
+    const updatedItem = allResults.find(r => r.ticker === _activeTicker);
+    if (updatedItem) {
+      renderMainPanel(updatedItem);
+    }
+    // If no result yet, placeholder is already showing — leave it
+  } else {
+    // No active ticker — auto-select first by score
+    const first = [...allResults].sort((a,b) => (b.sentiment_score||50) - (a.sentiment_score||50))[0];
+    if (first) selectTicker(first.ticker);
+  }
 }
 
 // Legacy renderSidebar kept as no-op so any stale call doesn't throw
@@ -1928,12 +1965,15 @@ function renderTickerPlaceholder(ticker) {
 
   panel.innerHTML =
     '<div class="ph-bar">' +
-      '<div class="ph-avatar sent-neu">' + ticker.slice(0,2) + '</div>' +
-      '<div class="ph-id">' +
-        '<span class="ph-sym">' + ticker + nameSpan + '</span>' +
-        metaSpan +
+      '<div class="ph-row1">' +
+        '<div class="ph-avatar sent-neu">' + ticker.slice(0,2) + '</div>' +
+        '<div class="ph-id">' +
+          '<span class="ph-sym">' + ticker + '</span>' +
+          (name    ? '<span class="ph-name">' + name + '</span>' : '') +
+          (metaStr ? '<span class="ph-meta">' + metaStr + '</span>' : '') +
+        '</div>' +
       '</div>' +
-      '<div class="ph-spacer"></div>' +
+      '<div class="ph-row2"><div class="ph-spacer"></div></div>' +
     '</div>' +
     '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:260px;gap:12px;color:var(--text3)">' +
       '<div style="font-family:var(--mono);font-size:28px;opacity:.15">' + icon + '</div>' +
@@ -2034,6 +2074,20 @@ function renderMainPanel(item) {
 
   // Sparkline removed in Phase 2b header
 
+  // Data source + last-updated indicators
+  const _src = item._dataSource || item._source || '';
+  const dataSource  = _src ? (_src.toLowerCase().includes('yahoo') ? 'yahoo' :
+                               _src.toLowerCase().includes('alpha') ? 'alphavantage' :
+                               _src.toLowerCase()) : '';
+  const _ts = item._timestamp || item._orchestratedAt || '';
+  let lastUpdated = '';
+  if (_ts) {
+    try {
+      const d = new Date(_ts);
+      lastUpdated = d.toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit'});
+    } catch(e) { lastUpdated = ''; }
+  }
+
   // Watchlist metadata for name / exchange / sector (Phase 1 schema)
   const wlEntry   = findTicker(item.ticker);
   const dispName  = (item.company_name || (wlEntry && wlEntry.name) || '').trim();
@@ -2066,19 +2120,30 @@ function renderMainPanel(item) {
   panel.innerHTML = `
     <!-- PULSE v1.1 TICKER HEADER -->
     <div class="ph-bar">
-      <div class="ph-avatar ${avatarCls}">${avatarTxt}</div>
-      <div class="ph-id">
-        <span class="ph-sym">${item.ticker}<span style="font-size:13px;font-weight:400;color:var(--text2);margin-left:10px">${dispName}</span></span>
-        ${metaStr ? `<span class="ph-meta">${metaStr}</span>` : ''}
+      <!-- Row 1: Identity -->
+      <div class="ph-row1">
+        <div class="ph-avatar ${avatarCls}">${avatarTxt}</div>
+        <div class="ph-id">
+          <span class="ph-sym">${item.ticker}</span>
+          ${dispName ? `<span class="ph-name">${dispName}</span>` : ''}
+          ${metaStr  ? `<span class="ph-meta">${metaStr}</span>` : ''}
+        </div>
       </div>
-      <div class="ph-price-block">
-        <span class="ph-price">${hasData ? price : '—'}</span>
-        <span class="ph-chg ${hasData ? chgCls2 : 'neu'}">${hasData ? (chgDir + (chg !== null ? Math.abs(chg * (item._verifiedPrice||0)/100).toFixed(2) : '—') + ' ' + chgPctStr) : '—'}</span>
-        <span class="ph-today">today</span>
+      <!-- Row 2: Price + meta indicators + market status -->
+      <div class="ph-row2">
+        <div class="ph-price-block">
+          <span class="ph-price">${hasData ? price : '—'}</span>
+          <span class="ph-chg ${hasData ? chgCls2 : 'neu'}">${hasData ? (chgDir + (chg !== null ? Math.abs(chg * (item._verifiedPrice||0)/100).toFixed(2) : '—') + ' ' + chgPctStr) : '—'}</span>
+          <span class="ph-today">today</span>
+        </div>
+        ${(dataSource || lastUpdated) ? `<div class="ph-divider"></div>` : ''}
+        ${dataSource  ? `<span class="ph-source">src: ${dataSource}</span>` : ''}
+        ${(dataSource && lastUpdated) ? `<span style="color:var(--border2);margin:0 5px">·</span>` : ''}
+        ${lastUpdated ? `<span class="ph-updated">updated ${lastUpdated}</span>` : ''}
+        <div class="ph-spacer"></div>
+        <div class="ph-mkt-pill ${mktCls}"><div class="ph-mkt-dot"></div>${mktLabel}</div>
+        <button class="ph-refresh" title="Refresh" onclick="selectTicker('${item.ticker}')">↻</button>
       </div>
-      <div class="ph-spacer"></div>
-      <div class="ph-mkt-pill ${mktCls}"><div class="ph-mkt-dot"></div>${mktLabel}</div>
-      <button class="ph-refresh" title="Refresh" onclick="selectTicker('${item.ticker}')">↻</button>
     </div>
 
     ${!hasData ? `
