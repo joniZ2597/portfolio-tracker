@@ -22,10 +22,10 @@ const TIMEOUT_MS   = 10000; // per-provider timeout
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 exports.handler = async function (event) {
-  // Validate query parameters
-  const params   = event.queryStringParameters || {};
+  // ── 1. Validate query parameters ─────────────────────────────────────────
+  const params             = event.queryStringParameters || {};
   const { interval = '1d', range = '1d' } = params;
-  const rawSym   = params.symbol || '';
+  const rawSym             = params.symbol || '';
 
   if (!rawSym.trim()) {
     return res(400, { error: 'Missing required parameter: symbol' });
@@ -37,34 +37,73 @@ exports.handler = async function (event) {
     return res(400, { error: 'Invalid symbol format: ' + sym });
   }
 
-  // ── Provider 1: Polygon.io ────────────────────────────────────────────────
   const polygonKey = process.env.POLYGON_API_KEY || '';
-  if (polygonKey) {
+
+  // ── 2. Provider policy ───────────────────────────────────────────────────
+  // Daily price ranges (5d / 1d): Yahoo first — Polygon aggregates are end-of-day
+  // and return stale/completed bars that do not reflect the current session price.
+  // Historical ranges (1mo+): Polygon first — reliable OHLCV history, no CORS.
+  const isDailyPriceRange = range === '1d' || range === '5d';
+
+  if (isDailyPriceRange) {
+    console.log('[market-data] provider policy: daily range -> Yahoo first for', sym, 'range=' + range);
+
+    // ── Daily: Yahoo → Polygon fallback ────────────────────────────────────
     try {
-      const data = await fetchPolygon(sym, interval, range, polygonKey);
+      const data = await fetchYahoo(sym, interval, range);
       if (data) {
-        console.log('[market-data] polygon OK for', sym, 'range=' + range);
+        console.log('[market-data] yahoo OK for', sym, 'range=' + range);
         return res(200, data);
       }
-      console.warn('[market-data] polygon returned no data for', sym, '— falling back to Yahoo');
-    } catch (err) {
-      console.warn('[market-data] polygon failed for', sym + ':', err.message, '— falling back to Yahoo');
+    } catch (yahooErr) {
+      console.warn('[market-data] yahoo failed for', sym + ':', yahooErr.message, '— falling back to Polygon');
     }
-  } else {
-    console.log('[market-data] POLYGON_API_KEY not set — using Yahoo for', sym);
-  }
 
-  // ── Provider 2: Yahoo Finance (fallback) ─────────────────────────────────
-  try {
-    const data = await fetchYahoo(sym, interval, range);
-    if (data) {
-      console.log('[market-data] yahoo OK for', sym, 'range=' + range);
-      return res(200, data);
+    if (polygonKey) {
+      try {
+        const data = await fetchPolygon(sym, interval, range, polygonKey);
+        if (data) {
+          console.log('[market-data] polygon OK for', sym, 'range=' + range);
+          return res(200, data);
+        }
+        console.warn('[market-data] polygon returned no data for', sym);
+      } catch (polyErr) {
+        console.warn('[market-data] polygon failed for', sym + ':', polyErr.message);
+      }
     }
-    return res(404, { error: 'No chart data available for ' + sym });
-  } catch (err) {
-    console.error('[market-data] yahoo failed for', sym + ':', err.message);
-    return res(502, { error: 'All providers failed for ' + sym + ': ' + err.message });
+
+    return res(502, { error: 'All providers failed for ' + sym + ' range=' + range });
+
+  } else {
+    console.log('[market-data] provider policy: historical range -> Polygon first for', sym, 'range=' + range);
+
+    // ── Historical: Polygon → Yahoo fallback ────────────────────────────────
+    if (polygonKey) {
+      try {
+        const data = await fetchPolygon(sym, interval, range, polygonKey);
+        if (data) {
+          console.log('[market-data] polygon OK for', sym, 'range=' + range);
+          return res(200, data);
+        }
+        console.warn('[market-data] polygon returned no data for', sym, '— falling back to Yahoo');
+      } catch (polyErr) {
+        console.warn('[market-data] polygon failed for', sym + ':', polyErr.message, '— falling back to Yahoo');
+      }
+    } else {
+      console.log('[market-data] POLYGON_API_KEY not set — using Yahoo for', sym);
+    }
+
+    try {
+      const data = await fetchYahoo(sym, interval, range);
+      if (data) {
+        console.log('[market-data] yahoo OK for', sym, 'range=' + range);
+        return res(200, data);
+      }
+      return res(404, { error: 'No chart data available for ' + sym });
+    } catch (yahooErr) {
+      console.error('[market-data] yahoo failed for', sym + ':', yahooErr.message);
+      return res(502, { error: 'All providers failed for ' + sym + ': ' + yahooErr.message });
+    }
   }
 };
 
