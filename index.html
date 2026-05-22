@@ -1939,6 +1939,7 @@ function renderTickerPlaceholder(ticker) {
   const sector    = (entry && entry.sector)    || '';
   const etf       = (entry && entry.sectorEtf) || '';
   const metaParts = [exchange, sector].filter(Boolean);
+  if (etf) metaParts.push('Benchmark: ' + etf);
   const metaStr   = metaParts.length ? metaParts.join(' · ') : '';
   const hintStr   = etf ? 'Sector ETF: ' + etf : '';
 
@@ -2093,9 +2094,11 @@ function renderMainPanel(item) {
   // Watchlist metadata for name / exchange / sector (Phase 1 schema)
   const wlEntry   = findTicker(item.ticker);
   const dispName  = (item.company_name || (wlEntry && wlEntry.name) || '').trim();
-  const dispExch  = (wlEntry && wlEntry.exchange) || '';
-  const dispSect  = (wlEntry && wlEntry.sector)   || '';
+  const dispExch  = (wlEntry && wlEntry.exchange)  || '';
+  const dispSect  = (wlEntry && wlEntry.sector)    || '';
+  const dispEtf   = (wlEntry && wlEntry.sectorEtf) || '';
   const metaParts = [dispExch, dispSect].filter(Boolean);
+  if (dispEtf) metaParts.push('Benchmark: ' + dispEtf);
   const metaStr   = metaParts.length ? metaParts.join(' · ') : '';
 
   // Market status (simple time-based heuristic, US Eastern)
