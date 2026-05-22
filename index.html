@@ -640,6 +640,144 @@ const _AV_OUTPUT_SIZE = { '1mo': 'compact', '3mo': 'compact', '6mo': 'full', '1y
 const historicalCache = {};
 const CACHE_TTL_MS    = 15 * 60 * 1000; // 15 minutes
 
+// ── Technical snapshot cache ─────────────────────────────────────────────────
+// key: ticker symbol → { snap, computedAt }
+const _techCache = {};
+
+// ── Pure math helpers ─────────────────────────────────────────────────────────
+
+/** Compute simple moving average of closes. Returns null if not enough candles. */
+function computeSMA(candles, period) {
+  if (!candles || candles.length < period) return null;
+  const slice = candles.slice(-period);
+  const sum   = slice.reduce((s, c) => s + (c.close || 0), 0);
+  return sum / period;
+}
+
+/** Percent difference: (price - reference) / reference * 100. Returns null if invalid. */
+function computePctDiff(price, reference) {
+  if (!reference || reference === 0 || price == null) return null;
+  return ((price - reference) / reference) * 100;
+}
+
+/**
+ * Compute relative performance of ticker vs benchmark over last `lookback` candles.
+ * Returns percent-point difference (tickerReturn - benchmarkReturn), or null.
+ */
+function computeRelativePerf(tickerCandles, benchCandles, lookback) {
+  if (!tickerCandles || !benchCandles) return null;
+  if (tickerCandles.length < lookback || benchCandles.length < lookback) return null;
+  const tSlice = tickerCandles.slice(-lookback);
+  const bSlice = benchCandles.slice(-lookback);
+  const tRet = computePctDiff(tSlice[tSlice.length-1].close, tSlice[0].close);
+  const bRet = computePctDiff(bSlice[bSlice.length-1].close, bSlice[0].close);
+  if (tRet === null || bRet === null) return null;
+  return tRet - bRet; // positive = outperforming
+}
+
+/** Compute volume vs 20-day average. Returns { ratio, avg20, current } or null. */
+function computeVolumeMetrics(candles) {
+  if (!candles || candles.length < 21) return null;
+  const recent  = candles[candles.length - 1];
+  const prev20  = candles.slice(-21, -1);
+  const avg20   = prev20.reduce((s, c) => s + (c.volume || 0), 0) / 20;
+  if (avg20 === 0) return null;
+  return { ratio: recent.volume / avg20, avg20, current: recent.volume };
+}
+
+/** Compute ATH distance from available candles. Returns pct below ATH or null. */
+function computeATHDistance(candles, currentPrice) {
+  if (!candles || candles.length === 0 || !currentPrice) return null;
+  const ath = Math.max(...candles.map(c => c.high || c.close));
+  if (ath === 0) return null;
+  return computePctDiff(currentPrice, ath); // negative = below ATH
+}
+
+/**
+ * Async: fetch 1Y candles for ticker + benchmarks, compute snapshot, cache it.
+ * Returns snapshot object. Never throws — all fields may be null.
+ */
+async function computeTechnicalSnapshot(symbol, sectorEtf, currentPrice) {
+  const sym = (symbol || '').toUpperCase();
+  if (!sym) return {};
+
+  // Return cached if fresh (reuse historicalCache TTL)
+  const cached = _techCache[sym];
+  if (cached && (Date.now() - cached.computedAt) < CACHE_TTL_MS) return cached.snap;
+
+  try {
+    // Fetch ticker + benchmarks in parallel; never throw
+    const etf     = (sectorEtf || '').toUpperCase();
+    const fetches = [fetchHistoricalCandles(sym, '1Y')];
+    const labels  = [sym];
+    if (etf)   { fetches.push(fetchHistoricalCandles(etf,   '1Y')); labels.push(etf); }
+    fetches.push(fetchHistoricalCandles('SPY', '1Y'));
+    labels.push('SPY');
+    fetches.push(fetchHistoricalCandles('QQQ', '1Y'));
+    labels.push('QQQ');
+
+    const results = await Promise.allSettled(fetches);
+    const candles = {};
+    results.forEach((r, i) => {
+      candles[labels[i]] = r.status === 'fulfilled' ? (r.value || []) : [];
+    });
+
+    const tc = candles[sym]; // ticker candles
+    const price = currentPrice || (tc.length ? tc[tc.length-1].close : null);
+
+    // SMAs
+    const sma20  = computeSMA(tc, 20);
+    const sma50  = computeSMA(tc, 50);
+    const sma150 = computeSMA(tc, 150);
+    const sma200 = computeSMA(tc, 200);
+
+    // % distance from each MA
+    const pct20  = computePctDiff(price, sma20);
+    const pct50  = computePctDiff(price, sma50);
+    const pct150 = computePctDiff(price, sma150);
+    const pct200 = computePctDiff(price, sma200);
+
+    // Volume
+    const volMetrics = computeVolumeMetrics(tc);
+
+    // ATH distance
+    const athDist = computeATHDistance(tc, price);
+
+    // Relative performance over 3M (~63 trading days)
+    const LOOKBACK = 63;
+    const rsSector = etf   ? computeRelativePerf(tc, candles[etf],   LOOKBACK) : null;
+    const rsSPY    = computeRelativePerf(tc, candles['SPY'], LOOKBACK);
+    const rsQQQ    = computeRelativePerf(tc, candles['QQQ'], LOOKBACK);
+
+    const snap = {
+      // MA levels
+      sma20, sma50, sma150, sma200,
+      pct20, pct50, pct150, pct200,
+      hasMA20:  sma20  !== null,
+      hasMA50:  sma50  !== null,
+      hasMA150: sma150 !== null,
+      hasMA200: sma200 !== null,
+      // Volume
+      volRatio:   volMetrics ? volMetrics.ratio       : null,
+      hasVolume:  volMetrics !== null,
+      // ATH
+      athDist, hasATH: athDist !== null,
+      // RS
+      rsSector, rsSPY, rsQQQ,
+      sectorEtf: etf || null,
+      // Candle counts
+      candleCount: tc.length,
+    };
+
+    _techCache[sym] = { snap, computedAt: Date.now() };
+    console.log('[tech] snapshot computed for', sym, '— candles:', tc.length);
+    return snap;
+  } catch(err) {
+    console.warn('[tech] snapshot failed for', sym, err.message);
+    return {};
+  }
+}
+
 // ─── PUBLIC API ──────────────────────────────────────────────────────────────
 
 /**
@@ -1986,6 +2124,24 @@ function renderTickerPlaceholder(ticker) {
     '</div>';
 }
 
+// ── refreshTechPanel: fire-and-forget async candle fetch + re-render ────────
+async function refreshTechPanel(symbol, sectorEtf, currentPrice) {
+  // Already cached — nothing to do (renderMainPanel already has snap data)
+  const cached = _techCache[symbol];
+  if (cached && (Date.now() - cached.computedAt) < CACHE_TTL_MS) return;
+
+  // Fetch in background; re-render when done if this ticker is still selected
+  try {
+    await computeTechnicalSnapshot(symbol, sectorEtf, currentPrice);
+    if (_activeTicker === symbol) {
+      const item = _cockpitResults.find(r => r.ticker === symbol);
+      if (item) renderMainPanel(item);
+    }
+  } catch(e) {
+    console.warn('[tech] refreshTechPanel failed for', symbol, e.message);
+  }
+}
+
 // ── Data-quality guard ────────────────────────────────────────────────────
 function hasVerifiedMarketData(item) {
   return (
@@ -2051,16 +2207,51 @@ function renderMainPanel(item) {
   const chgStr    = chg!==null?(chg>=0?'+':'')+chg.toFixed(2)+'%':'—';
   const chgCls    = chg===null?'':chg>0?'pos':chg<0?'neg':'';
 
-  // MA status (derived)
-  const ma20  = chg!==null?(chg>-5?'Above':'Below'):'—';
-  const ma50  = score>=50?'Above':score>=38?'Near':'Below';
-  const ma150 = score>=55?'Above':score>=42?'Near':'Below';
-  const ma200 = score>=60?'Above':score>=45?'Near':'Below';
-  const maCls = v => v==='Above'?'pos':v==='Near'?'warn':'neg';
-  const maChg20  = chg!==null?(chg>=0?'+':'')+chg.toFixed(1)+'%':'—';
-  const maChg50  = score>=50?'+'+(score-45).toFixed(1)+'%':'—';
-  const maChg150 = score>=55?'+'+(score-40).toFixed(1)+'%':'—';
-  const maChg200 = score>=60?'+'+(score-35).toFixed(1)+'%':'—';
+  // Watchlist metadata — must be declared before refreshTechPanel call
+  const wlEntry   = findTicker(item.ticker);
+  const dispName  = (item.company_name || (wlEntry && wlEntry.name) || '').trim();
+  const dispExch  = (wlEntry && wlEntry.exchange)  || '';
+  const dispSect  = (wlEntry && wlEntry.sector)    || '';
+  const dispEtf   = (wlEntry && wlEntry.sectorEtf) || '';
+  const metaParts = [dispExch, dispSect].filter(Boolean);
+  if (dispEtf) metaParts.push('Benchmark: ' + dispEtf);
+  const metaStr   = metaParts.length ? metaParts.join(' · ') : '';
+
+  // Technical snapshot — read from cache (populated async by refreshTechPanel)
+  const snap  = (_techCache[item.ticker] && _techCache[item.ticker].snap) || {};
+  const maCls = v => v === 'pos' ? 'pos' : v === 'warn' ? 'warn' : v === 'neg' ? 'neg' : 'neutral-v';
+
+  // Helper: format a pct diff for display
+  function fmtPct(val) {
+    if (val === null || val === undefined) return '—';
+    return (val >= 0 ? '+' : '') + val.toFixed(2) + '%';
+  }
+  function fmtMA(sma) {
+    if (sma === null || sma === undefined) return '—';
+    return '$' + sma.toFixed(2);
+  }
+  function maState(pct) {
+    if (pct === null || pct === undefined) return null; // unknown
+    if (pct > 1)  return 'pos'; // Above
+    if (pct > -3) return 'warn'; // Near
+    return 'neg'; // Below
+  }
+  function maLabel(pct) {
+    if (pct === null || pct === undefined) return '—';
+    if (pct > 1)  return 'Above';
+    if (pct > -3) return 'Near';
+    return 'Below';
+  }
+  function rsLabel(val) {
+    if (val === null || val === undefined) return null;
+    if (val > 3)  return { lbl: 'OUTPERFORM', cls: 'pos' };
+    if (val > -3) return { lbl: 'IN LINE',    cls: 'neutral-v' };
+    return           { lbl: 'UNDERPERFORM', cls: 'warn' };
+  }
+
+  // Kick off async snapshot fetch/refresh (no-op if already cached)
+  // Re-renders the panel when data arrives if this ticker is still selected
+  refreshTechPanel(item.ticker, dispEtf, item._verifiedPrice);
 
   // Catalysts list
   const catalysts = [
@@ -2092,15 +2283,6 @@ function renderMainPanel(item) {
   }
 
   // Watchlist metadata for name / exchange / sector (Phase 1 schema)
-  const wlEntry   = findTicker(item.ticker);
-  const dispName  = (item.company_name || (wlEntry && wlEntry.name) || '').trim();
-  const dispExch  = (wlEntry && wlEntry.exchange)  || '';
-  const dispSect  = (wlEntry && wlEntry.sector)    || '';
-  const dispEtf   = (wlEntry && wlEntry.sectorEtf) || '';
-  const metaParts = [dispExch, dispSect].filter(Boolean);
-  if (dispEtf) metaParts.push('Benchmark: ' + dispEtf);
-  const metaStr   = metaParts.length ? metaParts.join(' · ') : '';
-
   // Market status (simple time-based heuristic, US Eastern)
   const _now     = new Date();
   const _etHour  = (_now.getUTCHours() - 4 + 24) % 24; // rough ET offset
@@ -2163,56 +2345,90 @@ function renderMainPanel(item) {
       <!-- TREND & MA STRUCTURE -->
       <div class="mp-panel">
         <div class="mp-panel-title">TREND & MARKET STRUCTURE</div>
-        ${hasData ? `<div class="mp-ma-table">
-          ${[['20DMA','$—',maChg20,ma20],['50DMA','$—',maChg50,ma50],['150DMA','$—',maChg150,ma150],['200DMA','$—',maChg200,ma200]].map(([lbl,val,pct,state])=>`
-          <div class="ma-row">
-            <span class="ma-lbl">${lbl}</span>
-            <span class="ma-val">${val}</span>
-            <span class="ma-pct ${maCls(state)}">${pct}</span>
-            <div class="ma-arrow ${maCls(state)}">${state==='Above'?'↗':state==='Near'?'→':'↘'}</div>
-            <span class="ma-state ${maCls(state)}">${state}</span>
-          </div>`).join('')}
-        </div>` : '<div class="unavail-row">No verified price data — MA levels unavailable</div>'}
+        ${!hasData ? '<div class="unavail-row">No verified price data — MA levels unavailable</div>' :
+          snap.hasMA20 === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
+        `<div class="mp-ma-table">
+          ${[
+            ['MA 20',  fmtMA(snap.sma20),  fmtPct(snap.pct20),  maState(snap.pct20),  maLabel(snap.pct20),  snap.hasMA20],
+            ['MA 50',  fmtMA(snap.sma50),  fmtPct(snap.pct50),  maState(snap.pct50),  maLabel(snap.pct50),  snap.hasMA50],
+            ['MA 150', fmtMA(snap.sma150), fmtPct(snap.pct150), maState(snap.pct150), maLabel(snap.pct150), snap.hasMA150],
+            ['MA 200', fmtMA(snap.sma200), fmtPct(snap.pct200), maState(snap.pct200), maLabel(snap.pct200), snap.hasMA200],
+          ].map(([lbl, smaVal, pctVal, cls, stateStr, avail]) => avail
+            ? `<div class="ma-row">
+                <span class="ma-lbl">${lbl}</span>
+                <span class="ma-val">${smaVal}</span>
+                <span class="ma-pct ${cls || 'neutral-v'}">${pctVal}</span>
+                <div class="ma-arrow ${cls || 'neutral-v'}">${stateStr === 'Above' ? '↗' : stateStr === 'Near' ? '→' : '↘'}</div>
+                <span class="ma-state ${cls || 'neutral-v'}">${stateStr}</span>
+              </div>`
+            : `<div class="ma-row"><span class="ma-lbl">${lbl}</span><span class="ma-val" style="color:var(--text3)">—</span><span class="ma-pct neutral-v">Insufficient history</span></div>`
+          ).join('')}
+        </div>`}
       </div>
 
       <!-- RELATIVE STRENGTH -->
       <div class="mp-panel">
-        <div class="mp-panel-title">RELATIVE STRENGTH</div>
-        ${hasData ? `<div class="rs-table">
-          ${[['vs SOXX',rs,score],['vs QQQ',rs,score-3],['vs SPY',score>=60?'OUTPERFORM':'IN LINE',score-5]].map(([lbl,val,sc2])=>`
-          <div class="rs-row">
-            <span class="rs-lbl">${lbl}</span>
-            <span class="rs-val ${sc2>=65?'pos':sc2>=50?'neutral-v':'warn'}">${val}</span>
-            <div class="rs-bar-track"><div class="rs-bar-fill" style="width:${Math.min(100,sc2)}%;background:${sc2>=65?'#16A34A':sc2>=50?'#2563EB':'#D97706'}"></div></div>
-          </div>`).join('')}
+        <div class="mp-panel-title">RELATIVE STRENGTH <span style="font-size:8px;color:var(--text3);font-weight:400;margin-left:6px">3-MONTH COMPUTED</span></div>
+        ${!hasData ? '<div class="unavail-row">No verified price data — RS unavailable</div>' :
+          snap.candleCount === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
+        `<div class="rs-table">
+          ${[
+            [snap.sectorEtf ? 'vs ' + snap.sectorEtf : null, snap.rsSector],
+            ['vs QQQ', snap.rsQQQ],
+            ['vs SPY', snap.rsSPY],
+          ].filter(([lbl]) => lbl !== null).map(([lbl, val]) => {
+            const r = rsLabel(val);
+            return r
+              ? `<div class="rs-row">
+                  <span class="rs-lbl">${lbl}</span>
+                  <span class="rs-val ${r.cls}">${r.lbl}</span>
+                  <span class="rs-pct" style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-left:8px">${fmtPct(val)}</span>
+                </div>`
+              : `<div class="rs-row"><span class="rs-lbl">${lbl}</span><span class="rs-val neutral-v" style="color:var(--text3)">RS unavailable</span></div>`;
+          }).join('')}
           <div class="rs-rank-row">
-            <span class="rs-rank-lbl">RS RANK (vs Universe)</span>
+            <span class="rs-rank-lbl">AI Analysis Score</span>
             <span class="rs-rank-val">${score} <span style="color:var(--text3)">/ 100</span></span>
           </div>
-        </div>` : '<div class="unavail-row">No verified price data — RS unavailable</div>'}
+        </div>`}
       </div>
 
       <!-- VOLUME ANALYSIS -->
       <div class="mp-panel">
         <div class="mp-panel-title">VOLUME ANALYSIS</div>
-        ${hasData ? `<div class="vol-table">
-          <div class="vol-row"><span class="vol-lbl">Volume vs 20D Avg</span><span class="vol-metric">${Math.abs(chg||0)>3?'1.4x':'1.0x'}</span><span class="vol-state ${volCls}">${Math.abs(chg||0)>3?'HIGH':'AVERAGE'}</span></div>
-          <div class="vol-row"><span class="vol-lbl">Trend</span><span class="vol-metric"></span><span class="vol-state ${volCls}">${volChar}</span></div>
-          <div class="vol-row"><span class="vol-lbl">Distribution Days (20D)</span><span class="vol-metric">${hasCrit?'4':'2'}</span><span class="vol-state ${hasCrit?'warn':'pos'}">${hasCrit?'ELEVATED':'LOW'}</span></div>
-          <div class="vol-row"><span class="vol-lbl">Up Volume Ratio</span><span class="vol-metric">${score>=55?'58%':'42%'}</span><span class="vol-state ${score>=55?'pos':'warn'}">${score>=55?'Above Avg':'Below Avg'}</span></div>
-        </div>` : '<div class="unavail-row">No verified price data — volume metrics unavailable</div>'}
+        ${!hasData ? '<div class="unavail-row">No verified price data — volume metrics unavailable</div>' :
+          snap.candleCount === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
+        `<div class="vol-table">
+          <div class="vol-row">
+            <span class="vol-lbl">Volume vs 20D Avg</span>
+            <span class="vol-metric">${snap.hasVolume ? snap.volRatio.toFixed(2) + 'x' : '—'}</span>
+            <span class="vol-state ${snap.hasVolume ? (snap.volRatio > 1.5 ? 'pos' : snap.volRatio < 0.7 ? 'warn' : 'neutral-v') : 'neutral-v'}">
+              ${snap.hasVolume ? (snap.volRatio > 1.5 ? 'HIGH' : snap.volRatio < 0.7 ? 'LOW' : 'AVERAGE') : 'Insufficient history'}
+            </span>
+          </div>
+          <div class="vol-row"><span class="vol-lbl">Volume trend (AI)</span><span class="vol-metric"></span><span class="vol-state ${volCls}">${volChar}</span></div>
+          <div class="vol-row"><span class="vol-lbl">Distribution Days</span><span class="vol-metric" style="color:var(--text3)">—</span><span class="vol-state neutral-v">Requires computed scan</span></div>
+          <div class="vol-row"><span class="vol-lbl">Up Volume Ratio</span><span class="vol-metric" style="color:var(--text3)">—</span><span class="vol-state neutral-v">Requires computed scan</span></div>
+        </div>`}
       </div>
 
       <!-- PRICE POSITIONING -->
       <div class="mp-panel">
         <div class="mp-panel-title">PRICE POSITIONING</div>
-        ${hasData ? `<div class="pos-table">
-          <div class="pos-row"><span class="pos-lbl">Distance from ATH</span><span class="pos-val ${chg!==null&&chg<-5?'warn':'neutral-v'}">${chg!==null?'-'+(Math.abs(chg)*1.5).toFixed(1)+'%':'—'}</span></div>
-          <div class="pos-row"><span class="pos-lbl">Above 20DMA</span><span class="pos-val ${maCls(ma20)}">${maChg20}</span></div>
-          <div class="pos-row"><span class="pos-lbl">Above 50DMA</span><span class="pos-val ${maCls(ma50)}">${maChg50}</span></div>
-          <div class="pos-row"><span class="pos-lbl">Above 150DMA</span><span class="pos-val ${maCls(ma150)}">${maChg150}</span></div>
-          <div class="pos-row"><span class="pos-lbl">Support Proximity</span><span class="pos-val ${score>=55?'pos':'warn'}">${score>=55?'NEAR':'EXTENDED'}</span></div>
-        </div>` : '<div class="unavail-row">No verified price data — positioning unavailable</div>'}
+        ${!hasData ? '<div class="unavail-row">No verified price data — positioning unavailable</div>' :
+          snap.candleCount === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
+        `<div class="pos-table">
+          <div class="pos-row">
+            <span class="pos-lbl">Distance from period ATH</span>
+            <span class="pos-val ${snap.hasATH ? (snap.athDist < -15 ? 'warn' : snap.athDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">
+              ${snap.hasATH ? fmtPct(snap.athDist) : '—'}
+            </span>
+          </div>
+          <div class="pos-row"><span class="pos-lbl">vs MA 20</span><span class="pos-val ${maCls(maState(snap.pct20))}">${fmtPct(snap.pct20)}</span></div>
+          <div class="pos-row"><span class="pos-lbl">vs MA 50</span><span class="pos-val ${maCls(maState(snap.pct50))}">${fmtPct(snap.pct50)}</span></div>
+          <div class="pos-row"><span class="pos-lbl">vs MA 150</span><span class="pos-val ${maCls(maState(snap.pct150))}">${fmtPct(snap.pct150)}</span></div>
+          <div class="pos-row"><span class="pos-lbl">vs MA 200</span><span class="pos-val ${maCls(maState(snap.pct200))}">${fmtPct(snap.pct200)}</span></div>
+        </div>`}
       </div>
 
       <!-- CATALYSTS -->
