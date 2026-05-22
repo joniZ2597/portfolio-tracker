@@ -1131,6 +1131,7 @@ function removeTicker(sym) {
       selectTicker(next.symbol);
     } else {
       _activeTicker = null;
+      localStorage.removeItem('pt_active_ticker');
       const panel = document.getElementById('mainPanel');
       if (panel) panel.innerHTML =
         '<div class="main-empty">' +
@@ -1914,6 +1915,7 @@ function renderSidebar(allResults, dateStr) {
 
 function selectTicker(ticker) {
   _activeTicker = ticker;
+  localStorage.setItem('pt_active_ticker', ticker);
   // Highlight Pulse watchlist row (pwl-); also clear any legacy wl- rows
   document.querySelectorAll('.pwl-row').forEach(r => r.classList.remove('active'));
   document.querySelectorAll('.wl-row').forEach(r => r.classList.remove('active'));
@@ -2428,7 +2430,41 @@ function init() {
   // Phase 2a: render sidebar rows on load (before any scan)
   renderWatchlistRows();
   updateRunScanCount();
-  if (results.length) { const dateStr = localStorage.getItem('pt_date') || ''; renderResults(results, dateStr); }
+
+  // Restore saved results first (sets _cockpitResults without auto-selecting)
+  if (results.length) {
+    const dateStr = localStorage.getItem('pt_date') || '';
+    _cockpitResults = results;
+    const section = document.getElementById('resultsSection');
+    if (section) section.style.display = 'block';
+    const dateEl = document.getElementById('resultsDate');
+    if (dateEl) dateEl.textContent = dateStr;
+    renderWatchlistRows(results);
+    updateRunScanCount();
+  }
+
+  // Restore previously selected ticker (pt_active_ticker)
+  const savedActive = localStorage.getItem('pt_active_ticker');
+  if (savedActive && watchlist.some(e => e.symbol === savedActive)) {
+    // Ticker still in watchlist — restore selection without triggering auto-select
+    _activeTicker = savedActive;
+    const item = _cockpitResults.find(r => r.ticker === savedActive);
+    if (item) {
+      renderMainPanel(item);
+    } else {
+      renderTickerPlaceholder(savedActive);
+    }
+    // Highlight the row
+    const row = document.getElementById('pwl-' + savedActive);
+    if (row) row.classList.add('active');
+  } else {
+    // Saved ticker gone or no saved ticker — fall back to auto-select
+    if (savedActive) localStorage.removeItem('pt_active_ticker');
+    if (results.length) {
+      const dateStr = localStorage.getItem('pt_date') || '';
+      renderResults(results, dateStr);
+    }
+  }
 }
 
 init();
