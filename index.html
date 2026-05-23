@@ -451,6 +451,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .btn-edit-save{font-family:var(--mono);font-size:10px;font-weight:700;background:var(--blue);color:#fff;border:none;border-radius:3px;padding:7px 14px;cursor:pointer}
 .btn-edit-save:hover{background:#1D4ED8}
 
+/* ─── TOAST ────────────────────────────────────── */
+#appToast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(8px);background:var(--card);border:1px solid var(--border2);border-radius:4px;padding:7px 16px;font-family:var(--mono);font-size:10px;color:var(--text2);pointer-events:none;opacity:0;transition:opacity .18s ease,transform .18s ease;z-index:1100}
+#appToast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
 /* Hide legacy chip/config UI */
 .sb-chips,.sb-config,.chip{display:none!important}
 /* Keep legacy sb-header hidden by overriding to 0 height once replaced */
@@ -2277,6 +2281,25 @@ function saveEditModal() {
   }
 
   closeEditModal();
+  showToast('Details saved');
+}
+
+// ── Toast notification ───────────────────────────────────────────────────────
+let _toastTimer = null;
+function showToast(msg) {
+  let el = document.getElementById('appToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'appToast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg; // safeguard: textContent only, no innerHTML
+  if (_toastTimer) { clearTimeout(_toastTimer); _toastTimer = null; }
+  el.classList.add('show');
+  _toastTimer = setTimeout(function() {
+    el.classList.remove('show');
+    _toastTimer = null;
+  }, 2000);
 }
 
 function filterWatchlistRows(query) {
