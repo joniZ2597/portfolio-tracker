@@ -1155,6 +1155,9 @@ Object.defineProperty(window, 'tickers', {
 let results = JSON.parse(localStorage.getItem('pt_results') || '[]');
 let apiKey = localStorage.getItem('pt_apikey') || '';
 let pplxKey = localStorage.getItem('pt_pplxkey') || '';
+// Phase 1: fetchPerplexityContext routes through /.netlify/functions/perplexity-proxy.
+// pplxKey stays in localStorage (unused for context calls) until Phase 4 cleanup.
+const PPLX_SERVER_MANAGED = true;
 
 // ────────────────────────────────────── STOCK DATA LAYER ──────────────────────────────────────
 
@@ -1513,12 +1516,12 @@ DATA_FRESHNESS: [today/this week/this month]
 
 Use NONE for any field with no data. Be specific with numbers and dates.`;
 
-  const response = await fetch('https://api.perplexity.ai/chat/completions', {
+  const response = await fetch('/.netlify/functions/perplexity-proxy', {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${pplxKey}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: 'sonar-pro', messages: [{ role: 'user', content: query }], max_tokens: 1000 })
   });
-  if (!response.ok) { const err = await response.json(); throw new Error('Perplexity: ' + (err.error?.message || 'API error')); }
+  if (!response.ok) { const err = await response.json(); throw new Error('Perplexity: ' + (err.error?.message || 'upstream error')); }
   const data = await response.json();
   const raw = data.choices[0].message.content.trim();
   console.log('[PT] Perplexity raw length:', raw.length);
@@ -1825,12 +1828,12 @@ End: "Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength"
 Output STRICT JSON only — no backticks:
 {"results":[{"ticker":"X","company_name":"Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"paragraph","alerts":[{"type":"critical/normal","text":"text"}],"news":["catalyst 1","catalyst 2"]}]}`;
 
-  const response = await fetch('https://api.perplexity.ai/chat/completions', {
+  const response = await fetch('/.netlify/functions/perplexity-proxy', {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${pplxKey}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: 'sonar-pro', messages: [{ role: 'user', content: prompt }], max_tokens: 1500 })
   });
-  if (!response.ok) { const err = await response.json(); throw new Error('Perplexity: ' + (err.error?.message || 'API error')); }
+  if (!response.ok) { const err = await response.json(); throw new Error('Perplexity: ' + (err.error?.message || 'upstream error')); }
   const data = await response.json();
   return data.choices[0].message.content.trim();
 }
@@ -1910,7 +1913,7 @@ async function analyzeChunk(batch, today) {
   });
   const stockContext = formatStockContext(stockData);
 
-  if (apiKey && pplxKey) {
+  if (apiKey && (PPLX_SERVER_MANAGED || pplxKey)) {
     // Per-ticker isolation: call Perplexity once per ticker, never batch
     for (const sym of batch) {
       try {
@@ -1946,7 +1949,7 @@ async function analyzeChunk(batch, today) {
       _anthropicError = e;
       console.warn(`[PT] Anthropic failed for ${batch[0]}, using market-data fallback:`, e.message);
     }
-  } else if (pplxKey) {
+  } else if (PPLX_SERVER_MANAGED || pplxKey) {
     rawText = await fetchPerplexityAnalysis(batch, today, stockContext);
   }
 
@@ -1991,7 +1994,7 @@ async function analyzeChunk(batch, today) {
     const mkt = stockData[item.ticker];
     return mkt ? { ...item, _changePct: mkt.change_percent } : item;
   });
-  return enforceScoreConsistency(resultsWithPct, pplxKey ? JSON.stringify(pplxData) : '');
+  return enforceScoreConsistency(resultsWithPct, (PPLX_SERVER_MANAGED || pplxKey) ? JSON.stringify(pplxData) : '');
 }
 
 // ── renderResults ────────────────────────────────────────────────────────────
@@ -3034,7 +3037,7 @@ async function runAnalysis() {
   _analysisRunning   = true;
   _cancelRequested   = false;
   _currentScanTicker = null;
-  if (!apiKey && !pplxKey) { _analysisRunning = false; showError('נא להכניס לפחות מפתח API אחד (Anthropic או Perplexity)'); return; }
+  if (!apiKey && !(PPLX_SERVER_MANAGED || pplxKey)) { _analysisRunning = false; showError('נא להכניס לפחות מפתח API אחד (Anthropic או Perplexity)'); return; }
   const scanSymbols = getScanSymbols();
   if (scanSymbols.length === 0) { _analysisRunning = false; showError('No tickers checked for scan. Check at least one ticker.'); return; }
 
@@ -3221,17 +3224,19 @@ function checkAndShowKeyWarn() {
   if (!w) return;
 
   const lines = []; // { text, soft }
+  // hasPplx: true when Perplexity is server-managed (PPLX_SERVER_MANAGED) or key is saved locally
+  const hasPplx = PPLX_SERVER_MANAGED || !!pplxKey;
 
-  if (!apiKey && !pplxKey) {
+  if (!apiKey && !hasPplx) {
     lines.push({ text: 'No AI keys configured — scan cannot run until at least one AI key is added.', soft: false });
   } else if (!apiKey) {
     lines.push({ text: 'Anthropic key missing — scan will use Perplexity only.', soft: false });
-  } else if (!pplxKey) {
+  } else if (!hasPplx) {
     lines.push({ text: 'Perplexity key missing — scan will run without news context.', soft: false });
   }
 
-  // AV soft note: only when both AI keys are configured, to avoid noise for new users
-  if (!avKey && apiKey && pplxKey) {
+  // AV soft note: only when both AI channels are available, to avoid noise for new users
+  if (!avKey && apiKey && hasPplx) {
     lines.push({ text: 'Alpha Vantage key missing — Yahoo is the only market data source.', soft: true });
   }
 
@@ -3366,18 +3371,15 @@ const API_DEFINITIONS = [
     color:   '#0891B2',
     letter:  'PX',
     check: async () => {
-      const key = localStorage.getItem('pt_pplxkey');
-      if (!key) return { preview: '// No Perplexity key saved', ok: false, status: 'No Key' };
-      const r = await fetch('https://api.perplexity.ai/chat/completions', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'sonar', messages: [{role:'user',content:'Reply with only: {"status":"ok"}'}], max_tokens: 20 }),
-        signal: AbortSignal.timeout(15000)
-      });
-      if (!r.ok) { const e = await r.json(); throw new Error(e.error?.message || 'HTTP ' + r.status); }
+      // Phase 1: key is server-managed — ping via proxy, no localStorage key needed
+      const r = await fetch('/.netlify/functions/perplexity-proxy?mode=ping',
+        { signal: AbortSignal.timeout(15000) });
       const d = await r.json();
-      const content = d.choices?.[0]?.message?.content || '';
-      return { preview: `{\n  "model": "${d.model||'sonar'}",\n  "status": "ok",\n  "tokens": ${d.usage?.total_tokens||'—'}\n}`, ok: true };
+      if (!d.ok) {
+        if (d.status === 'no_key') return { preview: '// Perplexity key not configured server-side', ok: false, status: 'No Key' };
+        throw new Error(d.status || 'check failed');
+      }
+      return { preview: `{\n  "model": "${d.model||'sonar'}",\n  "status": "ok",\n  "tokens": ${d.tokens||'—'}\n}`, ok: true };
     }
   },
   {
