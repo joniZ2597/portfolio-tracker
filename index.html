@@ -1880,7 +1880,7 @@ async function analyzeChunk(batch, today) {
     return allResults;
   }
   console.log(`[PT] analyzeChunk START: ${batch[0]}`);
-  let rawText = '', pplxData = {}, stockData = {};
+  let rawText = '', pplxData = {}, stockData = {}, _anthropicError = null;
 
   stockData = await fetchBatchStockData(batch);
   batch.forEach(sym => { _fetchTimestamps[sym] = Date.now(); });
@@ -1914,16 +1914,55 @@ async function analyzeChunk(batch, today) {
     console.log('[PT] stockContext length:', stockContext.length);
     console.log('[PT] pplxData keys:', Object.keys(pplxData).join(','));
 
-    rawText = await fetchAnthropicAnalysis(batch, today, stockContext + '\n%%NEWS_CONTEXT_START%%\n' + JSON.stringify(pplxData));
+    try {
+      rawText = await fetchAnthropicAnalysis(batch, today, stockContext + '\n%%NEWS_CONTEXT_START%%\n' + JSON.stringify(pplxData));
+    } catch (e) {
+      _anthropicError = e;
+      console.warn(`[PT] Anthropic failed for ${batch[0]}, using market-data fallback:`, e.message);
+    }
   } else if (apiKey) {
-    rawText = await fetchAnthropicAnalysis(batch, today, stockContext);
+    try {
+      rawText = await fetchAnthropicAnalysis(batch, today, stockContext);
+    } catch (e) {
+      _anthropicError = e;
+      console.warn(`[PT] Anthropic failed for ${batch[0]}, using market-data fallback:`, e.message);
+    }
   } else if (pplxKey) {
     rawText = await fetchPerplexityAnalysis(batch, today, stockContext);
   }
 
   console.log('[PT] Claude raw response length:', rawText.length);
   const parsed = parseJSON(rawText);
-  const raw = parsed.results || [];
+  let raw = parsed.results || [];
+
+  // ── Anthropic fallback ────────────────────────────────────────────────────
+  // If Anthropic failed but market data succeeded, build a minimal fallback
+  // result per ticker so verified price, technical panels, and Perplexity
+  // context are still preserved and persisted to pt_results.
+  // Raw API error message is logged to console only — never surfaced in UI.
+  if (raw.length === 0 && _anthropicError) {
+    raw = batch.map(sym => {
+      const wlEntry = findTicker(sym);
+      // Preserve any Perplexity-derived analyst alerts if available
+      const pplxAlerts = (_anthropicError && pplxData[sym]?.analystActions?.length)
+        ? pplxData[sym].analystActions.map(a => ({
+            type: 'normal',
+            text: `${a.bank} price target $${a.target} — verify if recent`
+          }))
+        : [];
+      return {
+        ticker: sym,
+        company_name: (wlEntry && wlEntry.name) || sym,
+        sentiment: 'neutral',
+        sentiment_score: 50,
+        summary: 'AI analysis unavailable — market data shown only. Technical panels reflect verified price and candle data. No AI-generated summary is available for this scan.',
+        alerts: pplxAlerts,
+        news: [],
+        _aiUnavailable: true
+      };
+    });
+    console.warn('[PT] Fallback results built for:', batch.join(','));
+  }
 
   const orchestrated = orchestrate(raw, pplxData, stockData);
 
@@ -2783,6 +2822,12 @@ function renderMainPanel(item) {
       <span class="dq-warn-text">Verified price unavailable — analysis based on research context only. Technical, RS, and volume metrics are not shown.</span>
     </div>` : ''}
 
+    ${item._aiUnavailable ? `
+    <div class="dq-warn">
+      <span class="dq-warn-icon">⚠</span>
+      <span class="dq-warn-text">AI analysis unavailable — market data shown only. Technical panels reflect verified price and candle data.</span>
+    </div>` : ''}
+
     <!-- BODY PANELS -->
     <div class="mp-body">
 
@@ -2836,7 +2881,7 @@ function renderMainPanel(item) {
           }).join('')}
           <div class="rs-rank-row">
             <span class="rs-rank-lbl">AI Analysis Score</span>
-            <span class="rs-rank-val">${score} <span style="color:var(--text3)">/ 100</span></span>
+            <span class="rs-rank-val">${item._aiUnavailable ? '<span style="color:var(--text3)">N/A — AI unavailable</span>' : score + ' <span style="color:var(--text3)">/ 100</span>'}</span>
           </div>
         </div>`}
       </div>
