@@ -217,6 +217,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .ph-today{font-size:9px;color:var(--text3)}
 .ph-divider{width:1px;height:12px;background:var(--border2);margin:0 10px;flex-shrink:0}
 .ph-source{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.3px}
+.ph-bench-chip{font-family:var(--mono);font-size:9px;color:var(--text2);background:rgba(255,255,255,.05);border:1px solid var(--border2);border-radius:3px;padding:2px 6px;letter-spacing:.3px}
+.mp-panel-sub{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-top:-8px;margin-bottom:10px}
 .ph-updated{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.3px}
 .ph-spacer{flex:1}
 .ph-mkt-pill{
@@ -2749,9 +2751,9 @@ function renderMainPanel(item) {
           <span class="ph-today">today</span>
         </div>
         ${hasData && (typeof snap.spyChangePct === 'number' || typeof snap.qqqChangePct === 'number') ? `<div class="ph-divider"></div>` : ''}
-        ${hasData && typeof snap.spyChangePct === 'number' ? `<span class="ph-source">SPY <span class="${snap.spyChangePct >= 0 ? 'pos' : 'neg'}">${snap.spyChangePct >= 0 ? '+' : ''}${snap.spyChangePct.toFixed(2)}%</span></span>` : ''}
-        ${hasData && typeof snap.spyChangePct === 'number' && typeof snap.qqqChangePct === 'number' ? `<span style="color:var(--border2);margin:0 4px">·</span>` : ''}
-        ${hasData && typeof snap.qqqChangePct === 'number' ? `<span class="ph-source">QQQ <span class="${snap.qqqChangePct >= 0 ? 'pos' : 'neg'}">${snap.qqqChangePct >= 0 ? '+' : ''}${snap.qqqChangePct.toFixed(2)}%</span></span>` : ''}
+        ${hasData && typeof snap.spyChangePct === 'number' ? `<span class="ph-bench-chip">SPY <span class="${snap.spyChangePct >= 0 ? 'pos' : 'neg'}">${snap.spyChangePct >= 0 ? '+' : ''}${snap.spyChangePct.toFixed(2)}%</span></span>` : ''}
+        ${hasData && typeof snap.spyChangePct === 'number' && typeof snap.qqqChangePct === 'number' ? `<span style="color:var(--text3);margin:0 6px">·</span>` : ''}
+        ${hasData && typeof snap.qqqChangePct === 'number' ? `<span class="ph-bench-chip">QQQ <span class="${snap.qqqChangePct >= 0 ? 'pos' : 'neg'}">${snap.qqqChangePct >= 0 ? '+' : ''}${snap.qqqChangePct.toFixed(2)}%</span></span>` : ''}
         ${(dataSource || lastUpdated) ? `<div class="ph-divider"></div>` : ''}
         ${dataSource  ? `<span class="ph-source">src: ${dataSource}</span>` : ''}
         ${(dataSource && lastUpdated) ? `<span style="color:var(--border2);margin:0 5px">·</span>` : ''}
@@ -2797,7 +2799,8 @@ function renderMainPanel(item) {
 
       <!-- RELATIVE STRENGTH -->
       <div class="mp-panel">
-        <div class="mp-panel-title">RELATIVE STRENGTH <span style="font-size:8px;color:var(--text3);font-weight:400;margin-left:6px">3-MONTH COMPUTED</span></div>
+        <div class="mp-panel-title">RELATIVE STRENGTH</div>
+        <div class="mp-panel-sub">3-month performance vs benchmarks</div>
         ${!hasData ? '<div class="unavail-row">No verified price data — RS unavailable</div>' :
           snap.candleCount === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
         `<div class="rs-table">
@@ -2807,7 +2810,7 @@ function renderMainPanel(item) {
             [snap.sectorEtf ? 'vs ' + snap.sectorEtf : null, snap.rsSector, true],
           ].map(([lbl, val, isSector]) => {
             if (isSector && !lbl) {
-              return `<div class="rs-row"><span class="rs-lbl">vs Sector ETF</span><span class="rs-val neutral-v">No sector ETF configured</span></div>`;
+              return `<div class="rs-row"><span class="rs-lbl">vs Sector ETF</span><span class="rs-val neutral-v">No sector ETF — edit ticker details to add one</span></div>`;
             }
             const r = rsLabel(val);
             return r
