@@ -1317,23 +1317,35 @@ async function fetchAlphaVantage(symbol) {
   };
 }
 
+// In-flight dedup map — prevents duplicate concurrent Netlify/proxy requests for the same symbol.
+// Mirrors the _inflight pattern used in fetchHistoricalCandles.
+const _stockDataInflight = {};
+
 // Main: fetch with Yahoo → fallback Alpha Vantage
 async function fetchStockData(symbol) {
-  try {
-    const data = await fetchYahoo(symbol);
-    if (isValidStockData(data)) return data;
-    throw new Error('Yahoo data invalid');
-  } catch(e) {
-    console.warn(`Yahoo failed for ${symbol}: ${e.message} → trying Alpha Vantage`);
+  // If a fetch for this symbol is already in-flight, share its promise
+  if (_stockDataInflight[symbol]) return _stockDataInflight[symbol];
+  const p = (async () => {
     try {
-      const data = await fetchAlphaVantage(symbol);
+      const data = await fetchYahoo(symbol);
       if (isValidStockData(data)) return data;
-      throw new Error('AV data invalid');
-    } catch(e2) {
-      console.warn(`Alpha Vantage failed for ${symbol}: ${e2.message}`);
-      return null; // graceful null → AI will handle without real data
+      throw new Error('Yahoo data invalid');
+    } catch(e) {
+      console.warn(`Yahoo failed for ${symbol}: ${e.message} → trying Alpha Vantage`);
+      try {
+        const data = await fetchAlphaVantage(symbol);
+        if (isValidStockData(data)) return data;
+        throw new Error('AV data invalid');
+      } catch(e2) {
+        console.warn(`Alpha Vantage failed for ${symbol}: ${e2.message}`);
+        return null; // graceful null → AI will handle without real data
+      }
+    } finally {
+      delete _stockDataInflight[symbol]; // always clears, success or failure
     }
-  }
+  })();
+  _stockDataInflight[symbol] = p;
+  return p;
 }
 
 // Fetch data for a full batch in parallel
