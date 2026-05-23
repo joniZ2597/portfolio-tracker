@@ -177,6 +177,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .dq-warn{display:flex;align-items:flex-start;gap:10px;padding:8px 16px;background:rgba(217,119,6,.07);border-bottom:1px solid rgba(217,119,6,.25);flex-shrink:0;}
 .dq-warn-icon{color:var(--yellow2);font-size:13px;flex-shrink:0;padding-top:1px}
 .dq-warn-text{font-family:var(--mono);font-size:9px;color:var(--yellow2);line-height:1.5;letter-spacing:.3px;}
+/* Stale result guard banner (Improvement 3) */
+.stale-banner{display:flex;align-items:center;gap:6px;padding:5px 8px;margin:4px 8px 0;background:rgba(161,130,60,.09);border-left:2px solid rgba(161,130,60,.55);border-radius:3px;font-size:9px;color:var(--text2);}
+.stale-banner-icon{flex-shrink:0;font-size:11px;opacity:.75;}
+.stale-banner-text{flex:1;line-height:1.4;font-family:var(--mono);letter-spacing:.2px;}
+.stale-banner-btn{flex-shrink:0;font-size:9px;padding:2px 7px;background:transparent;border:1px solid rgba(161,130,60,.6);color:var(--text2);border-radius:3px;cursor:pointer;font-family:var(--mono);}
+.stale-banner-btn:hover{background:rgba(161,130,60,.15);}
 /* unavailable panel row */
 .unavail-row{padding:10px 0;font-family:var(--mono);font-size:10px;color:var(--text3);text-align:center;letter-spacing:.5px;}
 
@@ -553,6 +559,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
       <span id="progressLabel"></span>
       <div class="scan-note" id="scanNote">Checked tickers are included in the next scan. Unchecking does not remove them from the watchlist.</div>
     </div>
+
+    <!-- Stale results banner — shown by checkAndShowStaleBanner() on startup -->
+    <div id="stale-banner" class="stale-banner" style="display:none"></div>
 
     <!-- Watchlist header + tabs -->
     <div class="sb-wl-header">
@@ -3038,6 +3047,7 @@ async function runAnalysis() {
   btn.innerHTML = '<span>✕ Cancel scan</span><span class="scan-badge">' + scanSymbols.length + '</span>';
   document.getElementById('errorBox').style.display = 'none';
   if (document.getElementById('emptyState')) document.getElementById('emptyState').style.display = 'none';
+  _hideStaleBanner();
 
   const today = new Date().toLocaleDateString('he-IL');
   const BATCH_SIZE = 1; // 1 ticker per batch — ensures _cancelRequested is checked before each ticker
@@ -3131,6 +3141,62 @@ async function runAnalysis() {
   }
 }
 
+// ── Stale result guard (Improvement 3) ──────────────────────────────────────
+const STALE_RESULT_THRESHOLD_MS = 48 * 60 * 60 * 1000; // 48 hours
+
+function _hideStaleBanner() {
+  const b = document.getElementById('stale-banner');
+  if (!b) return;
+  b.style.display = 'none';
+  while (b.firstChild) b.removeChild(b.firstChild);
+}
+
+function _showStaleBanner(msg) {
+  const b = document.getElementById('stale-banner');
+  if (!b) return;
+  // Clear any previous content first
+  while (b.firstChild) b.removeChild(b.firstChild);
+  // Icon
+  const icon = document.createElement('span');
+  icon.className = 'stale-banner-icon';
+  icon.textContent = '⏱';
+  b.appendChild(icon);
+  // Message text
+  const txt = document.createElement('span');
+  txt.className = 'stale-banner-text';
+  txt.textContent = msg;
+  b.appendChild(txt);
+  // Re-run button
+  const btn = document.createElement('button');
+  btn.className = 'stale-banner-btn';
+  btn.textContent = 'Re-run';
+  btn.addEventListener('click', function() { runAnalysis(); });
+  b.appendChild(btn);
+  b.style.display = 'flex';
+}
+
+function checkAndShowStaleBanner() {
+  // Always clear first — prevents stale banner state from persisting
+  _hideStaleBanner();
+  // Nothing to check if no saved results
+  if (!results.length) return;
+  const timestamps = results
+    .map(function(r) { return new Date(r._timestamp || r._orchestratedAt || 0).getTime(); })
+    .filter(function(t) { return t > 0; });
+  if (timestamps.length === 0) {
+    // Legacy results with no timestamp — pre-Improvement 2
+    _showStaleBanner('Scan results are from a previous session (date unknown) — re-run scan to get current data');
+    return;
+  }
+  const mostRecent = Math.max.apply(null, timestamps);
+  if ((Date.now() - mostRecent) > STALE_RESULT_THRESHOLD_MS) {
+    const d = new Date(mostRecent);
+    const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      + ' · ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    _showStaleBanner('Results from ' + label + ' — re-run scan for latest data');
+  }
+}
+
 // ── init ──────────────────────────────────────────────────────────────────────
 function init() {
   // Phase 1: load + normalize watchlist from localStorage on startup
@@ -3154,6 +3220,9 @@ function init() {
     renderWatchlistRows(results);
     updateRunScanCount();
   }
+
+  // Check freshness of any saved results and show banner if outdated
+  checkAndShowStaleBanner();
 
   // Restore previously selected ticker (pt_active_ticker)
   const savedActive = localStorage.getItem('pt_active_ticker');
