@@ -430,6 +430,27 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .ticker-menu-item.danger:hover{background:rgba(220,38,38,.12);color:var(--red2)}
 .ticker-menu-sep{height:1px;background:var(--border);margin:4px 0}
 
+/* ─── EDIT TICKER MODAL ──────────────────────────── */
+.edit-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center}
+.edit-overlay.open{display:flex}
+.edit-modal{background:var(--card);border:1px solid var(--border);border-radius:8px;width:360px;max-width:95vw;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.6)}
+.edit-modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 12px;border-bottom:1px solid var(--border)}
+.edit-modal-title{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px}
+.edit-modal-sym{font-family:var(--mono);font-size:14px;font-weight:700;color:var(--cyan2);margin-left:8px}
+.edit-modal-body{padding:16px}
+.edit-field-row{display:flex;flex-direction:column;gap:4px;margin-bottom:14px}
+.edit-field-row:last-child{margin-bottom:0}
+.edit-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+.edit-inp{background:var(--bg);border:1px solid var(--border2);border-radius:3px;color:var(--text);font-family:var(--sans);font-size:13px;padding:7px 9px;outline:none;width:100%;box-sizing:border-box}
+.edit-inp:focus{border-color:var(--blue2)}
+.edit-note{resize:vertical;min-height:60px;font-family:var(--sans);font-size:12px;line-height:1.5}
+.edit-hint{font-size:10px;color:var(--text3);margin-top:2px}
+.edit-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
+.btn-edit-cancel{font-family:var(--mono);font-size:10px;color:var(--text2);background:none;border:1px solid var(--border2);border-radius:3px;padding:7px 14px;cursor:pointer}
+.btn-edit-cancel:hover{color:var(--text);border-color:var(--text3)}
+.btn-edit-save{font-family:var(--mono);font-size:10px;font-weight:700;background:var(--blue);color:#fff;border:none;border-radius:3px;padding:7px 14px;cursor:pointer}
+.btn-edit-save:hover{background:#1D4ED8}
+
 /* Hide legacy chip/config UI */
 .sb-chips,.sb-config,.chip{display:none!important}
 /* Keep legacy sb-header hidden by overriding to 0 height once replaced */
@@ -1965,19 +1986,39 @@ function openTickerMenu(sym, event) {
     ? '☐&nbsp; Remove from scan'
     : '☑&nbsp; Add to scan';
 
-  menu.innerHTML =
-    '<div class="ticker-menu-header">' + sym + '</div>' +
-    '<button class="ticker-menu-item" onclick="event.stopPropagation();selectTicker(\'' + sym + '\');closeTickerMenu()">' +
-      '▶&nbsp; View details' +
-    '</button>' +
-    '<div class="ticker-menu-sep"></div>' +
-    '<button class="ticker-menu-item" onclick="event.stopPropagation();toggleScanFromMenu(\'' + sym + '\')">' +
-      _scanLabel +
-    '</button>' +
-    '<div class="ticker-menu-sep"></div>' +
-    '<button class="ticker-menu-item danger" onclick="event.stopPropagation();confirmDeleteTicker(\'' + sym + '\')">' +
-      '🗑&nbsp; Delete from portfolio' +
-    '</button>';
+  // Build menu with DOM methods — sym set via textContent, onclick uses captured variable
+  // (safeguard 1: no user values in innerHTML)
+  const _mHdr = document.createElement('div');
+  _mHdr.className   = 'ticker-menu-header';
+  _mHdr.textContent = sym;
+
+  const _mView = document.createElement('button');
+  _mView.className   = 'ticker-menu-item';
+  _mView.textContent = '▶  View details';
+  _mView.onclick     = function(e){ e.stopPropagation(); selectTicker(sym); closeTickerMenu(); };
+
+  const _mEdit = document.createElement('button');
+  _mEdit.className   = 'ticker-menu-item';
+  _mEdit.textContent = '✏  Edit details';
+  _mEdit.onclick     = function(e){ e.stopPropagation(); openEditModal(sym); };
+
+  const _mSep1 = document.createElement('div');
+  _mSep1.className = 'ticker-menu-sep';
+
+  const _mScan = document.createElement('button');
+  _mScan.className   = 'ticker-menu-item';
+  _mScan.textContent = _inScanNow ? '☐  Remove from scan' : '☑  Add to scan';
+  _mScan.onclick     = function(e){ e.stopPropagation(); toggleScanFromMenu(sym); };
+
+  const _mSep2 = document.createElement('div');
+  _mSep2.className = 'ticker-menu-sep';
+
+  const _mDel = document.createElement('button');
+  _mDel.className   = 'ticker-menu-item danger';
+  _mDel.textContent = '🗑  Delete from portfolio';
+  _mDel.onclick     = function(e){ e.stopPropagation(); confirmDeleteTicker(sym); };
+
+  [_mHdr, _mView, _mEdit, _mSep1, _mScan, _mSep2, _mDel].forEach(el => menu.appendChild(el));
 
   // Append off-screen first so we can measure dimensions
   menu.style.visibility = 'hidden';
@@ -2053,6 +2094,188 @@ function confirmDeleteTicker(sym) {
 
 // Legacy alias — kept so any stale references don't throw
 function confirmRemoveTicker(sym) { confirmDeleteTicker(sym); }
+
+// ── Edit Details modal ────────────────────────────────────────────────────────
+
+let _editSym = null; // symbol currently being edited
+
+function openEditModal(sym) {
+  closeTickerMenu();
+  const entry = findTicker(sym);
+  if (!entry) return;
+  _editSym = sym;
+
+  const overlay = document.getElementById('editOverlay');
+  const modal   = document.getElementById('editModal');
+  if (!overlay || !modal) return;
+
+  // Build modal entirely with DOM methods — user values set via .value / .textContent,
+  // never injected into innerHTML (safeguard 1)
+  modal.innerHTML = '';
+
+  // ── Header ──────────────────────────────────────────────────────────────────
+  const hdr     = document.createElement('div');
+  hdr.className = 'edit-modal-hdr';
+
+  const titleWrap = document.createElement('div');
+  titleWrap.style.cssText = 'display:flex;align-items:center;gap:0';
+
+  const titleEl     = document.createElement('span');
+  titleEl.className   = 'edit-modal-title';
+  titleEl.textContent = 'Edit ticker';
+
+  const symEl     = document.createElement('span');
+  symEl.className   = 'edit-modal-sym';
+  symEl.textContent = sym; // sym is always uppercase ASCII — textContent is still the safe path
+
+  const closeBtn  = document.createElement('button');
+  closeBtn.className   = 'api-close-btn';
+  closeBtn.textContent = '✕';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.onclick     = closeEditModal;
+
+  titleWrap.appendChild(titleEl);
+  titleWrap.appendChild(symEl);
+  hdr.appendChild(titleWrap);
+  hdr.appendChild(closeBtn);
+
+  // ── Body ────────────────────────────────────────────────────────────────────
+  const body    = document.createElement('div');
+  body.className = 'edit-modal-body';
+
+  // Helper: create one label + input/textarea row
+  function _makeField(labelText, inputId, placeholder, currentValue, isTextarea) {
+    const row   = document.createElement('div');
+    row.className = 'edit-field-row';
+
+    const lbl   = document.createElement('label');
+    lbl.className   = 'edit-lbl';
+    lbl.textContent = labelText;
+    lbl.htmlFor     = inputId;
+
+    const inp   = document.createElement(isTextarea ? 'textarea' : 'input');
+    inp.id          = inputId;
+    inp.className   = 'edit-inp' + (isTextarea ? ' edit-note' : '');
+    inp.placeholder = placeholder;
+    inp.value       = currentValue || ''; // .value assignment — no innerHTML
+    if (!isTextarea) inp.type = 'text';
+
+    row.appendChild(lbl);
+    row.appendChild(inp);
+    return row;
+  }
+
+  body.appendChild(_makeField('Company name', 'editName',      'e.g. NVIDIA Corp.',   entry.name));
+  body.appendChild(_makeField('Sector',        'editSector',    'e.g. Semiconductors', entry.sector));
+
+  // Sector ETF row — extra hint and input constraints
+  const etfRow = _makeField('Sector ETF', 'editSectorEtf', 'e.g. SOXX', entry.sectorEtf);
+  const etfInp = etfRow.querySelector('#editSectorEtf');
+  etfInp.maxLength = 6;
+  etfInp.style.cssText += ';text-transform:uppercase;width:90px';
+  const etfHint = document.createElement('span');
+  etfHint.className   = 'edit-hint';
+  etfHint.textContent = 'Used as benchmark in technical analysis';
+  etfRow.appendChild(etfHint);
+  body.appendChild(etfRow);
+
+  body.appendChild(_makeField('Personal note', 'editNote', 'Your notes…', entry.personalNote, true));
+
+  // ── Footer actions ──────────────────────────────────────────────────────────
+  const actions   = document.createElement('div');
+  actions.className = 'edit-actions';
+
+  const cancelBtn     = document.createElement('button');
+  cancelBtn.className   = 'btn-edit-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick     = closeEditModal;
+
+  const saveBtn     = document.createElement('button');
+  saveBtn.className   = 'btn-edit-save';
+  saveBtn.textContent = 'Save';
+  saveBtn.onclick     = saveEditModal;
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(saveBtn);
+
+  modal.appendChild(hdr);
+  modal.appendChild(body);
+  modal.appendChild(actions);
+
+  overlay.classList.add('open');
+  document.addEventListener('keydown', _onEditEscape);
+
+  // Focus first field after render
+  setTimeout(function(){ const f = document.getElementById('editName'); if (f) f.focus(); }, 30);
+}
+
+function _onEditEscape(e) {
+  if (e.key === 'Escape') closeEditModal();
+}
+
+function closeEditModal() {
+  const overlay = document.getElementById('editOverlay');
+  if (overlay) overlay.classList.remove('open');
+  _editSym = null;
+  document.removeEventListener('keydown', _onEditEscape);
+}
+
+function saveEditModal() {
+  if (!_editSym) return;
+  const entry = findTicker(_editSym);
+  if (!entry) { closeEditModal(); return; }
+
+  // Read values from DOM inputs — never from innerHTML (safeguard 1)
+  const name         = (document.getElementById('editName')?.value      ?? '').trim();
+  const sector       = (document.getElementById('editSector')?.value    ?? '').trim();
+  // Safeguard 2: normalize sectorEtf — trim + uppercase
+  const sectorEtf    = (document.getElementById('editSectorEtf')?.value ?? '').trim().toUpperCase();
+  const personalNote = (document.getElementById('editNote')?.value      ?? '').trim();
+
+  // Detect ETF change before overwriting entry (safeguard 3)
+  const prevEtf    = entry.sectorEtf || '';
+  const etfChanged = sectorEtf !== prevEtf;
+
+  // Merge fields — inScan and symbol are NOT in the payload, so they are untouched (safeguard 3)
+  upsertTicker(_editSym, { name, sector, sectorEtf, personalNote });
+
+  // Clear stale technical snapshot if benchmark changed (safeguard 3)
+  if (etfChanged && typeof _techCache !== 'undefined') {
+    delete _techCache[_editSym];
+    console.log('[edit] sectorEtf changed for', _editSym, prevEtf, '\u2192', sectorEtf, '\u2014 techCache cleared');
+  }
+
+  // In-place sidebar row label update — avoids full re-render (preserves scroll + selection)
+  const pwlRow = document.getElementById('pwl-' + _editSym);
+  if (pwlRow) {
+    const updatedEntry = findTicker(_editSym);
+    const hint     = updatedEntry.sectorEtf || updatedEntry.sector || '';
+    const dispName = name
+      ? (hint ? name.slice(0, 14) + ' \u00b7 ' + hint : name.slice(0, 22))
+      : hint;
+    let nameEl = pwlRow.querySelector('.pwl-name');
+    if (!nameEl && dispName) {
+      // Row had no sub-label before (unknown ticker) — create the element
+      nameEl = document.createElement('span');
+      nameEl.className = 'pwl-name';
+      const infoEl = pwlRow.querySelector('.pwl-info');
+      if (infoEl) infoEl.appendChild(nameEl);
+    }
+    if (nameEl) nameEl.textContent = dispName; // textContent — never innerHTML (safeguard 1)
+  }
+
+  // Safeguard 3: if the edited ticker is currently active, refresh visible context
+  if (_activeTicker === _editSym) {
+    const item = (_cockpitResults || []).find(function(r){ return r.ticker === _editSym; });
+    if (item) {
+      renderMainPanel(item);       // re-renders header + technical panel with updated metadata
+    } else {
+      renderTickerPlaceholder(_editSym); // placeholder also reads entry.name / sector / etf
+    }
+  }
+
+  closeEditModal();
+}
 
 function filterWatchlistRows(query) {
   const normalised = (query || '').trim().toUpperCase();
@@ -3089,6 +3312,11 @@ async function checkAllApis() {
       </div>
     </div>
   </div>
+</div>
+
+<!-- EDIT TICKER MODAL — content built by openEditModal() via DOM methods -->
+<div class="edit-overlay" id="editOverlay" onclick="if(event.target===this)closeEditModal()">
+  <div class="edit-modal" id="editModal"></div>
 </div>
 
 </body>
