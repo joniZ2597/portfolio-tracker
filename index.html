@@ -350,6 +350,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .btn-cancel-scan:hover{background:rgba(220,38,38,.28);border-color:rgba(248,113,113,.6)}
 .scan-badge{background:rgba(255,255,255,.2);border-radius:10px;font-size:9px;font-weight:700;padding:1px 7px;letter-spacing:0;min-width:20px;text-align:center}
 .scan-note{font-size:9px;color:var(--text3);line-height:1.5;margin-top:6px;padding:0 2px}
+/* Missing key warning strip (Improvement 4) */
+.key-warn{display:flex;flex-direction:column;gap:3px;margin-top:5px;padding:5px 6px;background:rgba(234,179,8,.07);border-left:2px solid rgba(234,179,8,.4);border-radius:2px;}
+.key-warn-line{display:flex;align-items:baseline;gap:5px;font-size:9px;font-family:var(--mono);color:var(--yellow2);line-height:1.4;}
+.key-warn-line.soft{color:var(--text3);}
+.key-warn-icon{flex-shrink:0;font-size:10px;}
 
 /* Watchlist header row */
 .sb-wl-header{display:flex;align-items:center;justify-content:space-between;padding:8px 12px 4px;flex-shrink:0;border-bottom:1px solid var(--border)}
@@ -558,6 +563,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
       <div class="prog-wrap" id="progressWrap"><div class="prog-bar" id="progressBar"></div></div>
       <span id="progressLabel"></span>
       <div class="scan-note" id="scanNote">Checked tickers are included in the next scan. Unchecking does not remove them from the watchlist.</div>
+      <!-- Missing key warning — shown by checkAndShowKeyWarn() on startup and on key save -->
+      <div id="key-warn" class="key-warn" style="display:none"></div>
     </div>
 
     <!-- Stale results banner — shown by checkAndShowStaleBanner() on startup -->
@@ -1396,6 +1403,7 @@ function saveKey() {
   localStorage.setItem('pt_apikey', val);
   document.getElementById('keyStatus').textContent = val ? '✓ שמור' : '⚠ הכנס key';
   document.getElementById('keyStatus').style.color = val ? 'var(--green)' : 'orange';
+  checkAndShowKeyWarn();
 }
 
 function savePplxKey() {
@@ -1403,6 +1411,7 @@ function savePplxKey() {
   localStorage.setItem('pt_pplxkey', pplxKey);
   document.getElementById('pplxKeyStatus').textContent = '✓ שמור';
   document.getElementById('pplxKeyStatus').style.color = 'var(--green)';
+  checkAndShowKeyWarn();
 }
 
 function saveAvKey() {
@@ -1410,6 +1419,7 @@ function saveAvKey() {
   localStorage.setItem('pt_avkey', avKey);
   document.getElementById('avKeyStatus').textContent = '✓ שמור';
   document.getElementById('avKeyStatus').style.color = 'var(--green)';
+  checkAndShowKeyWarn();
 }
 
 function addTicker() {
@@ -3197,6 +3207,51 @@ function checkAndShowStaleBanner() {
   }
 }
 
+// ── Missing key warning (Improvement 4) ─────────────────────────────────────
+function _hideKeyWarn() {
+  const w = document.getElementById('key-warn');
+  if (!w) return;
+  w.style.display = 'none';
+  while (w.firstChild) w.removeChild(w.firstChild);
+}
+
+function checkAndShowKeyWarn() {
+  _hideKeyWarn();
+  const w = document.getElementById('key-warn');
+  if (!w) return;
+
+  const lines = []; // { text, soft }
+
+  if (!apiKey && !pplxKey) {
+    lines.push({ text: 'No AI keys configured — scan cannot run until at least one AI key is added.', soft: false });
+  } else if (!apiKey) {
+    lines.push({ text: 'Anthropic key missing — scan will use Perplexity only.', soft: false });
+  } else if (!pplxKey) {
+    lines.push({ text: 'Perplexity key missing — scan will run without news context.', soft: false });
+  }
+
+  // AV soft note: only when both AI keys are configured, to avoid noise for new users
+  if (!avKey && apiKey && pplxKey) {
+    lines.push({ text: 'Alpha Vantage key missing — Yahoo is the only market data source.', soft: true });
+  }
+
+  if (lines.length === 0) return;
+
+  lines.forEach(function(item) {
+    const row = document.createElement('div');
+    row.className = 'key-warn-line' + (item.soft ? ' soft' : '');
+    const icon = document.createElement('span');
+    icon.className = 'key-warn-icon';
+    icon.textContent = item.soft ? '·' : '⚠';
+    const txt = document.createElement('span');
+    txt.textContent = item.text;
+    row.appendChild(icon);
+    row.appendChild(txt);
+    w.appendChild(row);
+  });
+  w.style.display = 'flex';
+}
+
 // ── init ──────────────────────────────────────────────────────────────────────
 function init() {
   // Phase 1: load + normalize watchlist from localStorage on startup
@@ -3205,6 +3260,8 @@ function init() {
   if (apiKey) { const k = document.getElementById('apiKey'); if(k) { k.value = apiKey; } const s = document.getElementById('keyStatus'); if(s){s.textContent='✓';s.style.color='var(--green)';} }
   if (pplxKey) { const k = document.getElementById('pplxKey'); if(k) { k.value = pplxKey; } const s = document.getElementById('pplxKeyStatus'); if(s){s.textContent='✓';s.style.color='var(--green)';} }
   if (avKey)   { const k = document.getElementById('avKey');   if(k) { k.value = avKey;   } const s = document.getElementById('avKeyStatus');   if(s){s.textContent='✓';s.style.color='var(--green)';} }
+  // Show missing key warning on startup
+  checkAndShowKeyWarn();
   // Phase 2a: render sidebar rows on load (before any scan)
   renderWatchlistRows();
   updateRunScanCount();
