@@ -755,11 +755,21 @@ async function computeTechnicalSnapshot(symbol, sectorEtf, currentPrice) {
     fetches.push(fetchHistoricalCandles('QQQ', '1Y'));
     labels.push('QQQ');
 
-    const results = await Promise.allSettled(fetches);
+    // Run historical candle fetches and live SPY/QQQ quote fetches in parallel
+    const [candleResults, quoteResults] = await Promise.all([
+      Promise.allSettled(fetches),
+      Promise.allSettled([fetchStockData('SPY'), fetchStockData('QQQ')]),
+    ]);
     const candles = {};
-    results.forEach((r, i) => {
+    candleResults.forEach((r, i) => {
       candles[labels[i]] = r.status === 'fulfilled' ? (r.value || []) : [];
     });
+    // Extract live daily change from quote results — null on any failure
+    const [spyQR, qqqQR] = quoteResults;
+    const spyChangePct = (spyQR.status === 'fulfilled' && spyQR.value &&
+      typeof spyQR.value.change_percent === 'number') ? spyQR.value.change_percent : null;
+    const qqqChangePct = (qqqQR.status === 'fulfilled' && qqqQR.value &&
+      typeof qqqQR.value.change_percent === 'number') ? qqqQR.value.change_percent : null;
 
     const tc = candles[sym]; // ticker candles
     const price = currentPrice || (tc.length ? tc[tc.length-1].close : null);
@@ -806,6 +816,9 @@ async function computeTechnicalSnapshot(symbol, sectorEtf, currentPrice) {
       sectorEtf: etf || null,
       // Candle counts
       candleCount: tc.length,
+      // Live benchmark daily change (same source as verified ticker prices; null if fetch failed)
+      spyChangePct,
+      qqqChangePct,
     };
 
     _techCache[sym] = { snap, computedAt: Date.now() };
@@ -2735,6 +2748,10 @@ function renderMainPanel(item) {
           <span class="ph-chg ${hasData ? chgCls2 : 'neu'}">${hasData ? (chgDir + (chg !== null ? Math.abs(chg * (item._verifiedPrice||0)/100).toFixed(2) : '—') + ' ' + chgPctStr) : '—'}</span>
           <span class="ph-today">today</span>
         </div>
+        ${hasData && (typeof snap.spyChangePct === 'number' || typeof snap.qqqChangePct === 'number') ? `<div class="ph-divider"></div>` : ''}
+        ${hasData && typeof snap.spyChangePct === 'number' ? `<span class="ph-source">SPY <span class="${snap.spyChangePct >= 0 ? 'pos' : 'neg'}">${snap.spyChangePct >= 0 ? '+' : ''}${snap.spyChangePct.toFixed(2)}%</span></span>` : ''}
+        ${hasData && typeof snap.spyChangePct === 'number' && typeof snap.qqqChangePct === 'number' ? `<span style="color:var(--border2);margin:0 4px">·</span>` : ''}
+        ${hasData && typeof snap.qqqChangePct === 'number' ? `<span class="ph-source">QQQ <span class="${snap.qqqChangePct >= 0 ? 'pos' : 'neg'}">${snap.qqqChangePct >= 0 ? '+' : ''}${snap.qqqChangePct.toFixed(2)}%</span></span>` : ''}
         ${(dataSource || lastUpdated) ? `<div class="ph-divider"></div>` : ''}
         ${dataSource  ? `<span class="ph-source">src: ${dataSource}</span>` : ''}
         ${(dataSource && lastUpdated) ? `<span style="color:var(--border2);margin:0 5px">·</span>` : ''}
