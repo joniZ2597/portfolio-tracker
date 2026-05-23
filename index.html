@@ -2233,14 +2233,16 @@ function saveEditModal() {
   const personalNote = (document.getElementById('editNote')?.value      ?? '').trim();
 
   // Detect ETF change before overwriting entry (safeguard 3)
-  const prevEtf    = entry.sectorEtf || '';
+  // Use ?? (not ||) so an empty-string ETF is preserved as '' and not coerced by falsy check
+  const prevEtf    = entry.sectorEtf ?? '';
   const etfChanged = sectorEtf !== prevEtf;
 
   // Merge fields — inScan and symbol are NOT in the payload, so they are untouched (safeguard 3)
   upsertTicker(_editSym, { name, sector, sectorEtf, personalNote });
 
-  // Clear stale technical snapshot if benchmark changed (safeguard 3)
-  if (etfChanged && typeof _techCache !== 'undefined') {
+  // Clear stale technical snapshot whenever benchmark changes — including when cleared to ''
+  // No typeof guard: _techCache is a module-level const, always defined
+  if (etfChanged) {
     delete _techCache[_editSym];
     console.log('[edit] sectorEtf changed for', _editSym, prevEtf, '\u2192', sectorEtf, '\u2014 techCache cleared');
   }
