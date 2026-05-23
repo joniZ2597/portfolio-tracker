@@ -2785,10 +2785,13 @@ function renderMainPanel(item) {
           snap.candleCount === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
         `<div class="rs-table">
           ${[
-            [snap.sectorEtf ? 'vs ' + snap.sectorEtf : null, snap.rsSector],
-            ['vs QQQ', snap.rsQQQ],
-            ['vs SPY', snap.rsSPY],
-          ].filter(([lbl]) => lbl !== null).map(([lbl, val]) => {
+            ['vs SPY', snap.rsSPY,    false],
+            ['vs QQQ', snap.rsQQQ,    false],
+            [snap.sectorEtf ? 'vs ' + snap.sectorEtf : null, snap.rsSector, true],
+          ].map(([lbl, val, isSector]) => {
+            if (isSector && !lbl) {
+              return `<div class="rs-row"><span class="rs-lbl">vs Sector ETF</span><span class="rs-val neutral-v">No sector ETF configured</span></div>`;
+            }
             const r = rsLabel(val);
             return r
               ? `<div class="rs-row">
