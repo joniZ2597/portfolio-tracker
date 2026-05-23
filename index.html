@@ -445,6 +445,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .edit-inp:focus{border-color:var(--blue2)}
 .edit-note{resize:vertical;min-height:60px;font-family:var(--sans);font-size:12px;line-height:1.5}
 .edit-hint{font-size:10px;color:var(--text3);margin-top:2px}
+.edit-hint.warn{color:var(--text2)}
 .edit-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
 .btn-edit-cancel{font-family:var(--mono);font-size:10px;color:var(--text2);background:none;border:1px solid var(--border2);border-radius:3px;padding:7px 14px;cursor:pointer}
 .btn-edit-cancel:hover{color:var(--text);border-color:var(--text3)}
@@ -2182,6 +2183,26 @@ function openEditModal(sym) {
   etfHint.textContent = 'Used as benchmark in technical analysis';
   etfRow.appendChild(etfHint);
   body.appendChild(etfRow);
+
+  // Dynamic ETF hint — updates on every keystroke (textContent only, no innerHTML)
+  function _updateEtfHint() {
+    var val = etfInp.value.trim().toUpperCase();
+    if (!val) {
+      etfHint.textContent = 'Used as benchmark in technical analysis';
+      etfHint.classList.remove('warn');
+      return;
+    }
+    var inWatchlist = watchlist.some(function(e) { return e.symbol === val; });
+    if (inWatchlist) {
+      etfHint.textContent = 'Used as benchmark in technical analysis';
+      etfHint.classList.remove('warn');
+    } else {
+      etfHint.textContent = 'Not in your watchlist — will be used as-is';
+      etfHint.classList.add('warn');
+    }
+  }
+  etfInp.addEventListener('input', _updateEtfHint);
+  _updateEtfHint(); // set initial state when modal opens
 
   body.appendChild(_makeField('Personal note', 'editNote', 'Your notes…', entry.personalNote, true));
 
