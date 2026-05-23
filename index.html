@@ -260,6 +260,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .rs-row{display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid rgba(30,41,59,.4)}
 .rs-lbl{font-family:var(--mono);font-size:11px;color:var(--text2);width:52px}
 .rs-val{font-family:var(--mono);font-size:12px;font-weight:700;width:90px}
+.rs-note{font-family:var(--mono);font-size:9px;color:var(--text3);padding:6px 0 2px;letter-spacing:.2px}
 .rs-bar-track{flex:1;height:6px;background:var(--border2);border-radius:3px;overflow:hidden}
 .rs-bar-fill{height:100%;border-radius:3px;transition:width .4s}
 .rs-rank-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0 2px;border-top:1px solid var(--border2);margin-top:4px}
@@ -2810,7 +2811,7 @@ function renderMainPanel(item) {
             [snap.sectorEtf ? 'vs ' + snap.sectorEtf : null, snap.rsSector, true],
           ].map(([lbl, val, isSector]) => {
             if (isSector && !lbl) {
-              return `<div class="rs-row"><span class="rs-lbl">vs Sector ETF</span><span class="rs-val neutral-v">No sector ETF — edit ticker details to add one</span></div>`;
+              return `<div class="rs-note">No sector ETF configured — edit details to add benchmark</div>`;
             }
             const r = rsLabel(val);
             return r
