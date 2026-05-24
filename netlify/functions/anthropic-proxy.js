@@ -20,7 +20,7 @@
 
 const ANTHROPIC_URL     = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
-const TIMEOUT_MS        = 30000; // longer than Perplexity - 3000 max_tokens responses take time
+const TIMEOUT_MS        = 25000; // reduced from 30s - stay under Netlify 26s function limit
 const MAX_BODY_BYTES    = 65536; // 64 KB - covers system prompt + stock context + pplxData JSON
 
 // -- Entry point ---------------------------------------------------------------
