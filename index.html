@@ -1805,7 +1805,7 @@ Tickers: ${batch.join(',')}`;
   const response = await fetch(_antUrl, {
     method: 'POST',
     headers: _antHeaders,
-    body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 3000, system: system, messages: [{ role: 'user', content: user }, { role: 'assistant', content: '{' }] })
+    body: JSON.stringify({ model: 'claude-sonnet-4-5-20250929', max_tokens: 3000, system: system, messages: [{ role: 'user', content: user }, { role: 'assistant', content: '{' }] })
   });
   if (!response.ok) { const err = await response.json(); throw new Error('Anthropic: ' + (err.error?.message || 'API error')); }
   const data = await response.json();
