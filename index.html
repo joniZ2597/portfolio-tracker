@@ -958,17 +958,9 @@ function _parseYahooChart(data, sym) {
 // ─── ALPHA VANTAGE FALLBACK ──────────────────────────────────────────────────
 
 async function _fetchAVCandles(sym, yr) {
-  // avKey must exist globally (set by existing pipeline saveAvKey())
-  const key = (typeof avKey !== 'undefined' && avKey)
-    ? avKey
-    : localStorage?.getItem?.('pt_avkey');
-  if (!key) {
-    console.warn('[history] AV fallback skipped — no key');
-    return [];
-  }
-
+  // Phase 3: key is server-managed - route through av-proxy, no local key required
   const outputSize = _AV_OUTPUT_SIZE[yr] ?? 'full';
-  const url = `${_HIST_AV_BASE}?function=TIME_SERIES_DAILY&symbol=${sym}&outputsize=${outputSize}&apikey=${key}`;
+  const url = `/.netlify/functions/av-proxy?function=TIME_SERIES_DAILY&symbol=${sym}&outputsize=${outputSize}`;
 
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
@@ -1160,6 +1152,8 @@ let pplxKey = localStorage.getItem('pt_pplxkey') || '';
 const PPLX_SERVER_MANAGED = true;
 const ANTHROPIC_SERVER_MANAGED = true; // Phase 2: Anthropic calls route through /.netlify/functions/anthropic-proxy.
 // apiKey stays in localStorage (unused for calls) until Phase 4 cleanup.
+const AV_SERVER_MANAGED = true; // Phase 3: Alpha Vantage calls route through /.netlify/functions/av-proxy.
+// avKey stays in localStorage (unused for calls) until Phase 4 cleanup.
 
 // ────────────────────────────────────── STOCK DATA LAYER ──────────────────────────────────────
 
@@ -1290,11 +1284,10 @@ async function fetchYahoo(symbol) {
 }
 
 // Fetch from Alpha Vantage using TIME_SERIES_INTRADAY (real intraday high/low)
+// Phase 3: key is server-managed - all calls route through /.netlify/functions/av-proxy
 async function fetchAlphaVantage(symbol) {
-  if (!avKey) throw new Error('Alpha Vantage key missing');
-
   // Step 1: get previous close via GLOBAL_QUOTE
-  const gqUrl = `${AV_BASE}?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${avKey}`;
+  const gqUrl = `/.netlify/functions/av-proxy?function=GLOBAL_QUOTE&symbol=${symbol}`;
   const gqRes = await fetch(gqUrl, { signal: AbortSignal.timeout(8000) });
   if (!gqRes.ok) throw new Error('AV GQ HTTP ' + gqRes.status);
   const gqJson = await gqRes.json();
@@ -1311,7 +1304,7 @@ async function fetchAlphaVantage(symbol) {
   let high = parseFloat(q['03. high']);
   let low  = parseFloat(q['04. low']);
   try {
-    const tsUrl = `${AV_BASE}?function=TIME_SERIES_INTRADAY&symbol=${symbol}&interval=15min&outputsize=compact&apikey=${avKey}`;
+    const tsUrl = `/.netlify/functions/av-proxy?function=TIME_SERIES_INTRADAY&symbol=${symbol}&interval=15min&outputsize=compact`;
     const tsRes = await fetch(tsUrl, { signal: AbortSignal.timeout(8000) });
     if (tsRes.ok) {
       const tsJson = await tsRes.json();
@@ -3247,8 +3240,8 @@ function checkAndShowKeyWarn() {
     lines.push({ text: 'Perplexity key missing — scan will run without news context.', soft: false });
   }
 
-  // AV soft note: only when both AI channels are available, to avoid noise for new users
-  if (!avKey && apiKey && hasPplx) {
+  // AV soft note: suppressed when AV is server-managed; otherwise shown when both AI channels are available
+  if (!AV_SERVER_MANAGED && !avKey && hasAnthropic && hasPplx) {
     lines.push({ text: 'Alpha Vantage key missing — Yahoo is the only market data source.', soft: true });
   }
 
@@ -3363,16 +3356,15 @@ const API_DEFINITIONS = [
     color:   '#059669',
     letter:  'AV',
     check: async () => {
-      const avKey = localStorage.getItem('pt_avkey');
-      if (!avKey) return { preview: '// No Alpha Vantage key saved', ok: false, status: 'No Key' };
-      const url = `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=NVDA&apikey=${avKey}`;
-      const r = await fetch(url, {signal: AbortSignal.timeout(15000)});
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      // Phase 3: key is server-managed - ping via proxy, no localStorage key needed
+      const r = await fetch('/.netlify/functions/av-proxy?mode=ping',
+        { signal: AbortSignal.timeout(15000) });
       const d = await r.json();
-      if (d['Note'] || d['Information']) throw new Error('Rate limit / invalid key');
-      const q = d['Global Quote'];
-      if (!q || !q['05. price']) throw new Error('Invalid response');
-      return { preview: `{\n  "symbol": "NVDA",\n  "price": ${parseFloat(q['05. price']).toFixed(2)},\n  "change": ${q['09. change']}\n}`, ok: true };
+      if (!d.ok) {
+        if (d.status === 'no_key') return { preview: '// Alpha Vantage key not configured server-side', ok: false, status: 'No Key' };
+        throw new Error(d.status || 'check failed');
+      }
+      return { preview: `{\n  "symbol": "AAPL",\n  "price": ${parseFloat(d.price).toFixed(2)},\n  "source": "av-proxy"\n}`, ok: true };
     }
   },
   {
