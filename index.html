@@ -448,6 +448,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .edit-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
 .edit-inp{background:var(--bg);border:1px solid var(--border2);border-radius:3px;color:var(--text);font-family:var(--sans);font-size:13px;padding:7px 9px;outline:none;width:100%;box-sizing:border-box}
 .edit-inp:focus{border-color:var(--blue2)}
+select.edit-inp{appearance:none;cursor:pointer}
 .edit-note{resize:vertical;min-height:60px;font-family:var(--sans);font-size:12px;line-height:1.5}
 .edit-hint{font-size:10px;color:var(--text3);margin-top:2px}
 .edit-hint.warn{color:var(--text2)}
@@ -1362,18 +1363,17 @@ function addTicker() {
 }
 
 function removeTicker(sym) {
-  const upper = sym.toUpperCase();
+  const upper        = sym.toUpperCase();
+  const removedIndex = watchlist.findIndex(e => e.symbol === upper); // capture before filter
   // Remove only from watchlist — do NOT touch _cockpitResults or pt_results
   watchlist = watchlist.filter(e => e.symbol !== upper);
   saveWatchlist();
   renderWatchlistRows();
   updateRunScanCount();
-  // If the removed ticker was selected, pick next intelligently
+  // If the removed ticker was selected, restore selection by watchlist position
   if (_activeTicker === upper) {
-    // Prefer next ticker that already has a scan result
-    const withResult = watchlist.find(e => _cockpitResults.some(r => r.ticker === e.symbol));
-    const fallback   = watchlist[0];
-    const next       = withResult || fallback;
+    // Prefer the entry that slid into removedIndex (next), then the one before (previous)
+    const next = watchlist[removedIndex] || watchlist[removedIndex - 1] || null;
     if (next) {
       selectTicker(next.symbol);
     } else {
@@ -2147,36 +2147,44 @@ function openEditModal(sym) {
   body.appendChild(_makeField('Company name', 'editName',      'e.g. NVIDIA Corp.',   entry.name));
   body.appendChild(_makeField('Sector',        'editSector',    'e.g. Semiconductors', entry.sector));
 
-  // Sector ETF row — extra hint and input constraints
-  const etfRow = _makeField('Sector ETF', 'editSectorEtf', 'e.g. SOXX', entry.sectorEtf);
-  const etfInp = etfRow.querySelector('#editSectorEtf');
-  etfInp.maxLength = 6;
-  etfInp.style.cssText += ';text-transform:uppercase;width:90px';
+  // Sector ETF row — curated picker (Pulse v1.1 allowed values only)
+  const ETF_OPTIONS = ['', 'SMH', 'SOXX', 'XLK', 'IGV', 'XLC', 'XLY', 'XLF', 'XLE'];
+  const currentEtf = (entry.sectorEtf || '').trim().toUpperCase();
+  const etfInSpec  = ETF_OPTIONS.includes(currentEtf); // true for '' and all 8 allowed values
+
+  const etfRow = document.createElement('div');
+  etfRow.className = 'edit-field-row';
+
+  const etfLbl = document.createElement('label');
+  etfLbl.className   = 'edit-lbl';
+  etfLbl.textContent = 'Sector ETF';
+  etfLbl.htmlFor     = 'editSectorEtf';
+
+  const etfSel = document.createElement('select');
+  etfSel.id        = 'editSectorEtf';
+  etfSel.className = 'edit-inp';
+  ETF_OPTIONS.forEach(function(val) {
+    const opt       = document.createElement('option');
+    opt.value       = val;
+    opt.textContent = val || '-- none --';
+    if (val === (etfInSpec ? currentEtf : '')) opt.selected = true;
+    etfSel.appendChild(opt);
+  });
+
   const etfHint = document.createElement('span');
-  etfHint.className   = 'edit-hint';
-  etfHint.textContent = 'Used as benchmark in technical analysis';
+  etfHint.className = 'edit-hint';
+  if (!etfInSpec && currentEtf) {
+    // Out-of-spec value: warn without exposing it as a selectable option
+    etfHint.className += ' warn';
+    etfHint.textContent = 'Current benchmark ' + currentEtf + ' is outside the Pulse v1.1 picker. Choose a listed ETF to replace it, or save none.';
+  } else {
+    etfHint.textContent = 'Used as benchmark in Relative Strength comparison';
+  }
+
+  etfRow.appendChild(etfLbl);
+  etfRow.appendChild(etfSel);
   etfRow.appendChild(etfHint);
   body.appendChild(etfRow);
-
-  // Dynamic ETF hint — updates on every keystroke (textContent only, no innerHTML)
-  function _updateEtfHint() {
-    var val = etfInp.value.trim().toUpperCase();
-    if (!val) {
-      etfHint.textContent = 'Used as benchmark in technical analysis';
-      etfHint.classList.remove('warn');
-      return;
-    }
-    var inWatchlist = watchlist.some(function(e) { return e.symbol === val; });
-    if (inWatchlist) {
-      etfHint.textContent = 'Used as benchmark in technical analysis';
-      etfHint.classList.remove('warn');
-    } else {
-      etfHint.textContent = 'Not in your watchlist — will be used as-is';
-      etfHint.classList.add('warn');
-    }
-  }
-  etfInp.addEventListener('input', _updateEtfHint);
-  _updateEtfHint(); // set initial state when modal opens
 
   body.appendChild(_makeField('Personal note', 'editNote', 'Your notes…', entry.personalNote, true));
 
