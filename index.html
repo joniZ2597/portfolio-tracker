@@ -2066,7 +2066,7 @@ document.addEventListener('keydown', _onMenuEscape);
 // Permanent delete — requires explicit confirmation
 function confirmDeleteTicker(sym) {
   closeTickerMenu();
-  if (window.confirm('Delete ' + sym + ' from your portfolio? This cannot be undone.')) {
+  if (window.confirm('Remove ' + sym + ' from your watchlist? This cannot be undone.')) {
     removeTicker(sym);
   }
 }
