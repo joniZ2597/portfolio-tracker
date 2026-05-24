@@ -20,7 +20,7 @@
 
 const ANTHROPIC_URL     = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
-const TIMEOUT_MS        = 30000; // longer than Perplexity - 3000 max_tokens responses take time
+const TIMEOUT_MS        = 25000; // reduced from 30s - stay under Netlify 26s function limit
 const MAX_BODY_BYTES    = 65536; // 64 KB - covers system prompt + stock context + pplxData JSON
 
 // -- Entry point ---------------------------------------------------------------
@@ -68,6 +68,7 @@ exports.handler = async function (event) {
   };
   if (typeof body.system === 'string') payload.system = body.system;
 
+  const t0 = Date.now();
   try {
     const upstream = await timedFetch(ANTHROPIC_URL, {
       method: 'POST',
@@ -89,9 +90,14 @@ exports.handler = async function (event) {
     }
 
     const data = await upstream.json();
+    console.log('[anthropic-proxy] upstream ok:', Date.now() - t0, 'ms, tokens:', data.usage?.output_tokens || '?');
     return res(200, data);
 
   } catch (e) {
+    if (e.name === 'AbortError') {
+      console.error('[anthropic-proxy] upstream timeout after', Date.now() - t0, 'ms');
+      return res(504, { error: 'Upstream timeout' });
+    }
     console.error('[anthropic-proxy] fetch failed:', e.message);
     return res(502, { error: 'Upstream request failed' });
   }
