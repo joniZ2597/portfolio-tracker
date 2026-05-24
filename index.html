@@ -1585,7 +1585,7 @@ function parseJSON(raw) {
   const end   = clean.lastIndexOf('}');
   if (start === -1) { console.warn('[PT] parseJSON: no { found'); return { results: [] }; }
   let jsonStr = end > start ? clean.slice(start, end + 1) : clean.slice(start);
-  try { return JSON.parse(jsonStr); } catch(e1) {}
+  try { return JSON.parse(jsonStr); } catch(e1) { console.warn('[PT] parseJSON e1:', e1.message); }
   try { return JSON.parse(repairJSON(jsonStr)); } catch(e2) {}
   console.warn('[PT] parseJSON: falling back to per-ticker extraction');
   const items = [];
@@ -1719,7 +1719,7 @@ Tickers: ${batch.join(',')}`;
   const response = await fetch('/.netlify/functions/anthropic-proxy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1000, system: system, messages: [{ role: 'user', content: user }, { role: 'assistant', content: '{' }] })
+    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1500, system: system, messages: [{ role: 'user', content: user }, { role: 'assistant', content: '{' }] })
   });
   if (!response.ok) { const err = await response.json(); throw new Error('Anthropic: ' + (err.error?.message || 'API error')); }
   const data = await response.json();
