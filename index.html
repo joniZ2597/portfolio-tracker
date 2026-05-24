@@ -71,15 +71,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .chip-x{background:none;border:none;color:var(--text3);cursor:pointer;font-size:11px;line-height:1}
 .chip-x:hover{color:var(--red2)}
 
-/* Config */
-.sb-config{padding:8px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
-.cfg-row{display:flex;align-items:center;gap:5px;padding:3px 0}
-.cfg-lbl{font-family:var(--mono);font-size:7px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;min-width:38px}
-.cfg-inp{background:transparent;border:none;outline:none;color:var(--text2);font-family:var(--mono);font-size:8px;flex:1;min-width:0}
-.cfg-inp::placeholder{color:var(--border2)}
-.btn-cfg{font-family:var(--mono);font-size:7px;color:var(--cyan2);background:none;border:1px solid rgba(34,211,238,.18);border-radius:1px;padding:1px 5px;cursor:pointer}
-.cfg-st{font-family:var(--mono);font-size:7px;color:var(--green2)}
-
 /* Run */
 .sb-run{padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
 .btn-run{width:100%;font-family:var(--mono);font-size:10px;font-weight:700;background:var(--blue);color:#fff;border:none;border-radius:3px;padding:9px;cursor:pointer;letter-spacing:1px;text-transform:uppercase}
@@ -471,7 +462,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 #appToast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
 /* Hide legacy chip/config UI */
-.sb-chips,.sb-config,.chip{display:none!important}
+.sb-chips,.chip{display:none!important}
 /* Keep legacy sb-header hidden by overriding to 0 height once replaced */
 .sb-header-legacy{display:none!important}
 
@@ -598,27 +589,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 
     <!-- Legacy hidden elements preserved for init() compatibility -->
     <div class="sb-chips" id="tickerChips" style="display:none"></div>
-    <div class="sb-config" style="display:none">
-      <div class="cfg-row">
-        <span class="cfg-lbl">ANT</span>
-        <input class="cfg-inp" type="password" id="apiKey" placeholder="sk-ant-..."/>
-        <button class="btn-cfg" onclick="saveKey()">SAVE</button>
-        <span class="cfg-st" id="keyStatus"></span>
-      </div>
-      <div class="cfg-row">
-        <span class="cfg-lbl">PPLX</span>
-        <input class="cfg-inp" type="password" id="pplxKey" placeholder="pplx-..."/>
-        <button class="btn-cfg" onclick="savePplxKey()">SAVE</button>
-        <span class="cfg-st" id="pplxKeyStatus"></span>
-      </div>
-      <div class="cfg-row">
-        <span class="cfg-lbl">AV</span>
-        <input class="cfg-inp" type="password" id="avKey" placeholder="AV key..."/>
-        <button class="btn-cfg" onclick="saveAvKey()">SAVE</button>
-        <span class="cfg-st" id="avKeyStatus"></span>
-      </div>
-    </div>
-
     <!-- Legacy MSE footer elements — hidden in Phase 2a, kept for JS compat -->
     <div class="sb-footer" style="display:none">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
@@ -1145,15 +1115,8 @@ Object.defineProperty(window, 'tickers', {
   configurable: true,
 });
 let results = JSON.parse(localStorage.getItem('pt_results') || '[]');
-let apiKey = localStorage.getItem('pt_apikey') || '';
-let pplxKey = localStorage.getItem('pt_pplxkey') || '';
-// Phase 1: fetchPerplexityContext routes through /.netlify/functions/perplexity-proxy.
-// pplxKey stays in localStorage (unused for context calls) until Phase 4 cleanup.
-const PPLX_SERVER_MANAGED = true;
-const ANTHROPIC_SERVER_MANAGED = true; // Phase 2: Anthropic calls route through /.netlify/functions/anthropic-proxy.
-// apiKey stays in localStorage (unused for calls) until Phase 4 cleanup.
-const AV_SERVER_MANAGED = true; // Phase 3: Alpha Vantage calls route through /.netlify/functions/av-proxy.
-// avKey stays in localStorage (unused for calls) until Phase 4 cleanup.
+// Phase 4: remove obsolete client-side secret keys (idempotent, one-time)
+['pt_apikey', 'pt_pplxkey', 'pt_avkey'].forEach(function(k) { localStorage.removeItem(k); });
 
 // ────────────────────────────────────── STOCK DATA LAYER ──────────────────────────────────────
 
@@ -1216,13 +1179,6 @@ async function fetchYahooChart(symbol, interval, range, timeoutMs = 10000) {
     }
   }
   throw new Error('Yahoo: all proxies failed for ' + symbol);
-}
-
-function saveAvKey() {
-  avKey = document.getElementById('avKey').value.trim();
-  localStorage.setItem('pt_avkey', avKey);
-  document.getElementById('avKeyStatus').textContent = '✓ שמור';
-  document.getElementById('avKeyStatus').style.color = 'var(--green)';
 }
 
 // Validate a stock data object → returns true if all required fields present
@@ -1392,33 +1348,6 @@ function formatStockContext(stockMap) {
 
 
 // ── FULL ANALYSIS PIPELINE ──────────────────────────────────────────────────
-
-let avKey = localStorage.getItem('pt_avkey') || '';
-
-function saveKey() {
-  const val = document.getElementById('apiKey').value.trim();
-  apiKey = val;
-  localStorage.setItem('pt_apikey', val);
-  document.getElementById('keyStatus').textContent = val ? '✓ שמור' : '⚠ הכנס key';
-  document.getElementById('keyStatus').style.color = val ? 'var(--green)' : 'orange';
-  checkAndShowKeyWarn();
-}
-
-function savePplxKey() {
-  pplxKey = document.getElementById('pplxKey').value.trim();
-  localStorage.setItem('pt_pplxkey', pplxKey);
-  document.getElementById('pplxKeyStatus').textContent = '✓ שמור';
-  document.getElementById('pplxKeyStatus').style.color = 'var(--green)';
-  checkAndShowKeyWarn();
-}
-
-function saveAvKey() {
-  avKey = document.getElementById('avKey').value.trim();
-  localStorage.setItem('pt_avkey', avKey);
-  document.getElementById('avKeyStatus').textContent = '✓ שמור';
-  document.getElementById('avKeyStatus').style.color = 'var(--green)';
-  checkAndShowKeyWarn();
-}
 
 function addTicker() {
   const inp = document.getElementById('tickerInput');
@@ -1787,17 +1716,9 @@ Tickers: ${batch.join(',')}`;
 
   console.log('[PT] Anthropic user prompt length:', user.length);
 
-  // ANTHROPIC_SERVER_MANAGED = true  → proxy (ANTHROPIC_API_KEY never sent from browser)
-  // ANTHROPIC_SERVER_MANAGED = false → direct browser call (rollback path, requires pt_apikey)
-  const _antUrl = ANTHROPIC_SERVER_MANAGED
-    ? '/.netlify/functions/anthropic-proxy'
-    : 'https://api.anthropic.com/v1/messages';
-  const _antHeaders = ANTHROPIC_SERVER_MANAGED
-    ? { 'Content-Type': 'application/json' }
-    : { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' };
-  const response = await fetch(_antUrl, {
+  const response = await fetch('/.netlify/functions/anthropic-proxy', {
     method: 'POST',
-    headers: _antHeaders,
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1000, system: system, messages: [{ role: 'user', content: user }, { role: 'assistant', content: '{' }] })
   });
   if (!response.ok) { const err = await response.json(); throw new Error('Anthropic: ' + (err.error?.message || 'API error')); }
@@ -1916,44 +1837,33 @@ async function analyzeChunk(batch, today) {
   });
   const stockContext = formatStockContext(stockData);
 
-  if ((ANTHROPIC_SERVER_MANAGED || apiKey) && (PPLX_SERVER_MANAGED || pplxKey)) {
-    // Per-ticker isolation: call Perplexity once per ticker, never batch
-    for (const sym of batch) {
-      try {
-        const raw = await fetchPerplexityContext([sym]); // single ticker only
-        const parsed = parsePerplexityContext(raw);
-        // Merge into pplxData — only under the correct ticker key
-        if (parsed[sym]) {
-          pplxData[sym] = parsed[sym];
-          console.log(`[PT] Perplexity OK for ${sym}: ${parsed[sym].analystActions?.length || 0} analyst actions`);
-        } else if (parsed['__raw__']) {
-          // Fallback: tag raw context under the correct ticker
-          pplxData[sym] = { ...parsed['__raw__'], _ticker: sym };
-          console.log(`[PT] Perplexity raw fallback for ${sym}`);
-        }
-      } catch(e) { console.warn(`[PT] Perplexity failed for ${sym}:`, e.message); }
-    }
-    console.log(`[PT] Perplexity parsed tickers: ${Object.keys(pplxData).join(',') || 'none'}`);
-
-    // Debug: console only — never expose to UI
-    console.log('[PT] stockContext length:', stockContext.length);
-    console.log('[PT] pplxData keys:', Object.keys(pplxData).join(','));
-
+  // Per-ticker isolation: call Perplexity once per ticker, never batch
+  for (const sym of batch) {
     try {
-      rawText = await fetchAnthropicAnalysis(batch, today, stockContext + '\n%%NEWS_CONTEXT_START%%\n' + JSON.stringify(pplxData));
-    } catch (e) {
-      _anthropicError = e;
-      console.warn(`[PT] Anthropic failed for ${batch[0]}, using market-data fallback:`, e.message);
-    }
-  } else if (ANTHROPIC_SERVER_MANAGED || apiKey) {
-    try {
-      rawText = await fetchAnthropicAnalysis(batch, today, stockContext);
-    } catch (e) {
-      _anthropicError = e;
-      console.warn(`[PT] Anthropic failed for ${batch[0]}, using market-data fallback:`, e.message);
-    }
-  } else if (PPLX_SERVER_MANAGED || pplxKey) {
-    rawText = await fetchPerplexityAnalysis(batch, today, stockContext);
+      const raw = await fetchPerplexityContext([sym]); // single ticker only
+      const parsed = parsePerplexityContext(raw);
+      // Merge into pplxData — only under the correct ticker key
+      if (parsed[sym]) {
+        pplxData[sym] = parsed[sym];
+        console.log(`[PT] Perplexity OK for ${sym}: ${parsed[sym].analystActions?.length || 0} analyst actions`);
+      } else if (parsed['__raw__']) {
+        // Fallback: tag raw context under the correct ticker
+        pplxData[sym] = { ...parsed['__raw__'], _ticker: sym };
+        console.log(`[PT] Perplexity raw fallback for ${sym}`);
+      }
+    } catch(e) { console.warn(`[PT] Perplexity failed for ${sym}:`, e.message); }
+  }
+  console.log(`[PT] Perplexity parsed tickers: ${Object.keys(pplxData).join(',') || 'none'}`);
+
+  // Debug: console only — never expose to UI
+  console.log('[PT] stockContext length:', stockContext.length);
+  console.log('[PT] pplxData keys:', Object.keys(pplxData).join(','));
+
+  try {
+    rawText = await fetchAnthropicAnalysis(batch, today, stockContext + '\n%%NEWS_CONTEXT_START%%\n' + JSON.stringify(pplxData));
+  } catch (e) {
+    _anthropicError = e;
+    console.warn(`[PT] Anthropic failed for ${batch[0]}, using market-data fallback:`, e.message);
   }
 
   console.log('[PT] Claude raw response length:', rawText.length);
@@ -1997,7 +1907,7 @@ async function analyzeChunk(batch, today) {
     const mkt = stockData[item.ticker];
     return mkt ? { ...item, _changePct: mkt.change_percent } : item;
   });
-  return enforceScoreConsistency(resultsWithPct, (PPLX_SERVER_MANAGED || pplxKey) ? JSON.stringify(pplxData) : '');
+  return enforceScoreConsistency(resultsWithPct, JSON.stringify(pplxData));
 }
 
 // ── renderResults ────────────────────────────────────────────────────────────
@@ -3040,7 +2950,6 @@ async function runAnalysis() {
   _analysisRunning   = true;
   _cancelRequested   = false;
   _currentScanTicker = null;
-  if (!apiKey && !(PPLX_SERVER_MANAGED || pplxKey)) { _analysisRunning = false; showError('נא להכניס לפחות מפתח API אחד (Anthropic או Perplexity)'); return; }
   const scanSymbols = getScanSymbols();
   if (scanSymbols.length === 0) { _analysisRunning = false; showError('No tickers checked for scan. Check at least one ticker.'); return; }
 
@@ -3222,54 +3131,13 @@ function _hideKeyWarn() {
 }
 
 function checkAndShowKeyWarn() {
-  _hideKeyWarn();
-  const w = document.getElementById('key-warn');
-  if (!w) return;
-
-  const lines = []; // { text, soft }
-  // hasPplx: true when Perplexity is server-managed (PPLX_SERVER_MANAGED) or key is saved locally
-  const hasPplx = PPLX_SERVER_MANAGED || !!pplxKey;
-  // hasAnthropic: true when Anthropic is server-managed (ANTHROPIC_SERVER_MANAGED) or key is saved locally
-  const hasAnthropic = ANTHROPIC_SERVER_MANAGED || !!apiKey;
-
-  if (!hasAnthropic && !hasPplx) {
-    lines.push({ text: 'No AI keys configured — scan cannot run until at least one AI key is added.', soft: false });
-  } else if (!hasAnthropic) {
-    lines.push({ text: 'Anthropic key missing — scan will use Perplexity only.', soft: false });
-  } else if (!hasPplx) {
-    lines.push({ text: 'Perplexity key missing — scan will run without news context.', soft: false });
-  }
-
-  // AV soft note: suppressed when AV is server-managed; otherwise shown when both AI channels are available
-  if (!AV_SERVER_MANAGED && !avKey && hasAnthropic && hasPplx) {
-    lines.push({ text: 'Alpha Vantage key missing — Yahoo is the only market data source.', soft: true });
-  }
-
-  if (lines.length === 0) return;
-
-  lines.forEach(function(item) {
-    const row = document.createElement('div');
-    row.className = 'key-warn-line' + (item.soft ? ' soft' : '');
-    const icon = document.createElement('span');
-    icon.className = 'key-warn-icon';
-    icon.textContent = item.soft ? '·' : '⚠';
-    const txt = document.createElement('span');
-    txt.textContent = item.text;
-    row.appendChild(icon);
-    row.appendChild(txt);
-    w.appendChild(row);
-  });
-  w.style.display = 'flex';
+  _hideKeyWarn(); // all services are server-managed — no key warnings needed
 }
 
 // ── init ──────────────────────────────────────────────────────────────────────
 function init() {
   // Phase 1: load + normalize watchlist from localStorage on startup
   loadWatchlist();
-  // Keys still read from localStorage; inputs live in hidden .sb-config (Phase 2a)
-  if (apiKey) { const k = document.getElementById('apiKey'); if(k) { k.value = apiKey; } const s = document.getElementById('keyStatus'); if(s){s.textContent='✓';s.style.color='var(--green)';} }
-  if (pplxKey) { const k = document.getElementById('pplxKey'); if(k) { k.value = pplxKey; } const s = document.getElementById('pplxKeyStatus'); if(s){s.textContent='✓';s.style.color='var(--green)';} }
-  if (avKey)   { const k = document.getElementById('avKey');   if(k) { k.value = avKey;   } const s = document.getElementById('avKeyStatus');   if(s){s.textContent='✓';s.style.color='var(--green)';} }
   // Show missing key warning on startup
   checkAndShowKeyWarn();
   // Phase 2a: render sidebar rows on load (before any scan)
@@ -3565,7 +3433,7 @@ async function checkAllApis() {
       <div class="api-info-icon">ℹ</div>
       <div>
         <div class="api-info-title">About API Status</div>
-        <div class="api-info-text">This section lets you verify all data providers are working correctly. Each check sends a minimal test request. If an API fails, enter the correct key in the sidebar and re-check.</div>
+        <div class="api-info-text">This section lets you verify all data providers are working correctly. Each check sends a minimal test request. All API keys are managed server-side.</div>
       </div>
     </div>
   </div>
