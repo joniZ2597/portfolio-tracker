@@ -300,6 +300,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .mp-action-label{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--blue2);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:5px}
 .mp-action-text{font-size:15px;font-weight:600;color:var(--text);line-height:1.5}
 .mp-action-time{font-family:var(--mono);font-size:9px;color:var(--text3);white-space:nowrap}
+.mp-act-row{display:flex;align-items:baseline;gap:8px;padding:2px 0}
+.mp-act-lbl{font-family:var(--mono);font-size:9px;color:var(--text3);min-width:90px;flex-shrink:0;text-transform:uppercase;letter-spacing:.5px}
+.mp-act-val{font-family:var(--mono);font-size:11px;color:var(--text)}
+.mp-act-conflict{margin-top:4px;padding-top:4px;border-top:1px solid var(--border)}
 
 /* Deep dive */
 .mp-dd-bar{padding:10px 22px;border-top:1px solid var(--border);background:rgba(0,0,0,.15)}
@@ -720,6 +724,61 @@ function computeATHDistance(candles, currentPrice) {
   const ath = Math.max(...candles.map(c => c.high || c.close));
   if (ath === 0) return null;
   return computePctDiff(currentPrice, ath); // negative = below ATH
+}
+
+// ── Phase 6A-1: Deterministic technical setup classification ──────────────────
+/**
+ * Classify the chart setup from a computeTechnicalSnapshot snap object.
+ * Returns one of 8 setup state strings, or 'unknown' if data is insufficient.
+ * Rules are ordered most-specific → least-specific.
+ */
+function classifyTechnicalSetup(snap) {
+  const { pct20, pct50, pct150, athDist } = snap || {};
+  // Require at least pct20 + pct50 for any non-unknown classification
+  if (pct20 == null || pct50 == null) return 'unknown';
+  // extended_near_ath: price >10% above MA20 AND within 5% of 1Y high
+  if (athDist != null && athDist > -5 && pct20 > 10)
+    return 'extended_near_ath';
+  // healthy_uptrend_near_ath: above MA20+MA50, within 8% of ATH
+  if (athDist != null && athDist > -8 && pct20 > 2 && pct50 > 0)
+    return 'healthy_uptrend_near_ath';
+  // healthy_uptrend: above all three key MAs
+  if (pct150 != null && pct20 > 0 && pct50 > 0 && pct150 > 0)
+    return 'healthy_uptrend';
+  // support_test: below MA20, MA50 within ±3% (testing support), above MA150
+  // More specific than pullback_in_uptrend — must be evaluated first
+  if (pct150 != null && pct20 < 0 && pct50 >= -3 && pct50 <= 2 && pct150 > 0)
+    return 'support_test';
+  // pullback_in_uptrend: below MA20 but clearly above MA50 and MA150
+  if (pct150 != null && pct20 < 0 && pct50 > 0 && pct150 > 0)
+    return 'pullback_in_uptrend';
+  // breakdown_risk: below MA50 by >3% but MA150 still nearby
+  if (pct150 != null && pct50 < -3 && pct150 >= -5 && pct150 <= 2)
+    return 'breakdown_risk';
+  // below_key_mas: below MA20, MA50, and MA150 all
+  if (pct150 != null && pct20 < 0 && pct50 < 0 && pct150 < 0)
+    return 'below_key_mas';
+  return 'unknown';
+}
+
+/**
+ * Build a compact plain-text snapshot block for injection into the Anthropic prompt.
+ * Returns empty string if snap has no data.
+ */
+function buildTechSnapshotBlock(sym, snap, setupState) {
+  const s = snap || {};
+  if (s.pct20 == null && s.pct50 == null) return '';
+  const fmt  = v => v != null ? (v >= 0 ? '+' : '') + v.toFixed(2) + '%' : '—';
+  const fmtV = v => v != null ? v.toFixed(2) + 'x' : '—';
+  const etfLabel = s.sectorEtf ? ' vs ' + s.sectorEtf + ': ' + fmt(s.rsSector) : '';
+  return (
+    `${sym} [setup: ${setupState}]\n` +
+    `  MA20: ${s.sma20 != null ? '$' + s.sma20.toFixed(2) : '—'} (${fmt(s.pct20)})` +
+      `   MA50: ${s.sma50 != null ? '$' + s.sma50.toFixed(2) : '—'} (${fmt(s.pct50)})\n` +
+    `  MA150: ${s.sma150 != null ? '$' + s.sma150.toFixed(2) : '—'} (${fmt(s.pct150)})\n` +
+    `  ATH Dist: ${fmt(s.athDist)}   Volume vs 20D avg: ${fmtV(s.volRatio)}\n` +
+    `  RS vs SPY (3M): ${fmt(s.rsSPY)}   RS vs QQQ (3M): ${fmt(s.rsQQQ)}${etfLabel}\n`
+  );
 }
 
 /**
@@ -1599,7 +1658,7 @@ function parseJSON(raw) {
 }
 
 // ── Anthropic analysis ───────────────────────────────────────────────────────
-async function fetchAnthropicAnalysis(batch, today, context = '') {
+async function fetchAnthropicAnalysis(batch, today, context = '', techSnapshotText = '') {
   let stockBlock = '', pplxData = {};
   if (context.includes('%%NEWS_CONTEXT_START%%')) {
     const parts = context.split('%%NEWS_CONTEXT_START%%');
@@ -1662,6 +1721,20 @@ Classify the stock's current trend phase:
 - Thesis deterioration: verified negative catalyst (earnings miss, guidance cut, downgrade wave)
 State phase explicitly in ROOT CAUSE section.
 
+TECHNICAL SETUP GATING (mandatory when TECHNICAL SNAPSHOT is provided):
+The snapshot contains a deterministic setup classification from 1Y candle data.
+This gates the final action regardless of news bias:
+  extended_near_ath        → action: "hold_wait". Never Buy or Add. Price is too extended.
+  healthy_uptrend_near_ath → action: "hold_wait" or "add_on_pullback" only. Near ATH = no chase.
+  healthy_uptrend          → "hold", "add_on_pullback", or "add_on_breakout" acceptable.
+  pullback_in_uptrend      → "add_on_reclaim" or "add_on_pullback". State confirmation required.
+  support_test             → "add_on_pullback". Wait for bounce confirmation near support.
+  breakdown_risk           → "trim" or "avoid". No new positions.
+  below_key_mas            → "avoid". Watch only.
+  unknown                  → insufficient data. Do not fabricate action or entry zones.
+CONFLICT RULE: if news_bias is "bullish" AND setup is "extended_near_ath" or "below_key_mas",
+  set the conflict field to one sentence explaining the tension. Otherwise set conflict to null.
+
 RELATIVE STRENGTH CONTEXT:
 If price data includes sector ETF or index (QQQ, SOXX, XLE etc.) → compare performance.
 If not available → use [market-context]: "semiconductor sector broadly [direction] this week"
@@ -1706,11 +1779,11 @@ Summary MUST end: "Rating: Buy/Neutral/Sell | PT: $[consensus or single-verified
   const user = `VERIFIED PRICE DATA:
 ${dataSection}
 
-STRUCTURED RESEARCH (extracted facts — use for drivers):
+${techSnapshotText ? 'TECHNICAL SNAPSHOT (deterministic — computed from 1Y candles):\n' + techSnapshotText + '\n' : ''}STRUCTURED RESEARCH (extracted facts — use for drivers):
 ${researchByTicker}
 
 OUTPUT — raw JSON only, no fences:
-{"results":[{"ticker":"X","company_name":"Full Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"[Key Event]...[Root Cause]...[Price Context]...[Bull vs Bear]...[Actionable Take]...Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength","alerts":[{"type":"critical/normal","text":"specific alert"}],"news":["Primary: [driver]","Secondary: [driver]","Background: [context]"]}]}
+{"results":[{"ticker":"X","company_name":"Full Name","sentiment":"positive/negative/neutral","sentiment_score":0-100,"summary":"[Key Event]...[Root Cause]...[Price Context]...[Bull vs Bear]...[Actionable Take]...Rating: Buy/Neutral/Sell | PT: $X | Do not chase strength","news_bias":"bullish/neutral/bearish","technical_setup":"extended_near_ath/healthy_uptrend_near_ath/healthy_uptrend/pullback_in_uptrend/support_test/breakdown_risk/below_key_mas/unknown","conflict":"one sentence or null","action":"hold_wait/add_on_pullback/add_on_reclaim/add_on_breakout/trim/avoid/hold","entry_zone":"text or null","invalidation":"text or null","key_risk":"one sentence","alerts":[{"type":"critical/normal","text":"specific alert"}],"news":["Primary: [driver]","Secondary: [driver]","Background: [context]"]}]}
 
 Tickers: ${batch.join(',')}`;
 
@@ -1719,7 +1792,7 @@ Tickers: ${batch.join(',')}`;
   const response = await fetch('/.netlify/functions/anthropic-proxy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1500, system: system, messages: [{ role: 'user', content: user }, { role: 'assistant', content: '{' }] })
+    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1800, system: system, messages: [{ role: 'user', content: user }, { role: 'assistant', content: '{' }] })
   });
   if (!response.ok) { const err = await response.json(); throw new Error('Anthropic: ' + (err.error?.message || 'API error')); }
   const data = await response.json();
@@ -1769,6 +1842,10 @@ function orchestrate(claudeResults, pplxData, stockData) {
     const mkt  = stockData?.[sym];
     const pplx = pplxData?.[sym] || pplxData?.['__raw__'];
 
+    // Fix B: watchlist identity is authoritative — override AI-provided company_name
+    const _wlIdentity = findTicker(sym);
+    if (_wlIdentity?.name) item.company_name = _wlIdentity.name;
+
     if (mkt) { item._verifiedPrice = mkt.price; item._verifiedChangePct = mkt.change_percent; item._dataSource = mkt.source; }
 
     if (pplx?.analystActions?.length) {
@@ -1790,6 +1867,90 @@ function orchestrate(claudeResults, pplxData, stockData) {
     if (chg < -5 && item.sentiment_score > 60) { console.warn(`[PT] Orchestrate: score override ${sym} down ${chg}%`); item.sentiment_score = Math.min(item.sentiment_score, 45); item.sentiment = 'negative'; }
     if (chg > 5  && item.sentiment_score < 40) { console.warn(`[PT] Orchestrate: score override ${sym} up ${chg}%`);   item.sentiment_score = Math.max(item.sentiment_score, 55); item.sentiment = 'positive'; }
 
+    // Phase 6A-1: Technical setup clamp + audit trail
+    const _snap6a    = (_techCache[sym] && _techCache[sym].snap) ? _techCache[sym].snap : {};
+    const _setup6a   = classifyTechnicalSetup(_snap6a);
+    const _pplx6a    = pplxData?.[sym] || pplxData?.['__raw__'];
+    // Normalize AI fields that may arrive as the string "null" instead of actual null
+    ['conflict','entry_zone','invalidation','key_risk'].forEach(k => {
+      if (typeof item[k] === 'string' && item[k].trim().toLowerCase() === 'null') item[k] = null;
+    });
+    // Issue 1: deterministic setup is source of truth — overwrite AI-generated technical_setup
+    if (_setup6a && _setup6a !== 'unknown') item.technical_setup = _setup6a;
+    else item.technical_setup = item.technical_setup || 'unknown';
+    // Score clamp: extended_near_ath
+    if (_setup6a === 'extended_near_ath' && item.sentiment === 'positive' && item.sentiment_score > 62) {
+      console.warn(`[PT] Orchestrate: setup clamp ${sym} extended_near_ath → score ${item.sentiment_score} → 62`);
+      item.sentiment_score = 62;
+    }
+    // Issue 2a: extended_near_ath — gate action, conflict, key_risk
+    if (_setup6a === 'extended_near_ath') {
+      if (!item.action || item.action.startsWith('add_') || item.action === 'buy') {
+        console.warn(`[PT] Orchestrate: action override ${sym} extended_near_ath → hold_wait (was: ${item.action})`);
+        item.action = 'hold_wait';
+      }
+      if (!item.key_risk) item.key_risk = 'Chasing an extended move near highs.';
+      if (!item.conflict && (item.news_bias === 'bullish' || item.news_bias === 'positive' || item.sentiment === 'positive')) {
+        item.conflict = 'Bullish catalyst, but price is extended near highs; wait for pullback or consolidation.';
+      }
+    }
+    // Score clamp: below_key_mas
+    if (_setup6a === 'below_key_mas' && item.sentiment_score > 45) {
+      console.warn(`[PT] Orchestrate: setup clamp ${sym} below_key_mas → score ${item.sentiment_score} → 45`);
+      item.sentiment_score = 45;
+      item.sentiment = 'negative';
+    }
+    // Issue 2b: below_key_mas — gate action, sentiment, key_risk, conflict
+    if (_setup6a === 'below_key_mas') {
+      if (item.action !== 'avoid') {
+        console.warn(`[PT] Orchestrate: action override ${sym} below_key_mas → avoid (was: ${item.action})`);
+        item.action = 'avoid';
+      }
+      item.sentiment = 'negative';
+      if (!item.key_risk) item.key_risk = 'Price is below key moving averages; trend risk remains elevated.';
+      if (!item.conflict && (item.news_bias === 'bullish' || item.news_bias === 'positive')) {
+        item.conflict = 'Bullish catalyst conflicts with weak technical structure below key moving averages.';
+      }
+    }
+    // Attach structured audit trail — console + object level only in 6A-1
+    // (assembled after all overrides so finalDecision reflects corrected values)
+    item._auditTrail = {
+      dataCollected: {
+        price:         mkt?.price          ?? null,
+        dayChange:     mkt?.change_percent ?? null,
+        ma20:          _snap6a.sma20       ?? null,
+        ma50:          _snap6a.sma50       ?? null,
+        ma150:         _snap6a.sma150      ?? null,
+        pctAboveMA20:  _snap6a.pct20       ?? null,
+        pctAboveMA50:  _snap6a.pct50       ?? null,
+        pctAboveMA150: _snap6a.pct150      ?? null,
+        athDist:       _snap6a.athDist     ?? null,
+        rsSPY:         _snap6a.rsSPY       ?? null,
+        rsQQQ:         _snap6a.rsQQQ       ?? null,
+        rsSector:      _snap6a.rsSector    ?? null,
+        volRatio:      _snap6a.volRatio    ?? null,
+        catalysts:     _pplx6a?.bullishCatalysts ?? []
+      },
+      sourceTrace: {
+        marketData:        mkt?.source || 'unknown',
+        historicalCandles: 'market-data / yahoo-proxy / polygon / av-proxy (1Y)',
+        technicalFunction: 'computeTechnicalSnapshot()',
+        newsContext:       'perplexity-proxy / sonar-pro',
+        aiSynthesis:       'anthropic-proxy / claude-haiku-4-5-20251001'
+      },
+      interpretation: {
+        technicalSetup: _setup6a,
+        newsBias:       item.news_bias  || null,
+        conflict:       item.conflict   || null
+      },
+      finalDecision: {
+        action:       item.action       || null,
+        entryZone:    item.entry_zone   || null,
+        invalidation: item.invalidation || null,
+        keyRisk:      item.key_risk     || null
+      }
+    };
+    console.log(`[PT] auditTrail ${sym}:`, JSON.stringify(item._auditTrail));
     item._orchestrated = true;
     item._orchestratedAt = new Date().toISOString();
     return item;
@@ -1837,6 +1998,21 @@ async function analyzeChunk(batch, today) {
   });
   const stockContext = formatStockContext(stockData);
 
+  // Phase 6A-1: Compute technical snapshot before Anthropic call
+  // computeTechnicalSnapshot caches results in _techCache; failure is non-fatal
+  const _sym6a = batch[0];
+  const _wl6a  = findTicker(_sym6a);
+  let _techSnap6a    = {};
+  let _setupState6a  = 'unknown';
+  try {
+    _techSnap6a   = await computeTechnicalSnapshot(_sym6a, _wl6a?.sectorEtf || '', stockData[_sym6a]?.price || null);
+    _setupState6a = classifyTechnicalSetup(_techSnap6a);
+    console.log(`[PT] Tech setup for ${_sym6a}: ${_setupState6a}`);
+  } catch(e) {
+    console.warn(`[PT] computeTechnicalSnapshot failed for ${_sym6a} — continuing with unknown:`, e.message);
+  }
+  const _techSnapshotText6a = buildTechSnapshotBlock(_sym6a, _techSnap6a, _setupState6a);
+
   // Per-ticker isolation: call Perplexity once per ticker, never batch
   for (const sym of batch) {
     try {
@@ -1860,7 +2036,7 @@ async function analyzeChunk(batch, today) {
   console.log('[PT] pplxData keys:', Object.keys(pplxData).join(','));
 
   try {
-    rawText = await fetchAnthropicAnalysis(batch, today, stockContext + '\n%%NEWS_CONTEXT_START%%\n' + JSON.stringify(pplxData));
+    rawText = await fetchAnthropicAnalysis(batch, today, stockContext + '\n%%NEWS_CONTEXT_START%%\n' + JSON.stringify(pplxData), _techSnapshotText6a);
   } catch (e) {
     _anthropicError = e;
     console.warn(`[PT] Anthropic failed for ${batch[0]}, using market-data fallback:`, e.message);
@@ -1901,7 +2077,7 @@ async function analyzeChunk(batch, today) {
 
   const orchestrated = orchestrate(raw, pplxData, stockData);
 
-  window._lastRunState = { stockData, pplxData, runId: Date.now(), timestamp: new Date().toISOString() };
+  window._lastRunState = { stockData, pplxData, techSnap: _techSnap6a, setupState: _setupState6a, runId: Date.now(), timestamp: new Date().toISOString() };
 
   const resultsWithPct = orchestrated.map(item => {
     const mkt = stockData[item.ticker];
@@ -2369,7 +2545,7 @@ function renderWatchlistRows(scanResults) {
     const chgStr  = chg !== null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
     const chgCls  = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
     // Phase 1 schema: entry.name, entry.exchange, entry.sector, entry.sectorEtf
-    const name    = (res && res.company_name) || entry.name || '';
+    const name    = entry.name || (res && res.company_name) || '';
     const hint    = entry.sectorEtf || entry.sector || '';
     const sub     = name
       ? (hint ? name.slice(0,14) + ' · ' + hint : name.slice(0,22))
@@ -2597,7 +2773,7 @@ function renderMainPanel(item) {
 
   // Watchlist metadata — must be declared before refreshTechPanel call
   const wlEntry   = findTicker(item.ticker);
-  const dispName  = (item.company_name || (wlEntry && wlEntry.name) || '').trim();
+  const dispName  = ((wlEntry && wlEntry.name) || item.company_name || '').trim();
   const dispExch  = (wlEntry && wlEntry.exchange)  || '';
   const dispSect  = (wlEntry && wlEntry.sector)    || '';
   const dispEtf   = (wlEntry && wlEntry.sectorEtf) || '';
@@ -2697,6 +2873,8 @@ function renderMainPanel(item) {
   const chgPctStr = chg !== null ? `(${chgSign}${chg.toFixed(2)}%)` : '—';
   const chgDir    = chg !== null && chg < 0 ? '▼' : chg !== null && chg > 0 ? '▲' : '';
   const chgCls2   = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
+  // Phase 6A-1: escape AI-generated prose fields before HTML insertion
+  const _esc = s => s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : '';
 
   panel.innerHTML = `
     <!-- PULSE v1.1 TICKER HEADER -->
@@ -2870,8 +3048,25 @@ function renderMainPanel(item) {
 
     </div>
 
-    <!-- ACTIONABLE TAKE -->
-    ${actionable?`<div class="mp-action">
+    <!-- ACTIONABLE TAKE — structured (6A-1) when available, prose fallback otherwise -->
+    ${item.action ? `<div class="mp-action">
+      <div class="mp-action-left">
+        <div class="mp-action-icon">◎</div>
+        <div style="width:100%">
+          <div class="mp-action-label">${hasData ? 'ACTIONABLE TAKE' : 'RESEARCH-CONTEXT ANALYSIS — NO VERIFIED MARKET PRICE'}</div>
+          <div style="margin-top:6px">
+            ${item.news_bias     ? `<div class="mp-act-row"><span class="mp-act-lbl">Bias</span><span class="mp-act-val">${_esc(item.news_bias)}</span></div>` : ''}
+            ${item.technical_setup ? `<div class="mp-act-row"><span class="mp-act-lbl">Setup</span><span class="mp-act-val">${_esc(item.technical_setup).replace(/_/g,' ')}</span></div>` : ''}
+            ${item.action        ? `<div class="mp-act-row"><span class="mp-act-lbl">Action</span><span class="mp-act-val">${_esc(item.action).replace(/_/g,' ')}</span></div>` : ''}
+            ${item.entry_zone    ? `<div class="mp-act-row"><span class="mp-act-lbl">Entry Zone</span><span class="mp-act-val">${_esc(item.entry_zone)}</span></div>` : ''}
+            ${item.invalidation  ? `<div class="mp-act-row"><span class="mp-act-lbl">Invalidation</span><span class="mp-act-val">${_esc(item.invalidation)}</span></div>` : ''}
+            ${item.key_risk      ? `<div class="mp-act-row"><span class="mp-act-lbl">Key Risk</span><span class="mp-act-val">${_esc(item.key_risk)}</span></div>` : ''}
+            ${item.conflict      ? `<div class="mp-act-row mp-act-conflict"><span class="mp-act-lbl">⚠ Conflict</span><span class="mp-act-val" style="color:var(--yellow2)">${_esc(item.conflict)}</span></div>` : ''}
+          </div>
+        </div>
+      </div>
+      <div class="mp-action-time">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
+    </div>` : actionable ? `<div class="mp-action">
       <div class="mp-action-left">
         <div class="mp-action-icon">◎</div>
         <div>
@@ -2880,7 +3075,7 @@ function renderMainPanel(item) {
         </div>
       </div>
       <div class="mp-action-time">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
-    </div>`:''}
+    </div>` : ''}
 
   `; /* Deep Dive deferred to v1.2 — not rendered */
 }
