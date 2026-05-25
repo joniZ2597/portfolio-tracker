@@ -1842,6 +1842,10 @@ function orchestrate(claudeResults, pplxData, stockData) {
     const mkt  = stockData?.[sym];
     const pplx = pplxData?.[sym] || pplxData?.['__raw__'];
 
+    // Fix B: watchlist identity is authoritative — override AI-provided company_name
+    const _wlIdentity = findTicker(sym);
+    if (_wlIdentity?.name) item.company_name = _wlIdentity.name;
+
     if (mkt) { item._verifiedPrice = mkt.price; item._verifiedChangePct = mkt.change_percent; item._dataSource = mkt.source; }
 
     if (pplx?.analystActions?.length) {
@@ -2541,7 +2545,7 @@ function renderWatchlistRows(scanResults) {
     const chgStr  = chg !== null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
     const chgCls  = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
     // Phase 1 schema: entry.name, entry.exchange, entry.sector, entry.sectorEtf
-    const name    = (res && res.company_name) || entry.name || '';
+    const name    = entry.name || (res && res.company_name) || '';
     const hint    = entry.sectorEtf || entry.sector || '';
     const sub     = name
       ? (hint ? name.slice(0,14) + ' · ' + hint : name.slice(0,22))
@@ -2769,7 +2773,7 @@ function renderMainPanel(item) {
 
   // Watchlist metadata — must be declared before refreshTechPanel call
   const wlEntry   = findTicker(item.ticker);
-  const dispName  = (item.company_name || (wlEntry && wlEntry.name) || '').trim();
+  const dispName  = ((wlEntry && wlEntry.name) || item.company_name || '').trim();
   const dispExch  = (wlEntry && wlEntry.exchange)  || '';
   const dispSect  = (wlEntry && wlEntry.sector)    || '';
   const dispEtf   = (wlEntry && wlEntry.sectorEtf) || '';
