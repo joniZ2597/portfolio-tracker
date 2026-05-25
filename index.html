@@ -1878,8 +1878,8 @@ function orchestrate(claudeResults, pplxData, stockData) {
     // Issue 1: deterministic setup is source of truth — overwrite AI-generated technical_setup
     if (_setup6a && _setup6a !== 'unknown') item.technical_setup = _setup6a;
     else item.technical_setup = item.technical_setup || 'unknown';
-    // Score clamp: extended_near_ath
-    if (_setup6a === 'extended_near_ath' && item.sentiment === 'positive' && item.sentiment_score > 62) {
+    // Score clamp: extended_near_ath — use item.technical_setup (already overridden above) as reliable source
+    if (item.technical_setup === 'extended_near_ath' && item.sentiment_score > 62) {
       console.warn(`[PT] Orchestrate: setup clamp ${sym} extended_near_ath → score ${item.sentiment_score} → 62`);
       item.sentiment_score = 62;
     }
@@ -1969,6 +1969,7 @@ function enforceScoreConsistency(results, newsContext) {
     const score = item.sentiment_score || 50;
     const chgPct = item._changePct || 0;
     if (typeof chgPct === 'number' && chgPct < -3) { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (down day ${chgPct}%)`); return item; }
+    if (item.technical_setup === 'extended_near_ath') { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (extended_near_ath)`); return item; }
     if (bullishCount >= 2 && bearishCount === 0 && score < 65) { console.warn(`[PT-SCORE] ${item.ticker}: Tier1 boost ${score} → 72`); return { ...item, sentiment: 'positive', sentiment_score: 72 }; }
     return item;
   });
@@ -2745,16 +2746,9 @@ function renderMainPanel(item) {
   // of lower body panels that may still reference sc/sg (safe: not rendered in header)
   const hasCrit = (item.alerts||[]).some(a=>a.type==='critical');
 
-  // Trend
-  let phase='RANGE',phCls='neutral-v';
-  if(sl.includes('accumulation')){phase='UPTREND / ACCUMULATION';phCls='pos'}
-  else if(sl.includes('continuation')){phase='UPTREND';phCls='pos'}
-  else if(sl.includes('base formation')||sl.includes('basing')){phase='BASE FORMATION';phCls='neutral-v'}
-  else if(sl.includes('distribution')){phase='DISTRIBUTION';phCls='neg'}
-  else if(sl.includes('correction')||sl.includes('pullback')||sl.includes('profit-taking')){phase='CORRECTION';phCls='warn'}
-  else if(sl.includes('extended')){phase='EXTENDED';phCls='warn'}
-  else if(chg!==null&&chg<-3){phase='CORRECTION';phCls='warn'}
-  else if(chg!==null&&chg>3){phase='UPTREND';phCls='pos'}
+  // Timeframe Alignment — deterministic map from technical_setup (Phase 6A-3)
+  const _tfMap={extended_near_ath:['EXTENDED','warn'],healthy_uptrend_near_ath:['BULLISH','pos'],healthy_uptrend:['BULLISH','pos'],pullback_in_uptrend:['MIXED','warn'],support_test:['MIXED','warn'],breakdown_risk:['BEARISH','neg'],below_key_mas:['BEARISH','neg']};
+  const [phase,phCls]=_tfMap[item.technical_setup]||['NEUTRAL','neutral-v'];
 
   // State values
   const riskState = score>=65?'LOW RISK':score>=48?'MODERATE':score<=35?'HIGH RISK':'WATCH';
@@ -3036,7 +3030,7 @@ function renderMainPanel(item) {
         ${hasData ? `<div class="rr-table">
           <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val ${riskCls}">${riskState.replace(' RISK','')}</span></div>
           <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val ${score>=65?'pos':score>=48?'neutral-v':'neg'}">${score>=65?'HIGH':score>=48?'MODERATE':'LIMITED'}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase.includes('UP')||phase.includes('ACCUM')?'BULLISH':phase.includes('CORR')?'BEARISH':'NEUTRAL'}</span></div>
+          <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase}</span></div>
           <div class="rr-row"><span class="rr-lbl">Setup Quality</span><span class="rr-val">${score} / 100</span></div>
           <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
         </div>` : `<div class="rr-table">
