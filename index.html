@@ -240,8 +240,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .neutral-v{color:var(--text2)}
 
 /* Body grid */
-.mp-body{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:var(--border);border-bottom:1px solid var(--border)}
+.mp-body{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--border);border-bottom:1px solid var(--border)}
 .mp-panel{background:var(--card);padding:16px 18px}
+.mp-panel-wide{grid-column:1/-1}
 .mp-panel-title{font-family:var(--mono);font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
 
 /* MA table */
@@ -2918,9 +2919,9 @@ function renderMainPanel(item) {
     <!-- BODY PANELS -->
     <div class="mp-body">
 
-      <!-- TREND & MA STRUCTURE -->
+      <!-- TECHNICAL SETUP -->
       <div class="mp-panel">
-        <div class="mp-panel-title">TREND & MARKET STRUCTURE</div>
+        <div class="mp-panel-title">TECHNICAL SETUP</div>
         ${!hasData ? '<div class="unavail-row">No verified price data — MA levels unavailable</div>' :
           snap.hasMA20 === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
         `<div class="mp-ma-table">
@@ -2928,7 +2929,6 @@ function renderMainPanel(item) {
             ['MA 20',  fmtMA(snap.sma20),  fmtPct(snap.pct20),  maState(snap.pct20),  maLabel(snap.pct20),  snap.hasMA20],
             ['MA 50',  fmtMA(snap.sma50),  fmtPct(snap.pct50),  maState(snap.pct50),  maLabel(snap.pct50),  snap.hasMA50],
             ['MA 150', fmtMA(snap.sma150), fmtPct(snap.pct150), maState(snap.pct150), maLabel(snap.pct150), snap.hasMA150],
-            ['MA 200', fmtMA(snap.sma200), fmtPct(snap.pct200), maState(snap.pct200), maLabel(snap.pct200), snap.hasMA200],
           ].map(([lbl, smaVal, pctVal, cls, stateStr, avail]) => avail
             ? `<div class="ma-row">
                 <span class="ma-lbl">${lbl}</span>
@@ -2939,6 +2939,11 @@ function renderMainPanel(item) {
               </div>`
             : `<div class="ma-row"><span class="ma-lbl">${lbl}</span><span class="ma-val" style="color:var(--text3)">—</span><span class="ma-pct neutral-v">Insufficient history</span></div>`
           ).join('')}
+        </div>
+        <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
+          <div class="rr-row"><span class="rr-lbl">ATH Distance</span><span class="rr-val ${snap.hasATH ? (snap.athDist < -15 ? 'warn' : snap.athDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">${snap.hasATH ? fmtPct(snap.athDist) : '—'}</span></div>
+          <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase}</span></div>
+          <div class="rr-row"><span class="rr-lbl">Setup Quality</span><span class="rr-val">${score} / 100</span></div>
         </div>`}
       </div>
 
@@ -2966,16 +2971,12 @@ function renderMainPanel(item) {
                 </div>`
               : `<div class="rs-row"><span class="rs-lbl">${lbl}</span><span class="rs-val neutral-v" style="color:var(--text3)">RS unavailable</span></div>`;
           }).join('')}
-          <div class="rs-rank-row">
-            <span class="rs-rank-lbl">AI Analysis Score</span>
-            <span class="rs-rank-val">${item._aiUnavailable ? '<span style="color:var(--text3)">N/A — AI unavailable</span>' : score + ' <span style="color:var(--text3)">/ 100</span>'}</span>
-          </div>
         </div>`}
       </div>
 
-      <!-- VOLUME ANALYSIS -->
-      <div class="mp-panel">
-        <div class="mp-panel-title">VOLUME ANALYSIS</div>
+      <!-- VOLUME & RISK SIGNALS -->
+      <div class="mp-panel mp-panel-wide">
+        <div class="mp-panel-title">VOLUME & RISK SIGNALS</div>
         ${!hasData ? '<div class="unavail-row">No verified price data — volume metrics unavailable</div>' :
           snap.candleCount === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
         `<div class="vol-table">
@@ -2987,34 +2988,17 @@ function renderMainPanel(item) {
             </span>
           </div>
           <div class="vol-row"><span class="vol-lbl">Volume trend (AI)</span><span class="vol-metric"></span><span class="vol-state ${volCls}">${volChar}</span></div>
-          <div class="vol-row"><span class="vol-lbl">Distribution Days</span><span class="vol-metric" style="color:var(--text3)">—</span><span class="vol-state neutral-v">Requires computed scan</span></div>
-          <div class="vol-row"><span class="vol-lbl">Up Volume Ratio</span><span class="vol-metric" style="color:var(--text3)">—</span><span class="vol-state neutral-v">Requires computed scan</span></div>
         </div>`}
-      </div>
-
-      <!-- PRICE POSITIONING -->
-      <div class="mp-panel">
-        <div class="mp-panel-title">PRICE POSITIONING</div>
-        ${!hasData ? '<div class="unavail-row">No verified price data — positioning unavailable</div>' :
-          snap.candleCount === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
-        `<div class="pos-table">
-          <div class="pos-row">
-            <span class="pos-lbl">Distance from period ATH</span>
-            <span class="pos-val ${snap.hasATH ? (snap.athDist < -15 ? 'warn' : snap.athDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">
-              ${snap.hasATH ? fmtPct(snap.athDist) : '—'}
-            </span>
-          </div>
-          <div class="pos-row"><span class="pos-lbl">vs MA 20</span><span class="pos-val ${maCls(maState(snap.pct20))}">${fmtPct(snap.pct20)}</span></div>
-          <div class="pos-row"><span class="pos-lbl">vs MA 50</span><span class="pos-val ${maCls(maState(snap.pct50))}">${fmtPct(snap.pct50)}</span></div>
-          <div class="pos-row"><span class="pos-lbl">vs MA 150</span><span class="pos-val ${maCls(maState(snap.pct150))}">${fmtPct(snap.pct150)}</span></div>
-          <div class="pos-row"><span class="pos-lbl">vs MA 200</span><span class="pos-val ${maCls(maState(snap.pct200))}">${fmtPct(snap.pct200)}</span></div>
+        ${hasData ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
+          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val ${riskCls}">${riskState.replace(' RISK','')}</span></div>
+          <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val ${score>=65?'pos':score>=48?'neutral-v':'neg'}">${score>=65?'HIGH':score>=48?'MODERATE':'LIMITED'}</span></div>
+          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
+        </div>` : `<div class="rr-table" style="margin-top:8px">
+          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val neutral-v">Limited confidence</span></div>
+          <div class="rr-row"><span class="rr-lbl">Confidence</span><span class="rr-val warn">Research-only</span></div>
+          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
         </div>`}
-      </div>
-
-      <!-- CATALYSTS -->
-      <div class="mp-panel">
-        <div class="mp-panel-title">CATALYSTS</div>
-        <div class="cat-list">
+        <div class="cat-list" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
           ${catalysts.length ? catalysts.map(([,lbl,state,cls])=>`
           <div class="cat-row">
             <div class="cat-dot ${cls}"></div>
@@ -3022,22 +3006,6 @@ function renderMainPanel(item) {
             <span class="cat-state ${cls}">${state}</span>
           </div>`).join('') : `<div class="cat-row"><div class="cat-dot neutral-v"></div><span class="cat-lbl">No verified catalysts</span><span class="cat-state neutral-v">MONITORING</span></div>`}
         </div>
-      </div>
-
-      <!-- RISK / REWARD -->
-      <div class="mp-panel">
-        <div class="mp-panel-title">RISK / REWARD</div>
-        ${hasData ? `<div class="rr-table">
-          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val ${riskCls}">${riskState.replace(' RISK','')}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val ${score>=65?'pos':score>=48?'neutral-v':'neg'}">${score>=65?'HIGH':score>=48?'MODERATE':'LIMITED'}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Setup Quality</span><span class="rr-val">${score} / 100</span></div>
-          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
-        </div>` : `<div class="rr-table">
-          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val neutral-v">Limited confidence</span></div>
-          <div class="rr-row"><span class="rr-lbl">Confidence</span><span class="rr-val warn">Research-only</span></div>
-          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
-        </div>`}
       </div>
 
     </div>
