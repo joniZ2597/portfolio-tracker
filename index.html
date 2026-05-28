@@ -1961,6 +1961,22 @@ function orchestrate(claudeResults, pplxData, stockData) {
       else if (_bearPplx > 0 && _bullPplx === 0)  item._catalystDirection = 'bearish';
       else                                         item._catalystDirection = 'mixed';
     }
+    // 6B-3: Key Risk / Catalyst Contradiction Guard
+    // When structured bullish catalysts exist but Claude's key_risk denies catalyst existence,
+    // replace with a setup-aware deterministic fallback. Bearish/mixed/missing left untouched.
+    if (item._hasStructuredCatalysts &&
+        item._catalystDirection === 'bullish' &&
+        item._catalystDataMissing !== true &&
+        typeof item.key_risk === 'string' &&
+        /\b(no\s+(?:(?:verified|fundamental|identified)\s+){1,3}catalyst|lack\s+of\s+catalyst|absence\s+of\s+catalyst|missing\s+catalyst|without\s+catalyst)/i.test(item.key_risk)) {
+      const _krBefore = item.key_risk;
+      const _krFallback =
+        item.technical_setup === 'extended_near_ath' ? 'Chasing an extended move near highs.' :
+        item.technical_setup === 'below_key_mas'     ? 'Price is below key moving averages; trend risk remains elevated.' :
+                                                       'Follow-through risk despite confirmed catalysts.';
+      console.warn(`[PT] Orchestrate: key_risk catalyst-contradiction guard ${sym} → "${_krFallback}" (was: "${_krBefore}")`);
+      item.key_risk = _krFallback;
+    }
     item._auditTrail = {
       dataCollected: {
         price:         mkt?.price          ?? null,
