@@ -1539,15 +1539,22 @@ function parsePerplexityContext(raw) {
       if (target > 0 && target < 5000) analystActions.push({ bank: ptMatch[1], target, raw: ptMatch[0].slice(0, 80) });
     }
     const bullish = [], bearish = [];
+    // 6B-1: reject NONE/N/A/empty/dash values from catalyst arrays
+    const _isNoneValueLine = (line) => {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) return false;
+      const v = line.slice(colonIdx + 1).trim();
+      return !v || /^(NONE|N\/?A|-|—)(\s|—|$)/i.test(v);
+    };
     currentLines.forEach(l => {
       const ll = l.toLowerCase();
       if (ll.includes('bullish') || ll.includes('beat') || ll.includes('strong demand') || ll.includes('ai demand') || ll.includes('hbm') || ll.includes('upside')) {
         const clean = l.replace(/^[-*•#>\s]+/, '').trim();
-        if (clean.length > 10) bullish.push(clean.slice(0, 100));
+        if (clean.length > 10 && !_isNoneValueLine(clean)) bullish.push(clean.slice(0, 100));
       }
       if (ll.includes('bearish') || ll.includes('risk') || ll.includes('pressure') || ll.includes('declining') || ll.includes('downside')) {
         const clean = l.replace(/^[-*•#>\s]+/, '').trim();
-        if (clean.length > 10) bearish.push(clean.slice(0, 100));
+        if (clean.length > 10 && !_isNoneValueLine(clean)) bearish.push(clean.slice(0, 100));
       }
     });
     // Extract revision direction
@@ -1570,7 +1577,16 @@ function parsePerplexityContext(raw) {
       dataFreshness,
       earnings
     };
-    console.log(`[PT] Parsed ${currentTicker}: ${analystActions.length} analyst actions, ${bullish.length} bullish`);
+    // 6B-1: flag Perplexity responses that succeeded but contain no useful catalyst/news data
+    const _isNoneFieldVal = v => !v || /^(NONE|N\/?A|-|—|unknown)\b/i.test(String(v).trim());
+    result[currentTicker]._allNone = (
+      result[currentTicker].analystActions.length === 0 &&
+      result[currentTicker].bullishCatalysts.length === 0 &&
+      result[currentTicker].bearishCatalysts.length === 0 &&
+      _isNoneFieldVal(earnings) &&
+      _isNoneFieldVal(revDir)
+    );
+    console.log(`[PT] Parsed ${currentTicker}: ${analystActions.length} analyst actions, ${bullish.length} bullish${result[currentTicker]._allNone ? ' [allNone]' : ''}`);
     if (analystActions.length) console.log('[PT] Analyst actions:', JSON.stringify(analystActions));
   };
 
@@ -1590,6 +1606,8 @@ function parsePerplexityContext(raw) {
       const t = parseFloat(m2[2].replace(',', ''));
       if (t > 0 && t < 5000) result['__raw__'].analystActions.push({ bank: m2[1], target: t, raw: m2[0].slice(0, 80) });
     }
+    // 6B-1: __raw__ is allNone when fallback extracted no analyst PTs
+    result['__raw__']._allNone = result['__raw__'].analystActions.length === 0;
   }
   return result;
 }
@@ -1597,6 +1615,9 @@ function parsePerplexityContext(raw) {
 function formatNewsContext(pplxData, symbol) {
   const d = pplxData[symbol] || pplxData['__raw__'];
   if (!d) return `No research data for ${symbol}.`;
+  // 6B-1: surface upstream state explicitly to Anthropic instead of an empty context
+  if (d._unavailable) return `No research data for ${symbol} — upstream Perplexity unavailable.`;
+  if (d._allNone)     return `No catalyst, analyst, earnings, or revision data returned for ${symbol}.`;
   const lines = [];
   // Analyst actions with freshness context
   if (d.analystActions?.length) {
@@ -1923,6 +1944,8 @@ function orchestrate(claudeResults, pplxData, stockData) {
     }
     // Attach structured audit trail — console + object level only in 6A-1
     // (assembled after all overrides so finalDecision reflects corrected values)
+    // 6B-1: per-item flag so render layer can pick the right catalyst fallback wording
+    item._catalystDataMissing = !!(_pplx6a && (_pplx6a._allNone || _pplx6a._unavailable));
     item._auditTrail = {
       dataCollected: {
         price:         mkt?.price          ?? null,
@@ -1944,7 +1967,12 @@ function orchestrate(claudeResults, pplxData, stockData) {
         marketData:        mkt?.source || 'unknown',
         historicalCandles: 'market-data / yahoo-proxy / polygon / av-proxy (1Y)',
         technicalFunction: 'computeTechnicalSnapshot()',
-        newsContext:       'perplexity-proxy / sonar-pro',
+        // 6B-1: tri-state Perplexity source label
+        newsContext:       _pplx6a?._unavailable
+                             ? 'perplexity-proxy / unavailable'
+                             : _pplx6a?._allNone
+                               ? 'perplexity-proxy / no catalyst data'
+                               : 'perplexity-proxy / sonar-pro',
         aiSynthesis:       'anthropic-proxy / claude-haiku-4-5-20251001'
       },
       interpretation: {
@@ -2037,7 +2065,11 @@ async function analyzeChunk(batch, today) {
         pplxData[sym] = { ...parsed['__raw__'], _ticker: sym };
         console.log(`[PT] Perplexity raw fallback for ${sym}`);
       }
-    } catch(e) { console.warn(`[PT] Perplexity failed for ${sym}:`, e.message); }
+    } catch(e) {
+      console.warn(`[PT] Perplexity failed for ${sym}:`, e.message);
+      // 6B-1: mark ticker as upstream-unavailable so downstream can distinguish from all-NONE
+      pplxData[sym] = { _unavailable: true, _error: e.message, analystActions: [], bullishCatalysts: [], bearishCatalysts: [] };
+    }
   }
   console.log(`[PT] Perplexity parsed tickers: ${Object.keys(pplxData).join(',') || 'none'}`);
 
@@ -3012,7 +3044,9 @@ function renderMainPanel(item) {
             <div class="cat-dot ${cls}"></div>
             <span class="cat-lbl">${lbl}</span>
             <span class="cat-state ${cls}">${state}</span>
-          </div>`).join('') : `<div class="cat-row"><div class="cat-dot neutral-v"></div><span class="cat-lbl">No verified catalysts</span><span class="cat-state neutral-v">MONITORING</span></div>`}
+          </div>`).join('') : item._catalystDataMissing
+            ? `<div class="cat-row"><div class="cat-dot warn"></div><span class="cat-lbl">No catalyst data returned</span><span class="cat-state warn">PERPLEXITY NONE</span></div>`
+            : `<div class="cat-row"><div class="cat-dot neutral-v"></div><span class="cat-lbl">No verified catalysts</span><span class="cat-state neutral-v">MONITORING</span></div>`}
         </div>
       </div>
 
@@ -3056,7 +3090,7 @@ function renderMainPanel(item) {
         <span class="src-trace-sep">·</span>
         <span class="src-trace-chip">MA / RS: <span class="src-trace-val ${!hasData || snap.candleCount === undefined ? 'neutral-v' : snap.hasMA20 && snap.rsSPY !== null ? 'pos' : snap.hasMA20 ? 'warn' : 'neg'}">${!hasData || snap.candleCount === undefined ? '—' : snap.hasMA20 && snap.rsSPY !== null ? 'computed' : snap.hasMA20 ? 'MA only' : 'unavailable'}</span></span>
         <span class="src-trace-sep">·</span>
-        <span class="src-trace-chip">News: <span class="src-trace-val neutral-v">${item._auditTrail?.sourceTrace?.newsContext ? item._auditTrail.sourceTrace.newsContext.replace('perplexity-proxy / ', 'Perplexity / ') : '—'}</span></span>
+        <span class="src-trace-chip">News: <span class="src-trace-val ${item._catalystDataMissing ? 'warn' : 'neutral-v'}">${item._auditTrail?.sourceTrace?.newsContext ? item._auditTrail.sourceTrace.newsContext.replace('perplexity-proxy / ', 'Perplexity / ') : '—'}</span></span>
         <span class="src-trace-sep">·</span>
         <span class="src-trace-chip">AI: <span class="src-trace-val ${item._aiUnavailable ? 'neg' : 'neutral-v'}">${item._aiUnavailable ? 'unavailable' : (item._auditTrail?.sourceTrace?.aiSynthesis || '—').replace('anthropic-proxy / ', '').replace('claude-haiku-4-5-20251001', 'claude-haiku-4-5')}</span></span>
         <span class="src-trace-sep">·</span>
