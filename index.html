@@ -306,6 +306,14 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .mp-act-val{font-family:var(--mono);font-size:11px;color:var(--text)}
 .mp-act-conflict{margin-top:4px;padding-top:4px;border-top:1px solid var(--border)}
 
+/* Source trace footer */
+.src-trace{display:flex;align-items:center;gap:12px;padding:6px 22px;border-top:1px solid var(--border);background:rgba(0,0,0,.08);flex-wrap:wrap}
+.src-trace-hdr{font-family:var(--mono);font-size:8px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;white-space:nowrap;flex-shrink:0}
+.src-trace-chips{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.src-trace-chip{font-family:var(--mono);font-size:9px;color:var(--text3)}
+.src-trace-val{font-weight:700}
+.src-trace-sep{color:var(--border2)}
+
 /* Deep dive */
 .mp-dd-bar{padding:10px 22px;border-top:1px solid var(--border);background:rgba(0,0,0,.15)}
 .mp-dd-btn{font-family:var(--mono);font-size:9px;font-weight:500;background:none;border:1px solid var(--border2);border-radius:2px;color:var(--text3);padding:5px 12px;cursor:pointer;text-transform:uppercase;letter-spacing:1px}
@@ -3038,6 +3046,23 @@ function renderMainPanel(item) {
       </div>
       <div class="mp-action-time">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
     </div>` : ''}
+
+    <div class="src-trace">
+      <span class="src-trace-hdr">SOURCE TRACE</span>
+      <div class="src-trace-chips">
+        <span class="src-trace-chip">Price: <span class="src-trace-val neutral-v">${item._dataSource === 'alphavantage' ? 'av-proxy' : item._dataSource || '—'}</span></span>
+        <span class="src-trace-sep">·</span>
+        <span class="src-trace-chip">Candles: <span class="src-trace-val neutral-v">${!hasData ? '—' : snap.candleCount === undefined ? 'loading…' : snap.candleCount > 0 ? snap.candleCount + ' bars' : '—'}</span></span>
+        <span class="src-trace-sep">·</span>
+        <span class="src-trace-chip">MA / RS: <span class="src-trace-val ${!hasData || snap.candleCount === undefined ? 'neutral-v' : snap.hasMA20 && snap.rsSPY !== null ? 'pos' : snap.hasMA20 ? 'warn' : 'neg'}">${!hasData || snap.candleCount === undefined ? '—' : snap.hasMA20 && snap.rsSPY !== null ? 'computed' : snap.hasMA20 ? 'MA only' : 'unavailable'}</span></span>
+        <span class="src-trace-sep">·</span>
+        <span class="src-trace-chip">News: <span class="src-trace-val neutral-v">${item._auditTrail?.sourceTrace?.newsContext ? item._auditTrail.sourceTrace.newsContext.replace('perplexity-proxy / ', 'Perplexity / ') : '—'}</span></span>
+        <span class="src-trace-sep">·</span>
+        <span class="src-trace-chip">AI: <span class="src-trace-val ${item._aiUnavailable ? 'neg' : 'neutral-v'}">${item._aiUnavailable ? 'unavailable' : (item._auditTrail?.sourceTrace?.aiSynthesis || '—').replace('anthropic-proxy / ', '').replace('claude-haiku-4-5-20251001', 'claude-haiku-4-5')}</span></span>
+        <span class="src-trace-sep">·</span>
+        <span class="src-trace-chip">Updated: <span class="src-trace-val neutral-v">${(() => { const t = item._orchestratedAt || item._timestamp; if (!t) return '—'; try { return new Date(t).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'}); } catch(e) { return '—'; } })()}</span></span>
+      </div>
+    </div>
 
   `; /* Deep Dive deferred to v1.2 — not rendered */
 }
