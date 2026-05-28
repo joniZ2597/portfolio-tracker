@@ -1111,10 +1111,30 @@ function getTickerDefaults(symbol) {
   return TICKER_DEFAULTS[symbol.toUpperCase()] || { name:'', exchange:'', sector:'', sectorEtf:'' };
 }
 
+// 7A-1: Position data normalization helper.
+// Local-only: position data is NEVER sent to Anthropic, Perplexity, or any external API.
+function _normalizePosition(p) {
+  const has = !!(p && p.hasPosition === true);
+  const toPosNum = (v) => {
+    const n = typeof v === 'string' ? parseFloat(v) : v;
+    return (typeof n === 'number' && isFinite(n) && n > 0) ? n : null;
+  };
+  const toSignedNum = (v) => {
+    const n = typeof v === 'string' ? parseFloat(v) : v;
+    return (typeof n === 'number' && isFinite(n)) ? n : null;
+  };
+  return {
+    hasPosition:        has,
+    positionValue:      has ? toPosNum(p && p.positionValue)    : null,
+    pnlPercent:         has ? toSignedNum(p && p.pnlPercent)    : null,
+    partialProfitTaken: has && !!(p && p.partialProfitTaken === true),
+  };
+}
+
 function _buildEntry(sym) {
   const s = sym.trim().toUpperCase();
   const d = getTickerDefaults(s);
-  return { symbol: s, name: d.name, exchange: d.exchange, sector: d.sector, sectorEtf: d.sectorEtf, personalNote: '', inScan: true };
+  return { symbol: s, name: d.name, exchange: d.exchange, sector: d.sector, sectorEtf: d.sectorEtf, personalNote: '', inScan: true, position: _normalizePosition(null) };
 }
 
 function migrateWatchlist(raw) {
@@ -1140,6 +1160,7 @@ function migrateWatchlist(raw) {
       sectorEtf:    e.sectorEtf   ?? d.sectorEtf,
       personalNote: e.personalNote ?? '',
       inScan:       e.inScan      ?? true,
+      position:     _normalizePosition(e.position),
     };
   }).filter(Boolean);
 }
@@ -2393,6 +2414,26 @@ function openEditModal(sym) {
     return row;
   }
 
+  // 7A-1: checkbox row — minimal inline styling, no new CSS classes
+  function _makeCheckboxRow(labelText, inputId, currentChecked) {
+    const row = document.createElement('div');
+    row.className = 'edit-field-row';
+    const lbl = document.createElement('label');
+    lbl.className   = 'edit-lbl';
+    lbl.textContent = labelText;
+    lbl.htmlFor     = inputId;
+    const inp = document.createElement('input');
+    inp.type      = 'checkbox';
+    inp.id        = inputId;
+    inp.className = 'edit-inp';
+    inp.checked   = !!currentChecked;
+    inp.style.width = '16px';
+    inp.style.height = '16px';
+    row.appendChild(lbl);
+    row.appendChild(inp);
+    return row;
+  }
+
   body.appendChild(_makeField('Company name', 'editName',      'e.g. NVIDIA Corp.',   entry.name));
   body.appendChild(_makeField('Sector',        'editSector',    'e.g. Semiconductors', entry.sector));
 
@@ -2436,6 +2477,13 @@ function openEditModal(sym) {
   body.appendChild(etfRow);
 
   body.appendChild(_makeField('Personal note', 'editNote', 'Your notes…', entry.personalNote, true));
+
+  // 7A-1: Position fields — local-only, persisted in watchlist, NEVER sent to AI/API
+  const _pos = entry.position || _normalizePosition(null);
+  body.appendChild(_makeCheckboxRow('I hold a position in this ticker', 'editHasPosition', _pos.hasPosition));
+  body.appendChild(_makeField('Position size ($)', 'editPositionValue', 'e.g. 2500',  _pos.positionValue !== null ? String(_pos.positionValue) : ''));
+  body.appendChild(_makeField('Current P/L (%)',   'editPnlPercent',    'e.g. 59.96', _pos.pnlPercent    !== null ? String(_pos.pnlPercent)    : ''));
+  body.appendChild(_makeCheckboxRow('Partial profit already taken', 'editPartialProfitTaken', _pos.partialProfitTaken));
 
   // ── Footer actions ──────────────────────────────────────────────────────────
   const actions   = document.createElement('div');
@@ -2493,8 +2541,20 @@ function saveEditModal() {
   const prevEtf    = entry.sectorEtf ?? '';
   const etfChanged = sectorEtf !== prevEtf;
 
+  // 7A-1: Position fields — local-only, NEVER sent to AI/API
+  const hasPosition        = !!document.getElementById('editHasPosition')?.checked;
+  const partialProfitTaken = !!document.getElementById('editPartialProfitTaken')?.checked;
+  const _rawPositionValue  = (document.getElementById('editPositionValue')?.value ?? '').trim();
+  const _rawPnlPercent     = (document.getElementById('editPnlPercent')?.value    ?? '').trim();
+  const position = _normalizePosition({
+    hasPosition,
+    positionValue:      _rawPositionValue,
+    pnlPercent:         _rawPnlPercent,
+    partialProfitTaken,
+  });
+
   // Merge fields — inScan and symbol are NOT in the payload, so they are untouched (safeguard 3)
-  upsertTicker(_editSym, { name, sector, sectorEtf, personalNote });
+  upsertTicker(_editSym, { name, sector, sectorEtf, personalNote, position });
 
   // Clear stale technical snapshot whenever benchmark changes — including when cleared to ''
   // No typeof guard: _techCache is a module-level const, always defined
