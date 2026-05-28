@@ -1946,6 +1946,21 @@ function orchestrate(claudeResults, pplxData, stockData) {
     // (assembled after all overrides so finalDecision reflects corrected values)
     // 6B-1: per-item flag so render layer can pick the right catalyst fallback wording
     item._catalystDataMissing = !!(_pplx6a && (_pplx6a._allNone || _pplx6a._unavailable));
+    // 6B-2: derive catalyst-existence + direction signals for the catalyst panel
+    // _catalystDataMissing (6B-1) retains priority — checked first in the render ternary
+    const _bullPplx       = _pplx6a?.bullishCatalysts?.length || 0;
+    const _bearPplx       = _pplx6a?.bearishCatalysts?.length || 0;
+    const _hasClaudeNews  = Array.isArray(item.news) && item.news.length > 0;
+    const _biasDirectional = (item.news_bias === 'bullish' || item.news_bias === 'bearish');
+    item._hasStructuredCatalysts = (_bullPplx > 0 || _bearPplx > 0 || _hasClaudeNews || _biasDirectional);
+    item._catalystDirection = null;
+    if (item._hasStructuredCatalysts) {
+      if      (item.news_bias === 'bullish')      item._catalystDirection = 'bullish';
+      else if (item.news_bias === 'bearish')      item._catalystDirection = 'bearish';
+      else if (_bullPplx > 0 && _bearPplx === 0)  item._catalystDirection = 'bullish';
+      else if (_bearPplx > 0 && _bullPplx === 0)  item._catalystDirection = 'bearish';
+      else                                         item._catalystDirection = 'mixed';
+    }
     item._auditTrail = {
       dataCollected: {
         price:         mkt?.price          ?? null,
@@ -3046,7 +3061,13 @@ function renderMainPanel(item) {
             <span class="cat-state ${cls}">${state}</span>
           </div>`).join('') : item._catalystDataMissing
             ? `<div class="cat-row"><div class="cat-dot warn"></div><span class="cat-lbl">No catalyst data returned</span><span class="cat-state warn">PERPLEXITY NONE</span></div>`
-            : `<div class="cat-row"><div class="cat-dot neutral-v"></div><span class="cat-lbl">No verified catalysts</span><span class="cat-state neutral-v">MONITORING</span></div>`}
+            : item._hasStructuredCatalysts
+              ? (item._catalystDirection === 'bullish'
+                  ? `<div class="cat-row"><div class="cat-dot pos"></div><span class="cat-lbl">Bullish catalysts present</span><span class="cat-state pos">DETECTED</span></div>`
+                  : item._catalystDirection === 'bearish'
+                    ? `<div class="cat-row"><div class="cat-dot neg"></div><span class="cat-lbl">Bearish risks present</span><span class="cat-state neg">DETECTED</span></div>`
+                    : `<div class="cat-row"><div class="cat-dot warn"></div><span class="cat-lbl">Catalysts present</span><span class="cat-state warn">DETECTED</span></div>`)
+              : `<div class="cat-row"><div class="cat-dot neutral-v"></div><span class="cat-lbl">No verified catalysts</span><span class="cat-state neutral-v">MONITORING</span></div>`}
         </div>
       </div>
 
