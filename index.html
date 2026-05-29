@@ -1558,6 +1558,11 @@ DATA_FRESHNESS: [today/this week/this month]
 
 Use NONE only when no relevant information exists. If relevant information exists but is older than the primary 14-day window and is still being cited as a driver, include it with the date instead of NONE. Be specific with numbers and dates.`;
 
+  // 7B-4a: per-call telemetry (memory-only). Captures endpoint/model/timing for the
+  // primary Perplexity call; returned alongside { raw, sources }. Never persisted.
+  const _pplxEndpoint  = 'perplexity-proxy';
+  const _pplxModel     = 'sonar-pro';
+  const _pplxStartedAt = Date.now();
   const response = await fetch('/.netlify/functions/perplexity-proxy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1565,6 +1570,7 @@ Use NONE only when no relevant information exists. If relevant information exist
   });
   if (!response.ok) { const err = await response.json(); throw new Error('Perplexity: ' + (err.error?.message || 'upstream error')); }
   const data = await response.json();
+  const _pplxFinishedAt = Date.now();
   const raw = data.choices[0].message.content.trim();
   // 7B-1: capture citations / search_results if the proxy passes them through (sonar-pro returns these)
   const _rawSources = Array.isArray(data.citations) ? data.citations
@@ -1576,7 +1582,7 @@ Use NONE only when no relevant information exists. If relevant information exist
   }).filter(s => s.url || s.title).slice(0, 8);
   console.log('[PT] Perplexity raw length:', raw.length, '| sources:', sources.length);
   console.log('[PT] Perplexity preview:', raw.slice(0, 300));
-  return { raw, sources };
+  return { raw, sources, _telemetry: { endpoint: _pplxEndpoint, model: _pplxModel, startedAt: _pplxStartedAt, finishedAt: _pplxFinishedAt, latencyMs: _pplxFinishedAt - _pplxStartedAt } };
 }
 
 // ── Parse Perplexity markdown/text into structured object ───────────────────
@@ -2269,6 +2275,14 @@ async function analyzeChunk(batch, today) {
     if (rc === fc && retryRawLen > firstRawLen + 200) return true;
     return false;
   };
+  // 7B-4a: parsed catalyst counts for telemetry (memory-only). Safe on null input.
+  const _parsedCountsOf = (p) => ({
+    bullish:  p?.bullishCatalysts?.length || 0,
+    bearish:  p?.bearishCatalysts?.length || 0,
+    macro:    p?.macroDrivers?.length     || 0,
+    analyst:  p?.analystActions?.length   || 0,
+    earnings: (p?.earnings && !_isNoneVal_7B3B3(p.earnings)) ? 1 : 0
+  });
 
   stockData = await fetchBatchStockData(batch);
   batch.forEach(sym => { _fetchTimestamps[sym] = Date.now(); });
@@ -2296,9 +2310,10 @@ async function analyzeChunk(batch, today) {
 
   // Per-ticker isolation: call Perplexity once per ticker, never batch
   for (const sym of batch) {
+    const _pplxCallStart = Date.now(); // 7B-4a: timing baseline (covers success and error paths)
     try {
-      // 7B-1: fetch now returns { raw, sources }; parser attaches sources per ticker
-      const { raw, sources } = await fetchPerplexityContext([sym]); // single ticker only
+      // 7B-1: fetch now returns { raw, sources, _telemetry }; parser attaches sources per ticker
+      const { raw, sources, _telemetry } = await fetchPerplexityContext([sym]); // single ticker only
       const parsed = parsePerplexityContext(raw, sources);
       // 7B-3D0: memory-only debug snapshot — capture raw + parsed per ticker. NEVER persisted.
       if (!window._pplxDebug) window._pplxDebug = {};
@@ -2308,7 +2323,26 @@ async function analyzeChunk(batch, today) {
         sourcesCount: Array.isArray(sources) ? sources.length : 0,
         parsed:       parsed[sym] || parsed['__raw__'] || null,
         parsedFrom:   parsed[sym] ? 'ticker-header' : (parsed['__raw__'] ? '__raw__-fallback' : 'empty'),
-        capturedAt:   new Date().toISOString()
+        capturedAt:   new Date().toISOString(),
+        // 7B-4a: per-call/per-ticker telemetry (memory-only; never persisted)
+        endpoint:       _telemetry?.endpoint || 'perplexity-proxy',
+        model:          _telemetry?.model    || 'sonar-pro',
+        startedAt:      _telemetry?.startedAt  ?? _pplxCallStart,
+        finishedAt:     _telemetry?.finishedAt ?? Date.now(),
+        latencyMs:      _telemetry?.latencyMs  ?? (Date.now() - _pplxCallStart),
+        callCount:      1,
+        retryAttempted: false,
+        retryCount:     0,
+        retryReason:    null,
+        retryImproved:  false,
+        retryLatencyMs: null,
+        parsedCounts:   _parsedCountsOf(parsed[sym] || parsed['__raw__'] || null),
+        unavailable:    false,
+        fallbackUsed:   false,
+        errorReason:    null,
+        // 7B-4 (patch): explicit reliability state — memory-only. 'stale' reserved for future use.
+        responseState:    'available',
+        recoveredByRetry: false
       };
       // 7B-3B3: bounded retry on weak Perplexity response (one retry max per ticker).
       // Only triggers for empty-parse / all-none / short-raw cases. Network errors fall
@@ -2331,6 +2365,10 @@ async function analyzeChunk(batch, today) {
           window._pplxDebug[sym].firstParsed    = _firstParsedTicker;
           window._pplxDebug[sym].retryParsed    = _retryTicker;
           window._pplxDebug[sym].retryImproved  = _useRetry;
+          // 7B-4a: retry telemetry (memory-only)
+          window._pplxDebug[sym].callCount      = 2;
+          window._pplxDebug[sym].retryCount     = 1;
+          window._pplxDebug[sym].retryLatencyMs = _retry._telemetry?.latencyMs ?? null;
           if (_useRetry) {
             finalParsed  = _retryParsed;
             // Update canonical _pplxDebug fields to reflect the winning attempt.
@@ -2339,8 +2377,15 @@ async function analyzeChunk(batch, today) {
             window._pplxDebug[sym].sourcesCount = Array.isArray(_retry.sources) ? _retry.sources.length : 0;
             window._pplxDebug[sym].parsed       = _retryTicker;
             window._pplxDebug[sym].parsedFrom   = _retryParsed[sym] ? 'ticker-header' : (_retryParsed['__raw__'] ? '__raw__-fallback' : 'empty');
+            window._pplxDebug[sym].parsedCounts = _parsedCountsOf(_retryTicker);
+            // 7B-4 (patch): retry improved the response (memory-only)
+            window._pplxDebug[sym].responseState    = 'recovered';
+            window._pplxDebug[sym].recoveredByRetry = true;
             console.warn(`[PT] Perplexity retry improved ${sym}: first counts=${_countSummary(_firstParsedTicker)} retry counts=${_countSummary(_retryTicker)} (b/x/m/a/e)`);
           } else {
+            // 7B-4 (patch): retry ran but did not improve — response stays weak (memory-only)
+            window._pplxDebug[sym].responseState    = 'weak';
+            window._pplxDebug[sym].recoveredByRetry = false;
             console.warn(`[PT] Perplexity retry still weak for ${sym}: first counts=${_countSummary(_firstParsedTicker)} retry counts=${_countSummary(_retryTicker)} — keeping first`);
           }
         } catch (_retryErr) {
@@ -2351,6 +2396,12 @@ async function analyzeChunk(batch, today) {
           window._pplxDebug[sym].firstParsed    = _firstParsedTicker;
           window._pplxDebug[sym].retryImproved  = false;
           window._pplxDebug[sym].retryError     = _retryErr.message;
+          // 7B-4a: retry telemetry (memory-only) — retry threw; first attempt is kept
+          window._pplxDebug[sym].callCount      = 2;
+          window._pplxDebug[sym].retryCount     = 1;
+          // 7B-4 (patch): retry threw → did not improve; response stays weak (memory-only)
+          window._pplxDebug[sym].responseState    = 'weak';
+          window._pplxDebug[sym].recoveredByRetry = false;
         }
       }
       // Merge into pplxData — only under the correct ticker key.
@@ -2367,6 +2418,30 @@ async function analyzeChunk(batch, today) {
       console.warn(`[PT] Perplexity failed for ${sym}:`, e.message);
       // 6B-1: mark ticker as upstream-unavailable so downstream can distinguish from all-NONE
       pplxData[sym] = { _unavailable: true, _error: e.message, analystActions: [], bullishCatalysts: [], bearishCatalysts: [], macroDrivers: [] };
+      // 7B-4a: telemetry for the unavailable/error path (memory-only; never persisted)
+      if (!window._pplxDebug) window._pplxDebug = {};
+      window._pplxDebug[sym] = {
+        ...(window._pplxDebug[sym] || {}),
+        endpoint:     'perplexity-proxy',
+        model:        'sonar-pro',
+        startedAt:    _pplxCallStart,
+        finishedAt:   Date.now(),
+        latencyMs:    Date.now() - _pplxCallStart,
+        callCount:    (window._pplxDebug[sym]?.callCount) || 1,
+        rawLength:    (window._pplxDebug[sym]?.rawLength) || 0,
+        sourcesCount: (window._pplxDebug[sym]?.sourcesCount) || 0,
+        parsedCounts: (window._pplxDebug[sym]?.parsedCounts) || _parsedCountsOf(null),
+        unavailable:  true,
+        fallbackUsed: (window._pplxDebug[sym]?.fallbackUsed) || false,
+        errorReason:  e.message,
+        // 7B-4 (patch): explicit reliability state for the failure path (memory-only).
+        // No retry is attempted on fetch failure, so retryAttempted/retryCount stay false/0.
+        responseState:    'unavailable',
+        recoveredByRetry: false,
+        retryAttempted:   false,
+        retryCount:       0,
+        capturedAt:   new Date().toISOString()
+      };
     }
   }
   console.log(`[PT] Perplexity parsed tickers: ${Object.keys(pplxData).join(',') || 'none'}`);
@@ -2451,6 +2526,8 @@ async function analyzeChunk(batch, today) {
     });
     const _reason = _anthropicError ? 'anthropic-error' : (_retryAttempted ? 'parse-fail-after-retry' : 'parse-empty-no-retry');
     console.warn(`[PT] Fallback results built for ${batch.join(',')} (reason: ${_reason})`);
+    // 7B-4a: mark per-ticker telemetry that the Anthropic synthetic fallback was used (memory-only)
+    batch.forEach(sym => { if (window._pplxDebug && window._pplxDebug[sym]) window._pplxDebug[sym].fallbackUsed = true; });
   }
 
   const orchestrated = orchestrate(raw, pplxData, stockData);
@@ -3677,6 +3754,7 @@ async function runAnalysis() {
   const today = new Date().toLocaleDateString('he-IL');
   const BATCH_SIZE = 1; // 1 ticker per batch — ensures _cancelRequested is checked before each ticker
   const newResults = []; // accumulates results for this scan run only
+  const _scanStartedAt = Date.now(); // 7B-4b: scan-level telemetry timing baseline (memory-only)
 
   try {
     setProgress(5, 'מאתחל...');
@@ -3699,6 +3777,36 @@ async function runAnalysis() {
       localStorage.setItem('pt_results', JSON.stringify(merged));
       localStorage.setItem('pt_date', dateStr);
       renderResults(merged, dateStr);
+    }
+
+    // 7B-4b: scan-level telemetry rollup (memory-only). Aggregated from window._pplxDebug,
+    // NOT from _lastRunState (which is reassigned per ticker). Never persisted.
+    try {
+      const _dbg = window._pplxDebug || {};
+      const _telSyms = Object.keys(_dbg);
+      const _telEntries = _telSyms.map(k => _dbg[k]);
+      const _telLatencies = _telEntries.map(e => e && e.latencyMs).filter(n => typeof n === 'number');
+      const _telFinishedAt = Date.now();
+      window._pplxTelemetry = {
+        runId:              _scanStartedAt,
+        startedAt:          _scanStartedAt,
+        finishedAt:         _telFinishedAt,
+        totalLatencyMs:     _telFinishedAt - _scanStartedAt,
+        tickerCount:        _telSyms.length,
+        totalPplxCalls:     _telEntries.reduce((s, e) => s + ((e && e.callCount) || 1), 0),
+        retriedTickers:     _telSyms.filter(k => _dbg[k] && _dbg[k].retryAttempted),
+        unavailableTickers: _telSyms.filter(k => _dbg[k] && _dbg[k].unavailable),
+        fallbackTickers:    _telSyms.filter(k => _dbg[k] && _dbg[k].fallbackUsed),
+        weakResponses:      _telSyms.filter(k => _dbg[k] && _dbg[k].responseState === 'weak').length,
+        recoveredTickers:   _telSyms.filter(k => _dbg[k] && _dbg[k].recoveredByRetry),
+        weakTickers:        _telSyms.filter(k => _dbg[k] && _dbg[k].responseState === 'weak'),
+        avgLatencyMs:       _telLatencies.length ? Math.round(_telLatencies.reduce((a, b) => a + b, 0) / _telLatencies.length) : null
+      };
+      // Expose via _lastRunState for ergonomic access (not used as the aggregation source).
+      if (window._lastRunState) window._lastRunState.telemetry = window._pplxTelemetry;
+      console.log('[PT] Scan telemetry:', JSON.stringify(window._pplxTelemetry));
+    } catch (_telErr) {
+      console.warn('[PT] Telemetry rollup failed (non-fatal):', _telErr.message);
     }
 
     setProgress(100, 'הניתוח הושלם!');
