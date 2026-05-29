@@ -1749,10 +1749,14 @@ function repairJSON(str) {
 }
 
 function parseJSON(raw) {
+  // 7B-1.5: structured diagnostic for empty-result paths
+  const _head = (raw || '').slice(0, 120).replace(/\s+/g, ' ');
+  const _tail = (raw || '').slice(-120).replace(/\s+/g, ' ');
+  const _rawLen = (raw || '').length;
   let clean = raw.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
   const start = clean.indexOf('{');
   const end   = clean.lastIndexOf('}');
-  if (start === -1) { console.warn('[PT] parseJSON: no { found'); return { results: [] }; }
+  if (start === -1) { console.warn(`[PT] parseJSON: no { found (rawLen=${_rawLen}, head="${_head}")`); return { results: [] }; }
   let jsonStr = end > start ? clean.slice(start, end + 1) : clean.slice(start);
   try { return JSON.parse(jsonStr); } catch(e1) { console.warn('[PT] parseJSON e1:', e1.message); }
   try { return JSON.parse(repairJSON(jsonStr)); } catch(e2) {}
@@ -1763,7 +1767,11 @@ function parseJSON(raw) {
   while ((m = tickerRe.exec(jsonStr)) !== null) {
     try { const obj = JSON.parse(m[0].replace(/,\s*$/, '')); if (obj.ticker) items.push(obj); } catch(e3) {}
   }
-  console.log('[PT] parseJSON: extracted', items.length, 'items via fallback');
+  if (items.length === 0) {
+    console.warn(`[PT] parseJSON: ALL tiers failed (rawLen=${_rawLen}, jsonLen=${jsonStr.length}, head="${_head}", tail="${_tail}")`);
+  } else {
+    console.log('[PT] parseJSON: extracted', items.length, 'items via fallback');
+  }
   return { results: items };
 }
 
@@ -2200,33 +2208,71 @@ async function analyzeChunk(batch, today) {
   const parsed = parseJSON(rawText);
   let raw = parsed.results || [];
 
+  // 7B-1.5: symbol consistency check — Anthropic occasionally returns a result
+  // for the wrong ticker. Single-ticker isolation means batch.length === 1 here.
+  if (raw.length > 0 && batch.length === 1 && raw[0].ticker && raw[0].ticker.toUpperCase() !== batch[0].toUpperCase()) {
+    console.warn(`[PT] Ticker mismatch: expected ${batch[0]}, got ${raw[0].ticker} — treating as parse-failed`);
+    raw = [];
+  }
+
+  // 7B-1.5: Anthropic returned content but parseJSON yielded 0 results → retry once.
+  // Bounded to a single retry per ticker. Same prompt, no max_tokens change.
+  let _retryAttempted = false;
+  if (raw.length === 0 && !_anthropicError && rawText && rawText.length > 100) {
+    console.warn(`[PT] parseEmpty for ${batch[0]} (rawLen=${rawText.length}) — retrying Anthropic once`);
+    _retryAttempted = true;
+    try {
+      const retryText = await fetchAnthropicAnalysis(batch, today, stockContext + '\n%%NEWS_CONTEXT_START%%\n' + JSON.stringify(pplxData), _techSnapshotText6a);
+      console.log(`[PT] Retry: response length ${retryText.length}`);
+      const retryParsed = parseJSON(retryText);
+      const retryRaw = retryParsed.results || [];
+      const retryOk = retryRaw.length > 0 && (!retryRaw[0].ticker || retryRaw[0].ticker.toUpperCase() === batch[0].toUpperCase());
+      if (retryOk) {
+        raw = retryRaw;
+        console.log(`[PT] Retry resolved: ${raw.length} result(s) for ${batch[0]}`);
+      } else {
+        console.warn(`[PT] Retry still empty/mismatched for ${batch[0]} — falling through to safe fallback`);
+      }
+    } catch (retryErr) {
+      console.warn(`[PT] Retry threw for ${batch[0]}: ${retryErr.message}`);
+      _anthropicError = retryErr;
+    }
+  }
+
   // ── Anthropic fallback ────────────────────────────────────────────────────
-  // If Anthropic failed but market data succeeded, build a minimal fallback
-  // result per ticker so verified price, technical panels, and Perplexity
-  // context are still preserved and persisted to pt_results.
+  // Build a minimal fallback result per ticker so verified price, technical
+  // panels, and Perplexity context are still preserved and persisted to
+  // pt_results. Triggers when Anthropic erred, returned empty, or both the
+  // first attempt and retry produced 0 parseable results.
+  // 7B-1.5: condition broadened from "&& _anthropicError" so parse-fail also
+  // produces a safe synthetic result instead of silently dropping the ticker.
   // Raw API error message is logged to console only — never surfaced in UI.
-  if (raw.length === 0 && _anthropicError) {
+  if (raw.length === 0) {
     raw = batch.map(sym => {
       const wlEntry = findTicker(sym);
       // Preserve any Perplexity-derived analyst alerts if available
-      const pplxAlerts = (_anthropicError && pplxData[sym]?.analystActions?.length)
+      const pplxAlerts = (pplxData[sym]?.analystActions?.length)
         ? pplxData[sym].analystActions.map(a => ({
             type: 'normal',
             text: `${a.bank} price target $${a.target} — verify if recent`
           }))
         : [];
+      const summaryNet = 'AI analysis unavailable — market data shown only. Technical panels reflect verified price and candle data. No AI-generated summary is available for this scan.';
+      const summaryParse = 'AI response could not be parsed after retry — market data and technical panels shown only. No AI-generated summary is available for this scan.';
       return {
         ticker: sym,
         company_name: (wlEntry && wlEntry.name) || sym,
         sentiment: 'neutral',
         sentiment_score: 50,
-        summary: 'AI analysis unavailable — market data shown only. Technical panels reflect verified price and candle data. No AI-generated summary is available for this scan.',
+        summary: _anthropicError ? summaryNet : (_retryAttempted ? summaryParse : summaryNet),
         alerts: pplxAlerts,
         news: [],
-        _aiUnavailable: true
+        _aiUnavailable: true,
+        _aiParseFailed: !_anthropicError && _retryAttempted
       };
     });
-    console.warn('[PT] Fallback results built for:', batch.join(','));
+    const _reason = _anthropicError ? 'anthropic-error' : (_retryAttempted ? 'parse-fail-after-retry' : 'parse-empty-no-retry');
+    console.warn(`[PT] Fallback results built for ${batch.join(',')} (reason: ${_reason})`);
   }
 
   const orchestrated = orchestrate(raw, pplxData, stockData);
