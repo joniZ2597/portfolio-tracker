@@ -1557,82 +1557,111 @@ Use NONE for any field with no data. Be specific with numbers and dates.`;
   if (!response.ok) { const err = await response.json(); throw new Error('Perplexity: ' + (err.error?.message || 'upstream error')); }
   const data = await response.json();
   const raw = data.choices[0].message.content.trim();
-  console.log('[PT] Perplexity raw length:', raw.length);
+  // 7B-1: capture citations / search_results if the proxy passes them through (sonar-pro returns these)
+  const _rawSources = Array.isArray(data.citations) ? data.citations
+                    : Array.isArray(data.search_results) ? data.search_results
+                    : [];
+  const sources = _rawSources.map(s => {
+    if (typeof s === 'string') return { url: s, title: '', date: '' };
+    return { url: s.url || '', title: s.title || '', date: s.date || s.published_date || '' };
+  }).filter(s => s.url || s.title).slice(0, 8);
+  console.log('[PT] Perplexity raw length:', raw.length, '| sources:', sources.length);
   console.log('[PT] Perplexity preview:', raw.slice(0, 300));
-  return raw;
+  return { raw, sources };
 }
 
 // ── Parse Perplexity markdown/text into structured object ───────────────────
-function parsePerplexityContext(raw) {
+// 7B-1: structural extraction — no bank whitelist, no keyword filter; trust the template
+function parsePerplexityContext(raw, sources = []) {
   const result = {};
   if (!raw || raw.length < 10) return result;
   const lines = raw.split('\n');
   let currentTicker = null, currentLines = [];
 
+  // 7B-1 helpers
+  const NONE_RE = /^(NONE|N\/?A|-|—|unknown)\b/i;
+  const _isNoneVal = v => !v || NONE_RE.test(String(v).trim());
+  // Read a labeled template line's value (after the colon); '' if absent/NONE
+  const _readField = (label, ls) => {
+    const line = ls.find(l => l.replace(/^[-*•#>\s]+/, '').toUpperCase().startsWith(label + ':'));
+    if (!line) return '';
+    const idx = line.indexOf(':');
+    const v = line.slice(idx + 1).trim();
+    return _isNoneVal(v) ? '' : v;
+  };
+  // Split a list value on " | " into clean items, dropping NONE/empties
+  const _splitList = (val) => val ? val.split(/\s*\|\s*/).map(s => s.trim()).filter(s => s && !_isNoneVal(s)).slice(0, 4) : [];
+  // Extract analyst actions by action verb — captures bank phrase + verb + PT amount.
+  // Bank phrase is anything reasonable up to the action verb; no hardcoded list.
+  const ACTION_RE = /([A-Z][\w&.\- ]{1,40}?)\s+(raised|cut|lowered|trimmed|reduced|initiated|reiterated|maintained|started|launched|reinstated|resumed|upgraded|downgraded|boosted|hiked|set)\b[^\n$]{0,80}\$([0-9,]+(?:\.[0-9]+)?)/gi;
+  const _extractActions = (text) => {
+    const out = [];
+    const seen = new Set();
+    let m;
+    ACTION_RE.lastIndex = 0;
+    while ((m = ACTION_RE.exec(text)) !== null) {
+      const bank = m[1].replace(/^[-*•#>\s]+/, '').trim();
+      const verb = m[2].toLowerCase();
+      const target = parseFloat(m[3].replace(/,/g, ''));
+      if (!(target > 0 && target < 5000)) continue;
+      const key = bank.toLowerCase() + '|' + target;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ bank, action: verb, target, raw: m[0].slice(0, 100) });
+    }
+    return out;
+  };
+
   const flushTicker = () => {
     if (!currentTicker || !currentLines.length) return;
-    const block = currentLines.join('\n');
-    const analystActions = [];
-    const ptRe = /\b(Goldman|GS|Morgan Stanley|MS|JPMorgan|JPM|UBS|BofA|Bank of America|CFRA|Citi|Barclays|Jefferies|Wedbush|Needham|KeyBanc|Wells Fargo|Deutsche|Raymond James|Piper Sandler)[^\n]*?\$([0-9,]+)/gi;
-    let ptMatch;
-    while ((ptMatch = ptRe.exec(block)) !== null) {
-      const target = parseFloat(ptMatch[2].replace(',', ''));
-      if (target > 0 && target < 5000) analystActions.push({ bank: ptMatch[1], target, raw: ptMatch[0].slice(0, 80) });
-    }
-    const bullish = [], bearish = [];
-    // 6B-1: reject NONE/N/A/empty/dash values from catalyst arrays
-    const _isNoneValueLine = (line) => {
-      const colonIdx = line.indexOf(':');
-      if (colonIdx === -1) return false;
-      const v = line.slice(colonIdx + 1).trim();
-      return !v || /^(NONE|N\/?A|-|—)(\s|—|$)/i.test(v);
-    };
-    currentLines.forEach(l => {
-      const ll = l.toLowerCase();
-      if (ll.includes('bullish') || ll.includes('beat') || ll.includes('strong demand') || ll.includes('ai demand') || ll.includes('hbm') || ll.includes('upside')) {
-        const clean = l.replace(/^[-*•#>\s]+/, '').trim();
-        if (clean.length > 10 && !_isNoneValueLine(clean)) bullish.push(clean.slice(0, 100));
-      }
-      if (ll.includes('bearish') || ll.includes('risk') || ll.includes('pressure') || ll.includes('declining') || ll.includes('downside')) {
-        const clean = l.replace(/^[-*•#>\s]+/, '').trim();
-        if (clean.length > 10 && !_isNoneValueLine(clean)) bearish.push(clean.slice(0, 100));
-      }
-    });
-    // Extract revision direction
-    const revLine = currentLines.find(l => l.startsWith('REVISION_DIRECTION:'));
-    const revDir = revLine ? revLine.replace('REVISION_DIRECTION:', '').trim() : 'unknown';
-    const recLine = currentLines.find(l => l.startsWith('REVISION_RECENCY:'));
-    const revRecency = recLine ? recLine.replace('REVISION_RECENCY:', '').trim() : 'unknown';
-    const freshLine = currentLines.find(l => l.startsWith('DATA_FRESHNESS:'));
-    const dataFreshness = freshLine ? freshLine.replace('DATA_FRESHNESS:', '').trim() : 'unknown';
-    const earnLine = currentLines.find(l => l.startsWith('EARNINGS:'));
-    const earnings = earnLine ? earnLine.replace('EARNINGS:', '').trim() : 'NONE';
+
+    // 7B-1: structural extraction from the template lines themselves.
+    // Scope action extraction to the ANALYST_ACTIONS line to avoid false positives
+    // from prose that mentions "$N" outside the template (e.g. Fed rate prose).
+    const actionsRaw = _readField('ANALYST_ACTIONS', currentLines);
+    const analystActions = _extractActions(actionsRaw || '').slice(0, 5);
+    const bullishCatalysts = _splitList(_readField('BULLISH', currentLines));
+    const bearishCatalysts = _splitList(_readField('BEARISH', currentLines));
+    const macroDrivers     = _splitList(_readField('MACRO',   currentLines));
+    const revDir          = _readField('REVISION_DIRECTION', currentLines) || 'unknown';
+    const revRecency      = _readField('REVISION_RECENCY',   currentLines) || 'unknown';
+    const dataFreshness   = _readField('DATA_FRESHNESS',     currentLines) || 'unknown';
+    const earnings        = _readField('EARNINGS',           currentLines) || 'NONE';
 
     result[currentTicker] = {
-      analystActions: analystActions.slice(0, 5),
-      bullishCatalysts: bullish.slice(0, 4),
-      bearishCatalysts: bearish.slice(0, 4),
-      macroDrivers: [], institutionalFlows: [], risks: bearish.slice(0, 3),
+      analystActions,
+      bullishCatalysts,
+      bearishCatalysts,
+      macroDrivers,
+      institutionalFlows: [],
+      risks: [], // 7B-1: stop duplicating bearishCatalysts (was bearish.slice(0,3))
       revisionDirection: revDir,
       revisionRecency: revRecency,
       dataFreshness,
-      earnings
+      earnings,
+      sources: Array.isArray(sources) ? sources : []
     };
     // 6B-1: flag Perplexity responses that succeeded but contain no useful catalyst/news data
-    const _isNoneFieldVal = v => !v || /^(NONE|N\/?A|-|—|unknown)\b/i.test(String(v).trim());
     result[currentTicker]._allNone = (
-      result[currentTicker].analystActions.length === 0 &&
-      result[currentTicker].bullishCatalysts.length === 0 &&
-      result[currentTicker].bearishCatalysts.length === 0 &&
-      _isNoneFieldVal(earnings) &&
-      _isNoneFieldVal(revDir)
+      analystActions.length === 0 &&
+      bullishCatalysts.length === 0 &&
+      bearishCatalysts.length === 0 &&
+      macroDrivers.length === 0 &&
+      _isNoneVal(earnings) &&
+      _isNoneVal(revDir)
     );
-    console.log(`[PT] Parsed ${currentTicker}: ${analystActions.length} analyst actions, ${bullish.length} bullish${result[currentTicker]._allNone ? ' [allNone]' : ''}`);
+    console.log(`[PT] Parsed ${currentTicker}: ${analystActions.length} actions, ${bullishCatalysts.length} bullish, ${bearishCatalysts.length} bearish, ${macroDrivers.length} macro${result[currentTicker]._allNone ? ' [allNone]' : ''}`);
     if (analystActions.length) console.log('[PT] Analyst actions:', JSON.stringify(analystActions));
+    // 7B-1: diagnostic — template line present in raw block but parsed to 0 items
+    [['BULLISH', bullishCatalysts.length], ['BEARISH', bearishCatalysts.length], ['MACRO', macroDrivers.length]].forEach(([label, n]) => {
+      const hasRaw = currentLines.some(l => l.replace(/^[-*•#>\s]+/, '').toUpperCase().startsWith(label + ':'));
+      if (hasRaw && n === 0) console.warn(`[PT] ${currentTicker}: ${label} line present but parsed to 0 items`);
+    });
   };
 
   for (const line of lines) {
-    const tickerMatch = line.match(/^(?:TICKER:|##|\*\*)\s*([A-Z]{1,6})(?:\b|\*\*)/);
+    // 7B-1: broader ticker-header fallback — TICKER:, ## NVDA, ## $NVDA, **NVDA**, **Ticker: NVDA**, ### $NVDA …
+    const tickerMatch = line.match(/^\s*(?:TICKER:|Ticker:|#{1,4}\s*\$?|\*\*\s*(?:Ticker:\s*)?\$?)\s*([A-Z]{1,6})(?=\b|\*\*|\s|$)/);
     if (tickerMatch) { flushTicker(); currentTicker = tickerMatch[1]; currentLines = []; }
     else if (currentTicker) currentLines.push(line);
   }
@@ -1640,15 +1669,21 @@ function parsePerplexityContext(raw) {
 
   if (Object.keys(result).length === 0 && raw.length > 50) {
     console.warn('[PT] No ticker headers found, using full text as context');
-    result['__raw__'] = { rawText: raw, analystActions: [], bullishCatalysts: [], bearishCatalysts: [], macroDrivers: [], risks: [] };
-    const ptRe2 = /\b(Goldman|GS|Morgan Stanley|UBS|BofA|CFRA|Citi|Barclays|Jefferies|Wedbush)[^\n]*?\$([0-9,]+)/gi;
-    let m2;
-    while ((m2 = ptRe2.exec(raw)) !== null) {
-      const t = parseFloat(m2[2].replace(',', ''));
-      if (t > 0 && t < 5000) result['__raw__'].analystActions.push({ bank: m2[1], target: t, raw: m2[0].slice(0, 80) });
-    }
+    // 7B-1: __raw__ fallback uses the same action-verb extractor (no bank whitelist)
+    const rawActions = _extractActions(raw).slice(0, 5);
+    result['__raw__'] = {
+      rawText: raw,
+      analystActions: rawActions,
+      bullishCatalysts: [],
+      bearishCatalysts: [],
+      macroDrivers: [],
+      institutionalFlows: [],
+      risks: [],
+      sources: Array.isArray(sources) ? sources : []
+    };
     // 6B-1: __raw__ is allNone when fallback extracted no analyst PTs
-    result['__raw__']._allNone = result['__raw__'].analystActions.length === 0;
+    result['__raw__']._allNone = rawActions.length === 0;
+    console.log(`[PT] __raw__ fallback: ${rawActions.length} analyst actions`);
   }
   return result;
 }
@@ -1676,7 +1711,11 @@ function formatNewsContext(pplxData, symbol) {
   if (d.bullishCatalysts?.length) lines.push('BULLISH: ' + d.bullishCatalysts.join(' | '));
   if (d.bearishCatalysts?.length) lines.push('BEARISH: ' + d.bearishCatalysts.join(' | '));
   if (d.macroDrivers?.length)     lines.push('MACRO: ' + d.macroDrivers.join(' | '));
-  if (d.risks?.length)            lines.push('RISKS: ' + d.risks.join(' | '));
+  // 7B-1: RISKS line removed — it duplicated BEARISH. SOURCES line added when proxy returned citations.
+  if (d.sources?.length) {
+    const srcStr = d.sources.slice(0, 5).map(s => s && (s.url || s.title)).filter(Boolean).join(' | ');
+    if (srcStr) lines.push('SOURCES: ' + srcStr);
+  }
   if (d.rawText)                  lines.push('RAW CONTEXT: ' + d.rawText.slice(0, 400));
   return lines.length ? lines.join('\n') : `No specific catalysts found for ${symbol}.`;
 }
@@ -2126,12 +2165,13 @@ async function analyzeChunk(batch, today) {
   // Per-ticker isolation: call Perplexity once per ticker, never batch
   for (const sym of batch) {
     try {
-      const raw = await fetchPerplexityContext([sym]); // single ticker only
-      const parsed = parsePerplexityContext(raw);
+      // 7B-1: fetch now returns { raw, sources }; parser attaches sources per ticker
+      const { raw, sources } = await fetchPerplexityContext([sym]); // single ticker only
+      const parsed = parsePerplexityContext(raw, sources);
       // Merge into pplxData — only under the correct ticker key
       if (parsed[sym]) {
         pplxData[sym] = parsed[sym];
-        console.log(`[PT] Perplexity OK for ${sym}: ${parsed[sym].analystActions?.length || 0} analyst actions`);
+        console.log(`[PT] Perplexity OK for ${sym}: ${parsed[sym].analystActions?.length || 0} analyst actions, ${parsed[sym].macroDrivers?.length || 0} macro, ${parsed[sym].sources?.length || 0} sources`);
       } else if (parsed['__raw__']) {
         // Fallback: tag raw context under the correct ticker
         pplxData[sym] = { ...parsed['__raw__'], _ticker: sym };
@@ -2140,7 +2180,7 @@ async function analyzeChunk(batch, today) {
     } catch(e) {
       console.warn(`[PT] Perplexity failed for ${sym}:`, e.message);
       // 6B-1: mark ticker as upstream-unavailable so downstream can distinguish from all-NONE
-      pplxData[sym] = { _unavailable: true, _error: e.message, analystActions: [], bullishCatalysts: [], bearishCatalysts: [] };
+      pplxData[sym] = { _unavailable: true, _error: e.message, analystActions: [], bullishCatalysts: [], bearishCatalysts: [], macroDrivers: [] };
     }
   }
   console.log(`[PT] Perplexity parsed tickers: ${Object.keys(pplxData).join(',') || 'none'}`);
