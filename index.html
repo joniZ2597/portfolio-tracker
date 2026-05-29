@@ -2049,6 +2049,22 @@ function orchestrate(claudeResults, pplxData, stockData) {
       else if (_bearPplx > 0 && _bullPplx === 0)  item._catalystDirection = 'bearish';
       else                                         item._catalystDirection = 'mixed';
     }
+    // 7B-2A: pass-through structured catalyst payload from pplxData so the render layer
+    // (next commit) can read real catalyst data from pt_results without depending on the
+    // per-batch _lastRunState that is overwritten and lost on reload. Additive only —
+    // no renderer consumes this field yet. Old persisted results without _catalysts
+    // remain safe because nothing reads it in this commit.
+    item._catalysts = {
+      bullish:         _pplx6a?.bullishCatalysts  || [],
+      bearish:         _pplx6a?.bearishCatalysts  || [],
+      macro:           _pplx6a?.macroDrivers      || [],
+      analystActions:  _pplx6a?.analystActions    || [],
+      earnings:        _pplx6a?.earnings          || null,
+      sources:         _pplx6a?.sources           || [],
+      freshness:       _pplx6a?.dataFreshness     || null,
+      revisionDir:     _pplx6a?.revisionDirection || null,
+      revisionRecency: _pplx6a?.revisionRecency   || null
+    };
     // 6B-3: Key Risk / Catalyst Contradiction Guard
     // When structured bullish catalysts exist but Claude's key_risk denies catalyst existence,
     // replace with a setup-aware deterministic fallback. Bearish/mixed/missing left untouched.
