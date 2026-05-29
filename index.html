@@ -2226,6 +2226,50 @@ async function analyzeChunk(batch, today) {
   console.log(`[PT] analyzeChunk START: ${batch[0]}`);
   let rawText = '', pplxData = {}, stockData = {}, _anthropicError = null;
 
+  // 7B-3B3: bounded Perplexity retry helpers (scope-local; no window.* exposure).
+  // Used to detect weak Perplexity responses and decide whether to retry once.
+  const _NONE_RE_7B3B3 = /^(NONE|N\/?A|-|—|unknown)\b/i;
+  const _isNoneVal_7B3B3 = v => !v || _NONE_RE_7B3B3.test(String(v).trim());
+  const _countSummary = (p) => {
+    if (!p) return '0/0/0/0/0';
+    const a = p.analystActions?.length || 0;
+    const b = p.bullishCatalysts?.length || 0;
+    const x = p.bearishCatalysts?.length || 0;
+    const m = p.macroDrivers?.length || 0;
+    const e = (p.earnings && !_isNoneVal_7B3B3(p.earnings)) ? 1 : 0;
+    return `${b}/${x}/${m}/${a}/${e}`;
+  };
+  const _detectWeakPerplexity = (raw, p, parsedFrom) => {
+    if (parsedFrom === 'empty')     return 'empty-parse';
+    if (p && p._allNone === true)   return 'all-none';
+    const rawLen = (raw || '').length;
+    const aCount = p?.analystActions?.length   || 0;
+    const bCount = p?.bullishCatalysts?.length || 0;
+    const xCount = p?.bearishCatalysts?.length || 0;
+    const mCount = p?.macroDrivers?.length     || 0;
+    const earningsMeaningful = p?.earnings && !_isNoneVal_7B3B3(p.earnings);
+    if (rawLen < 500 && aCount === 0 && bCount === 0 && xCount === 0 && mCount === 0 && !earningsMeaningful) {
+      return 'short-raw';
+    }
+    return null;
+  };
+  const _retryIsBetter = (first, retry, firstRawLen, retryRawLen) => {
+    if (!retry) return false;
+    if (!first) return true;
+    const countOf = (p) => {
+      if (!p) return 0;
+      const e = (p.earnings && !_isNoneVal_7B3B3(p.earnings)) ? 1 : 0;
+      return (p.analystActions?.length || 0) + (p.bullishCatalysts?.length || 0)
+           + (p.bearishCatalysts?.length || 0) + (p.macroDrivers?.length || 0) + e;
+    };
+    const fc = countOf(first);
+    const rc = countOf(retry);
+    if (rc > fc) return true;
+    // Tie-breaker: retry raw must be materially longer (≥200 chars) to displace first.
+    if (rc === fc && retryRawLen > firstRawLen + 200) return true;
+    return false;
+  };
+
   stockData = await fetchBatchStockData(batch);
   batch.forEach(sym => { _fetchTimestamps[sym] = Date.now(); });
   batch.forEach(sym => {
@@ -2266,13 +2310,57 @@ async function analyzeChunk(batch, today) {
         parsedFrom:   parsed[sym] ? 'ticker-header' : (parsed['__raw__'] ? '__raw__-fallback' : 'empty'),
         capturedAt:   new Date().toISOString()
       };
-      // Merge into pplxData — only under the correct ticker key
-      if (parsed[sym]) {
-        pplxData[sym] = parsed[sym];
-        console.log(`[PT] Perplexity OK for ${sym}: ${parsed[sym].analystActions?.length || 0} analyst actions, ${parsed[sym].macroDrivers?.length || 0} macro, ${parsed[sym].sources?.length || 0} sources`);
-      } else if (parsed['__raw__']) {
+      // 7B-3B3: bounded retry on weak Perplexity response (one retry max per ticker).
+      // Only triggers for empty-parse / all-none / short-raw cases. Network errors fall
+      // through to the existing catch(e) block below and are NOT retried here.
+      const _firstParsedTicker = parsed[sym] || parsed['__raw__'] || null;
+      const _firstParsedFrom   = window._pplxDebug[sym].parsedFrom;
+      const _weakReason        = _detectWeakPerplexity(raw, _firstParsedTicker, _firstParsedFrom);
+      let finalParsed = parsed;
+      if (_weakReason) {
+        console.warn(`[PT] Perplexity weak response for ${sym} (${_weakReason}, rawLength=${(raw||'').length}); retrying once.`);
+        try {
+          const _retry        = await fetchPerplexityContext([sym]);
+          const _retryParsed  = parsePerplexityContext(_retry.raw, _retry.sources);
+          const _retryTicker  = _retryParsed[sym] || _retryParsed['__raw__'] || null;
+          const _useRetry     = _retryIsBetter(_firstParsedTicker, _retryTicker, (raw||'').length, (_retry.raw||'').length);
+          window._pplxDebug[sym].retryAttempted = true;
+          window._pplxDebug[sym].retryReason    = _weakReason;
+          window._pplxDebug[sym].firstRawLength = (raw || '').length;
+          window._pplxDebug[sym].retryRawLength = (_retry.raw || '').length;
+          window._pplxDebug[sym].firstParsed    = _firstParsedTicker;
+          window._pplxDebug[sym].retryParsed    = _retryTicker;
+          window._pplxDebug[sym].retryImproved  = _useRetry;
+          if (_useRetry) {
+            finalParsed  = _retryParsed;
+            // Update canonical _pplxDebug fields to reflect the winning attempt.
+            window._pplxDebug[sym].rawText      = _retry.raw;
+            window._pplxDebug[sym].rawLength    = (_retry.raw || '').length;
+            window._pplxDebug[sym].sourcesCount = Array.isArray(_retry.sources) ? _retry.sources.length : 0;
+            window._pplxDebug[sym].parsed       = _retryTicker;
+            window._pplxDebug[sym].parsedFrom   = _retryParsed[sym] ? 'ticker-header' : (_retryParsed['__raw__'] ? '__raw__-fallback' : 'empty');
+            console.warn(`[PT] Perplexity retry improved ${sym}: first counts=${_countSummary(_firstParsedTicker)} retry counts=${_countSummary(_retryTicker)} (b/x/m/a/e)`);
+          } else {
+            console.warn(`[PT] Perplexity retry still weak for ${sym}: first counts=${_countSummary(_firstParsedTicker)} retry counts=${_countSummary(_retryTicker)} — keeping first`);
+          }
+        } catch (_retryErr) {
+          console.warn(`[PT] Perplexity retry threw for ${sym}: ${_retryErr.message}`);
+          window._pplxDebug[sym].retryAttempted = true;
+          window._pplxDebug[sym].retryReason    = _weakReason;
+          window._pplxDebug[sym].firstRawLength = (raw || '').length;
+          window._pplxDebug[sym].firstParsed    = _firstParsedTicker;
+          window._pplxDebug[sym].retryImproved  = false;
+          window._pplxDebug[sym].retryError     = _retryErr.message;
+        }
+      }
+      // Merge into pplxData — only under the correct ticker key.
+      // 7B-3B3: consume finalParsed (winning attempt).
+      if (finalParsed[sym]) {
+        pplxData[sym] = finalParsed[sym];
+        console.log(`[PT] Perplexity OK for ${sym}: ${finalParsed[sym].analystActions?.length || 0} analyst actions, ${finalParsed[sym].macroDrivers?.length || 0} macro, ${finalParsed[sym].sources?.length || 0} sources`);
+      } else if (finalParsed['__raw__']) {
         // Fallback: tag raw context under the correct ticker
-        pplxData[sym] = { ...parsed['__raw__'], _ticker: sym };
+        pplxData[sym] = { ...finalParsed['__raw__'], _ticker: sym };
         console.log(`[PT] Perplexity raw fallback for ${sym}`);
       }
     } catch(e) {
