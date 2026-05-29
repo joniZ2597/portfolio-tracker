@@ -3140,24 +3140,12 @@ function renderMainPanel(item) {
   // Re-renders the panel when data arrives if this ticker is still selected
   refreshTechPanel(item.ticker, dispEtf, item._verifiedPrice);
 
-  // Catalysts list — conservative: negative events require explicit phrases
-  const _hasBeat = sl.includes('earnings beat') || sl.includes('beat estimates') || sl.includes('beat expectations');
-  const _hasMiss = sl.includes('earnings miss') || sl.includes('missed estimates') || sl.includes('missed expectations') || sl.includes('earnings disappointment');
-  const _hasDowngrade = sl.includes('analyst downgrade') || sl.includes('rating cut') || sl.includes('downgraded to') || (sl.includes('downgrade') && !sl.includes('no downgrade'));
-  const _hasUpgrade   = (sl.includes('upgrade')||sl.includes('analyst upgrade')||sl.includes('rating raised')) && !_hasDowngrade;
-  // Only show miss if beat is NOT also present, unless both are explicitly stated
-  const _showMiss = _hasMiss && (!_hasBeat || (sl.includes('earnings miss') && sl.includes('earnings beat')));
-  const catalysts = [
-    [sl.includes('hbm')||sl.includes('ai demand')||sl.includes('ai-driven'), 'AI Memory Demand', 'HIGH', 'pos'],
-    [sl.includes('hbm'), 'HBM Cycle', 'POSITIVE', 'pos'],
-    [_hasBeat, 'Earnings Beat', 'POSITIVE', 'pos'],
-    [_hasUpgrade, 'Analyst Upgrades', '+UPGRADE', 'pos'],
-    [_showMiss, 'Earnings Miss', 'NEGATIVE', 'neg'],
-    [_hasDowngrade, 'Analyst Downgrade', 'RISK', 'neg'],
-    [sl.includes('sector rotation'), 'Sector Rotation', 'WATCH', 'warn'],
-    [sl.includes('profit-taking')||sl.includes('profit taking'), 'Profit Taking', 'WATCH', 'warn'],
-    [sl.includes('macro')||sl.includes('tariff'), 'Macro Risk', 'WATCH', 'warn'],
-  ].filter(([c])=>c).slice(0,5);
+  // 7B-2B: hardcoded summary-substring catalyst dictionary removed.
+  // The CATALYSTS panel now reads real ticker-specific rows from item._catalysts
+  // (attached by orchestrate in 7B-2A). Row builder is defined just before
+  // panel.innerHTML so it can use the _esc helper. The fallback ternary in the
+  // render block continues to handle _catalystDataMissing, _hasStructuredCatalysts,
+  // and pre-7B-2A persisted results without _catalysts.
 
   // Sparkline removed in Phase 2b header
 
@@ -3198,6 +3186,56 @@ function renderMainPanel(item) {
   const chgCls2   = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
   // Phase 6A-1: escape AI-generated prose fields before HTML insertion
   const _esc = s => s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : '';
+
+  // 7B-2B: build real catalyst rows from item._catalysts (attached by 7B-2A orchestrate).
+  // Priority order: analystActions → bullish → bearish → macro → earnings (only if room).
+  // Cap at 5 visible rows. All Perplexity-sourced strings pass through _esc + truncation.
+  // When _catalysts is absent (pre-7B-2A persisted results) or empty, catalystRows stays
+  // empty and the render block falls through to the existing _catalystDataMissing /
+  // _hasStructuredCatalysts / "No verified catalysts" ternary.
+  const _trunc70 = s => { s = String(s == null ? '' : s); return s.length > 70 ? s.slice(0, 67) + '…' : s; };
+  const _actionPosVerbs = ['raised','boosted','hiked','initiated','started','resumed','upgraded','reinstated'];
+  const _actionNegVerbs = ['cut','lowered','reduced','trimmed','downgraded'];
+  const _actionNeuVerbs = ['maintained','reiterated','set','launched'];
+  const _actionStateOf = v => {
+    const vv = String(v || '').toLowerCase();
+    if (_actionPosVerbs.includes(vv)) return { state: 'POSITIVE', cls: 'pos' };
+    if (_actionNegVerbs.includes(vv)) return { state: 'RISK',     cls: 'neg' };
+    if (_actionNeuVerbs.includes(vv)) return { state: 'WATCH',    cls: 'warn' };
+    return { state: 'WATCH', cls: 'warn' };
+  };
+  const _c = item._catalysts || null;
+  const catalystRows = [];
+  if (_c) {
+    const ROW_CAP = 5;
+    for (const a of (_c.analystActions || [])) {
+      if (catalystRows.length >= ROW_CAP) break;
+      const { state, cls } = _actionStateOf(a && a.action);
+      const bank = _esc(_trunc70(a && a.bank));
+      const action = _esc(String((a && a.action) || '').toLowerCase());
+      const target = (a && typeof a.target === 'number') ? a.target : null;
+      const lbl = (bank && action && target !== null)
+        ? `${bank} ${action} PT $${target}`
+        : _esc(_trunc70((a && a.raw) || 'Analyst action'));
+      catalystRows.push({ cls, lbl, state });
+    }
+    for (const s of (_c.bullish || [])) {
+      if (catalystRows.length >= ROW_CAP) break;
+      catalystRows.push({ cls: 'pos',       lbl: _esc(_trunc70(s)), state: 'POSITIVE' });
+    }
+    for (const s of (_c.bearish || [])) {
+      if (catalystRows.length >= ROW_CAP) break;
+      catalystRows.push({ cls: 'neg',       lbl: _esc(_trunc70(s)), state: 'RISK' });
+    }
+    for (const s of (_c.macro || [])) {
+      if (catalystRows.length >= ROW_CAP) break;
+      catalystRows.push({ cls: 'warn',      lbl: _esc(_trunc70(s)), state: 'MACRO' });
+    }
+    const _earn = _c.earnings;
+    if (catalystRows.length < ROW_CAP && _earn && !/^(NONE|N\/?A|-|—|unknown)\b/i.test(String(_earn).trim())) {
+      catalystRows.push({ cls: 'neutral-v', lbl: _esc(_trunc70(_earn)), state: 'EARNINGS' });
+    }
+  }
 
   panel.innerHTML = `
     <!-- PULSE v1.1 TICKER HEADER -->
@@ -3327,7 +3365,7 @@ function renderMainPanel(item) {
           <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
         </div>`}
         <div class="cat-list" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
-          ${catalysts.length ? catalysts.map(([,lbl,state,cls])=>`
+          ${catalystRows.length ? catalystRows.map(({cls,lbl,state})=>`
           <div class="cat-row">
             <div class="cat-dot ${cls}"></div>
             <span class="cat-lbl">${lbl}</span>
