@@ -1534,20 +1534,29 @@ function hideProgress() { setProgress(100, ''); }
 // ── Perplexity: fetch structured context ────────────────────────────────────
 async function fetchPerplexityContext(batch) {
   const ticker = batch[0];
-  const query = `Report on ${ticker} for the past 7 days. EXACTLY this format. No markdown. No hedging.
+  // 7B-3A: widened window — primary 14 days, still-active fallback up to 30 days,
+  // explicit prior-session inclusion, broader catalyst category prompt, softer NONE rule.
+  // Parser still reads only the existing labels; new GUIDANCE/CONTRACTS/PEER_MOVE lines
+  // flow to Anthropic via RAW CONTEXT until parser hardening (7B-3B, if needed).
+  const query = `Report on ${ticker}. Cover the past 14 calendar days as the primary window, AND any catalyst from the past 30 days that traders/investors still cite as a driver of current price action. Include prior-session catalysts when they still explain today's move. EXACTLY this format. No markdown. No hedging.
+
+Look for: analyst actions / price-target changes, earnings beat/miss with revenue and EPS detail, guidance raise/cut, contracts / backlog / customer wins, M&A or strategic deals, sector or peer sympathy moves (e.g. read-through from a peer's earnings), and macro triggers.
 
 TICKER: ${ticker}
 ANALYST_ACTIONS: [bank] [raised/cut/initiated] PT $[number] ([date e.g. May 14]) | [next action if any]
 REVISION_DIRECTION: [upgrading/downgrading/mixed/stable] — analyst revision trend past 30 days
 REVISION_RECENCY: [date of most recent revision]
-EARNINGS: [last quarter — beat/miss/in-line and key metric e.g. "Q2 beat, revenue +49% YoY"]
+EARNINGS: [last quarter — beat/miss/in-line + key metric e.g. "Q2 beat, revenue +49% YoY, EPS $0.27 vs $0.22"]
+GUIDANCE: [most recent guidance update — raised/cut/maintained + metric and date]
+CONTRACTS: [recent material contract, customer win, or backlog change with date]
 BULLISH: [specific catalyst with date if known] | [next]
 BEARISH: [specific risk] | [next]
 MACRO: [macro factor] | [next]
+PEER_MOVE: [sector or peer move with read-through, with date]
 PRICE_TODAY: $[close] [change%]
 DATA_FRESHNESS: [today/this week/this month]
 
-Use NONE for any field with no data. Be specific with numbers and dates.`;
+Use NONE only when no relevant information exists. If relevant information exists but is older than the primary 14-day window and is still being cited as a driver, include it with the date instead of NONE. Be specific with numbers and dates.`;
 
   const response = await fetch('/.netlify/functions/perplexity-proxy', {
     method: 'POST',
