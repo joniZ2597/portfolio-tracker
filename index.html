@@ -2112,6 +2112,19 @@ function orchestrate(claudeResults, pplxData, stockData) {
       revisionDir:     _pplx6a?.revisionDirection || null,
       revisionRecency: _pplx6a?.revisionRecency   || null
     };
+    // 7B-3D0: enrich the per-ticker memory-only debug snapshot with orchestrated/result
+    // fields and the formatNewsContext output (what Anthropic actually sees). NEVER persisted.
+    if (window._pplxDebug && window._pplxDebug[sym]) {
+      try {
+        window._pplxDebug[sym].resultCatalysts        = JSON.parse(JSON.stringify(item._catalysts));
+        window._pplxDebug[sym].catalystDataMissing    = item._catalystDataMissing;
+        window._pplxDebug[sym].hasStructuredCatalysts = item._hasStructuredCatalysts;
+        window._pplxDebug[sym].catalystDirection      = item._catalystDirection;
+        window._pplxDebug[sym].newsBias               = item.news_bias || null;
+        window._pplxDebug[sym].actionableAction       = item.action    || null;
+        window._pplxDebug[sym].formattedNewsContext   = (typeof formatNewsContext === 'function') ? formatNewsContext(pplxData, sym) : null;
+      } catch (_e) { /* debug-only; never break the run */ }
+    }
     // 6B-3: Key Risk / Catalyst Contradiction Guard
     // When structured bullish catalysts exist but Claude's key_risk denies catalyst existence,
     // replace with a setup-aware deterministic fallback. Bearish/mixed/missing left untouched.
@@ -2170,6 +2183,10 @@ function orchestrate(claudeResults, pplxData, stockData) {
       }
     };
     console.log(`[PT] auditTrail ${sym}:`, JSON.stringify(item._auditTrail));
+    // 7B-3D0: attach sourceTrace into the memory-only debug snapshot (auditTrail now ready)
+    if (window._pplxDebug && window._pplxDebug[sym] && item._auditTrail) {
+      window._pplxDebug[sym].sourceTrace = item._auditTrail.sourceTrace || null;
+    }
     item._orchestrated = true;
     item._orchestratedAt = new Date().toISOString();
     return item;
@@ -2239,6 +2256,16 @@ async function analyzeChunk(batch, today) {
       // 7B-1: fetch now returns { raw, sources }; parser attaches sources per ticker
       const { raw, sources } = await fetchPerplexityContext([sym]); // single ticker only
       const parsed = parsePerplexityContext(raw, sources);
+      // 7B-3D0: memory-only debug snapshot — capture raw + parsed per ticker. NEVER persisted.
+      if (!window._pplxDebug) window._pplxDebug = {};
+      window._pplxDebug[sym] = {
+        rawText:      raw,
+        rawLength:    (raw || '').length,
+        sourcesCount: Array.isArray(sources) ? sources.length : 0,
+        parsed:       parsed[sym] || parsed['__raw__'] || null,
+        parsedFrom:   parsed[sym] ? 'ticker-header' : (parsed['__raw__'] ? '__raw__-fallback' : 'empty'),
+        capturedAt:   new Date().toISOString()
+      };
       // Merge into pplxData — only under the correct ticker key
       if (parsed[sym]) {
         pplxData[sym] = parsed[sym];
@@ -2340,7 +2367,8 @@ async function analyzeChunk(batch, today) {
 
   const orchestrated = orchestrate(raw, pplxData, stockData);
 
-  window._lastRunState = { stockData, pplxData, techSnap: _techSnap6a, setupState: _setupState6a, runId: Date.now(), timestamp: new Date().toISOString() };
+  // 7B-3D0: mirror the memory-only debug accumulator into _lastRunState for ergonomic access
+  window._lastRunState = { stockData, pplxData, techSnap: _techSnap6a, setupState: _setupState6a, runId: Date.now(), timestamp: new Date().toISOString(), pplxDebug: window._pplxDebug || {} };
 
   const resultsWithPct = orchestrated.map(item => {
     const mkt = stockData[item.ticker];
@@ -3539,6 +3567,9 @@ async function runAnalysis() {
   // Reset only in-memory pipeline state (not localStorage)
   window._lastPplxRaw = null;
   window._lastStockData = null;
+  // 7B-3D0: memory-only Perplexity debug snapshot accumulator (cleared per scan).
+  // Captured raw text and parsed/result fields keyed by ticker. NEVER persisted.
+  window._pplxDebug = {};
   if (window._fetchTimestamps) Object.keys(window._fetchTimestamps).forEach(k => delete window._fetchTimestamps[k]);
   document.querySelectorAll('[class*="deepdive-result"]').forEach(el => { el.style.display = 'none'; const txt = el.querySelector('[id^="dd-text-"]'); if (txt) txt.textContent = ''; });
   document.querySelectorAll('[id^="dd-btn-"]').forEach(btn => { btn.textContent = 'Deep Dive — ניתוח מוסדי מעמיק'; btn.disabled = false; });
