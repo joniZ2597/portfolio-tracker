@@ -1598,8 +1598,37 @@ function parsePerplexityContext(raw, sources = []) {
     const v = line.slice(idx + 1).trim();
     return _isNoneVal(v) ? '' : v;
   };
-  // Split a list value on " | " into clean items, dropping NONE/empties
-  const _splitList = (val) => val ? val.split(/\s*\|\s*/).map(s => s.trim()).filter(s => s && !_isNoneVal(s)).slice(0, 4) : [];
+  // 7B-3B1: catalyst quality guard — reject price-history-only rows that sonar-pro
+  // occasionally puts in BULLISH/BEARISH/MACRO slots (e.g. "May 28, 2026 stock close
+  // at $214.25"). Only rejects when the row matches a price-history pattern AND has
+  // NO real catalyst term. Conservative-by-default: a row mentioning a price alongside
+  // a real catalyst term (e.g. "Q1 earnings beat drove shares to close at $185") is kept.
+  const _isPriceHistoryOnly = s => {
+    const t = String(s || '').toLowerCase();
+    if (!t) return false;
+    const looksLikePriceHistory =
+      /\b(?:close[ds]?|trad(?:ed|ing))\s+(?:at|near|around)\s+\$?\d/i.test(t) ||
+      /\bshares\s+closed?\b/i.test(t) ||
+      /\btrading\s+range\b/i.test(t) ||
+      /\b(?:intraday|52[- ]week|year[- ]to[- ]date)\s+(?:high|low|range)\b/i.test(t) ||
+      /^\s*(?:on\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s*\d{4})?\b[^a-z]*\$\d/i.test(t);
+    if (!looksLikePriceHistory) return false;
+    const hasCatalyst = /\b(?:earnings|eps|revenue|beat|miss|guidance|raise[ds]?|cut|price\s+target|\bpt\b|analyst|upgrad|downgrad|initiat|reiterat|maintain|contract|customer|partnership|\bwin\b|backlog|acquisit|merger|m&a|regulat|approv|\bfda\b|sanction|tariff|demand|supply|capacity|expansion|sector|peer|sympathy|rotation|macro|\bfed\b|\brate\b|inflation|\bgdp\b|buyback|dividend)\b/i.test(t);
+    return !hasCatalyst;
+  };
+  // 7B-3B1: per-ticker filter accumulator (reset at start of each flushTicker call)
+  const _filterStats = { count: 0, samples: [] };
+  // Split a list value on " | " into clean items, dropping NONE/empties and
+  // (7B-3B1) price-history-only rows. Filter stats reported via _filterStats.
+  const _splitList = (val) => val ? val.split(/\s*\|\s*/).map(s => s.trim()).filter(s => {
+    if (!s || _isNoneVal(s)) return false;
+    if (_isPriceHistoryOnly(s)) {
+      _filterStats.count++;
+      if (_filterStats.samples.length < 2) _filterStats.samples.push(s.slice(0, 60));
+      return false;
+    }
+    return true;
+  }).slice(0, 4) : [];
   // Extract analyst actions by action verb — captures bank phrase + verb + PT amount.
   // Bank phrase is anything reasonable up to the action verb; no hardcoded list.
   const ACTION_RE = /([A-Z][\w&.\- ]{1,40}?)\s+(raised|cut|lowered|trimmed|reduced|initiated|reiterated|maintained|started|launched|reinstated|resumed|upgraded|downgraded|boosted|hiked|set)\b[^\n$]{0,80}\$([0-9,]+(?:\.[0-9]+)?)/gi;
@@ -1624,6 +1653,10 @@ function parsePerplexityContext(raw, sources = []) {
   const flushTicker = () => {
     if (!currentTicker || !currentLines.length) return;
 
+    // 7B-3B1: reset quality-filter stats for this ticker block
+    _filterStats.count = 0;
+    _filterStats.samples.length = 0;
+
     // 7B-1: structural extraction from the template lines themselves.
     // Scope action extraction to the ANALYST_ACTIONS line to avoid false positives
     // from prose that mentions "$N" outside the template (e.g. Fed rate prose).
@@ -1632,6 +1665,11 @@ function parsePerplexityContext(raw, sources = []) {
     const bullishCatalysts = _splitList(_readField('BULLISH', currentLines));
     const bearishCatalysts = _splitList(_readField('BEARISH', currentLines));
     const macroDrivers     = _splitList(_readField('MACRO',   currentLines));
+    // 7B-3B1: report quality-filter activity per ticker, if any
+    if (_filterStats.count > 0) {
+      const _samples = _filterStats.samples.map(s => `"${s}"`).join(' | ');
+      console.warn(`[PT] ${currentTicker}: filtered ${_filterStats.count} price-history-only catalyst rows${_samples ? ' (samples: ' + _samples + ')' : ''}`);
+    }
     const revDir          = _readField('REVISION_DIRECTION', currentLines) || 'unknown';
     const revRecency      = _readField('REVISION_RECENCY',   currentLines) || 'unknown';
     const dataFreshness   = _readField('DATA_FRESHNESS',     currentLines) || 'unknown';
