@@ -3722,13 +3722,22 @@ function renderMainPanel(item) {
     // Name comes from the watchlist via findTicker(sym).name; falls back to ticker-only. No event seeding.
     let _subj = sym;
     try { const _e = (typeof findTicker==='function') && findTicker(sym); if (_e && _e.name) _subj = `${sym} (${_e.name})`; } catch(_){}
-    const content0 = CATS[key].q(_subj) + '. Be specific with names, numbers, and dates; use NONE if nothing; cite a source URL with a date for every item.';
+    // 7B-6C-9C-2: validated lightweight query-first structured-verdict prompt (no NONE-bias).
+    // Query first (company-name-aware _subj preserved), brief analysis, then exactly one verdict block.
+    const _today9c = new Date().toISOString().slice(0,10);
+    const _fmt9c = '===VERDICT===\nSTATUS: HARD | WEAK | STALE | NONE\nEVENT_DATE: YYYY-MM-DD | NONE\nEVENT_TYPE: <short label> | NONE\nSUMMARY: <one line>\nSOURCE_URL: <best supporting URL> | NONE\nSOURCE_TYPE: IR | SEC | gov | news | analyst-aggregator | price-aggregator | other | NONE\nCONFIDENCE: high | medium | low\nREASON: <one line>\n===END===';
+    const content0 = CATS[key].q(_subj)
+      + '. Be specific with names, amounts, and dates; cite a source URL with a date for each item. Keep the analysis brief, maximum 120 words, then output the verdict block.\n\n'
+      + 'Output EXACTLY ONE verdict block as the FINAL text of your answer. Never omit it.\n'
+      + 'Today is ' + _today9c + '; "current" = dated within the last 35 days.\n'
+      + 'STATUS values: HARD = current dated item with a strong/reputable source; WEAK = current dated item with a weaker/aggregator source; STALE = a relevant item exists but is outside the current window; NONE = no relevant item found.\n\n'
+      + _fmt9c;
     const ctrl = new AbortController();
     const tid = setTimeout(()=>ctrl.abort(), CALL_TIMEOUT_MS);
     try {
       const resp = await fetch('/.netlify/functions/perplexity-proxy', {
         method:'POST', headers:{'Content-Type':'application/json'}, signal:ctrl.signal,
-        body: JSON.stringify({ model:'sonar-pro', messages:[{role:'user', content:content0}], max_tokens:700, search_recency_filter:'month' })
+        body: JSON.stringify({ model:'sonar-pro', messages:[{role:'user', content:content0}], max_tokens:1300, search_recency_filter:'month' })
       });
       clearTimeout(tid);
       const data = await resp.json();
@@ -3907,7 +3916,7 @@ function renderMainPanel(item) {
     if (rs==='HARD'||rs==='WEAK'||rs==='STALE') return { finalStatus:rs, retryAttempted:true, retryRecovered:true };
     return { finalStatus:'NOT_FOUND_LOW_CONFIDENCE', retryAttempted:true, retryRecovered:false };
   }
-  void _parseVerdict; void _reconcile; void _noneTrust; void _resolveUntrustedNone; // 7B-6C-9C-1: defined-but-unused (dormant)
+  void _noneTrust; void _resolveUntrustedNone; // 7B-6C-9C-2: still dormant (NONE-trust + retry deferred to 9C-3); _parseVerdict/_reconcile now wired
 
   window.runQuerySplitDeepDive = async function(sym){
     if (window[FLAG] !== true) { console.warn('[PT][DeepDive] disabled — set window.PT_ENABLE_QUERY_SPLIT_DEEPDIVE = true to enable (dev/QA only).'); return null; }
@@ -3917,22 +3926,50 @@ function renderMainPanel(item) {
     if (_ddCache[sym] && _ddCache[sym].day === day) { console.log('[PT][DeepDive] cached result for', sym); return _ddCache[sym].data; }
     const cats = _selectCats(sym);
     const t0 = Date.now();
+    const _today = new Date().toISOString().slice(0,10); // 7B-6C-9C-2: runtime today for date reconciliation
     const raw = await _runPool(cats.map(k => () => _callCategory(sym, k)), CONCURRENCY);
-    let hardCatalystCount=0, staleRejectedCount=0, weakSourceCount=0;
+    let hardCatalystCount=0, staleRejectedCount=0, weakSourceCount=0, structuredCount=0, regexFallbackCount=0;
     const allTiers = [];
+    // 7B-6C-9C-2: reuse the EXISTING _classify bestTier semantics (Tier-4 rejected; min of T1/T2 else 3 else null;
+    // Form-4 Tier-2 promotion already applied in _callCategory) so the structured path stays consistent.
+    const _bestTierOf = (sources) => { const kept=(sources||[]).filter(s=>s.tier!==4); const t12=kept.filter(s=>s.tier===1||s.tier===2).map(s=>s.tier); const hasT3=kept.some(s=>s.tier===3); return t12.length?Math.min.apply(null,t12):(hasT3?3:null); };
     const categories = raw.map(r => {
-      const c = _classify(r);
       (r.sources||[]).forEach(s=>{ if(s.tier!==4) allTiers.push(s.tier); });
-      if (c.status==='hard') hardCatalystCount++;
-      else if (c.status==='stale') staleRejectedCount++;
-      else if (c.status==='weak') weakSourceCount++;
-      return { category:r.label, status:c.status, bestTier:c.bestTier, note:c.note||null, error:r.error||null, latencyMs:r.latencyMs, sourceTiers:(r.sources||[]).map(s=>s.tier), snippet:(r.content||'').slice(0,260) };
+      // 7B-6C-9C-2: structured verdict is PRIMARY; existing regex _classify retained ONLY as fallback.
+      const _v = _parseVerdict(r.content || '');
+      let verdictSource, status, finalStatus, modelStatus=null, reconciledFrom=null, eventDate=null, dateAmbiguous=false, bestTier=null, note=null, noneTrustPending=false;
+      if (r.ok && _v.parseOk && _v.validStatus) {
+        verdictSource = 'structured'; structuredCount++;
+        bestTier = _bestTierOf(r.sources);
+        const _rec = _reconcile(_v, { bestTier, today:_today });
+        finalStatus = _rec.status;                       // HARD | WEAK | STALE | NONE (reconciled)
+        modelStatus = _v.modelStatus; reconciledFrom = _rec.reconciledFrom;
+        eventDate = _v.eventDate; dateAmbiguous = !!_v.dateAmbiguous;
+        status = String(finalStatus).toLowerCase();
+        // 9C-2: structured NONE stays PROVISIONAL — NONE-trust + retry deferred to 9C-3 (helpers NOT called here).
+        if (finalStatus === 'NONE') noneTrustPending = true;
+      } else {
+        verdictSource = 'regex-fallback'; regexFallbackCount++;
+        const c = _classify(r);                          // unchanged fallback path (missing/invalid verdict block)
+        status = c.status; finalStatus = String(c.status||'').toUpperCase();
+        bestTier = c.bestTier; note = c.note || null;
+      }
+      if (status==='hard') hardCatalystCount++;
+      else if (status==='stale') staleRejectedCount++;
+      else if (status==='weak') weakSourceCount++;
+      return { category:r.label, status, finalStatus, verdictSource, verdictPresent:_v.present, parseOk:_v.parseOk,
+               modelStatus, reconciledFrom, eventDate, dateAmbiguous, bestTier,
+               noneTrustPending: noneTrustPending || undefined,
+               finalStatusProvisional: (verdictSource==='structured' && finalStatus==='NONE') || undefined,
+               note, error:r.error||null, latencyMs:r.latencyMs, sourceTiers:(r.sources||[]).map(s=>s.tier), snippet:(r.content||'').slice(0,260) };
     });
     const pts = allTiers.map(t=> t===1?3 : t===2?2 : t===3?0 : -1);
     const sourceQualityScore = pts.length ? +(pts.reduce((a,b)=>a+b,0)/pts.length).toFixed(2) : null;
+    const structuredVerdictRate = raw.length ? +(structuredCount/raw.length).toFixed(2) : null;
     const data = {
       sym, day, querySplitUsed:true, querySplitCallCount:raw.length, querySplitLatencyMs:Date.now()-t0,
-      hardCatalystCount, staleRejectedCount, weakSourceCount, sourceQualityScore, categories
+      hardCatalystCount, staleRejectedCount, weakSourceCount, sourceQualityScore,
+      structuredVerdictRate, regexFallbackCount, categories
     };
     if (!window._pplxDebug) window._pplxDebug = {};                 // memory-only (never persisted)
     window._pplxDebug[sym] = Object.assign(window._pplxDebug[sym]||{}, { deepDive:data });
