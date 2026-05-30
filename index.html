@@ -3812,7 +3812,14 @@ function renderMainPanel(item) {
     const _lead = (_leadM ? _leadM[0] : _ntLead).slice(0, 240);
     // 7B-6C-7 positive-precedence: an in-window real finding must not be nulled by a trailing
     // "no other" / older mention. When present, skip the stale/none branches and use tier logic.
-    const _posFinding = has2026 && _POS.some(re => re.test(ntxt));
+    // 7B-6C-8 lead-order guard: a leading "no current event" negation must NOT be overridden by an
+    // out-of-window item listed later. If the lead itself is a negation, require a _POS match in
+    // the lead BEFORE that negation (the "found one ... no other" shape). Clean leads behave as 7B-6C-7.
+    const _firstIdx = (arr, s) => { let m = -1; for (const re of arr) { const i = s.search(re); if (i >= 0 && (m < 0 || i < m)) m = i; } return m; };
+    const _negLeadIdx = _firstIdx(_NEG_NONE.concat(_NEG_STALE), _lead);   // -1 if lead has no negation
+    const _posLeadIdx = _firstIdx(_POS, _lead);                            // -1 if no positive in lead
+    const _posOkInLead = (_negLeadIdx < 0) || (_posLeadIdx >= 0 && _posLeadIdx < _negLeadIdx);
+    const _posFinding = has2026 && _POS.some(re => re.test(ntxt)) && _posOkInLead;
     if (!_posFinding) {
       // out-of-window-only prose => stale; explicit no-current-event prose (lead) => none.
       if (_NEG_STALE.some(re=>re.test(ntxt)))  return { status:'stale', note:'only out-of-window items found', bestTier:_bt };
