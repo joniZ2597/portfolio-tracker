@@ -3832,6 +3832,83 @@ function renderMainPanel(item) {
     return { status:'weak', bestTier: hasT3?3:(kept[0]?kept[0].tier:3) }; // low-confidence
   }
 
+  // ==========================================================================
+  // Phase 7B-6C-9C-1: pure structured-verdict helpers (DORMANT — NOT WIRED).
+  // Validated against the offline harness (9c_offline_tests.js: 55/55).
+  // Pure functions only: no fetch, no localStorage, no pt_results, no mutation.
+  // Not yet referenced by any live execution path (no call sites). 'today' is
+  // passed via context (not hard-coded for runtime). Reserved for 7B-6C-9C-2 wiring.
+  // ==========================================================================
+  const _isRealDate9c = s => { const a=String(s).split('-').map(Number), y=a[0], m=a[1], d=a[2]; if(!(m>=1&&m<=12&&d>=1&&d<=31)) return false; const dt=new Date(Date.UTC(y,m-1,d)); return dt.getUTCFullYear()===y && dt.getUTCMonth()===m-1 && dt.getUTCDate()===d; };
+  const _dateInfo9c = (eventDate, today) => {
+    if (eventDate==null || /^NONE$/i.test(eventDate)) return { valid:false, isNone:true, ageDays:null, ambiguous:false };
+    if (/^\d{4}-\d{2}-\d{2}$/.test(eventDate) && _isRealDate9c(eventDate)) {
+      const age = Math.round((Date.parse(today+'T00:00:00Z') - Date.parse(eventDate+'T00:00:00Z'))/86400000);
+      return { valid:true, isNone:false, ageDays:age, ambiguous:false };
+    }
+    return { valid:false, isNone:false, ageDays:null, ambiguous:true };
+  };
+  // A. _parseVerdict — parse only the LAST verdict block; missing/invalid => needsFallback.
+  function _parseVerdict(content){
+    const blocks=[...String(content).matchAll(/===VERDICT===([\s\S]*?)===END===/g)];
+    const present=blocks.length>=1;
+    const body=present?blocks[blocks.length-1][1]:'';
+    const sm=body.match(/STATUS:\s*([A-Za-z_]+)/);
+    const rawStatus=sm?sm[1].toUpperCase():null;
+    const validStatus=['HARD','WEAK','STALE','NONE'].indexOf(rawStatus)>=0;
+    const dm=body.match(/EVENT_DATE:\s*([^\n]+)/);
+    const dRaw=dm?dm[1].trim():null;
+    let eventDate=dRaw, dateValid=false, dateAmbiguous=false;
+    if (dRaw==null) { dateValid=false; }
+    else if (/^NONE$/i.test(dRaw)) { eventDate='NONE'; dateValid=true; }
+    else if (/^\d{4}-\d{2}-\d{2}$/.test(dRaw) && _isRealDate9c(dRaw)) { eventDate=dRaw; dateValid=true; }
+    else { dateValid=false; dateAmbiguous=true; }
+    const _g=(re)=>{ const m=body.match(re); return m?m[1].trim():null; };
+    const eventType=_g(/EVENT_TYPE:\s*([^\n]+)/), summary=_g(/SUMMARY:\s*([^\n]+)/),
+          sourceUrl=_g(/SOURCE_URL:\s*([^\n]+)/), sourceType=_g(/SOURCE_TYPE:\s*([^\n]+)/),
+          confidence=_g(/CONFIDENCE:\s*(high|medium|low)/i), reason=_g(/REASON:\s*([^\n]+)/);
+    const parseOk = present && validStatus && dateValid && !!confidence && !!(reason && reason.length>0);
+    return { present, validStatus, modelStatus: validStatus?rawStatus:null, eventDate, dateValid, dateAmbiguous,
+             eventType, summary, sourceUrl, sourceType, confidence, reason, parseOk, needsFallback: !present || !validStatus };
+  }
+  // B. _reconcile — deterministic tier/date reconciliation; NONE passes through. Pure.
+  function _reconcile(parsed, ctx){
+    const st=parsed.modelStatus, di=_dateInfo9c(parsed.eventDate, (ctx&&ctx.today)||''), bt=ctx&&ctx.bestTier;
+    if (st==='NONE') return { status:'NONE', reconciledFrom:null, dateAmbiguous:di.ambiguous };
+    const tier12=(bt===1||bt===2), inWin=di.valid&&di.ageDays<=35, outWin=di.valid&&di.ageDays>35;
+    let status=st, from=null;
+    if (st==='STALE'){
+      if (inWin && tier12){ status='HARD'; from='STALE->HARD(in-window)'; }
+      else if (inWin && bt===3){ status='WEAK'; from='STALE->WEAK(in-window)'; }
+    } else { // HARD or WEAK
+      if (st==='HARD' && !tier12){ status='WEAK'; from='HARD->WEAK(tier3)'; }
+      if (outWin){ status='STALE'; from=(from?from+'; ':'')+(st+'->STALE(date>35d)'); }
+    }
+    return { status, reconciledFrom:from, dateAmbiguous:di.ambiguous };
+  }
+  // C. _noneTrust — decide trusted vs untrusted NONE. Read-only context; no storage, no mutation.
+  const _HIGH9c=['RKLB|insider','NVDA|buyback','NVDA|analyst','ARM|earnings','LUNR|contracts'];
+  const _EVENT9c=['earnings','analyst','insider','buyback','contracts','mna','m&a'];
+  function _noneTrust(ctx){
+    ctx=ctx||{};
+    const key=String(ctx.key||'').toLowerCase();
+    const isHigh=_HIGH9c.indexOf((ctx.sym||'')+'|'+(ctx.key||''))>=0;
+    const isEvent=_EVENT9c.indexOf(key)>=0;
+    const heavy=(ctx.catalystHeavy===true)||isHigh||(isEvent && ctx.pulseCatalystMissing===true);
+    const lowSQS=(ctx.sourceQualityScore!=null && ctx.sourceQualityScore<=0.2);
+    const untrusted=!!heavy || (ctx.pulseCatalystMissing===true) || !!lowSQS;
+    return { noneTrusted:!untrusted, noneUntrusted:untrusted, heavy:!!heavy };
+  }
+  // D. _resolveUntrustedNone — outcome only (no retry/fetch here). Untrusted NONE never stays plain NONE.
+  function _resolveUntrustedNone(ctx){
+    ctx=ctx||{};
+    if (ctx.circuitOpen) return { finalStatus:'NOT_FOUND_LOW_CONFIDENCE', retryAttempted:false, retryRecovered:false };
+    const rs=ctx.retryStatus;
+    if (rs==='HARD'||rs==='WEAK'||rs==='STALE') return { finalStatus:rs, retryAttempted:true, retryRecovered:true };
+    return { finalStatus:'NOT_FOUND_LOW_CONFIDENCE', retryAttempted:true, retryRecovered:false };
+  }
+  void _parseVerdict; void _reconcile; void _noneTrust; void _resolveUntrustedNone; // 7B-6C-9C-1: defined-but-unused (dormant)
+
   window.runQuerySplitDeepDive = async function(sym){
     if (window[FLAG] !== true) { console.warn('[PT][DeepDive] disabled — set window.PT_ENABLE_QUERY_SPLIT_DEEPDIVE = true to enable (dev/QA only).'); return null; }
     sym = String(sym||'').toUpperCase().trim();
