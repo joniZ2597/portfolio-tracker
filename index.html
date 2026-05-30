@@ -338,6 +338,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .mp-dd-bar{padding:10px 22px;border-top:1px solid var(--border);background:rgba(0,0,0,.15)}
 .mp-dd-btn{font-family:var(--mono);font-size:9px;font-weight:500;background:none;border:1px solid var(--border2);border-radius:2px;color:var(--text3);padding:5px 12px;cursor:pointer;text-transform:uppercase;letter-spacing:1px}
 .mp-dd-btn:hover{color:var(--text2);border-color:var(--text3)}
+.mp-dd-btn:disabled{opacity:.4;cursor:not-allowed}
+.edgar-dd-status{display:inline-block;font-family:var(--mono);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:3px 8px;border-radius:2px;margin-bottom:8px;background:rgba(0,0,0,.18)}
 .dd-detail-row{display:flex;gap:12px;padding:7px 0;border-bottom:1px solid var(--border)}
 .dd-detail-tag{font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;min-width:56px;padding-top:2px;white-space:nowrap}
 .dd-detail-body{font-size:12px;color:var(--text2);line-height:1.6}
@@ -3675,7 +3677,15 @@ function renderMainPanel(item) {
         <span class="src-trace-chip">Updated: <span class="src-trace-val neutral-v">${(() => { const t = item._orchestratedAt || item._timestamp; if (!t) return '—'; try { return new Date(t).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'}); } catch(e) { return '—'; } })()}</span></span>
       </div>
     </div>
-
+${window.PT_ENABLE_EDGAR_FORM4 === true ? `
+    <div class="mp-dd-bar" id="edgar-dd-bar-${item.ticker}">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <span style="font-family:var(--mono);font-size:8px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">Insider / Form 4 — EDGAR</span>
+        <button class="mp-dd-btn" id="edgar-dd-btn-${item.ticker}"
+          onclick="_runEdgarInsiderDeepDive('${item.ticker}')">▶ Run Deep Dive</button>
+      </div>
+      <div id="edgar-dd-panel-${item.ticker}" style="display:none;margin-top:10px"></div>
+    </div>` : ''}
   `; /* Deep Dive deferred to v1.2 — not rendered */
 }
 
@@ -4041,6 +4051,7 @@ function renderMainPanel(item) {
                edgarCoverageComplete, edgarTruncated,
                edgarError:'contract_mismatch:'+ef4.status+':events='+events.length });
   }
+  window._buildEdgarInsiderCat = _buildEdgarInsiderCat; // 7B-6E-5a: shared EDGAR-to-status mapper
 
   window.runQuerySplitDeepDive = async function(sym){
     if (window[FLAG] !== true) { console.warn('[PT][DeepDive] disabled — set window.PT_ENABLE_QUERY_SPLIT_DEEPDIVE = true to enable (dev/QA only).'); return null; }
@@ -4229,6 +4240,157 @@ function renderMainPanel(item) {
     return out;
   };
 })();
+
+// ── 7B-6E-5a: EDGAR Insider Deep Dive UI ─────────────────────────────────────
+// Dev-only manual trigger. Gated behind PT_ENABLE_EDGAR_FORM4.
+// Memory-only: no pt_results, localStorage, scoring, or sonar-pro calls.
+// Uses window._buildEdgarInsiderCat as the single shared EDGAR-to-status mapper.
+// ─────────────────────────────────────────────────────────────────────────────
+function _edgarEsc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
+
+function _renderEdgarInsiderPanel(ef4) {
+  const cat = (typeof window._buildEdgarInsiderCat === 'function')
+    ? window._buildEdgarInsiderCat(ef4)
+    : { finalStatus:'VERIFICATION_UNAVAILABLE', edgarTransactions:null,
+        edgarAggregation:null, edgarWindowStart:null, edgarWindowEnd:null, edgarLatencyMs:null };
+
+  const fs = cat.finalStatus;
+
+  const _stLabel = {
+    VERIFIED_TRANSACTIONS:    'EDGAR Verified — Insider / Form 4',
+    VERIFIED_NO_TRANSACTIONS: 'EDGAR Verified — Insider / Form 4',
+    PARTIAL:                  'SEC/EDGAR — Insider / Form 4 · Partial',
+    IDENTITY_UNRESOLVED:      'SEC/EDGAR — Insider / Form 4 · Identity Unresolved',
+    VERIFICATION_UNAVAILABLE: 'SEC/EDGAR — Insider / Form 4 · Unavailable',
+    DISABLED:                 'SEC/EDGAR — Insider / Form 4'
+  };
+  const _stCls = {
+    VERIFIED_TRANSACTIONS:'pos',    VERIFIED_NO_TRANSACTIONS:'neutral-v',
+    PARTIAL:'warn',                 IDENTITY_UNRESOLVED:'warn',
+    VERIFICATION_UNAVAILABLE:'neg', DISABLED:'neutral-v'
+  };
+  const label = _stLabel[fs] || 'SEC/EDGAR — Insider / Form 4';
+  const cls   = _stCls[fs]   || 'neutral-v';
+  const ws    = _edgarEsc(cat.edgarWindowStart || '');
+  const we    = _edgarEsc(cat.edgarWindowEnd   || '');
+  const lms   = cat.edgarLatencyMs || 0;
+
+  // Confirmed classification keys from edgar-form4.js classify() — no invented values.
+  const _clsInfo = {
+    open_market_purchase:       { label:'Open market purchase',              matCls:'pos'       },
+    open_market_sale:           { label:'Open market sale',                  matCls:'neg'       },
+    sell_to_cover:              { label:'Sell to cover (non-discretionary)', matCls:'neutral-v' },
+    tax_withholding_or_payment: { label:'Tax withholding (non-discretionary)',matCls:'neutral-v' },
+    option_exercise:            { label:'Option exercise',                   matCls:'neutral-v' },
+    derivative_forward:         { label:'Forward / derivative',              matCls:'neutral-v' },
+    derivative_other_review:    { label:'Derivative — review required',      matCls:'warn'      },
+    gift:                       { label:'Gift (non-discretionary)',           matCls:'neutral-v' },
+    unknown_review:             { label:'Unclassified — review required',    matCls:'warn'      }
+  };
+  const _ci = c => _clsInfo[c] || { label:_edgarEsc((c||'').replace(/_/g,' ')), matCls:'neutral-v' };
+
+  let body = '';
+
+  if (fs === 'VERIFIED_TRANSACTIONS') {
+    const agg  = Array.isArray(cat.edgarAggregation)  ? cat.edgarAggregation  : [];
+    const evts = Array.isArray(cat.edgarTransactions) ? cat.edgarTransactions : [];
+    const issuer = _edgarEsc((ef4 && ef4.issuer) || '');
+    const cik    = _edgarEsc((ef4 && ef4.cik)    || '');
+    body += `<div style="font-size:10px;color:var(--text3);margin-bottom:8px">${issuer||'—'}${cik?' · CIK '+cik:''}</div>`;
+
+    // Aggregation summary — capped at 5 groups (AMKR-style: meaningful activity visible at a glance)
+    const AGG_CAP = 5;
+    if (agg.length > 0) {
+      body += `<div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:3px 0 6px 0;border-bottom:1px solid var(--border);display:grid;grid-template-columns:1fr 200px 80px 50px;gap:8px">
+        <span>Insider</span><span>Type</span><span style="text-align:right">Shares</span><span style="text-align:right">Txns</span></div>`;
+      agg.slice(0, AGG_CAP).forEach(a => {
+        const { label:clsLbl, matCls } = _ci(a.classification);
+        const shrs = (Number(a.shares)||0).toLocaleString();
+        body += `<div class="dd-detail-row">
+          <span class="dd-detail-body">${_edgarEsc(a.filerName||'?')}</span>
+          <span class="dd-detail-body ${matCls}" style="font-family:var(--mono);font-size:9px">${_edgarEsc(clsLbl)}</span>
+          <span class="dd-detail-body" style="font-family:var(--mono);font-size:10px;text-align:right">${_edgarEsc(shrs)}</span>
+          <span class="dd-detail-body neutral-v" style="font-family:var(--mono);font-size:10px;text-align:right">${a.count}</span>
+        </div>`;
+      });
+      if (agg.length > AGG_CAP)
+        body += `<div style="font-size:10px;color:var(--text3);padding-top:4px">+${agg.length-AGG_CAP} additional groups not shown.</div>`;
+    }
+
+    // Raw transaction rows — capped at 10 (VRT-style: mechanical vs discretionary clear per row)
+    if (evts.length > 0) {
+      body += `<div style="font-family:var(--mono);font-size:8px;color:var(--text3);margin-top:10px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">Transactions (${evts.length})</div>`;
+      evts.slice(0,10).forEach(ev => {
+        const { label:clsLbl, matCls } = _ci(ev.classification);
+        const shrs  = ev.shares!=null ? (Number(ev.shares)||0).toLocaleString() : '—';
+        const price = ev.pricePerShare!=null ? ' @ $'+Number(ev.pricePerShare).toFixed(2) : '';
+        const role  = _edgarEsc(ev.officerTitle||(ev.roles||[]).join('/'));
+        body += `<div class="dd-detail-row">
+          <span class="dd-detail-tag">${_edgarEsc(ev.transactionDate||'—')}</span>
+          <span class="dd-detail-body"><strong>${_edgarEsc(ev.filerName||'?')}</strong>
+            <span style="font-size:10px;color:var(--text3)"> · ${role}</span></span>
+          <span class="dd-detail-body ${matCls}" style="font-family:var(--mono);font-size:9px">${_edgarEsc(clsLbl)}</span>
+          <span class="dd-detail-body" style="font-family:var(--mono);font-size:10px;text-align:right;white-space:nowrap">${_edgarEsc(shrs)}${_edgarEsc(price)}</span>
+        </div>`;
+      });
+      if (evts.length > 10)
+        body += `<div style="font-size:10px;color:var(--text3);padding-top:6px">+${evts.length-10} additional transactions not shown.</div>`;
+    }
+
+  } else if (fs === 'VERIFIED_NO_TRANSACTIONS') {
+    const scanned = ef4&&ef4.filingsScanned!=null ? ef4.filingsScanned : '—';
+    const issuer  = _edgarEsc((ef4&&ef4.issuer)||'');
+    body = `<div style="font-size:12px;color:var(--text2);padding:4px 0">No insider transactions in the 35-day window.</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:4px">${issuer||'—'} · ${scanned} filing(s) scanned · coverage complete</div>`;
+
+  } else if (fs === 'PARTIAL') {
+    body = `<div style="font-size:11px;color:var(--text2)">Coverage is incomplete. Transaction data cannot be verified as complete or absent.</div>`;
+
+  } else if (fs === 'IDENTITY_UNRESOLVED') {
+    body = `<div style="font-size:11px;color:var(--text2)">Issuer identity could not be resolved for this ticker.</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:4px">No confidence in presence or absence of insider activity.</div>`;
+
+  } else if (fs === 'VERIFICATION_UNAVAILABLE') {
+    body = `<div style="font-size:11px;color:var(--text2)">Insider verification is unavailable.</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:4px">No confidence in presence or absence of insider activity.</div>`;
+
+  } else if (fs === 'DISABLED') {
+    body = `<div style="font-size:11px;color:var(--text3)">Insider verification is unavailable in this environment.</div>`;
+  }
+
+  // Tier 1 wording only for verified outcomes.
+  const tierNote = (fs==='VERIFIED_TRANSACTIONS'||fs==='VERIFIED_NO_TRANSACTIONS')
+    ? ' · SEC/EDGAR primary (Tier 1)' : '';
+  const footer = `<div style="font-family:var(--mono);font-size:8px;color:var(--text3);margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+    Window: ${ws||'—'} – ${we||'—'}${lms?' · '+lms+'ms':''}${tierNote}</div>`;
+
+  return `<div><span class="edgar-dd-status ${cls}">${_edgarEsc(label)}</span>${body}${footer}</div>`;
+}
+
+async function _runEdgarInsiderDeepDive(sym) {
+  if (window.PT_ENABLE_EDGAR_FORM4 !== true) { console.warn('[PT][EDGAR-UI] disabled — set PT_ENABLE_EDGAR_FORM4=true'); return; }
+  if (typeof window.runEdgarForm4Probe !== 'function') { console.warn('[PT][EDGAR-UI] runEdgarForm4Probe not available'); return; }
+  const btn   = document.getElementById('edgar-dd-btn-' + sym);
+  const panel = document.getElementById('edgar-dd-panel-' + sym);
+  if (!btn || !panel) return;
+  btn.disabled = true;
+  btn.textContent = '⟳ Checking EDGAR…';
+  panel.style.display = 'none';
+  panel.innerHTML = '';
+  const today    = new Date().toISOString().slice(0,10);
+  const winStart = (() => { const d=new Date(today+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-35); return d.toISOString().slice(0,10); })();
+  let ef4 = null;
+  try {
+    ef4 = await window.runEdgarForm4Probe(sym, { windowStart:winStart, windowEnd:today });
+  } catch(e) {
+    ef4 = { status:'VERIFICATION_UNAVAILABLE', reason:'client_error',
+            error:String(e&&e.message||e), _clientLatencyMs:0 };
+  }
+  panel.innerHTML = _renderEdgarInsiderPanel(ef4);
+  panel.style.display = 'block';
+  btn.textContent = '▶ Run again';  // neutral manual-run copy; no auto-retry
+  btn.disabled = false;
+}
 
 function exportJSON() {
   if (!results.length) return;
