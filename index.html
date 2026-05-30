@@ -3916,7 +3916,7 @@ function renderMainPanel(item) {
     if (rs==='HARD'||rs==='WEAK'||rs==='STALE') return { finalStatus:rs, retryAttempted:true, retryRecovered:true };
     return { finalStatus:'NOT_FOUND_LOW_CONFIDENCE', retryAttempted:true, retryRecovered:false };
   }
-  void _noneTrust; void _resolveUntrustedNone; // 7B-6C-9C-2: still dormant (NONE-trust + retry deferred to 9C-3); _parseVerdict/_reconcile now wired
+  // 7B-6C-9C-3: all four structured-verdict helpers (_parseVerdict, _reconcile, _noneTrust, _resolveUntrustedNone) are now wired into the Deep Dive runtime.
 
   window.runQuerySplitDeepDive = async function(sym){
     if (window[FLAG] !== true) { console.warn('[PT][DeepDive] disabled — set window.PT_ENABLE_QUERY_SPLIT_DEEPDIVE = true to enable (dev/QA only).'); return null; }
@@ -3937,7 +3937,8 @@ function renderMainPanel(item) {
       (r.sources||[]).forEach(s=>{ if(s.tier!==4) allTiers.push(s.tier); });
       // 7B-6C-9C-2: structured verdict is PRIMARY; existing regex _classify retained ONLY as fallback.
       const _v = _parseVerdict(r.content || '');
-      let verdictSource, status, finalStatus, modelStatus=null, reconciledFrom=null, eventDate=null, dateAmbiguous=false, bestTier=null, note=null, noneTrustPending=false;
+      let verdictSource, status, finalStatus, modelStatus=null, reconciledFrom=null, eventDate=null, dateAmbiguous=false, bestTier=null, note=null,
+          noneTrusted, noneUntrusted, underClaimSuspected=false, initialModelStatus=null, _needsRetry=false;
       if (r.ok && _v.parseOk && _v.validStatus) {
         verdictSource = 'structured'; structuredCount++;
         bestTier = _bestTierOf(r.sources);
@@ -3946,8 +3947,14 @@ function renderMainPanel(item) {
         modelStatus = _v.modelStatus; reconciledFrom = _rec.reconciledFrom;
         eventDate = _v.eventDate; dateAmbiguous = !!_v.dateAmbiguous;
         status = String(finalStatus).toLowerCase();
-        // 9C-2: structured NONE stays PROVISIONAL — NONE-trust + retry deferred to 9C-3 (helpers NOT called here).
-        if (finalStatus === 'NONE') noneTrustPending = true;
+        // 9C-3: NONE-trust gate. Runtime retry eligibility is limited to the EXPLICIT high-value list only
+        // (Pulse/low-source-quality signals intentionally NOT passed, so non-high-value true negatives are never retried).
+        if (finalStatus === 'NONE') {
+          const _t = _noneTrust({ sym, key:r.key });     // untrusted iff explicit high-value pair
+          noneTrusted = _t.noneTrusted; noneUntrusted = _t.noneUntrusted;
+          if (_t.noneUntrusted) { underClaimSuspected = true; initialModelStatus = 'NONE'; _needsRetry = true; } // bounded retry candidate
+          else { finalStatus = 'NONE_CONFIDENT'; }        // trusted true-negative; no retry
+        }
       } else {
         verdictSource = 'regex-fallback'; regexFallbackCount++;
         const c = _classify(r);                          // unchanged fallback path (missing/invalid verdict block)
@@ -3957,19 +3964,54 @@ function renderMainPanel(item) {
       if (status==='hard') hardCatalystCount++;
       else if (status==='stale') staleRejectedCount++;
       else if (status==='weak') weakSourceCount++;
-      return { category:r.label, status, finalStatus, verdictSource, verdictPresent:_v.present, parseOk:_v.parseOk,
-               modelStatus, reconciledFrom, eventDate, dateAmbiguous, bestTier,
-               noneTrustPending: noneTrustPending || undefined,
-               finalStatusProvisional: (verdictSource==='structured' && finalStatus==='NONE') || undefined,
+      return { category:r.label, _key:r.key, status, finalStatus, verdictSource, verdictPresent:_v.present, parseOk:_v.parseOk,
+               modelStatus, initialModelStatus, reconciledFrom, eventDate, dateAmbiguous, bestTier,
+               noneTrusted, noneUntrusted, underClaimSuspected: underClaimSuspected||undefined, _needsRetry: _needsRetry||undefined,
                note, error:r.error||null, latencyMs:r.latencyMs, sourceTiers:(r.sources||[]).map(s=>s.tier), snippet:(r.content||'').slice(0,260) };
     });
-    const pts = allTiers.map(t=> t===1?3 : t===2?2 : t===3?0 : -1);
+    // 7B-6C-9C-3: bounded retry pass — ONLY explicit high-value structured-NONE candidates; one retry each,
+    // sequential (concurrency 1), overall cap of 2 extra calls per Deep Dive. No alt wording / no splitting / no recursion.
+    let retryCount=0, recoveredByRetryCount=0, notFoundLowConfidenceCount=0, retryStructuredCount=0, retryRegexFallbackCount=0;
+    const RETRY_CAP = 2;
+    for (const c of categories.filter(x=>x._needsRetry)) {
+      if (retryCount >= RETRY_CAP) {                      // suppressed by overall cap — never leave as plain NONE
+        c.finalStatus='NOT_FOUND_LOW_CONFIDENCE'; c.status='not_found'; c.retryAttempted=false; c.retrySuppressed=true;
+        notFoundLowConfidenceCount++; continue;
+      }
+      retryCount++;
+      const rr = await _callCategory(sym, c._key);         // same-query retry via the existing structured-prompt path
+      c.retrySourceTiers = (rr.sources||[]).map(s=>s.tier); // retry evidence kept DISTINCT from initial sourceTiers
+      c.retrySourceTiers.forEach(t=>{ if(t!==4) allTiers.push(t); }); // include retry sources in source-quality accounting
+      const rv = _parseVerdict(rr.content || '');
+      let rFinal, rSource, rModel=null;
+      if (rr.ok && rv.parseOk && rv.validStatus) {         // structured retry -> reconcile (tier/date rules reapplied)
+        rSource='structured'; retryStructuredCount++; const _rbt=_bestTierOf(rr.sources); const _rrec=_reconcile(rv, { bestTier:_rbt, today:_today });
+        rFinal=_rrec.status; rModel=rv.modelStatus; c.bestTier=_rbt; c.eventDate=rv.eventDate; c.dateAmbiguous=!!rv.dateAmbiguous; c.reconciledFrom=_rrec.reconciledFrom;
+      } else {                                             // retry missing/invalid block -> regex fallback for this retry only
+        rSource='regex-fallback'; retryRegexFallbackCount++; const _rc=_classify(rr); rFinal=String(_rc.status||'').toUpperCase(); c.bestTier=_rc.bestTier;
+      }
+      const _res=_resolveUntrustedNone({ retryStatus:rFinal, circuitOpen:false });
+      c.retryAttempted=true; c.retryVerdictSource=rSource; c.retryModelStatus=rModel;
+      c.finalStatus=_res.finalStatus; c.retryRecovered=_res.retryRecovered;
+      if (_res.retryRecovered) { recoveredByRetryCount++; const _s=String(c.finalStatus).toLowerCase(); c.status=_s;
+        if(_s==='hard')hardCatalystCount++; else if(_s==='weak')weakSourceCount++; else if(_s==='stale')staleRejectedCount++; }
+      else { notFoundLowConfidenceCount++; c.status='not_found'; }   // retry NONE/unusable -> NOT_FOUND_LOW_CONFIDENCE
+    }
+    categories.forEach(c=>{ delete c._needsRetry; delete c._key; });  // drop transient runtime-only fields
+    const noneConfidentCount = categories.filter(c=>c.finalStatus==='NONE_CONFIDENT').length;
+    const pts = allTiers.map(t=> t===1?3 : t===2?2 : t===3?0 : -1);   // allTiers now includes retry-call source tiers
     const sourceQualityScore = pts.length ? +(pts.reduce((a,b)=>a+b,0)/pts.length).toFixed(2) : null;
-    const structuredVerdictRate = raw.length ? +(structuredCount/raw.length).toFixed(2) : null;
+    // 7B-6C-9C-3: rates/counters span initial + retry calls so memory-only telemetry reflects ALL API calls made.
+    const totalCallCount = raw.length + retryCount;
+    const totalStructuredCount = structuredCount + retryStructuredCount;
+    const totalRegexFallbackCount = regexFallbackCount + retryRegexFallbackCount;
+    const structuredVerdictRate = totalCallCount ? +(totalStructuredCount/totalCallCount).toFixed(2) : null;
     const data = {
-      sym, day, querySplitUsed:true, querySplitCallCount:raw.length, querySplitLatencyMs:Date.now()-t0,
+      sym, day, querySplitUsed:true, querySplitCallCount:totalCallCount, querySplitLatencyMs:Date.now()-t0,
       hardCatalystCount, staleRejectedCount, weakSourceCount, sourceQualityScore,
-      structuredVerdictRate, regexFallbackCount, categories
+      structuredVerdictRate, regexFallbackCount:totalRegexFallbackCount,
+      retryCount, recoveredByRetryCount, notFoundLowConfidenceCount, noneConfidentCount,
+      retryStructuredCount, retryRegexFallbackCount, categories
     };
     if (!window._pplxDebug) window._pplxDebug = {};                 // memory-only (never persisted)
     window._pplxDebug[sym] = Object.assign(window._pplxDebug[sym]||{}, { deepDive:data });
