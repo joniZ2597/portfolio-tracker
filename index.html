@@ -3680,9 +3680,9 @@ function renderMainPanel(item) {
 ${window.PT_ENABLE_EDGAR_FORM4 === true ? `
     <div class="mp-dd-bar" id="edgar-dd-bar-${item.ticker}">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-        <span style="font-family:var(--mono);font-size:8px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">Insider / Form 4 — EDGAR</span>
+        <span style="font-family:var(--mono);font-size:8px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">Insider / Form 4 — SEC EDGAR</span>
         <button class="mp-dd-btn" id="edgar-dd-btn-${item.ticker}"
-          onclick="_runEdgarInsiderDeepDive('${item.ticker}')">▶ Run Deep Dive</button>
+          onclick="_runEdgarInsiderDeepDive('${item.ticker}')">▶ Check Insider Activity</button>
       </div>
       <div id="edgar-dd-panel-${item.ticker}" style="display:none;margin-top:10px"></div>
     </div>` : ''}
@@ -4703,6 +4703,11 @@ function init() {
   }
 }
 
+// 7B-6E-6: auto-enable EDGAR Insider UI on branch-dev preview host only.
+// Server gate (PT_ENABLE_EDGAR_FORM4_SERVER) remains the real safety boundary.
+if (window.location.hostname === 'branch-dev--portfoliotrk.netlify.app') {
+  window.PT_ENABLE_EDGAR_FORM4 = true;
+}
 init();
 // ─────────────────────────────────────────────────────────────────────────────
 
