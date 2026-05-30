@@ -3781,6 +3781,20 @@ function renderMainPanel(item) {
     /\bno\b[^.]{0,90}\b(transaction|award|acquisition|merger|deal|contract|guidance|buyback|dividend|price ?target|target|rating|catalyst|filing|trade)s?\b[^.]{0,90}\b(in|over|for|during) (the )?(last|past) \d+ days?\b/,
     /\b(has|have|there (is|are|was|were)) no\b[^.]{0,90}\b(in|over|for|during) (the )?(last|past) \d+ days?\b/
   ];
+  // 7B-6C-7: tight positive-finding indicators. Each requires a real found-item structure
+  // (no bare "$" or lone "target"). Drives positive-precedence so a real catalyst is not
+  // nulled by a trailing "no other" / older mention.
+  const _POS = [
+    /\b(found|identified|located|shows?|reported|disclosed|has had|there (?:is|are|was|were)) (?:one|two|three|a|an|the|its|multiple|several|\d+)\b[^.]{0,40}\b(filing|transaction|trade|result|acquisition|merger|award|contract|repurchase|buyback|dividend|change|target|earnings)/,
+    /\breported (?:its|a|an|the|one)\b[^.]{0,20}\b(quarterly|q[1-4]|fiscal|earnings|result)/,
+    /\b(sold|purchased|acquired|disposed of|bought)\b[^.]{0,40}\b(\d[\d,.]*\s*shares?|\$\s?\d)/,
+    /\bform ?4\b[^.]{0,60}\b(\$\s?\d|\d[\d,.]*\s*shares?|sold|purchased|disposed)/,
+    /\b(revenue|eps|net (?:income|profit))\b[^.]{0,25}\b(\$\s?\d|\d+%|up \d)/,
+    /\b(raised|cut|initiated|reiterated|maintained)\b[^.]{0,25}\b(price ?target|target|\$\s?\d)/,
+    /\bcompleted (?:the )?acquisition of [a-z]/,
+    /\bnew share repurchase\b/,
+    /\bdividend (increase|raise|hike|of \$)/
+  ];
   function _classify(r){
     if (!r.ok) return { status:'error', error:r.error, bestTier:null };
     const txt = r.content || '';
@@ -3792,14 +3806,21 @@ function renderMainPanel(item) {
     const has2025 = /\b2025\b/.test(ntxt);
     const startsNone = _NONE_RE.test(txt);
     const _bt = t12.length ? Math.min.apply(null,t12) : (hasT3?3:null);
-    const _leadM = ntxt.match(/^[\s\S]*?[.!?](\s|$)/);
-    const _lead = (_leadM ? _leadM[0] : ntxt).slice(0, 240);
-    // out-of-window-only prose => stale; explicit no-current-event prose (lead) => none.
-    if (_NEG_STALE.some(re=>re.test(ntxt)))  return { status:'stale', note:'only out-of-window items found', bestTier:_bt };
-    if (_NEG_NONE.some(re=>re.test(_lead)))  return { status:'none', bestTier:null };
-    // Stale (year-based): evidence only references an out-of-window prior year, or NONE-current but lists prior-year items.
-    if ((!has2026 && has2025) || (startsNone && has2025)) return { status:'stale', note:'evidence dated outside ~35-day window', bestTier:_bt };
-    if (startsNone) return { status:'none', bestTier:null };
+    // 7B-6C-7 abbreviation-safe lead: don't end the lead at "ltd./inc./corp./co./plc/llc/ag/nv" periods.
+    const _ntLead = ntxt.replace(/\b(ltd|inc|corp|co|plc|llc|sa|ag|nv|holdings?)\.\s*/g, '$1 ');
+    const _leadM = _ntLead.match(/^[\s\S]*?[.!?](\s|$)/);
+    const _lead = (_leadM ? _leadM[0] : _ntLead).slice(0, 240);
+    // 7B-6C-7 positive-precedence: an in-window real finding must not be nulled by a trailing
+    // "no other" / older mention. When present, skip the stale/none branches and use tier logic.
+    const _posFinding = has2026 && _POS.some(re => re.test(ntxt));
+    if (!_posFinding) {
+      // out-of-window-only prose => stale; explicit no-current-event prose (lead) => none.
+      if (_NEG_STALE.some(re=>re.test(ntxt)))  return { status:'stale', note:'only out-of-window items found', bestTier:_bt };
+      if (_NEG_NONE.some(re=>re.test(_lead)))  return { status:'none', bestTier:null };
+      // Stale (year-based): evidence only references an out-of-window prior year, or NONE-current but lists prior-year items.
+      if ((!has2026 && has2025) || (startsNone && has2025)) return { status:'stale', note:'evidence dated outside ~35-day window', bestTier:_bt };
+      if (startsNone) return { status:'none', bestTier:null };
+    }
     if (t12.length && has2026) return { status:'hard', bestTier:Math.min.apply(null,t12) };
     return { status:'weak', bestTier: hasT3?3:(kept[0]?kept[0].tier:3) }; // low-confidence
   }
