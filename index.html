@@ -3707,7 +3707,7 @@ function renderMainPanel(item) {
   const CATS = {
     earnings:  { label:'earnings/guidance',       q:t=>`${t} recent quarterly earnings results and guidance update in the last 30 days, revenue and EPS vs estimate with dates` },
     analyst:   { label:'analyst PT changes',      q:t=>`${t} recent analyst price target changes in the last 30 days, which banks, new targets, and dates` },
-    insider:   { label:'insider/Form 4',          q:t=>`${t} recent insider transactions and Form 4 filings in the last 30 days, who, shares, dollar amount, and date` },
+    insider:   { label:'insider/Form 4',          q:t=>`Search ${t} insider transactions and SEC Form 4 filings in the last 30 days, prioritizing sec.gov, openinsider.com, and quiverquant.com. For each transaction found provide insider name, role, transaction type, date, shares, dollar value, and supporting source URL` },
     contracts: { label:'contracts/awards',        q:t=>`${t} recent contracts, program awards, or customer wins in the last 30 days, value and date` },
     mna:       { label:'M&A',                     q:t=>`${t} recent acquisitions or mergers in the last 30 days, terms and date` },
     buyback:   { label:'buyback/dividend',        q:t=>`${t} recent share buyback authorization or dividend change in the last 30 days, amount and date` },
