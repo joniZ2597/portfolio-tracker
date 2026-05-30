@@ -4027,6 +4027,61 @@ function renderMainPanel(item) {
   };
 })();
 
+// ============================================================================
+// Phase 7B-6E-3: Dedicated EDGAR Form 4 vertical slice (DEV-ONLY, default OFF).
+// Memory-only. Calls server-side /.netlify/functions/edgar-form4 (SEC primary).
+// Does NOT touch the normal scan, scoring, Actionable Take, technical setup,
+// pt_results, localStorage, _pplxDebug, or the existing sonar-pro insider path
+// (runQuerySplitDeepDive). Separate flag + separate namespace by design.
+// Enable for branch-dev QA:  window.PT_ENABLE_EDGAR_FORM4 = true
+// Run: await window.runEdgarForm4Probe('NVDA')
+//      await window.runEdgarForm4Probe('LUNR', { cik: '1844452' })            // optional CIK override
+//      await window.runEdgarForm4Probe('NVDA', { windowStart:'2026-03-01', windowEnd:'2026-05-30' })
+// Output: console + memory-only on window._edgarDebug[sym]
+// ============================================================================
+(function(){
+  const FLAG = 'PT_ENABLE_EDGAR_FORM4';
+  const ENDPOINT = '/.netlify/functions/edgar-form4';
+  const DEFAULT_START = '2026-03-01', DEFAULT_END = '2026-05-30';
+  const CALL_TIMEOUT_MS = 30000;
+  const _now = () => (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+
+  window.runEdgarForm4Probe = async function(sym, opts){
+    if (window[FLAG] !== true) { console.warn('[PT][EDGAR] disabled — set window.PT_ENABLE_EDGAR_FORM4 = true to enable (dev/QA only).'); return null; }
+    if (!sym) { console.warn('[PT][EDGAR] ticker required, e.g. runEdgarForm4Probe("NVDA")'); return null; }
+    const ticker = String(sym).toUpperCase();
+    opts = opts || {};
+    const windowStart = opts.windowStart || DEFAULT_START;
+    const windowEnd   = opts.windowEnd   || DEFAULT_END;
+    let issuerNameHint = '';
+    try { const _e = (typeof findTicker === 'function') && findTicker(ticker); if (_e && _e.name) issuerNameHint = _e.name; } catch(_){}
+    const t0 = _now();
+    let out;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+      const resp = await fetch(ENDPOINT, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, issuerNameHint, cik: opts.cik, windowStart, windowEnd }),
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      out = await resp.json().catch(() => ({ status: 'VERIFICATION_UNAVAILABLE', reason: 'bad_json' }));
+      out._httpStatus = resp.status;
+    } catch(e) {
+      out = { status: 'VERIFICATION_UNAVAILABLE', reason: 'client_fetch_failed', error: String(e && e.message || e) };
+    }
+    out._clientLatencyMs = Math.round(_now() - t0);
+    if (!window._edgarDebug) window._edgarDebug = {};   // memory-only (never persisted)
+    window._edgarDebug[ticker] = out;
+    try {
+      console.log('[PT][EDGAR]', ticker, JSON.stringify({ status: out.status, cik: out.cik, issuer: out.issuer, resolutionPath: out.resolutionPath, events: (out.events || []).length, latencyMs: out._clientLatencyMs }));
+      (out.events || []).forEach(ev => console.log(`  [${ev.classification}] ${ev.filerName} (${(ev.roles||[]).join('/')}${ev.officerTitle ? ': ' + ev.officerTitle : ''}) ${ev.transactionDate} code ${ev.transactionCode} ${ev.acquiredDisposed} shares=${ev.shares != null ? ev.shares : '—'}${ev.pricePerShare != null ? ' @ $' + ev.pricePerShare : ''} conf=${ev.confidence}`));
+    } catch(_){}
+    return out;
+  };
+})();
+
 function exportJSON() {
   if (!results.length) return;
   const blob = new Blob([JSON.stringify({ date: localStorage.getItem('pt_date'), results }, null, 2)], { type: 'application/json' });
