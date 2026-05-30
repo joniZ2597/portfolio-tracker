@@ -3918,6 +3918,130 @@ function renderMainPanel(item) {
   }
   // 7B-6C-9C-3: all four structured-verdict helpers (_parseVerdict, _reconcile, _noneTrust, _resolveUntrustedNone) are now wired into the Deep Dive runtime.
 
+  // 7B-6E-4a: convert EDGAR probe result to a factual insider category record.
+  // Pure: no fetch, no storage, no mutation. Does NOT affect sonar scoring metrics.
+  // status/finalStatus use the approved factual model only (no investment/catalyst semantics).
+  function _buildEdgarInsiderCat(ef4) {
+    const label = CATS.insider.label;
+    if (!ef4) {                                                            // G0: probe returned null
+      return { category:label, verdictSource:'edgar-direct', verdictPresent:false, parseOk:false,
+               modelStatus:null, initialModelStatus:null, reconciledFrom:null, dateAmbiguous:false,
+               status:'verification_unavailable', finalStatus:'VERIFICATION_UNAVAILABLE',
+               bestTier:null, sourceTiers:[], eventDate:null, note:null, error:null, snippet:'',
+               latencyMs:0, edgarTransactions:null, edgarAggregation:null, edgarTransactionCount:null,
+               edgarCoverageComplete:null, edgarTruncated:null, edgarWindowStart:null,
+               edgarWindowEnd:null, edgarLatencyMs:null, edgarError:'probe_null' };
+    }
+    const _ws = (ef4.window && ef4.window.start) || null;
+    const _we = (ef4.window && ef4.window.end)   || null;
+    const _lms = ef4._clientLatencyMs ?? null;
+    const _errs = Array.isArray(ef4.errors) ? ef4.errors : [];
+    const _base = { category:label, verdictSource:'edgar-direct', modelStatus:null, initialModelStatus:null,
+                    reconciledFrom:null, dateAmbiguous:false, latencyMs:ef4._clientLatencyMs||0,
+                    edgarWindowStart:_ws, edgarWindowEnd:_we, edgarLatencyMs:_lms };
+    if (ef4.status==='DISABLED' || ef4.reason==='SERVER_DISABLED') {     // G1: server gate disabled
+      return Object.assign({}, _base, { verdictPresent:false, parseOk:false,
+               status:'disabled', finalStatus:'DISABLED',
+               bestTier:null, sourceTiers:[], eventDate:null, note:null, error:null,
+               snippet:'[EDGAR] disabled on this deployment.',
+               edgarTransactions:[], edgarAggregation:[], edgarTransactionCount:null,
+               edgarCoverageComplete:null, edgarTruncated:null,
+               edgarError:_errs[0]||'SERVER_DISABLED' });
+    }
+    if (ef4.status==='IDENTITY_UNRESOLVED'||ef4.status==='IDENTITY_AMBIGUOUS') { // G2: identity failure
+      return Object.assign({}, _base, { verdictPresent:false, parseOk:false,
+               status:'identity_unresolved', finalStatus:'IDENTITY_UNRESOLVED',
+               bestTier:null, sourceTiers:[], eventDate:null, note:ef4.resolutionPath||ef4.status,
+               error:null, snippet:'[EDGAR] issuer identity unresolved ('+ef4.resolutionPath+').',
+               edgarTransactions:[], edgarAggregation:[], edgarTransactionCount:null,
+               edgarCoverageComplete:null, edgarTruncated:null, edgarError:null });
+    }
+    if (ef4.status==='VERIFICATION_UNAVAILABLE') {                        // G3: server verification failure
+      return Object.assign({}, _base, { verdictPresent:false, parseOk:false,
+               status:'verification_unavailable', finalStatus:'VERIFICATION_UNAVAILABLE',
+               bestTier:null, sourceTiers:[], eventDate:null, note:ef4.reason||null, error:null,
+               snippet:'[EDGAR] verification unavailable: '+(ef4.reason||ef4.status)+'.',
+               edgarTransactions:[], edgarAggregation:[], edgarTransactionCount:null,
+               edgarCoverageComplete:null, edgarTruncated:null, edgarError:ef4.reason||_errs[0]||null });
+    }
+    if (ef4._httpStatus !== 200) {                                         // G4: HTTP gate
+      return Object.assign({}, _base, { verdictPresent:false, parseOk:false,
+               status:'verification_unavailable', finalStatus:'VERIFICATION_UNAVAILABLE',
+               bestTier:null, sourceTiers:[], eventDate:null, note:null, error:null,
+               snippet:'[EDGAR] HTTP '+(ef4._httpStatus??'none')+'.',
+               edgarTransactions:null, edgarAggregation:null, edgarTransactionCount:null,
+               edgarCoverageComplete:null, edgarTruncated:null,
+               edgarError:'http_'+(ef4._httpStatus??'none') });
+    }
+    const events = Array.isArray(ef4.events) ? ef4.events : null;
+    if (events===null) {                                                   // G5: malformed — not a real array
+      return Object.assign({}, _base, { verdictPresent:false, parseOk:false,
+               status:'verification_unavailable', finalStatus:'VERIFICATION_UNAVAILABLE',
+               bestTier:null, sourceTiers:[], eventDate:null, note:null, error:null,
+               snippet:'[EDGAR] malformed response (events not an array).',
+               edgarTransactions:null, edgarAggregation:null, edgarTransactionCount:null,
+               edgarCoverageComplete:ef4.coverageComplete??null, edgarTruncated:ef4.truncated??null,
+               edgarError:'malformed_events' });
+    }
+    // All structural gates passed. Evaluate coverage completeness gates for verified outcomes.
+    const _cvg = ef4.coverageComplete===true, _noTrunc = ef4.truncated===false;
+    const _noErr = _errs.length===0;
+    const _rawOK = ef4.status==='OK'||ef4.status==='NONE_CONFIRMED';
+    const edgarCoverageComplete = ef4.coverageComplete??null, edgarTruncated = ef4.truncated??null;
+    const edgarError = _errs.length>0 ? _errs[0] : null;
+    const _agg = {};
+    events.forEach(ev => {
+      const k = (ev.filerName||'unknown')+'|'+(ev.classification||'unknown');
+      if (!_agg[k]) _agg[k]={ filerName:ev.filerName||null, classification:ev.classification||null, shares:0, count:0 };
+      _agg[k].shares += Number(ev.shares)||0; _agg[k].count++;
+    });
+    const edgarAggregation = Object.values(_agg);
+    if (!(_cvg&&_noTrunc&&_noErr&&_rawOK)) {                               // any gate fails → PARTIAL
+      const _fd = events.length>0?(events[0].transactionDate||null):null;
+      const snippet = events.length>0
+        ? '[EDGAR PARTIAL] '+events.length+' transaction(s) found (coverage incomplete or status '+ef4.status+').'
+        : '[EDGAR PARTIAL] No transactions found; coverage incomplete or status '+ef4.status+' — absence unverified.';
+      return Object.assign({}, _base, { verdictPresent:true, parseOk:true,
+               status:'partial', finalStatus:'PARTIAL', bestTier:null, sourceTiers:[], eventDate:_fd,
+               note:'coverageComplete='+ef4.coverageComplete+' truncated='+ef4.truncated+' status='+ef4.status,
+               error:null, snippet, edgarTransactions:events, edgarAggregation,
+               edgarTransactionCount:events.length??null,
+               edgarCoverageComplete, edgarTruncated, edgarError });
+    }
+    if (ef4.status==='NONE_CONFIRMED' && events.length===0) {              // status+count must both align
+      return Object.assign({}, _base, { verdictPresent:true, parseOk:true,
+               status:'verified_no_transactions', finalStatus:'VERIFIED_NO_TRANSACTIONS',
+               bestTier:1, sourceTiers:[1], eventDate:null, note:null, error:null,
+               snippet:'[EDGAR] No insider transactions in window (verified; '+ef4.filingsScanned+' filing(s) scanned).',
+               edgarTransactions:[], edgarAggregation:[], edgarTransactionCount:0,
+               edgarCoverageComplete, edgarTruncated, edgarError:null });
+    }
+    if (ef4.status==='OK' && events.length>0) {                            // status+count must both align
+      const snippet = '[EDGAR] '+events.length+' transaction(s): '+
+        events.slice(0,3).map(ev=>(ev.filerName||'?')+' '+(ev.acquiredDisposed||'?')+' '+
+          (ev.shares!=null?(Number(ev.shares)||0):'—')+' shares on '+(ev.transactionDate||'?')+
+          ' ('+(ev.transactionCode||'?')+')').join('; ');
+      return Object.assign({}, _base, { verdictPresent:true, parseOk:true,
+               status:'verified_transactions', finalStatus:'VERIFIED_TRANSACTIONS',
+               bestTier:1, sourceTiers:[1], eventDate:events[0].transactionDate||null,
+               note:null, error:null, snippet, edgarTransactions:events, edgarAggregation,
+               edgarTransactionCount:events.length??null,
+               edgarCoverageComplete, edgarTruncated, edgarError:null });
+    }
+    // Contract mismatch: OK+zero events or NONE_CONFIRMED+non-zero events — never emit a verified outcome.
+    const _fd = events.length>0?(events[0].transactionDate||null):null;
+    const _mNote = 'contract_mismatch: status='+ef4.status+' events='+events.length;
+    const _mSnip = events.length>0
+      ? '[EDGAR PARTIAL] '+events.length+' transaction(s) present but status is '+ef4.status+' (contract mismatch).'
+      : '[EDGAR PARTIAL] Zero events returned but status is '+ef4.status+' (contract mismatch); absence not verified.';
+    return Object.assign({}, _base, { verdictPresent:true, parseOk:true,
+               status:'partial', finalStatus:'PARTIAL', bestTier:null, sourceTiers:[], eventDate:_fd,
+               note:_mNote, error:null, snippet:_mSnip, edgarTransactions:events, edgarAggregation,
+               edgarTransactionCount:events.length??null,
+               edgarCoverageComplete, edgarTruncated,
+               edgarError:'contract_mismatch:'+ef4.status+':events='+events.length });
+  }
+
   window.runQuerySplitDeepDive = async function(sym){
     if (window[FLAG] !== true) { console.warn('[PT][DeepDive] disabled — set window.PT_ENABLE_QUERY_SPLIT_DEEPDIVE = true to enable (dev/QA only).'); return null; }
     sym = String(sym||'').toUpperCase().trim();
@@ -3927,7 +4051,19 @@ function renderMainPanel(item) {
     const cats = _selectCats(sym);
     const t0 = Date.now();
     const _today = new Date().toISOString().slice(0,10); // 7B-6C-9C-2: runtime today for date reconciliation
-    const raw = await _runPool(cats.map(k => () => _callCategory(sym, k)), CONCURRENCY);
+    // 7B-6E-4a: when EDGAR is enabled, exclude insider from the sonar-pro pool (no sonar insider call made or used).
+    const _edgarInsider = (window['PT_ENABLE_EDGAR_FORM4'] === true);
+    const _pplxCats = _edgarInsider ? cats.filter(k => k !== 'insider') : cats;
+    const raw = await _runPool(_pplxCats.map(k => () => _callCategory(sym, k)), CONCURRENCY);
+    // 7B-6E-4a: EDGAR probe — window computed from _today using existing 35-day Deep Dive rule
+    // (matches _reconcile ageDays ≤ 35 and sonar prompt "current = within last 35 days").
+    // No new window policy: reuses the established rule, applied dynamically per-call.
+    let _edgarProbeResult = null;
+    if (_edgarInsider && typeof window.runEdgarForm4Probe === 'function') {
+      const _winEnd = _today;
+      const _winStart = (()=>{ const d=new Date(_today+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-35); return d.toISOString().slice(0,10); })();
+      _edgarProbeResult = await window.runEdgarForm4Probe(sym, { windowStart:_winStart, windowEnd:_winEnd });
+    }
     let hardCatalystCount=0, staleRejectedCount=0, weakSourceCount=0, structuredCount=0, regexFallbackCount=0;
     const allTiers = [];
     // 7B-6C-9C-2: reuse the EXISTING _classify bestTier semantics (Tier-4 rejected; min of T1/T2 else 3 else null;
@@ -3998,6 +4134,14 @@ function renderMainPanel(item) {
       else { notFoundLowConfidenceCount++; c.status='not_found'; }   // retry NONE/unusable -> NOT_FOUND_LOW_CONFIDENCE
     }
     categories.forEach(c=>{ delete c._needsRetry; delete c._key; });  // drop transient runtime-only fields
+    // 7B-6E-4a: inject EDGAR insider category — after retry pass; EDGAR result is authoritative, never retried.
+    // Intentionally does NOT increment hardCatalystCount / weakSourceCount / staleRejectedCount
+    // and does NOT push into allTiers: EDGAR factual data is isolated from sonar-pro scoring metrics.
+    let _edgarCat = null;
+    if (_edgarInsider) {
+      _edgarCat = _buildEdgarInsiderCat(_edgarProbeResult);
+      categories.push(_edgarCat);
+    }
     const noneConfidentCount = categories.filter(c=>c.finalStatus==='NONE_CONFIDENT').length;
     const pts = allTiers.map(t=> t===1?3 : t===2?2 : t===3?0 : -1);   // allTiers now includes retry-call source tiers
     const sourceQualityScore = pts.length ? +(pts.reduce((a,b)=>a+b,0)/pts.length).toFixed(2) : null;
@@ -4011,7 +4155,10 @@ function renderMainPanel(item) {
       hardCatalystCount, staleRejectedCount, weakSourceCount, sourceQualityScore,
       structuredVerdictRate, regexFallbackCount:totalRegexFallbackCount,
       retryCount, recoveredByRetryCount, notFoundLowConfidenceCount, noneConfidentCount,
-      retryStructuredCount, retryRegexFallbackCount, categories
+      retryStructuredCount, retryRegexFallbackCount,
+      edgarInsider: _edgarInsider || false,
+      edgarTransactionCount: _edgarCat ? (_edgarCat.edgarTransactionCount ?? null) : null,
+      categories
     };
     if (!window._pplxDebug) window._pplxDebug = {};                 // memory-only (never persisted)
     window._pplxDebug[sym] = Object.assign(window._pplxDebug[sym]||{}, { deepDive:data });
@@ -4057,19 +4204,20 @@ function renderMainPanel(item) {
     try { const _e = (typeof findTicker === 'function') && findTicker(ticker); if (_e && _e.name) issuerNameHint = _e.name; } catch(_){}
     const t0 = _now();
     let out;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
       const resp = await fetch(ENDPOINT, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ticker, issuerNameHint, cik: opts.cik, windowStart, windowEnd }),
         signal: controller.signal
       });
-      clearTimeout(timer);
       out = await resp.json().catch(() => ({ status: 'VERIFICATION_UNAVAILABLE', reason: 'bad_json' }));
       out._httpStatus = resp.status;
     } catch(e) {
       out = { status: 'VERIFICATION_UNAVAILABLE', reason: 'client_fetch_failed', error: String(e && e.message || e) };
+    } finally {
+      clearTimeout(timer);
     }
     out._clientLatencyMs = Math.round(_now() - t0);
     if (!window._edgarDebug) window._edgarDebug = {};   // memory-only (never persisted)
