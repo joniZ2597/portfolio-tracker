@@ -3718,7 +3718,11 @@ function renderMainPanel(item) {
 
   async function _callCategory(sym, key){
     const t0 = Date.now();
-    const content0 = CATS[key].q(sym) + '. Be specific with names, numbers, and dates; use NONE if nothing; cite a source URL with a date for every item.';
+    // 7B-6C-6: company-name-aware subject to disambiguate ticker identity (e.g. "FROG (JFrog Ltd.)").
+    // Name comes from the watchlist via findTicker(sym).name; falls back to ticker-only. No event seeding.
+    let _subj = sym;
+    try { const _e = (typeof findTicker==='function') && findTicker(sym); if (_e && _e.name) _subj = `${sym} (${_e.name})`; } catch(_){}
+    const content0 = CATS[key].q(_subj) + '. Be specific with names, numbers, and dates; use NONE if nothing; cite a source URL with a date for every item.';
     const ctrl = new AbortController();
     const tid = setTimeout(()=>ctrl.abort(), CALL_TIMEOUT_MS);
     try {
@@ -3765,10 +3769,17 @@ function renderMainPanel(item) {
     /\bnone found\b/,
     /\bno current catalyst\b/,
     /\bno new price ?target updates?\b/,
+    // 7B-6C-6: negation-verb forms — "could not verify any", "unable to find", "not able to confirm"
+    /\b(could not|can ?not|was not|were not|did not|do not|not able to|unable to) (be )?(able to )?(verify|find|identify|confirm|locate|document)\b/,
+    // 7B-6C-6: explicit no-event phrasings — "no publicly confirmed/disclosed/reported/announced"
+    /\bno publicly (confirmed|disclosed|reported|announced)\b/,
+    // 7B-6C-6: "...found" tail — "no Form 4 transactions found"
+    /\bno\b[^.]{0,40}\b(transaction|filing|trade|acquisition|merger|deal|award|contract)s? found\b/,
     /\bno\b[^.]{0,50}\banalyst\b[^.]{0,30}\b(price ?target|target|rating)\b[^.]{0,20}\b(change|update|action|move)s?\b/,
     /\bno (recent|current|new|recorded|documented)\b[^.]{0,30}\b(analyst )?(change|action|update|move)s?\b/,
-    /\bno\b[^.]{0,40}\b(transaction|award|acquisition|merger|deal|contract|guidance|buyback|dividend|price ?target|target|rating|catalyst)s?\b[^.]{0,40}\b(in|over|for|during) (the )?(last|past) \d+ days?\b/,
-    /\b(has|have|there (is|are|was|were)) no\b[^.]{0,70}\b(in|over|for|during) (the )?(last|past) \d+ days?\b/
+    // 7B-6C-6: filler widened 40->90 (long subjects e.g. "...by Arm Holdings plc...") and filing/trade added
+    /\bno\b[^.]{0,90}\b(transaction|award|acquisition|merger|deal|contract|guidance|buyback|dividend|price ?target|target|rating|catalyst|filing|trade)s?\b[^.]{0,90}\b(in|over|for|during) (the )?(last|past) \d+ days?\b/,
+    /\b(has|have|there (is|are|was|were)) no\b[^.]{0,90}\b(in|over|for|during) (the )?(last|past) \d+ days?\b/
   ];
   function _classify(r){
     if (!r.ok) return { status:'error', error:r.error, bestTier:null };
