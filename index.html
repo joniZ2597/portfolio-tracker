@@ -3689,7 +3689,7 @@ function renderMainPanel(item) {
 // ============================================================================
 (function(){
   const FLAG = 'PT_ENABLE_QUERY_SPLIT_DEEPDIVE';
-  const MAX_CALLS = 7, CONCURRENCY = 4, CALL_TIMEOUT_MS = 20000;
+  const MAX_CALLS = 7, CONCURRENCY = 4, CALL_TIMEOUT_MS = 30000; // 7B-6C-4: 20s->30s so slow-but-valid upstream calls are not aborted
   const _ddCache = {}; // memory-only per-ticker/day cache
 
   // Source tiering. Tier1/2 => hard-catalyst eligible; Tier3 => low-confidence;
@@ -3747,42 +3747,45 @@ function renderMainPanel(item) {
   }
 
   const _NONE_RE = /^\s*NONE\b/i;
-  // 7B-6C-4 fix: negative / no-current-event prose must be classified none/stale BEFORE the
-  // hard path — a Tier-1/2 source + a current-year token must NOT make a "no events in the
-  // last 30 days" / "all moves are older than the window" result 'hard'.
-  // STALE cues (out-of-window items exist) match on the full text. NONE cues (no current
-  // event) match only on the LEAD sentence, so a result that DID find a catalyst but adds
-  // "...there are no other X" later is not wrongly nulled.
+  // 7B-6C-4 robust fix: classify negative / no-current-event prose as none/stale BEFORE the
+  // hard path. Match against a NORMALIZED copy (markdown stripped, whitespace collapsed,
+  // lowercased) so bold (**no**), spacing and casing variants are caught. STALE cues (only
+  // out-of-window items) match the full normalized text; NONE cues (no current event) match
+  // the LEAD sentence so a result that DID find a catalyst but adds "...no other X" is not nulled.
+  const _norm = s => (s||'').replace(/[*_`#>~]/g,' ').replace(/\s+/g,' ').trim().toLowerCase();
   const _NEG_STALE = [
-    /\bolder\s+than\s+(that|the|this)\s+window\b/i,
-    /\ball\s+(visible|available|reported|known|recent)?\s*(target\s+)?(moves?|changes?|actions?|updates?)\s+(are|were)\s+older\b/i,
-    /\ball\s+available\s+target\s+changes?\s+are\s+older\b/i
+    /\bolder than \d+ days?\b/,
+    /\bolder than (the|that|this) window\b/,
+    /\ball (visible|available|reported|known)\b[^.]{0,70}\b(are|were) older\b/,
+    /\ball available target changes? are older\b/
   ];
   const _NEG_NONE = [
-    /\bno\s+(documented\s+)?analyst\s+price[\s-]*target\s+changes?\b/i,
-    /\bno\s+recent\s+analyst\s+(changes?|actions?|updates?)\b/i,
-    /\bno\s+current\s+analyst\s+(actions?|catalysts?)\b/i,
-    /\bno\s+new\s+price[\s-]*target\s+updates?\b/i,
-    /\bnone\s+found\b/i,
-    /\bno\s+current\s+catalyst\b/i,
-    /\b(has|have|there\s+(is|are|were|was))\s+no\b[^.\n]{0,70}\b(in|over|for|during)\s+(the\s+)?(last|past)\s+\d+\s+days?\b/i,
-    /\bno\s+(new\s+|recent\s+|documented\s+|announced\s+)?(transactions?|awards?|acquisitions?|mergers?|deals?|guidance\s+updates?|contracts?|buybacks?|dividend\s+changes?|insider\s+(transactions?|trades?))\b[^.\n]{0,50}\b(in|over|for|during)\s+(the\s+)?(last|past)\s+\d+\s+days?\b/i
+    /\b(answer|result)\b[^.]{0,24}\bis\b[^.]{0,8}\bnone\b/,
+    /[=:]\s*none\b/,
+    /\bnone found\b/,
+    /\bno current catalyst\b/,
+    /\bno new price ?target updates?\b/,
+    /\bno\b[^.]{0,50}\banalyst\b[^.]{0,30}\b(price ?target|target|rating)\b[^.]{0,20}\b(change|update|action|move)s?\b/,
+    /\bno (recent|current|new|recorded|documented)\b[^.]{0,30}\b(analyst )?(change|action|update|move)s?\b/,
+    /\bno\b[^.]{0,40}\b(transaction|award|acquisition|merger|deal|contract|guidance|buyback|dividend|price ?target|target|rating|catalyst)s?\b[^.]{0,40}\b(in|over|for|during) (the )?(last|past) \d+ days?\b/,
+    /\b(has|have|there (is|are|was|were)) no\b[^.]{0,70}\b(in|over|for|during) (the )?(last|past) \d+ days?\b/
   ];
   function _classify(r){
     if (!r.ok) return { status:'error', error:r.error, bestTier:null };
     const txt = r.content || '';
+    const ntxt = _norm(txt);                                      // normalized for negative/stale matching
     const kept = (r.sources||[]).filter(s=>s.tier!==4);           // Tier4 rejected
     const t12 = kept.filter(s=>s.tier===1||s.tier===2).map(s=>s.tier);
     const hasT3 = kept.some(s=>s.tier===3);
-    const has2026 = /\b2026\b/.test(txt);
-    const has2025 = /\b2025\b/.test(txt);
+    const has2026 = /\b2026\b/.test(ntxt);
+    const has2025 = /\b2025\b/.test(ntxt);
     const startsNone = _NONE_RE.test(txt);
     const _bt = t12.length ? Math.min.apply(null,t12) : (hasT3?3:null);
-    const _leadM = txt.match(/^[\s\S]*?[.!?](\s|$)/);
-    const _lead = (_leadM ? _leadM[0] : txt).slice(0, 220);
-    // 7B-6C-4 fix: out-of-window-only prose => stale; explicit no-current-event prose => none.
-    if (_NEG_STALE.some(re=>re.test(txt)))  return { status:'stale', note:'only out-of-window items found', bestTier:_bt };
-    if (_NEG_NONE.some(re=>re.test(_lead))) return { status:'none', bestTier:null };
+    const _leadM = ntxt.match(/^[\s\S]*?[.!?](\s|$)/);
+    const _lead = (_leadM ? _leadM[0] : ntxt).slice(0, 240);
+    // out-of-window-only prose => stale; explicit no-current-event prose (lead) => none.
+    if (_NEG_STALE.some(re=>re.test(ntxt)))  return { status:'stale', note:'only out-of-window items found', bestTier:_bt };
+    if (_NEG_NONE.some(re=>re.test(_lead)))  return { status:'none', bestTier:null };
     // Stale (year-based): evidence only references an out-of-window prior year, or NONE-current but lists prior-year items.
     if ((!has2026 && has2025) || (startsNone && has2025)) return { status:'stale', note:'evidence dated outside ~35-day window', bestTier:_bt };
     if (startsNone) return { status:'none', bestTier:null };
