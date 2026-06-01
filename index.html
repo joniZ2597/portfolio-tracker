@@ -4362,6 +4362,69 @@ window.runFinanceSearchProbe = async function (ticker, category) {
   return result;
 };
 
+// ============================================================================
+// Phase 7B-6G-3: Capital Returns console probe (DEV-ONLY, default OFF).
+// Memory-only. Calls server-side /.netlify/functions/capital-returns (SEC XBRL).
+// Does NOT touch normal scan, Deep Dive, scoring, Actionable Take, pt_results,
+// localStorage, EDGAR, Finance Search, or any other existing path.
+// Enable:  window.PT_ENABLE_CAPITAL_RETURNS_CLIENT = true  (in-session only; resets on reload)
+// Run:     await window.runCapitalReturnsProbe('COP')
+//          await window.runCapitalReturnsProbe('NVDA')
+//          await window.runCapitalReturnsProbe('ON')
+// Output:  window._capitalReturnsDebug['COP'], etc.
+// ============================================================================
+window.runCapitalReturnsProbe = async function (ticker) {
+  if (window.PT_ENABLE_CAPITAL_RETURNS_CLIENT !== true) {
+    console.warn('[PT][CapReturns] disabled — set window.PT_ENABLE_CAPITAL_RETURNS_CLIENT = true to enable (dev/QA only).');
+    return null;
+  }
+  if (!ticker || typeof ticker !== 'string') {
+    console.warn('[PT][CapReturns] ticker required, e.g. runCapitalReturnsProbe("COP")');
+    return null;
+  }
+  const sym = ticker.toUpperCase();
+  const t0 = Date.now();
+  let result;
+  try {
+    const r = await fetch('/.netlify/functions/capital-returns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: sym })
+    });
+    const responseText = await r.text();
+    let raw = null;
+    try { raw = JSON.parse(responseText); } catch (_) {}
+    if (raw !== null && typeof raw === 'object') {
+      result = { ticker: sym, latencyMs: Date.now() - t0, ...raw };
+      if (!r.ok) result.httpStatus = r.status;
+    } else {
+      result = {
+        ticker: sym, latencyMs: Date.now() - t0,
+        status: 'CLIENT_HTTP_ERROR', httpStatus: r.status, httpStatusText: r.statusText,
+        bodyPreview: responseText.slice(0, 300),
+        buybacks: [], dividends: [], dividendsPerShare: [], authorizations: [],
+        errors: ['CLIENT_HTTP_ERROR:' + r.status]
+      };
+    }
+  } catch (e) {
+    result = { ticker: sym, error: String(e && e.message || e), latencyMs: Date.now() - t0 };
+  }
+  if (!window._capitalReturnsDebug) window._capitalReturnsDebug = {};
+  window._capitalReturnsDebug[sym] = result;
+  try {
+    const s = result.summary || {};
+    console.log('[PT][CapReturns]', sym, JSON.stringify({
+      status: result.status, cik: result.cik,
+      buybacks: (result.buybacks || []).length,
+      dividends: (result.dividends || []).length,
+      totalCapitalReturnedUSD: s.totalCapitalReturnedUSD,
+      latencyMs: result.latencyMs,
+      errors: result.errors
+    }));
+  } catch (_) {}
+  return result;
+};
+
 // ── 7B-6E-5a: EDGAR Insider Deep Dive UI ─────────────────────────────────────
 // Dev-only manual trigger. Gated behind PT_ENABLE_EDGAR_FORM4.
 // Memory-only: no pt_results, localStorage, scoring, or sonar-pro calls.
