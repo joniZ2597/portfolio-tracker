@@ -1093,7 +1093,8 @@ const SAMPLE_TICKERS = ['AAPL','NVDA','MSFT','TSLA','GOOGL','META','AMZN'];
 const MY_PORTFOLIO = ['FROG','CRWD','XLE','QQQ','SPY','ROK','KRE','NVDA','ONDS','VRT','MRNA','AA','MDT','CAH','ON','SOXX','TAN','CIBR','FLNG','MU','NFLX','ITA','IGV'];
 
 // ─── Phase 1: Approved watchlist data model ───────────────────────────────────
-// Schema: { symbol, name, exchange, sector, sectorEtf, personalNote, inScan }
+// Persisted schema: { symbol, name, exchange, sector, sectorEtf, personalNote, position }
+// Session-only (not persisted): inScan — run selection, always resets to true on load
 // localStorage key: pt_tickers (unchanged)
 
 const TICKER_DEFAULTS = {
@@ -1181,7 +1182,7 @@ function migrateWatchlist(raw) {
       sector:       e.sector      ?? d.sector,
       sectorEtf:    e.sectorEtf   ?? d.sectorEtf,
       personalNote: e.personalNote ?? '',
-      inScan:       e.inScan      ?? true,
+      inScan:       true,
       position:     _normalizePosition(e.position),
     };
   }).filter(Boolean);
@@ -1192,13 +1193,22 @@ let watchlist = [];
 function loadWatchlist() {
   const raw = localStorage.getItem('pt_tickers');
   watchlist = migrateWatchlist(raw);
-  // Write normalized result back so future reads are already in object[] format
-  localStorage.setItem('pt_tickers', JSON.stringify(watchlist));
+  // Write normalized result back — uses saveWatchlist() so inScan is stripped from stored form
+  saveWatchlist();
   return watchlist;
 }
 
 function saveWatchlist() {
-  localStorage.setItem('pt_tickers', JSON.stringify(watchlist));
+  const toStore = watchlist.map(e => ({
+    symbol:       e.symbol,
+    name:         e.name,
+    exchange:     e.exchange,
+    sector:       e.sector,
+    sectorEtf:    e.sectorEtf,
+    personalNote: e.personalNote,
+    position:     e.position
+  }));
+  localStorage.setItem('pt_tickers', JSON.stringify(toStore));
 }
 
 function getSymbols()     { return watchlist.map(e => e.symbol); }
@@ -1218,7 +1228,7 @@ function upsertTicker(symbol, fields) {
 
 function setInScan(symbol, bool) {
   const entry = findTicker(symbol);
-  if (entry) { entry.inScan = bool; saveWatchlist(); }
+  if (entry) { entry.inScan = bool; }
 }
 
 // Legacy `tickers` compat — read-only snapshot for any residual references
@@ -3004,7 +3014,6 @@ function toggleAllVisibleScanInclusion() {
   // Check all if any are unchecked; uncheck all if all are checked
   const shouldCheck = visibleRows.some(e => !e.inScan);
   visibleRows.forEach(e => { e.inScan = shouldCheck; });
-  saveWatchlist();
   renderWatchlistRows();
   updateRunScanCount();
 }
