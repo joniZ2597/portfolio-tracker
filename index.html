@@ -4332,8 +4332,20 @@ window.runFinanceSearchProbe = async function (ticker, category) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticker: sym, categories: [cat] })
     });
-    const raw = await r.json();
-    result = { ticker: sym, category: cat, latencyMs: Date.now() - t0, ...raw };
+    const responseText = await r.text();
+    let raw = null;
+    try { raw = JSON.parse(responseText); } catch (_) {}
+    if (raw !== null && typeof raw === 'object') {
+      result = { ticker: sym, category: cat, latencyMs: Date.now() - t0, ...raw };
+      if (!r.ok) result.httpStatus = r.status;
+    } else {
+      result = {
+        ticker: sym, category: cat, latencyMs: Date.now() - t0,
+        status: 'CLIENT_HTTP_ERROR', httpStatus: r.status, httpStatusText: r.statusText,
+        bodyPreview: responseText.slice(0, 300),
+        evidence: [], invocations: 0, errors: ['CLIENT_HTTP_ERROR:' + r.status]
+      };
+    }
   } catch (e) {
     result = { ticker: sym, category: cat, error: String(e && e.message || e), latencyMs: Date.now() - t0 };
   }
