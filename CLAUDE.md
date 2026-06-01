@@ -79,3 +79,29 @@ Never alter scoring, Actionable Take, recommendations, normal scan, persistence,
 ## Source of current project state
 
 Use local-only `CHECKPOINT.md` as the sole source for current commits, deployed state, completed phases, QA results, enabled DEV gates, and next planned work. Do not duplicate or hard-code changing project state in this file.
+
+---
+
+### Agent Pre-Flight Skills & Goal Checklist
+
+Before proposing any code edits for **Client Probes** or **Server Components**, the agent must explicitly output a pre-flight evaluation covering all four items below. Do not skip, abbreviate, or defer any item. The evaluation must appear in full before any code or diff is shown.
+
+**[Skill - Pattern Auditing]**
+Identify and explicitly reference at least two existing code patterns in the repository that dictate the architectural style for this change. Name the function(s), file(s), and the specific structural decisions being matched (gate style, storage key, fetch shape, result structure, etc.).
+
+**[Skill - State & Boundary Isolation]**
+Trace the exact boundaries of the proposed change. Confirm zero accidental mutation of:
+- `localStorage` (no reads or writes to `pt_results`, `pt_tickers`, or any existing key)
+- DOM (no injection outside the explicitly scoped element, if any)
+- Scoring engines (`orchestrate`, `analyzeChunk`, `enforceScoreConsistency`, `_techCache`)
+- Any existing Deep Dive, normal scan, or Actionable Take flow
+
+**[Skill - Gate Verification]**
+Verify that code execution is guarded by:
+- A client-side boolean gate (explicit `=== true` strict check, not truthy, reset on every page reload)
+- A server-side environment toggle (`=== 'true'` string check, checked before any upstream I/O)
+
+State the exact variable names and check expressions for both gates.
+
+**[Goal - Definition of Done]**
+Specify the exact JSON shape or logic outcome that constitutes a successful run. This output shape serves as the strict QA benchmark — any deviation from it is a test failure, not a warning.
