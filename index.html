@@ -2263,6 +2263,53 @@ function enforceScoreConsistency(results, newsContext) {
   });
 }
 
+// ── 7B-6G-4: Capital Returns yield nudge ──────────────────────────────────────
+// Deterministic post-processing layer. Reads window._capitalReturnsDebug[sym].
+// +2 pts per confirmed primary-source signal: active dividend, active buyback auth.
+// Max nudge: +4 pts. Ceiling-aware: never re-breaches extended_near_ath (62) or
+// below_key_mas (45) clamps already applied by orchestrate().
+// Zero impact if probe was never run, status !== 'OK', or summary is absent.
+// _crNudge is persisted into pt_results (Option B) for audit and future UI use.
+// ─────────────────────────────────────────────────────────────────────────────
+function applyCapitalReturnsNudge(results) {
+  return results.map(item => {
+    const sym = item.ticker;
+    const cr  = window._capitalReturnsDebug?.[sym];
+
+    // Strict bypass: absent, DISABLED, non-OK, or missing summary → zero impact
+    if (!cr || cr.status !== 'OK' || !cr.summary) return item;
+
+    const s = cr.summary;
+    const hasDividend   = typeof s.latestDividendPerShare           === 'number' && s.latestDividendPerShare           > 0;
+    const hasActiveAuth = typeof s.latestRemainingAuthorizationUSD  === 'number' && s.latestRemainingAuthorizationUSD  > 0;
+
+    let nudge = 0;
+    if (hasDividend)   nudge += 2;
+    if (hasActiveAuth) nudge += 2;
+
+    if (nudge === 0) return item;
+
+    // Respect ceilings already enforced by orchestrate() — never re-breach them
+    const ceiling =
+      item.technical_setup === 'extended_near_ath' ? 62 :
+      item.technical_setup === 'below_key_mas'     ? 45 : 100;
+
+    const scoreBefore = item.sentiment_score;
+    const scoreAfter  = Math.min(scoreBefore + nudge, ceiling);
+
+    if (scoreAfter === scoreBefore) {
+      console.log(`[PT][CapReturns] ${sym}: nudge +${nudge} absorbed by ceiling (${item.technical_setup})`);
+      item._crNudge = { nudge, hasDividend, hasActiveAuth, scoreBefore, scoreAfter, absorbedByCeiling: true };
+      return item;
+    }
+
+    console.log(`[PT][CapReturns] ${sym}: yield nudge +${nudge} → ${scoreBefore} → ${scoreAfter} (div:${hasDividend}, auth:${hasActiveAuth})`);
+    item.sentiment_score = scoreAfter;
+    item._crNudge = { nudge, hasDividend, hasActiveAuth, scoreBefore, scoreAfter, absorbedByCeiling: false };
+    return item;
+  });
+}
+
 // ── analyzeChunk ─────────────────────────────────────────────────────────────
 async function analyzeChunk(batch, today) {
   // Enforce single-ticker mode — split multi-ticker into sequential single runs
@@ -2585,7 +2632,8 @@ async function analyzeChunk(batch, today) {
     const mkt = stockData[item.ticker];
     return mkt ? { ...item, _changePct: mkt.change_percent } : item;
   });
-  return enforceScoreConsistency(resultsWithPct, JSON.stringify(pplxData));
+  const resultsWithCapReturns = applyCapitalReturnsNudge(resultsWithPct);
+  return enforceScoreConsistency(resultsWithCapReturns, JSON.stringify(pplxData));
 }
 
 // ── renderResults ────────────────────────────────────────────────────────────
