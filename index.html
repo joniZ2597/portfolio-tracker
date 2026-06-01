@@ -232,6 +232,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
   font-size:13px;padding:3px 7px;margin-left:6px;border-radius:3px;
 }
 .ph-refresh:hover{color:var(--text2);background:rgba(255,255,255,.04)}
+/* Extended-hours row (pre / after-hours) */
+.ph-ext-row{display:flex;align-items:baseline;gap:8px;padding:2px 20px 8px}
+.ph-ext-price{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--text)}
+.ph-ext-chg{font-family:var(--mono);font-size:11px;font-weight:500}
+.ph-ext-chg.pos{color:var(--green2)}.ph-ext-chg.neg{color:var(--red2)}.ph-ext-chg.neu{color:var(--text3)}
+.ph-ext-lbl{font-size:10px;color:var(--text3)}
 
 /* Color utilities */
 .pos      {color:var(--green2)}
@@ -707,6 +713,9 @@ const _inflight = {};
 // ── Technical snapshot cache ─────────────────────────────────────────────────
 // key: ticker symbol → { snap, computedAt }
 const _techCache = {};
+
+// ── Extended-hours display cache — session-only, never serialized ────────────
+const _extendedMktCache = {};
 
 // ── Pure math helpers ─────────────────────────────────────────────────────────
 
@@ -1347,6 +1356,14 @@ async function fetchYahoo(symbol) {
     }
   }
 
+  // Parse optional numeric Yahoo extended-hours fields; Number.isFinite preserves valid 0
+  const _parseOptNum = x => { const n = parseFloat(x); return Number.isFinite(n) ? n : null; };
+  const _extMs      = meta.marketState || null;
+  const _prePrice   = _parseOptNum(meta.preMarketPrice);
+  const _preChgPct  = _parseOptNum(meta.preMarketChangePercent);
+  const _postPrice  = _parseOptNum(meta.postMarketPrice);
+  const _postChgPct = _parseOptNum(meta.postMarketChangePercent);
+
   return {
     symbol,
     price,
@@ -1357,7 +1374,10 @@ async function fetchYahoo(symbol) {
     previous_close,
     volume:         parseInt(meta.regularMarketVolume),
     timestamp:      new Date(meta.regularMarketTime * 1000).toISOString(),
-    source:         'yahoo'
+    source:         'yahoo',
+    ...(_extMs     !== null ? { marketState: _extMs }                                                       : {}),
+    ...(_prePrice  !== null ? { preMarketPrice: _prePrice,  preMarketChangePercent: _preChgPct  }           : {}),
+    ...(_postPrice !== null ? { postMarketPrice: _postPrice, postMarketChangePercent: _postChgPct }          : {}),
   };
 }
 
@@ -2029,7 +2049,21 @@ function orchestrate(claudeResults, pplxData, stockData) {
     const _wlIdentity = findTicker(sym);
     if (_wlIdentity?.name) item.company_name = _wlIdentity.name;
 
-    if (mkt) { item._verifiedPrice = mkt.price; item._verifiedChangePct = mkt.change_percent; item._dataSource = mkt.source; }
+    delete _extendedMktCache[sym];
+    if (mkt) {
+      item._verifiedPrice = mkt.price;
+      item._verifiedChangePct = mkt.change_percent;
+      item._dataSource = mkt.source;
+      if (mkt.source === 'yahoo' && mkt.marketState) {
+        _extendedMktCache[sym] = {
+          marketState:              mkt.marketState,
+          preMarketPrice:           mkt.preMarketPrice           ?? null,
+          preMarketChangePercent:   mkt.preMarketChangePercent   ?? null,
+          postMarketPrice:          mkt.postMarketPrice          ?? null,
+          postMarketChangePercent:  mkt.postMarketChangePercent  ?? null
+        };
+      }
+    }
 
     if (pplx?.analystActions?.length) {
       const ptMentioned = pplx.analystActions.some(a => item.summary?.includes(a.bank) || item.summary?.includes('$' + a.target));
@@ -3415,12 +3449,29 @@ function renderMainPanel(item) {
   }
 
   // Watchlist metadata for name / exchange / sector (Phase 1 schema)
-  // Market status (simple time-based heuristic, US Eastern)
+  // Extended-hours: read session-only cache; no item/localStorage fields touched
+  const _extC      = hasData ? (_extendedMktCache[item.ticker] || null) : null;
+  const _ms        = _extC ? _extC.marketState : null;
+
+  // Market status — prefer fresh Yahoo marketState; fall back to time heuristic
   const _now     = new Date();
   const _etHour  = (_now.getUTCHours() - 4 + 24) % 24; // rough ET offset
   const _isOpen  = _etHour >= 9.5 && _etHour < 16 && _now.getUTCDay() >= 1 && _now.getUTCDay() <= 5;
-  const mktLabel = _isOpen ? 'Market open · closes 4:00 PM ET' : 'Market closed';
-  const mktCls   = _isOpen ? 'open' : 'closed';
+  const mktLabel = _ms === 'REGULAR' ? 'Market open · closes 4:00 PM ET'
+                 : _ms === 'PRE'     ? 'Pre-market'
+                 : _ms === 'POST'    ? 'After-hours'
+                 : _ms === 'CLOSED'  ? 'Market closed'
+                 : (_isOpen ? 'Market open · closes 4:00 PM ET' : 'Market closed');
+  const mktCls   = _ms === 'REGULAR' ? 'open' : _ms ? 'closed' : (_isOpen ? 'open' : 'closed');
+
+  const _todayLbl  = _ms === 'REGULAR' ? 'today'
+                   : (_ms === 'PRE' || _ms === 'POST' || _ms === 'CLOSED') ? 'regular close'
+                   : 'regular price';
+  const _showExt   = _ms === 'PRE' || _ms === 'POST';
+  const _extPrice  = _ms === 'PRE'  ? _extC.preMarketPrice
+                   : _ms === 'POST' ? _extC.postMarketPrice  : null;
+  const _extChgPct = _ms === 'PRE'  ? _extC.preMarketChangePercent
+                   : _ms === 'POST' ? _extC.postMarketChangePercent : null;
 
   // Avatar initials (up to 2 chars)
   const avatarTxt = item.ticker.slice(0, 2);
@@ -3505,7 +3556,7 @@ function renderMainPanel(item) {
         <div class="ph-price-block">
           <span class="ph-price">${hasData ? price : '—'}</span>
           <span class="ph-chg ${hasData ? chgCls2 : 'neu'}">${hasData ? (chgDir + (chg !== null ? Math.abs(chg * (item._verifiedPrice||0)/100).toFixed(2) : '—') + ' ' + chgPctStr) : '—'}</span>
-          <span class="ph-today">today</span>
+          <span class="ph-today">${_todayLbl}</span>
         </div>
         ${hasData && (typeof snap.spyChangePct === 'number' || typeof snap.qqqChangePct === 'number') ? `<div class="ph-divider"></div>` : ''}
         ${hasData && typeof snap.spyChangePct === 'number' ? `<span class="ph-bench-chip">SPY <span class="${snap.spyChangePct >= 0 ? 'pos' : 'neg'}">${snap.spyChangePct >= 0 ? '+' : ''}${snap.spyChangePct.toFixed(2)}%</span></span>` : ''}
@@ -3519,6 +3570,7 @@ function renderMainPanel(item) {
         <div class="ph-mkt-pill ${mktCls}"><div class="ph-mkt-dot"></div>${mktLabel}</div>
         <button class="ph-refresh" title="Refresh" onclick="selectTicker('${item.ticker}')">↻</button>
       </div>
+      ${hasData && _showExt && _extPrice !== null ? `<div class="ph-ext-row"><span class="ph-ext-price">$${_extPrice.toFixed(2)}</span>${_extChgPct !== null ? `<span class="ph-ext-chg ${_extChgPct >= 0 ? 'pos' : 'neg'}">${_extChgPct >= 0 ? '+' : ''}${_extChgPct.toFixed(2)}%</span>` : ''}<span class="ph-ext-lbl">${_ms === 'PRE' ? 'Pre-market' : 'After-hours'}</span></div>` : ''}
     </div>
 
     ${!hasData ? `
