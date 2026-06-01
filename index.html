@@ -4302,6 +4302,54 @@ ${window.PT_ENABLE_EDGAR_FORM4 === true ? `
   };
 })();
 
+// ============================================================================
+// Phase 7B-6F-4: Finance Search console probe (DEV-ONLY, default OFF).
+// Memory-only. Calls server-side /.netlify/functions/finance-search (Agent API).
+// Does NOT touch normal scan, Deep Dive, scoring, Actionable Take, pt_results,
+// localStorage, EDGAR, sonar-pro proxy, or any other existing path.
+// Enable:  window.PT_ENABLE_FINANCE_SEARCH_CLIENT = true  (in-session only; resets on reload)
+// Run:     await window.runFinanceSearchProbe('NVDA', 'earnings_history')
+//          await window.runFinanceSearchProbe('ARM', 'forward_guidance')
+//          await window.runFinanceSearchProbe('FROG', 'capital_returns')
+// Output:  window._financeSearchDebug['NVDA']['earnings_history'], etc.
+// ============================================================================
+window.runFinanceSearchProbe = async function (ticker, category) {
+  if (window.PT_ENABLE_FINANCE_SEARCH_CLIENT !== true) {
+    console.warn('[PT][FinSearch] disabled — set window.PT_ENABLE_FINANCE_SEARCH_CLIENT = true to enable (dev/QA only).');
+    return null;
+  }
+  if (!ticker || typeof ticker !== 'string') {
+    console.warn('[PT][FinSearch] ticker required, e.g. runFinanceSearchProbe("NVDA", "earnings_history")');
+    return null;
+  }
+  const sym = ticker.toUpperCase();
+  const cat = (typeof category === 'string' && category.trim()) ? category.trim() : 'earnings_history';
+  const t0 = Date.now();
+  let result;
+  try {
+    const r = await fetch('/.netlify/functions/finance-search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: sym, categories: [cat] })
+    });
+    const raw = await r.json();
+    result = { ticker: sym, category: cat, latencyMs: Date.now() - t0, ...raw };
+  } catch (e) {
+    result = { ticker: sym, category: cat, error: String(e && e.message || e), latencyMs: Date.now() - t0 };
+  }
+  window._financeSearchDebug = window._financeSearchDebug || {};
+  window._financeSearchDebug[sym] = window._financeSearchDebug[sym] || {};
+  window._financeSearchDebug[sym][cat] = result;
+  try {
+    console.log('[PT][FinSearch]', sym, cat, JSON.stringify({
+      status: result.status, invocations: result.invocations,
+      evidenceLen: (result.evidence || []).length, latencyMs: result.latencyMs,
+      errors: result.errors
+    }));
+  } catch (_) {}
+  return result;
+};
+
 // ── 7B-6E-5a: EDGAR Insider Deep Dive UI ─────────────────────────────────────
 // Dev-only manual trigger. Gated behind PT_ENABLE_EDGAR_FORM4.
 // Memory-only: no pt_results, localStorage, scoring, or sonar-pro calls.
