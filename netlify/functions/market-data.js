@@ -48,15 +48,43 @@ exports.handler = async function (event) {
   if (isDailyPriceRange) {
     console.log('[market-data] provider policy: daily range -> Yahoo first for', sym, 'range=' + range);
 
-    // ── Daily: Yahoo → Polygon fallback ────────────────────────────────────
+    // ── Daily: Yahoo (+ display-only overlay) → Polygon fallback ───────────
+    let _session      = 'CLOSED';
+    let _needsOverlay = false;
     try {
-      const data = await fetchYahoo(sym, interval, range);
-      if (data) {
-        console.log('[market-data] yahoo OK for', sym, 'range=' + range);
-        return res(200, data);
+      _session      = getEtSession();
+      _needsOverlay = _session === 'PRE' || _session === 'POST';
+    } catch (sessionErr) {
+      console.warn('[market-data] ext overlay session check skipped for', sym + ':', sessionErr.message);
+    }
+    const [_mainRes, _overlayRes] = await Promise.allSettled([
+      fetchYahoo(sym, interval, range),
+      _needsOverlay ? fetchYahooIntraday(sym, 5000) : Promise.resolve(null),
+    ]);
+
+    if (_mainRes.status === 'fulfilled' && _mainRes.value) {
+      const data = _mainRes.value;
+      console.log('[market-data] yahoo OK for', sym, 'range=' + range);
+      if (_needsOverlay && _overlayRes.status === 'fulfilled' && _overlayRes.value) {
+        try {
+          const _meta     = data?.chart?.result?.[0]?.meta;
+          const _regClose = _meta?.regularMarketPrice;
+          const _overlay  = deriveExtendedOverlay(_overlayRes.value, _regClose, _session, getEtDateStr());
+          if (_overlay && _meta) {
+            Object.assign(_meta, _overlay);
+            console.log('[market-data] ext overlay applied for', sym, _session,
+              'price=' + (_overlay.preMarketPrice ?? _overlay.postMarketPrice));
+          }
+        } catch (overlayErr) {
+          console.warn('[market-data] ext overlay skipped for', sym + ':', overlayErr.message);
+        }
+      } else if (_needsOverlay && _overlayRes.status === 'rejected') {
+        console.warn('[market-data] ext overlay fetch skipped for', sym + ':', _overlayRes.reason?.message);
       }
-    } catch (yahooErr) {
-      console.warn('[market-data] yahoo failed for', sym + ':', yahooErr.message, '— falling back to Polygon');
+      return res(200, data);
+    }
+    if (_mainRes.status === 'rejected') {
+      console.warn('[market-data] yahoo failed for', sym + ':', _mainRes.reason?.message, '— falling back to Polygon');
     }
 
     if (polygonKey) {
@@ -179,6 +207,116 @@ async function fetchYahoo(sym, interval, range) {
   }
 
   return data; // already Yahoo shape
+}
+
+// ── ET session helpers (DST-correct via Intl) ─────────────────────────────────
+
+function getEtSession(now) {
+  const d = now || new Date();
+  const p = {};
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short', hour: 'numeric', minute: 'numeric', hour12: false,
+  }).formatToParts(d).forEach(x => { p[x.type] = x.value; });
+  const f = parseInt(p.hour) + parseInt(p.minute) / 60;
+  if (p.weekday === 'Sat' || p.weekday === 'Sun') return 'CLOSED';
+  if (f >= 4   && f < 9.5)  return 'PRE';
+  if (f >= 9.5 && f < 16)   return 'REGULAR';
+  if (f >= 16  && f < 20)   return 'POST';
+  return 'CLOSED';
+}
+
+function getEtDateStr(now) {
+  const d = now || new Date();
+  const p = {};
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(d).forEach(x => { p[x.type] = x.value; });
+  return p.year + '-' + p.month + '-' + p.day;
+}
+
+function getBarEtParts(tsSeconds) {
+  const p = {};
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: 'numeric', minute: 'numeric', hour12: false,
+  }).formatToParts(new Date(tsSeconds * 1000)).forEach(x => { p[x.type] = x.value; });
+  return {
+    dateStr: p.year + '-' + p.month + '-' + p.day,
+    etFrac:  parseInt(p.hour) + parseInt(p.minute) / 60,
+  };
+}
+
+// ── Intraday display-only fetch (PRE/POST overlay source) ─────────────────────
+// Issued only when session is PRE or POST. Never used for candle calculations.
+
+async function fetchYahooIntraday(sym, timeoutMs) {
+  const url =
+    YAHOO_BASE + '/' + encodeURIComponent(sym) +
+    '?interval=1m&range=1d&includePrePost=true';
+  const raw = await timedFetch(url, {
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ' +
+        'AppleWebKit/537.36 (KHTML, like Gecko) ' +
+        'Chrome/120.0.0.0 Safari/537.36',
+      Accept: 'application/json',
+    },
+  }, timeoutMs);
+  if (!raw.ok) throw new Error('Yahoo intraday HTTP ' + raw.status);
+  const data = await raw.json();
+  if (!data?.chart?.result?.[0]) throw new Error('Yahoo intraday: no chart result');
+  return data;
+}
+
+// ── Extended-hours overlay derivation ────────────────────────────────────────
+// Returns { marketState, pre/postMarketPrice, pre/postMarketChangePercent } or null.
+// Never touches candle arrays — display-only fields overlaid onto meta only.
+
+function deriveExtendedOverlay(intradayData, regularClose, session, todayEtDate) {
+  if (session !== 'PRE' && session !== 'POST') return null;
+  if (!Number.isFinite(regularClose) || regularClose <= 0) return null;
+
+  const result     = intradayData?.chart?.result?.[0];
+  if (!result) return null;
+
+  const timestamps = result.timestamp || [];
+  const closes     = result.indicators?.quote?.[0]?.close || [];
+  const minHour    = session === 'PRE' ? 4   : 16;
+  const maxHour    = session === 'PRE' ? 9.5 : 20;
+
+  let extPrice = null;
+  let latestTs = -1;
+  for (let i = 0; i < timestamps.length; i++) {
+    const ts = timestamps[i];
+    if (ts <= latestTs) continue;
+    const { dateStr, etFrac } = getBarEtParts(ts);
+    if (dateStr !== todayEtDate) continue;
+    if (etFrac < minHour || etFrac >= maxHour) continue;
+    const c = closes[i];
+    if (!Number.isFinite(c) || c <= 0) continue;
+    extPrice = c;
+    latestTs = ts;
+  }
+
+  if (extPrice === null) return null;
+
+  const extChgPct = parseFloat(((extPrice - regularClose) / regularClose * 100).toFixed(2));
+
+  if (session === 'PRE') {
+    return {
+      marketState:            'PRE',
+      preMarketPrice:         extPrice,
+      preMarketChangePercent: extChgPct,
+    };
+  }
+  return {
+    marketState:             'POST',
+    postMarketPrice:         extPrice,
+    postMarketChangePercent: extChgPct,
+  };
 }
 
 // ── Polygon → Yahoo shape adapter ─────────────────────────────────────────────
