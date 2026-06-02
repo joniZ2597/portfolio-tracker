@@ -549,6 +549,16 @@ select.edit-inp{appearance:none;cursor:pointer}
 .api-info-text{font-size:12px;color:var(--text2);line-height:1.6}
 .all-ok-badge{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9px;font-weight:600;color:var(--green2)}
 .all-ok-dot{width:7px;height:7px;border-radius:50%;background:var(--green2)}
+/* Phase 5C: Pulse v1.1 Card Grid */
+.pulse-banner{display:flex;gap:1px;background:var(--border);border-bottom:1px solid var(--border);margin-bottom:1px}
+.pulse-banner > .mp-pos,.pulse-banner > .mp-pos-take{flex:1;border-top:none}
+.pulse-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:1px;background:var(--border);border-bottom:1px solid var(--border)}
+.pc-card{background:var(--card);padding:16px 18px}
+.pc-span-6{grid-column:span 6}
+.pc-span-12{grid-column:span 12}
+.pc-card-title{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
+.pc-card-sub{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-top:-8px;margin-bottom:10px}
+.pc-empty{font-family:var(--mono);font-size:10px;color:var(--text3);font-style:italic}
 </style>
 </head>
 <body>
@@ -3633,14 +3643,20 @@ function renderMainPanel(item) {
       <span class="dq-warn-text">AI analysis unavailable — market data shown only. Technical panels reflect verified price and candle data.</span>
     </div>` : ''}
 
-    <!-- BODY PANELS -->
-    <div class="mp-body">
+    <!-- POSITION BANNER — always rendered above grid (7A-2 / 7A-3) -->
+    <div class="pulse-banner">
+      ${_posCardHtml}
+      ${_positionTakeHtml}
+    </div>
 
-      <!-- TECHNICAL SETUP -->
-      <div class="mp-panel">
-        <div class="mp-panel-title">TECHNICAL SETUP</div>
-        ${!hasData ? '<div class="unavail-row">No verified price data — MA levels unavailable</div>' :
-          snap.hasMA20 === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
+    <!-- PULSE v1.1 CARD GRID -->
+    <div class="pulse-grid">
+
+      <!-- TECHNICAL SETUP — span 6 -->
+      <div class="pc-card pc-span-6">
+        <div class="pc-card-title">Technical Setup</div>
+        ${!hasData ? '<div class="pc-empty">No verified price data — MA levels unavailable</div>' :
+          snap.hasMA20 === undefined ? '<div class="pc-empty">Loading candle data…</div>' :
         `<div class="mp-ma-table">
           ${[
             ['MA 20',  fmtMA(snap.sma20),  fmtPct(snap.pct20),  maState(snap.pct20),  maLabel(snap.pct20),  snap.hasMA20],
@@ -3664,38 +3680,11 @@ function renderMainPanel(item) {
         </div>`}
       </div>
 
-      <!-- RELATIVE STRENGTH -->
-      <div class="mp-panel">
-        <div class="mp-panel-title">RELATIVE STRENGTH</div>
-        <div class="mp-panel-sub">3-month performance vs benchmarks</div>
-        ${!hasData ? '<div class="unavail-row">No verified price data — RS unavailable</div>' :
-          snap.candleCount === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
-        `<div class="rs-table">
-          ${[
-            ['vs SPY', snap.rsSPY,    false],
-            ['vs QQQ', snap.rsQQQ,    false],
-            [snap.sectorEtf ? 'vs ' + snap.sectorEtf : null, snap.rsSector, true],
-          ].map(([lbl, val, isSector]) => {
-            if (isSector && !lbl) {
-              return `<div class="rs-note">No sector ETF configured — use Edit ticker to add benchmark</div>`;
-            }
-            const r = rsLabel(val);
-            return r
-              ? `<div class="rs-row">
-                  <span class="rs-lbl">${lbl}</span>
-                  <span class="rs-val ${r.cls}">${r.lbl}</span>
-                  <span class="rs-pct" style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-left:8px">${fmtPct(val)}</span>
-                </div>`
-              : `<div class="rs-row"><span class="rs-lbl">${lbl}</span><span class="rs-val neutral-v" style="color:var(--text3)">RS unavailable</span></div>`;
-          }).join('')}
-        </div>`}
-      </div>
-
-      <!-- VOLUME & RISK SIGNALS -->
-      <div class="mp-panel mp-panel-wide">
-        <div class="mp-panel-title">VOLUME & RISK SIGNALS</div>
-        ${!hasData ? '<div class="unavail-row">No verified price data — volume metrics unavailable</div>' :
-          snap.candleCount === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
+      <!-- SIGNALS (Volume + Catalysts) — span 6 -->
+      <div class="pc-card pc-span-6">
+        <div class="pc-card-title">Signals</div>
+        ${!hasData ? '<div class="pc-empty">No verified price data — volume metrics unavailable</div>' :
+          snap.candleCount === undefined ? '<div class="pc-empty">Loading candle data…</div>' :
         `<div class="vol-table">
           <div class="vol-row">
             <span class="vol-lbl">Volume vs 20D Avg</span>
@@ -3705,15 +3694,6 @@ function renderMainPanel(item) {
             </span>
           </div>
           <div class="vol-row"><span class="vol-lbl">Volume trend (AI)</span><span class="vol-metric"></span><span class="vol-state ${volCls}">${volChar}</span></div>
-        </div>`}
-        ${hasData ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
-          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val ${riskCls}">${riskState.replace(' RISK','')}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val ${score>=65?'pos':score>=48?'neutral-v':'neg'}">${score>=65?'HIGH':score>=48?'MODERATE':'LIMITED'}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
-        </div>` : `<div class="rr-table" style="margin-top:8px">
-          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val neutral-v">Limited confidence</span></div>
-          <div class="rr-row"><span class="rr-lbl">Confidence</span><span class="rr-val warn">Research-only</span></div>
-          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
         </div>`}
         <div class="cat-list" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
           ${catalystRows.length ? catalystRows.map(({cls,lbl,state})=>`
@@ -3733,42 +3713,70 @@ function renderMainPanel(item) {
         </div>
       </div>
 
-    </div>
-
-    <!-- 7A-2: POSITION CONTEXT — derived from local watchlist position data, never sent to AI/API -->
-    ${_posCardHtml}
-
-    <!-- 7A-3: POSITION TAKE — derived from local mode + technical_setup, never sent to AI/API -->
-    ${_positionTakeHtml}
-
-    <!-- ACTIONABLE TAKE — structured (6A-1) when available, prose fallback otherwise -->
-    ${item.action ? `<div class="mp-action">
-      <div class="mp-action-left">
-        <div class="mp-action-icon">◎</div>
-        <div style="width:100%">
-          <div class="mp-action-label">${hasData ? 'ACTIONABLE TAKE' : 'RESEARCH-CONTEXT ANALYSIS — NO VERIFIED MARKET PRICE'}</div>
-          <div style="margin-top:6px">
-            ${item.news_bias     ? `<div class="mp-act-row"><span class="mp-act-lbl">Bias</span><span class="mp-act-val">${_esc(item.news_bias)}</span></div>` : ''}
+      <!-- AI SUMMARY (Actionable Take) — span 12 -->
+      <div class="pc-card pc-span-12">
+        <div class="pc-card-title">${hasData ? 'Actionable Take' : 'Research-Context Analysis'}</div>
+        ${item.action ? `
+          <div>
+            ${item.news_bias       ? `<div class="mp-act-row"><span class="mp-act-lbl">Bias</span><span class="mp-act-val">${_esc(item.news_bias)}</span></div>` : ''}
             ${item.technical_setup ? `<div class="mp-act-row"><span class="mp-act-lbl">Setup</span><span class="mp-act-val">${_esc(item.technical_setup).replace(/_/g,' ')}</span></div>` : ''}
-            ${item.action        ? `<div class="mp-act-row"><span class="mp-act-lbl">Action</span><span class="mp-act-val">${_esc(item.action).replace(/_/g,' ')}</span></div>` : ''}
-            ${item.entry_zone    ? `<div class="mp-act-row"><span class="mp-act-lbl">Entry Zone</span><span class="mp-act-val">${_esc(item.entry_zone)}</span></div>` : ''}
-            ${item.invalidation  ? `<div class="mp-act-row"><span class="mp-act-lbl">Invalidation</span><span class="mp-act-val">${_esc(item.invalidation)}</span></div>` : ''}
-            ${item.key_risk      ? `<div class="mp-act-row"><span class="mp-act-lbl">Key Risk</span><span class="mp-act-val">${_esc(item.key_risk)}</span></div>` : ''}
-            ${item.conflict      ? `<div class="mp-act-row mp-act-conflict"><span class="mp-act-lbl">⚠ Conflict</span><span class="mp-act-val" style="color:var(--yellow2)">${_esc(item.conflict)}</span></div>` : ''}
-          </div>
-        </div>
-      </div>
-      <div class="mp-action-time">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
-    </div>` : actionable ? `<div class="mp-action">
-      <div class="mp-action-left">
-        <div class="mp-action-icon">◎</div>
-        <div>
-          <div class="mp-action-label">${hasData ? 'ACTIONABLE TAKE' : 'RESEARCH-CONTEXT ANALYSIS — NO VERIFIED MARKET PRICE'}</div>
+            ${item.action          ? `<div class="mp-act-row"><span class="mp-act-lbl">Action</span><span class="mp-act-val">${_esc(item.action).replace(/_/g,' ')}</span></div>` : ''}
+            ${item.conflict        ? `<div class="mp-act-row mp-act-conflict"><span class="mp-act-lbl">⚠ Conflict</span><span class="mp-act-val" style="color:var(--yellow2)">${_esc(item.conflict)}</span></div>` : ''}
+          </div>` : actionable ? `
           <div class="mp-action-text">${actionable.replace(/Rating:.*$/s,'').replace(/\*\*/g,'').replace(/^[\]\[:\-"'\s]+/,'').trim()}</div>
+        ` : '<div class="pc-empty">No analysis available — run scan for actionable take</div>'}
+        <div class="mp-action-time" style="margin-top:8px">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
+      </div>
+
+      <!-- COMPARISON (RS + Rating) — span 6 -->
+      <div class="pc-card pc-span-6">
+        <div class="pc-card-title">Comparison</div>
+        <div class="pc-card-sub">3-month performance vs benchmarks</div>
+        ${!hasData ? '<div class="pc-empty">No verified price data — RS unavailable</div>' :
+          snap.candleCount === undefined ? '<div class="pc-empty">Loading candle data…</div>' :
+        `<div class="rs-table">
+          ${[
+            ['vs SPY', snap.rsSPY,    false],
+            ['vs QQQ', snap.rsQQQ,    false],
+            [snap.sectorEtf ? 'vs ' + snap.sectorEtf : null, snap.rsSector, true],
+          ].map(([lbl, val, isSector]) => {
+            if (isSector && !lbl) {
+              return `<div class="rs-note">No sector ETF configured — use Edit ticker to add benchmark</div>`;
+            }
+            const r = rsLabel(val);
+            return r
+              ? `<div class="rs-row">
+                  <span class="rs-lbl">${lbl}</span>
+                  <span class="rs-val ${r.cls}">${r.lbl}</span>
+                  <span class="rs-pct" style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-left:8px">${fmtPct(val)}</span>
+                </div>`
+              : `<div class="rs-row"><span class="rs-lbl">${lbl}</span><span class="rs-val neutral-v" style="color:var(--text3)">RS unavailable</span></div>`;
+          }).join('')}
+        </div>`}
+        <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
+          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
         </div>
       </div>
-      <div class="mp-action-time">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
-    </div>` : ''}
+
+      <!-- KEY LEVELS (Entry / Invalidation / Risk) — span 6 -->
+      <div class="pc-card pc-span-6">
+        <div class="pc-card-title">Key Levels</div>
+        ${item.action ? `
+          <div>
+            ${item.entry_zone   ? `<div class="mp-act-row"><span class="mp-act-lbl">Entry Zone</span><span class="mp-act-val">${_esc(item.entry_zone)}</span></div>` : ''}
+            ${item.invalidation ? `<div class="mp-act-row"><span class="mp-act-lbl">Invalidation</span><span class="mp-act-val">${_esc(item.invalidation)}</span></div>` : ''}
+            ${item.key_risk     ? `<div class="mp-act-row"><span class="mp-act-lbl">Key Risk</span><span class="mp-act-val">${_esc(item.key_risk)}</span></div>` : ''}
+          </div>` : '<div class="pc-empty">Run analysis for key levels</div>'}
+        ${hasData ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
+          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val ${riskCls}">${riskState.replace(' RISK','')}</span></div>
+          <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val ${score>=65?'pos':score>=48?'neutral-v':'neg'}">${score>=65?'HIGH':score>=48?'MODERATE':'LIMITED'}</span></div>
+        </div>` : `<div class="rr-table" style="margin-top:8px">
+          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val neutral-v">Limited confidence</span></div>
+          <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val warn">Research-only</span></div>
+        </div>`}
+      </div>
+
+    </div>
 
     <div class="src-trace">
       <span class="src-trace-hdr">SOURCE TRACE</span>
