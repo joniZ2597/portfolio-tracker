@@ -96,7 +96,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .wl-grade.c{color:#FB923C}.wl-grade.avoid{color:var(--red2)}
 .wl-info{flex:1;min-width:0}
 .wl-sym{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text);display:block}
-.wl-name{font-size:9px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.wl-name{font-size:11px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
 .wl-right{display:flex;flex-direction:column;align-items:flex-end;gap:1px}
 .wl-price{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text)}
 .wl-chg{font-family:var(--mono);font-size:10px;font-weight:600}
@@ -106,7 +106,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 
 /* Sidebar footer */
 .sb-footer{padding:10px 14px;border-top:1px solid var(--border);flex-shrink:0}
-.sb-footer-lbl{font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+.sb-footer-lbl{font-family:var(--mono);font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
 .sb-footer-val{font-family:var(--mono);font-size:12px;font-weight:700}
 .sidebar-regime{font-family:var(--mono);font-size:10px;font-weight:700;padding:2px 8px;border-radius:2px;border:1px solid}
 .sidebar-regime.on {color:var(--green2);border-color:rgba(34,197,94,.3);background:rgba(34,197,94,.08)}
@@ -160,7 +160,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .mp-state-strip{display:grid;grid-template-columns:repeat(5,1fr);background:var(--card2);border-bottom:1px solid var(--border)}
 .mp-state-cell{padding:12px 18px;border-right:1px solid var(--border)}
 .mp-state-cell:last-child{border-right:none}
-.mp-state-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;display:block;margin-bottom:4px}
+.mp-state-lbl{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;display:block;margin-bottom:4px}
 .mp-state-val{font-family:var(--mono);font-size:15px;font-weight:700;display:block;margin-bottom:2px}
 .mp-state-sub{font-size:10px;color:var(--text3);display:block}
 
@@ -211,12 +211,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .ph-price{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--text)}
 .ph-chg{font-family:var(--mono);font-size:12px;font-weight:600}
 .ph-chg.pos{color:var(--green2)}.ph-chg.neg{color:var(--red2)}.ph-chg.neu{color:var(--text3)}
-.ph-today{font-size:9px;color:var(--text3)}
+.ph-today{font-size:10px;color:var(--text3)}
 .ph-divider{width:1px;height:12px;background:var(--border2);margin:0 10px;flex-shrink:0}
-.ph-source{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.3px}
+.ph-source{font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:.3px}
 .ph-bench-chip{font-family:var(--mono);font-size:9px;color:var(--text2);background:rgba(255,255,255,.05);border:1px solid var(--border2);border-radius:3px;padding:2px 6px;letter-spacing:.3px}
 .mp-panel-sub{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-top:-8px;margin-bottom:10px}
-.ph-updated{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.3px}
+.ph-updated{font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:.3px}
 .ph-spacer{flex:1}
 .ph-mkt-pill{
   display:flex;align-items:center;gap:5px;
@@ -232,6 +232,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
   font-size:13px;padding:3px 7px;margin-left:6px;border-radius:3px;
 }
 .ph-refresh:hover{color:var(--text2);background:rgba(255,255,255,.04)}
+/* Extended-hours row (pre / after-hours) */
+.ph-ext-row{display:flex;align-items:baseline;gap:8px;padding:2px 20px 8px}
+.ph-ext-price{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--text)}
+.ph-ext-chg{font-family:var(--mono);font-size:11px;font-weight:500}
+.ph-ext-chg.pos{color:var(--green2)}.ph-ext-chg.neg{color:var(--red2)}.ph-ext-chg.neu{color:var(--text3)}
+.ph-ext-lbl{font-size:10px;color:var(--text3)}
 
 /* Color utilities */
 .pos      {color:var(--green2)}
@@ -243,39 +249,39 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .mp-body{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--border);border-bottom:1px solid var(--border)}
 .mp-panel{background:var(--card);padding:16px 18px}
 .mp-panel-wide{grid-column:1/-1}
-.mp-panel-title{font-family:var(--mono);font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
+.mp-panel-title{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
 
 /* MA table */
 .ma-row{display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid rgba(30,41,59,.4)}
 .ma-row:last-child{border-bottom:none}
-.ma-lbl{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--text2);width:50px}
-.ma-val{font-family:var(--mono);font-size:11px;color:var(--text3);width:52px}
+.ma-lbl{font-family:var(--mono);font-size:12px;font-weight:500;color:var(--text2);width:50px}
+.ma-val{font-family:var(--mono);font-size:12px;color:var(--text3);width:52px}
 .ma-pct{font-family:var(--mono);font-size:12px;font-weight:700;width:48px}
 .ma-arrow{font-size:16px;width:20px;text-align:center}
-.ma-state{font-family:var(--mono);font-size:11px;font-weight:700}
+.ma-state{font-family:var(--mono);font-size:12px;font-weight:700}
 
 /* RS table */
 .rs-row{display:flex;align-items:center;gap:10px;padding:5px 0;border-bottom:1px solid rgba(30,41,59,.4)}
-.rs-lbl{font-family:var(--mono);font-size:11px;color:var(--text2);width:52px}
+.rs-lbl{font-family:var(--mono);font-size:12px;color:var(--text2);width:52px}
 .rs-val{font-family:var(--mono);font-size:12px;font-weight:700;width:90px}
 .rs-note{font-family:var(--mono);font-size:9px;color:var(--text3);padding:6px 0 2px;letter-spacing:.2px}
 .rs-bar-track{flex:1;height:6px;background:var(--border2);border-radius:3px;overflow:hidden}
 .rs-bar-fill{height:100%;border-radius:3px;transition:width .4s}
 .rs-rank-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0 2px;border-top:1px solid var(--border2);margin-top:4px}
-.rs-rank-lbl{font-size:11px;color:var(--text3)}
+.rs-rank-lbl{font-size:12px;color:var(--text3)}
 .rs-rank-val{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--text)}
 
 /* Volume table */
 .vol-row{display:flex;align-items:center;padding:5px 0;border-bottom:1px solid rgba(30,41,59,.4);gap:8px}
 .vol-row:last-child{border-bottom:none}
-.vol-lbl{font-size:11px;color:var(--text2);flex:1}
+.vol-lbl{font-size:12px;color:var(--text2);flex:1}
 .vol-metric{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text);min-width:36px;text-align:right}
-.vol-state{font-family:var(--mono);font-size:11px;font-weight:700;min-width:72px;text-align:right}
+.vol-state{font-family:var(--mono);font-size:12px;font-weight:700;min-width:72px;text-align:right}
 
 /* Price positioning */
 .pos-row{display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(30,41,59,.4)}
 .pos-row:last-child{border-bottom:none}
-.pos-lbl{font-size:11px;color:var(--text2)}
+.pos-lbl{font-size:12px;color:var(--text2)}
 .pos-val{font-family:var(--mono);font-size:12px;font-weight:700}
 
 /* Catalysts */
@@ -284,21 +290,21 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .cat-row:last-child{border-bottom:none}
 .cat-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .cat-dot.pos{background:var(--green2)}.cat-dot.neg{background:var(--red2)}.cat-dot.warn{background:var(--yellow2)}.cat-dot.neutral-v{background:var(--text3)}
-.cat-lbl{font-size:12px;color:var(--text2);flex:1}
+.cat-lbl{font-size:13px;color:var(--text2);flex:1}
 .cat-state{font-family:var(--mono);font-size:11px;font-weight:700}
 
 /* Risk/reward */
 .rr-table{display:flex;flex-direction:column;gap:2px}
 .rr-row{display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid rgba(30,41,59,.4)}
 .rr-row:last-child{border-bottom:none}
-.rr-lbl{font-size:11px;color:var(--text2)}
+.rr-lbl{font-size:12px;color:var(--text2)}
 .rr-val{font-family:var(--mono);font-size:12px;font-weight:700}
 
 /* Actionable take */
 .mp-action{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 22px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:rgba(37,99,235,.05);border-left:4px solid var(--blue2)}
 .mp-action-left{display:flex;align-items:flex-start;gap:14px}
 .mp-action-icon{font-size:28px;color:var(--blue2);flex-shrink:0;line-height:1}
-.mp-action-label{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--blue2);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:5px}
+.mp-action-label{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--blue2);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:5px}
 .mp-action-text{font-size:15px;font-weight:600;color:var(--text);line-height:1.5}
 .mp-action-time{font-family:var(--mono);font-size:9px;color:var(--text3);white-space:nowrap}
 /* 7A-2: Position Context card — render-only, derived from local watchlist position data */
@@ -307,7 +313,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .mp-pos.mode-big-winner,.mp-pos.mode-profitable{border-left-color:var(--green2);background:rgba(34,197,94,.05)}
 .mp-pos.mode-flat{border-left-color:var(--yellow2);background:rgba(252,211,77,.05)}
 .mp-pos.mode-loss{border-left-color:var(--red2);background:rgba(248,113,113,.05)}
-.mp-pos-label{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--blue2);text-transform:uppercase;letter-spacing:1.5px}
+.mp-pos-label{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--blue2);text-transform:uppercase;letter-spacing:1.5px}
 .mp-pos-row{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:13px}
 .mp-pos-lbl{color:var(--text2);font-weight:500}
 .mp-pos-val{color:var(--text);font-weight:600;font-family:var(--mono)}
@@ -319,16 +325,16 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .mp-pos-take.mode-big-winner,.mp-pos-take.mode-profitable{border-left-color:var(--green2);background:rgba(34,197,94,.05)}
 .mp-pos-take.mode-flat{border-left-color:var(--yellow2);background:rgba(252,211,77,.05)}
 .mp-pos-take.mode-loss{border-left-color:var(--red2);background:rgba(248,113,113,.05)}
-.mp-pos-take-label{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--blue2);text-transform:uppercase;letter-spacing:1.5px}
+.mp-pos-take-label{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--blue2);text-transform:uppercase;letter-spacing:1.5px}
 .mp-pos-take-text{font-size:13px;color:var(--text);line-height:1.5}
 .mp-act-row{display:flex;align-items:baseline;gap:8px;padding:2px 0}
-.mp-act-lbl{font-family:var(--mono);font-size:9px;color:var(--text3);min-width:90px;flex-shrink:0;text-transform:uppercase;letter-spacing:.5px}
+.mp-act-lbl{font-family:var(--mono);font-size:11px;color:var(--text3);min-width:90px;flex-shrink:0;text-transform:uppercase;letter-spacing:.5px}
 .mp-act-val{font-family:var(--mono);font-size:11px;color:var(--text)}
 .mp-act-conflict{margin-top:4px;padding-top:4px;border-top:1px solid var(--border)}
 
 /* Source trace footer */
 .src-trace{display:flex;align-items:center;gap:12px;padding:6px 22px;border-top:1px solid var(--border);background:rgba(0,0,0,.08);flex-wrap:wrap}
-.src-trace-hdr{font-family:var(--mono);font-size:8px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;white-space:nowrap;flex-shrink:0}
+.src-trace-hdr{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;white-space:nowrap;flex-shrink:0}
 .src-trace-chips{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .src-trace-chip{font-family:var(--mono);font-size:9px;color:var(--text3)}
 .src-trace-val{font-weight:700}
@@ -338,6 +344,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .mp-dd-bar{padding:10px 22px;border-top:1px solid var(--border);background:rgba(0,0,0,.15)}
 .mp-dd-btn{font-family:var(--mono);font-size:9px;font-weight:500;background:none;border:1px solid var(--border2);border-radius:2px;color:var(--text3);padding:5px 12px;cursor:pointer;text-transform:uppercase;letter-spacing:1px}
 .mp-dd-btn:hover{color:var(--text2);border-color:var(--text3)}
+.mp-dd-btn:disabled{opacity:.4;cursor:not-allowed}
+.edgar-dd-status{display:inline-block;font-family:var(--mono);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:3px 8px;border-radius:2px;margin-bottom:8px;background:rgba(0,0,0,.18)}
 .dd-detail-row{display:flex;gap:12px;padding:7px 0;border-bottom:1px solid var(--border)}
 .dd-detail-tag{font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:1px;min-width:56px;padding-top:2px;white-space:nowrap}
 .dd-detail-body{font-size:12px;color:var(--text2);line-height:1.6}
@@ -400,8 +408,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 #scanColToggle.all-checked .sct-check{display:block}
 #scanColToggle .sct-dash{display:none;width:6px;height:1.5px;background:var(--text3);border-radius:1px;}
 #scanColToggle.mixed .sct-dash{display:block}
-.sb-col-ticker{font-family:var(--mono);font-size:7px;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;flex:1;padding-left:6px}
-.sb-col-chg{font-family:var(--mono);font-size:7px;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;min-width:44px;text-align:right}
+.sb-col-ticker{font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;flex:1;padding-left:6px}
+.sb-col-chg{font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;min-width:44px;text-align:right}
 
 /* Pulse watchlist rows */
 .pwl-row{
@@ -426,7 +434,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 /* Ticker info */
 .pwl-info{flex:1;min-width:0;padding-left:6px}
 .pwl-sym{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text);display:block;line-height:1.2}
-.pwl-name{font-size:9px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;max-width:130px}
+.pwl-name{font-size:11px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;max-width:130px}
 
 /* CHG % */
 .pwl-chg{font-family:var(--mono);font-size:10px;font-weight:600;min-width:44px;text-align:right;flex-shrink:0}
@@ -541,6 +549,16 @@ select.edit-inp{appearance:none;cursor:pointer}
 .api-info-text{font-size:12px;color:var(--text2);line-height:1.6}
 .all-ok-badge{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9px;font-weight:600;color:var(--green2)}
 .all-ok-dot{width:7px;height:7px;border-radius:50%;background:var(--green2)}
+/* Phase 5C: Pulse v1.1 Card Grid */
+.pulse-banner{display:flex;gap:1px;background:var(--border);border-bottom:1px solid var(--border);margin-bottom:1px}
+.pulse-banner > .mp-pos,.pulse-banner > .mp-pos-take{flex:1;border-top:none}
+.pulse-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:1px;background:var(--border);border-bottom:1px solid var(--border)}
+.pc-card{background:var(--card);padding:16px 18px}
+.pc-span-6{grid-column:span 6}
+.pc-span-12{grid-column:span 12}
+.pc-card-title{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
+.pc-card-sub{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-top:-8px;margin-bottom:10px}
+.pc-empty{font-family:var(--mono);font-size:10px;color:var(--text3);font-style:italic}
 </style>
 </head>
 <body>
@@ -705,6 +723,9 @@ const _inflight = {};
 // ── Technical snapshot cache ─────────────────────────────────────────────────
 // key: ticker symbol → { snap, computedAt }
 const _techCache = {};
+
+// ── Extended-hours display cache — session-only, never serialized ────────────
+const _extendedMktCache = {};
 
 // ── Pure math helpers ─────────────────────────────────────────────────────────
 
@@ -1091,7 +1112,8 @@ const SAMPLE_TICKERS = ['AAPL','NVDA','MSFT','TSLA','GOOGL','META','AMZN'];
 const MY_PORTFOLIO = ['FROG','CRWD','XLE','QQQ','SPY','ROK','KRE','NVDA','ONDS','VRT','MRNA','AA','MDT','CAH','ON','SOXX','TAN','CIBR','FLNG','MU','NFLX','ITA','IGV'];
 
 // ─── Phase 1: Approved watchlist data model ───────────────────────────────────
-// Schema: { symbol, name, exchange, sector, sectorEtf, personalNote, inScan }
+// Persisted schema: { symbol, name, exchange, sector, sectorEtf, personalNote, position }
+// Session-only (not persisted): inScan — run selection, always resets to true on load
 // localStorage key: pt_tickers (unchanged)
 
 const TICKER_DEFAULTS = {
@@ -1179,7 +1201,7 @@ function migrateWatchlist(raw) {
       sector:       e.sector      ?? d.sector,
       sectorEtf:    e.sectorEtf   ?? d.sectorEtf,
       personalNote: e.personalNote ?? '',
-      inScan:       e.inScan      ?? true,
+      inScan:       true,
       position:     _normalizePosition(e.position),
     };
   }).filter(Boolean);
@@ -1190,13 +1212,22 @@ let watchlist = [];
 function loadWatchlist() {
   const raw = localStorage.getItem('pt_tickers');
   watchlist = migrateWatchlist(raw);
-  // Write normalized result back so future reads are already in object[] format
-  localStorage.setItem('pt_tickers', JSON.stringify(watchlist));
+  // Write normalized result back — uses saveWatchlist() so inScan is stripped from stored form
+  saveWatchlist();
   return watchlist;
 }
 
 function saveWatchlist() {
-  localStorage.setItem('pt_tickers', JSON.stringify(watchlist));
+  const toStore = watchlist.map(e => ({
+    symbol:       e.symbol,
+    name:         e.name,
+    exchange:     e.exchange,
+    sector:       e.sector,
+    sectorEtf:    e.sectorEtf,
+    personalNote: e.personalNote,
+    position:     e.position
+  }));
+  localStorage.setItem('pt_tickers', JSON.stringify(toStore));
 }
 
 function getSymbols()     { return watchlist.map(e => e.symbol); }
@@ -1216,7 +1247,7 @@ function upsertTicker(symbol, fields) {
 
 function setInScan(symbol, bool) {
   const entry = findTicker(symbol);
-  if (entry) { entry.inScan = bool; saveWatchlist(); }
+  if (entry) { entry.inScan = bool; }
 }
 
 // Legacy `tickers` compat — read-only snapshot for any residual references
@@ -1335,6 +1366,14 @@ async function fetchYahoo(symbol) {
     }
   }
 
+  // Parse optional numeric Yahoo extended-hours fields; Number.isFinite preserves valid 0
+  const _parseOptNum = x => { const n = parseFloat(x); return Number.isFinite(n) ? n : null; };
+  const _extMs      = meta.marketState || null;
+  const _prePrice   = _parseOptNum(meta.preMarketPrice);
+  const _preChgPct  = _parseOptNum(meta.preMarketChangePercent);
+  const _postPrice  = _parseOptNum(meta.postMarketPrice);
+  const _postChgPct = _parseOptNum(meta.postMarketChangePercent);
+
   return {
     symbol,
     price,
@@ -1345,7 +1384,10 @@ async function fetchYahoo(symbol) {
     previous_close,
     volume:         parseInt(meta.regularMarketVolume),
     timestamp:      new Date(meta.regularMarketTime * 1000).toISOString(),
-    source:         'yahoo'
+    source:         'yahoo',
+    ...(_extMs     !== null ? { marketState: _extMs }                                                       : {}),
+    ...(_prePrice  !== null ? { preMarketPrice: _prePrice,  preMarketChangePercent: _preChgPct  }           : {}),
+    ...(_postPrice !== null ? { postMarketPrice: _postPrice, postMarketChangePercent: _postChgPct }          : {}),
   };
 }
 
@@ -2017,7 +2059,21 @@ function orchestrate(claudeResults, pplxData, stockData) {
     const _wlIdentity = findTicker(sym);
     if (_wlIdentity?.name) item.company_name = _wlIdentity.name;
 
-    if (mkt) { item._verifiedPrice = mkt.price; item._verifiedChangePct = mkt.change_percent; item._dataSource = mkt.source; }
+    delete _extendedMktCache[sym];
+    if (mkt) {
+      item._verifiedPrice = mkt.price;
+      item._verifiedChangePct = mkt.change_percent;
+      item._dataSource = mkt.source;
+      if (mkt.source === 'yahoo' && mkt.marketState) {
+        _extendedMktCache[sym] = {
+          marketState:              mkt.marketState,
+          preMarketPrice:           mkt.preMarketPrice           ?? null,
+          preMarketChangePercent:   mkt.preMarketChangePercent   ?? null,
+          postMarketPrice:          mkt.postMarketPrice          ?? null,
+          postMarketChangePercent:  mkt.postMarketChangePercent  ?? null
+        };
+      }
+    }
 
     if (pplx?.analystActions?.length) {
       const ptMentioned = pplx.analystActions.some(a => item.summary?.includes(a.bank) || item.summary?.includes('$' + a.target));
@@ -2213,6 +2269,53 @@ function enforceScoreConsistency(results, newsContext) {
     if (typeof chgPct === 'number' && chgPct < -3) { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (down day ${chgPct}%)`); return item; }
     if (item.technical_setup === 'extended_near_ath') { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (extended_near_ath)`); return item; }
     if (bullishCount >= 2 && bearishCount === 0 && score < 65) { console.warn(`[PT-SCORE] ${item.ticker}: Tier1 boost ${score} → 72`); return { ...item, sentiment: 'positive', sentiment_score: 72 }; }
+    return item;
+  });
+}
+
+// ── 7B-6G-4: Capital Returns yield nudge ──────────────────────────────────────
+// Deterministic post-processing layer. Reads window._capitalReturnsDebug[sym].
+// +2 pts per confirmed primary-source signal: active dividend, active buyback auth.
+// Max nudge: +4 pts. Ceiling-aware: never re-breaches extended_near_ath (62) or
+// below_key_mas (45) clamps already applied by orchestrate().
+// Zero impact if probe was never run, status !== 'OK', or summary is absent.
+// _crNudge is persisted into pt_results (Option B) for audit and future UI use.
+// ─────────────────────────────────────────────────────────────────────────────
+function applyCapitalReturnsNudge(results) {
+  return results.map(item => {
+    const sym = item.ticker;
+    const cr  = window._capitalReturnsDebug?.[sym];
+
+    // Strict bypass: absent, DISABLED, non-OK, or missing summary → zero impact
+    if (!cr || cr.status !== 'OK' || !cr.summary) return item;
+
+    const s = cr.summary;
+    const hasDividend   = typeof s.latestDividendPerShare           === 'number' && s.latestDividendPerShare           > 0;
+    const hasActiveAuth = typeof s.latestRemainingAuthorizationUSD  === 'number' && s.latestRemainingAuthorizationUSD  > 0;
+
+    let nudge = 0;
+    if (hasDividend)   nudge += 2;
+    if (hasActiveAuth) nudge += 2;
+
+    if (nudge === 0) return item;
+
+    // Respect ceilings already enforced by orchestrate() — never re-breach them
+    const ceiling =
+      item.technical_setup === 'extended_near_ath' ? 62 :
+      item.technical_setup === 'below_key_mas'     ? 45 : 100;
+
+    const scoreBefore = item.sentiment_score;
+    const scoreAfter  = Math.min(scoreBefore + nudge, ceiling);
+
+    if (scoreAfter === scoreBefore) {
+      console.log(`[PT][CapReturns] ${sym}: nudge +${nudge} absorbed by ceiling (${item.technical_setup})`);
+      item._crNudge = { nudge, hasDividend, hasActiveAuth, scoreBefore, scoreAfter, absorbedByCeiling: true };
+      return item;
+    }
+
+    console.log(`[PT][CapReturns] ${sym}: yield nudge +${nudge} → ${scoreBefore} → ${scoreAfter} (div:${hasDividend}, auth:${hasActiveAuth})`);
+    item.sentiment_score = scoreAfter;
+    item._crNudge = { nudge, hasDividend, hasActiveAuth, scoreBefore, scoreAfter, absorbedByCeiling: false };
     return item;
   });
 }
@@ -2539,7 +2642,8 @@ async function analyzeChunk(batch, today) {
     const mkt = stockData[item.ticker];
     return mkt ? { ...item, _changePct: mkt.change_percent } : item;
   });
-  return enforceScoreConsistency(resultsWithPct, JSON.stringify(pplxData));
+  const resultsWithCapReturns = applyCapitalReturnsNudge(resultsWithPct);
+  return enforceScoreConsistency(resultsWithCapReturns, JSON.stringify(pplxData));
 }
 
 // ── renderResults ────────────────────────────────────────────────────────────
@@ -3002,7 +3106,6 @@ function toggleAllVisibleScanInclusion() {
   // Check all if any are unchecked; uncheck all if all are checked
   const shouldCheck = visibleRows.some(e => !e.inScan);
   visibleRows.forEach(e => { e.inScan = shouldCheck; });
-  saveWatchlist();
   renderWatchlistRows();
   updateRunScanCount();
 }
@@ -3404,12 +3507,29 @@ function renderMainPanel(item) {
   }
 
   // Watchlist metadata for name / exchange / sector (Phase 1 schema)
-  // Market status (simple time-based heuristic, US Eastern)
+  // Extended-hours: read session-only cache; no item/localStorage fields touched
+  const _extC      = hasData ? (_extendedMktCache[item.ticker] || null) : null;
+  const _ms        = _extC ? _extC.marketState : null;
+
+  // Market status — prefer fresh Yahoo marketState; fall back to time heuristic
   const _now     = new Date();
   const _etHour  = (_now.getUTCHours() - 4 + 24) % 24; // rough ET offset
   const _isOpen  = _etHour >= 9.5 && _etHour < 16 && _now.getUTCDay() >= 1 && _now.getUTCDay() <= 5;
-  const mktLabel = _isOpen ? 'Market open · closes 4:00 PM ET' : 'Market closed';
-  const mktCls   = _isOpen ? 'open' : 'closed';
+  const mktLabel = _ms === 'REGULAR' ? 'Market open · closes 4:00 PM ET'
+                 : _ms === 'PRE'     ? 'Pre-market'
+                 : _ms === 'POST'    ? 'After-hours'
+                 : _ms === 'CLOSED'  ? 'Market closed'
+                 : (_isOpen ? 'Market open · closes 4:00 PM ET' : 'Market closed');
+  const mktCls   = _ms === 'REGULAR' ? 'open' : _ms ? 'closed' : (_isOpen ? 'open' : 'closed');
+
+  const _todayLbl  = _ms === 'REGULAR' ? 'today'
+                   : (_ms === 'PRE' || _ms === 'POST' || _ms === 'CLOSED') ? 'regular close'
+                   : 'regular price';
+  const _showExt   = _ms === 'PRE' || _ms === 'POST';
+  const _extPrice  = _ms === 'PRE'  ? _extC.preMarketPrice
+                   : _ms === 'POST' ? _extC.postMarketPrice  : null;
+  const _extChgPct = _ms === 'PRE'  ? _extC.preMarketChangePercent
+                   : _ms === 'POST' ? _extC.postMarketChangePercent : null;
 
   // Avatar initials (up to 2 chars)
   const avatarTxt = item.ticker.slice(0, 2);
@@ -3494,7 +3614,7 @@ function renderMainPanel(item) {
         <div class="ph-price-block">
           <span class="ph-price">${hasData ? price : '—'}</span>
           <span class="ph-chg ${hasData ? chgCls2 : 'neu'}">${hasData ? (chgDir + (chg !== null ? Math.abs(chg * (item._verifiedPrice||0)/100).toFixed(2) : '—') + ' ' + chgPctStr) : '—'}</span>
-          <span class="ph-today">today</span>
+          <span class="ph-today">${_todayLbl}</span>
         </div>
         ${hasData && (typeof snap.spyChangePct === 'number' || typeof snap.qqqChangePct === 'number') ? `<div class="ph-divider"></div>` : ''}
         ${hasData && typeof snap.spyChangePct === 'number' ? `<span class="ph-bench-chip">SPY <span class="${snap.spyChangePct >= 0 ? 'pos' : 'neg'}">${snap.spyChangePct >= 0 ? '+' : ''}${snap.spyChangePct.toFixed(2)}%</span></span>` : ''}
@@ -3508,6 +3628,7 @@ function renderMainPanel(item) {
         <div class="ph-mkt-pill ${mktCls}"><div class="ph-mkt-dot"></div>${mktLabel}</div>
         <button class="ph-refresh" title="Refresh" onclick="selectTicker('${item.ticker}')">↻</button>
       </div>
+      ${hasData && _showExt && _extPrice !== null ? `<div class="ph-ext-row"><span class="ph-ext-price">$${_extPrice.toFixed(2)}</span>${_extChgPct !== null ? `<span class="ph-ext-chg ${_extChgPct >= 0 ? 'pos' : 'neg'}">${_extChgPct >= 0 ? '+' : ''}${_extChgPct.toFixed(2)}%</span>` : ''}<span class="ph-ext-lbl">${_ms === 'PRE' ? 'Pre-market' : 'After-hours'}</span></div>` : ''}
     </div>
 
     ${!hasData ? `
@@ -3522,14 +3643,20 @@ function renderMainPanel(item) {
       <span class="dq-warn-text">AI analysis unavailable — market data shown only. Technical panels reflect verified price and candle data.</span>
     </div>` : ''}
 
-    <!-- BODY PANELS -->
-    <div class="mp-body">
+    <!-- POSITION BANNER — always rendered above grid (7A-2 / 7A-3) -->
+    <div class="pulse-banner">
+      ${_posCardHtml}
+      ${_positionTakeHtml}
+    </div>
 
-      <!-- TECHNICAL SETUP -->
-      <div class="mp-panel">
-        <div class="mp-panel-title">TECHNICAL SETUP</div>
-        ${!hasData ? '<div class="unavail-row">No verified price data — MA levels unavailable</div>' :
-          snap.hasMA20 === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
+    <!-- PULSE v1.1 CARD GRID -->
+    <div class="pulse-grid">
+
+      <!-- TECHNICAL SETUP — span 6 -->
+      <div class="pc-card pc-span-6">
+        <div class="pc-card-title">Technical Setup</div>
+        ${!hasData ? '<div class="pc-empty">No verified price data — MA levels unavailable</div>' :
+          snap.hasMA20 === undefined ? '<div class="pc-empty">Loading candle data…</div>' :
         `<div class="mp-ma-table">
           ${[
             ['MA 20',  fmtMA(snap.sma20),  fmtPct(snap.pct20),  maState(snap.pct20),  maLabel(snap.pct20),  snap.hasMA20],
@@ -3553,38 +3680,11 @@ function renderMainPanel(item) {
         </div>`}
       </div>
 
-      <!-- RELATIVE STRENGTH -->
-      <div class="mp-panel">
-        <div class="mp-panel-title">RELATIVE STRENGTH</div>
-        <div class="mp-panel-sub">3-month performance vs benchmarks</div>
-        ${!hasData ? '<div class="unavail-row">No verified price data — RS unavailable</div>' :
-          snap.candleCount === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
-        `<div class="rs-table">
-          ${[
-            ['vs SPY', snap.rsSPY,    false],
-            ['vs QQQ', snap.rsQQQ,    false],
-            [snap.sectorEtf ? 'vs ' + snap.sectorEtf : null, snap.rsSector, true],
-          ].map(([lbl, val, isSector]) => {
-            if (isSector && !lbl) {
-              return `<div class="rs-note">No sector ETF configured — use Edit ticker to add benchmark</div>`;
-            }
-            const r = rsLabel(val);
-            return r
-              ? `<div class="rs-row">
-                  <span class="rs-lbl">${lbl}</span>
-                  <span class="rs-val ${r.cls}">${r.lbl}</span>
-                  <span class="rs-pct" style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-left:8px">${fmtPct(val)}</span>
-                </div>`
-              : `<div class="rs-row"><span class="rs-lbl">${lbl}</span><span class="rs-val neutral-v" style="color:var(--text3)">RS unavailable</span></div>`;
-          }).join('')}
-        </div>`}
-      </div>
-
-      <!-- VOLUME & RISK SIGNALS -->
-      <div class="mp-panel mp-panel-wide">
-        <div class="mp-panel-title">VOLUME & RISK SIGNALS</div>
-        ${!hasData ? '<div class="unavail-row">No verified price data — volume metrics unavailable</div>' :
-          snap.candleCount === undefined ? '<div class="unavail-row" style="color:var(--text3);font-size:10px">Loading candle data…</div>' :
+      <!-- SIGNALS (Volume + Catalysts) — span 6 -->
+      <div class="pc-card pc-span-6">
+        <div class="pc-card-title">Signals</div>
+        ${!hasData ? '<div class="pc-empty">No verified price data — volume metrics unavailable</div>' :
+          snap.candleCount === undefined ? '<div class="pc-empty">Loading candle data…</div>' :
         `<div class="vol-table">
           <div class="vol-row">
             <span class="vol-lbl">Volume vs 20D Avg</span>
@@ -3594,15 +3694,6 @@ function renderMainPanel(item) {
             </span>
           </div>
           <div class="vol-row"><span class="vol-lbl">Volume trend (AI)</span><span class="vol-metric"></span><span class="vol-state ${volCls}">${volChar}</span></div>
-        </div>`}
-        ${hasData ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
-          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val ${riskCls}">${riskState.replace(' RISK','')}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val ${score>=65?'pos':score>=48?'neutral-v':'neg'}">${score>=65?'HIGH':score>=48?'MODERATE':'LIMITED'}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
-        </div>` : `<div class="rr-table" style="margin-top:8px">
-          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val neutral-v">Limited confidence</span></div>
-          <div class="rr-row"><span class="rr-lbl">Confidence</span><span class="rr-val warn">Research-only</span></div>
-          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
         </div>`}
         <div class="cat-list" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
           ${catalystRows.length ? catalystRows.map(({cls,lbl,state})=>`
@@ -3622,42 +3713,70 @@ function renderMainPanel(item) {
         </div>
       </div>
 
-    </div>
-
-    <!-- 7A-2: POSITION CONTEXT — derived from local watchlist position data, never sent to AI/API -->
-    ${_posCardHtml}
-
-    <!-- 7A-3: POSITION TAKE — derived from local mode + technical_setup, never sent to AI/API -->
-    ${_positionTakeHtml}
-
-    <!-- ACTIONABLE TAKE — structured (6A-1) when available, prose fallback otherwise -->
-    ${item.action ? `<div class="mp-action">
-      <div class="mp-action-left">
-        <div class="mp-action-icon">◎</div>
-        <div style="width:100%">
-          <div class="mp-action-label">${hasData ? 'ACTIONABLE TAKE' : 'RESEARCH-CONTEXT ANALYSIS — NO VERIFIED MARKET PRICE'}</div>
-          <div style="margin-top:6px">
-            ${item.news_bias     ? `<div class="mp-act-row"><span class="mp-act-lbl">Bias</span><span class="mp-act-val">${_esc(item.news_bias)}</span></div>` : ''}
+      <!-- AI SUMMARY (Actionable Take) — span 12 -->
+      <div class="pc-card pc-span-12">
+        <div class="pc-card-title">${hasData ? 'Actionable Take' : 'Research-Context Analysis'}</div>
+        ${item.action ? `
+          <div>
+            ${item.news_bias       ? `<div class="mp-act-row"><span class="mp-act-lbl">Bias</span><span class="mp-act-val">${_esc(item.news_bias)}</span></div>` : ''}
             ${item.technical_setup ? `<div class="mp-act-row"><span class="mp-act-lbl">Setup</span><span class="mp-act-val">${_esc(item.technical_setup).replace(/_/g,' ')}</span></div>` : ''}
-            ${item.action        ? `<div class="mp-act-row"><span class="mp-act-lbl">Action</span><span class="mp-act-val">${_esc(item.action).replace(/_/g,' ')}</span></div>` : ''}
-            ${item.entry_zone    ? `<div class="mp-act-row"><span class="mp-act-lbl">Entry Zone</span><span class="mp-act-val">${_esc(item.entry_zone)}</span></div>` : ''}
-            ${item.invalidation  ? `<div class="mp-act-row"><span class="mp-act-lbl">Invalidation</span><span class="mp-act-val">${_esc(item.invalidation)}</span></div>` : ''}
-            ${item.key_risk      ? `<div class="mp-act-row"><span class="mp-act-lbl">Key Risk</span><span class="mp-act-val">${_esc(item.key_risk)}</span></div>` : ''}
-            ${item.conflict      ? `<div class="mp-act-row mp-act-conflict"><span class="mp-act-lbl">⚠ Conflict</span><span class="mp-act-val" style="color:var(--yellow2)">${_esc(item.conflict)}</span></div>` : ''}
-          </div>
-        </div>
-      </div>
-      <div class="mp-action-time">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
-    </div>` : actionable ? `<div class="mp-action">
-      <div class="mp-action-left">
-        <div class="mp-action-icon">◎</div>
-        <div>
-          <div class="mp-action-label">${hasData ? 'ACTIONABLE TAKE' : 'RESEARCH-CONTEXT ANALYSIS — NO VERIFIED MARKET PRICE'}</div>
+            ${item.action          ? `<div class="mp-act-row"><span class="mp-act-lbl">Action</span><span class="mp-act-val">${_esc(item.action).replace(/_/g,' ')}</span></div>` : ''}
+            ${item.conflict        ? `<div class="mp-act-row mp-act-conflict"><span class="mp-act-lbl">⚠ Conflict</span><span class="mp-act-val" style="color:var(--yellow2)">${_esc(item.conflict)}</span></div>` : ''}
+          </div>` : actionable ? `
           <div class="mp-action-text">${actionable.replace(/Rating:.*$/s,'').replace(/\*\*/g,'').replace(/^[\]\[:\-"'\s]+/,'').trim()}</div>
+        ` : '<div class="pc-empty">No analysis available — run scan for actionable take</div>'}
+        <div class="mp-action-time" style="margin-top:8px">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
+      </div>
+
+      <!-- COMPARISON (RS + Rating) — span 6 -->
+      <div class="pc-card pc-span-6">
+        <div class="pc-card-title">Comparison</div>
+        <div class="pc-card-sub">3-month performance vs benchmarks</div>
+        ${!hasData ? '<div class="pc-empty">No verified price data — RS unavailable</div>' :
+          snap.candleCount === undefined ? '<div class="pc-empty">Loading candle data…</div>' :
+        `<div class="rs-table">
+          ${[
+            ['vs SPY', snap.rsSPY,    false],
+            ['vs QQQ', snap.rsQQQ,    false],
+            [snap.sectorEtf ? 'vs ' + snap.sectorEtf : null, snap.rsSector, true],
+          ].map(([lbl, val, isSector]) => {
+            if (isSector && !lbl) {
+              return `<div class="rs-note">No sector ETF configured — use Edit ticker to add benchmark</div>`;
+            }
+            const r = rsLabel(val);
+            return r
+              ? `<div class="rs-row">
+                  <span class="rs-lbl">${lbl}</span>
+                  <span class="rs-val ${r.cls}">${r.lbl}</span>
+                  <span class="rs-pct" style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-left:8px">${fmtPct(val)}</span>
+                </div>`
+              : `<div class="rs-row"><span class="rs-lbl">${lbl}</span><span class="rs-val neutral-v" style="color:var(--text3)">RS unavailable</span></div>`;
+          }).join('')}
+        </div>`}
+        <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
+          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
         </div>
       </div>
-      <div class="mp-action-time">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
-    </div>` : ''}
+
+      <!-- KEY LEVELS (Entry / Invalidation / Risk) — span 6 -->
+      <div class="pc-card pc-span-6">
+        <div class="pc-card-title">Key Levels</div>
+        ${item.action ? `
+          <div>
+            ${item.entry_zone   ? `<div class="mp-act-row"><span class="mp-act-lbl">Entry Zone</span><span class="mp-act-val">${_esc(item.entry_zone)}</span></div>` : ''}
+            ${item.invalidation ? `<div class="mp-act-row"><span class="mp-act-lbl">Invalidation</span><span class="mp-act-val">${_esc(item.invalidation)}</span></div>` : ''}
+            ${item.key_risk     ? `<div class="mp-act-row"><span class="mp-act-lbl">Key Risk</span><span class="mp-act-val">${_esc(item.key_risk)}</span></div>` : ''}
+          </div>` : '<div class="pc-empty">Run analysis for key levels</div>'}
+        ${hasData ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
+          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val ${riskCls}">${riskState.replace(' RISK','')}</span></div>
+          <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val ${score>=65?'pos':score>=48?'neutral-v':'neg'}">${score>=65?'HIGH':score>=48?'MODERATE':'LIMITED'}</span></div>
+        </div>` : `<div class="rr-table" style="margin-top:8px">
+          <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val neutral-v">Limited confidence</span></div>
+          <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val warn">Research-only</span></div>
+        </div>`}
+      </div>
+
+    </div>
 
     <div class="src-trace">
       <span class="src-trace-hdr">SOURCE TRACE</span>
@@ -3675,7 +3794,15 @@ function renderMainPanel(item) {
         <span class="src-trace-chip">Updated: <span class="src-trace-val neutral-v">${(() => { const t = item._orchestratedAt || item._timestamp; if (!t) return '—'; try { return new Date(t).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'}); } catch(e) { return '—'; } })()}</span></span>
       </div>
     </div>
-
+${window.PT_ENABLE_EDGAR_FORM4 === true ? `
+    <div class="mp-dd-bar" id="edgar-dd-bar-${item.ticker}">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <span style="font-family:var(--mono);font-size:8px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">Insider / Form 4 — SEC EDGAR</span>
+        <button class="mp-dd-btn" id="edgar-dd-btn-${item.ticker}"
+          onclick="_runEdgarInsiderDeepDive('${item.ticker}')">▶ Check Insider Activity</button>
+      </div>
+      <div id="edgar-dd-panel-${item.ticker}" style="display:none;margin-top:10px"></div>
+    </div>` : ''}
   `; /* Deep Dive deferred to v1.2 — not rendered */
 }
 
@@ -3918,6 +4045,131 @@ function renderMainPanel(item) {
   }
   // 7B-6C-9C-3: all four structured-verdict helpers (_parseVerdict, _reconcile, _noneTrust, _resolveUntrustedNone) are now wired into the Deep Dive runtime.
 
+  // 7B-6E-4a: convert EDGAR probe result to a factual insider category record.
+  // Pure: no fetch, no storage, no mutation. Does NOT affect sonar scoring metrics.
+  // status/finalStatus use the approved factual model only (no investment/catalyst semantics).
+  function _buildEdgarInsiderCat(ef4) {
+    const label = CATS.insider.label;
+    if (!ef4) {                                                            // G0: probe returned null
+      return { category:label, verdictSource:'edgar-direct', verdictPresent:false, parseOk:false,
+               modelStatus:null, initialModelStatus:null, reconciledFrom:null, dateAmbiguous:false,
+               status:'verification_unavailable', finalStatus:'VERIFICATION_UNAVAILABLE',
+               bestTier:null, sourceTiers:[], eventDate:null, note:null, error:null, snippet:'',
+               latencyMs:0, edgarTransactions:null, edgarAggregation:null, edgarTransactionCount:null,
+               edgarCoverageComplete:null, edgarTruncated:null, edgarWindowStart:null,
+               edgarWindowEnd:null, edgarLatencyMs:null, edgarError:'probe_null' };
+    }
+    const _ws = (ef4.window && ef4.window.start) || null;
+    const _we = (ef4.window && ef4.window.end)   || null;
+    const _lms = ef4._clientLatencyMs ?? null;
+    const _errs = Array.isArray(ef4.errors) ? ef4.errors : [];
+    const _base = { category:label, verdictSource:'edgar-direct', modelStatus:null, initialModelStatus:null,
+                    reconciledFrom:null, dateAmbiguous:false, latencyMs:ef4._clientLatencyMs||0,
+                    edgarWindowStart:_ws, edgarWindowEnd:_we, edgarLatencyMs:_lms };
+    if (ef4.status==='DISABLED' || ef4.reason==='SERVER_DISABLED') {     // G1: server gate disabled
+      return Object.assign({}, _base, { verdictPresent:false, parseOk:false,
+               status:'disabled', finalStatus:'DISABLED',
+               bestTier:null, sourceTiers:[], eventDate:null, note:null, error:null,
+               snippet:'[EDGAR] disabled on this deployment.',
+               edgarTransactions:[], edgarAggregation:[], edgarTransactionCount:null,
+               edgarCoverageComplete:null, edgarTruncated:null,
+               edgarError:_errs[0]||'SERVER_DISABLED' });
+    }
+    if (ef4.status==='IDENTITY_UNRESOLVED'||ef4.status==='IDENTITY_AMBIGUOUS') { // G2: identity failure
+      return Object.assign({}, _base, { verdictPresent:false, parseOk:false,
+               status:'identity_unresolved', finalStatus:'IDENTITY_UNRESOLVED',
+               bestTier:null, sourceTiers:[], eventDate:null, note:ef4.resolutionPath||ef4.status,
+               error:null, snippet:'[EDGAR] issuer identity unresolved ('+ef4.resolutionPath+').',
+               edgarTransactions:[], edgarAggregation:[], edgarTransactionCount:null,
+               edgarCoverageComplete:null, edgarTruncated:null, edgarError:null });
+    }
+    if (ef4.status==='VERIFICATION_UNAVAILABLE') {                        // G3: server verification failure
+      return Object.assign({}, _base, { verdictPresent:false, parseOk:false,
+               status:'verification_unavailable', finalStatus:'VERIFICATION_UNAVAILABLE',
+               bestTier:null, sourceTiers:[], eventDate:null, note:ef4.reason||null, error:null,
+               snippet:'[EDGAR] verification unavailable: '+(ef4.reason||ef4.status)+'.',
+               edgarTransactions:[], edgarAggregation:[], edgarTransactionCount:null,
+               edgarCoverageComplete:null, edgarTruncated:null, edgarError:ef4.reason||_errs[0]||null });
+    }
+    if (ef4._httpStatus !== 200) {                                         // G4: HTTP gate
+      return Object.assign({}, _base, { verdictPresent:false, parseOk:false,
+               status:'verification_unavailable', finalStatus:'VERIFICATION_UNAVAILABLE',
+               bestTier:null, sourceTiers:[], eventDate:null, note:null, error:null,
+               snippet:'[EDGAR] HTTP '+(ef4._httpStatus??'none')+'.',
+               edgarTransactions:null, edgarAggregation:null, edgarTransactionCount:null,
+               edgarCoverageComplete:null, edgarTruncated:null,
+               edgarError:'http_'+(ef4._httpStatus??'none') });
+    }
+    const events = Array.isArray(ef4.events) ? ef4.events : null;
+    if (events===null) {                                                   // G5: malformed — not a real array
+      return Object.assign({}, _base, { verdictPresent:false, parseOk:false,
+               status:'verification_unavailable', finalStatus:'VERIFICATION_UNAVAILABLE',
+               bestTier:null, sourceTiers:[], eventDate:null, note:null, error:null,
+               snippet:'[EDGAR] malformed response (events not an array).',
+               edgarTransactions:null, edgarAggregation:null, edgarTransactionCount:null,
+               edgarCoverageComplete:ef4.coverageComplete??null, edgarTruncated:ef4.truncated??null,
+               edgarError:'malformed_events' });
+    }
+    // All structural gates passed. Evaluate coverage completeness gates for verified outcomes.
+    const _cvg = ef4.coverageComplete===true, _noTrunc = ef4.truncated===false;
+    const _noErr = _errs.length===0;
+    const _rawOK = ef4.status==='OK'||ef4.status==='NONE_CONFIRMED';
+    const edgarCoverageComplete = ef4.coverageComplete??null, edgarTruncated = ef4.truncated??null;
+    const edgarError = _errs.length>0 ? _errs[0] : null;
+    const _agg = {};
+    events.forEach(ev => {
+      const k = (ev.filerName||'unknown')+'|'+(ev.classification||'unknown');
+      if (!_agg[k]) _agg[k]={ filerName:ev.filerName||null, classification:ev.classification||null, shares:0, count:0 };
+      _agg[k].shares += Number(ev.shares)||0; _agg[k].count++;
+    });
+    const edgarAggregation = Object.values(_agg);
+    if (!(_cvg&&_noTrunc&&_noErr&&_rawOK)) {                               // any gate fails → PARTIAL
+      const _fd = events.length>0?(events[0].transactionDate||null):null;
+      const snippet = events.length>0
+        ? '[EDGAR PARTIAL] '+events.length+' transaction(s) found (coverage incomplete or status '+ef4.status+').'
+        : '[EDGAR PARTIAL] No transactions found; coverage incomplete or status '+ef4.status+' — absence unverified.';
+      return Object.assign({}, _base, { verdictPresent:true, parseOk:true,
+               status:'partial', finalStatus:'PARTIAL', bestTier:null, sourceTiers:[], eventDate:_fd,
+               note:'coverageComplete='+ef4.coverageComplete+' truncated='+ef4.truncated+' status='+ef4.status,
+               error:null, snippet, edgarTransactions:events, edgarAggregation,
+               edgarTransactionCount:events.length??null,
+               edgarCoverageComplete, edgarTruncated, edgarError });
+    }
+    if (ef4.status==='NONE_CONFIRMED' && events.length===0) {              // status+count must both align
+      return Object.assign({}, _base, { verdictPresent:true, parseOk:true,
+               status:'verified_no_transactions', finalStatus:'VERIFIED_NO_TRANSACTIONS',
+               bestTier:1, sourceTiers:[1], eventDate:null, note:null, error:null,
+               snippet:'[EDGAR] No insider transactions in window (verified; '+ef4.filingsScanned+' filing(s) scanned).',
+               edgarTransactions:[], edgarAggregation:[], edgarTransactionCount:0,
+               edgarCoverageComplete, edgarTruncated, edgarError:null });
+    }
+    if (ef4.status==='OK' && events.length>0) {                            // status+count must both align
+      const snippet = '[EDGAR] '+events.length+' transaction(s): '+
+        events.slice(0,3).map(ev=>(ev.filerName||'?')+' '+(ev.acquiredDisposed||'?')+' '+
+          (ev.shares!=null?(Number(ev.shares)||0):'—')+' shares on '+(ev.transactionDate||'?')+
+          ' ('+(ev.transactionCode||'?')+')').join('; ');
+      return Object.assign({}, _base, { verdictPresent:true, parseOk:true,
+               status:'verified_transactions', finalStatus:'VERIFIED_TRANSACTIONS',
+               bestTier:1, sourceTiers:[1], eventDate:events[0].transactionDate||null,
+               note:null, error:null, snippet, edgarTransactions:events, edgarAggregation,
+               edgarTransactionCount:events.length??null,
+               edgarCoverageComplete, edgarTruncated, edgarError:null });
+    }
+    // Contract mismatch: OK+zero events or NONE_CONFIRMED+non-zero events — never emit a verified outcome.
+    const _fd = events.length>0?(events[0].transactionDate||null):null;
+    const _mNote = 'contract_mismatch: status='+ef4.status+' events='+events.length;
+    const _mSnip = events.length>0
+      ? '[EDGAR PARTIAL] '+events.length+' transaction(s) present but status is '+ef4.status+' (contract mismatch).'
+      : '[EDGAR PARTIAL] Zero events returned but status is '+ef4.status+' (contract mismatch); absence not verified.';
+    return Object.assign({}, _base, { verdictPresent:true, parseOk:true,
+               status:'partial', finalStatus:'PARTIAL', bestTier:null, sourceTiers:[], eventDate:_fd,
+               note:_mNote, error:null, snippet:_mSnip, edgarTransactions:events, edgarAggregation,
+               edgarTransactionCount:events.length??null,
+               edgarCoverageComplete, edgarTruncated,
+               edgarError:'contract_mismatch:'+ef4.status+':events='+events.length });
+  }
+  window._buildEdgarInsiderCat = _buildEdgarInsiderCat; // 7B-6E-5a: shared EDGAR-to-status mapper
+
   window.runQuerySplitDeepDive = async function(sym){
     if (window[FLAG] !== true) { console.warn('[PT][DeepDive] disabled — set window.PT_ENABLE_QUERY_SPLIT_DEEPDIVE = true to enable (dev/QA only).'); return null; }
     sym = String(sym||'').toUpperCase().trim();
@@ -3927,7 +4179,19 @@ function renderMainPanel(item) {
     const cats = _selectCats(sym);
     const t0 = Date.now();
     const _today = new Date().toISOString().slice(0,10); // 7B-6C-9C-2: runtime today for date reconciliation
-    const raw = await _runPool(cats.map(k => () => _callCategory(sym, k)), CONCURRENCY);
+    // 7B-6E-4a: when EDGAR is enabled, exclude insider from the sonar-pro pool (no sonar insider call made or used).
+    const _edgarInsider = (window['PT_ENABLE_EDGAR_FORM4'] === true);
+    const _pplxCats = _edgarInsider ? cats.filter(k => k !== 'insider') : cats;
+    const raw = await _runPool(_pplxCats.map(k => () => _callCategory(sym, k)), CONCURRENCY);
+    // 7B-6E-4a: EDGAR probe — window computed from _today using existing 35-day Deep Dive rule
+    // (matches _reconcile ageDays ≤ 35 and sonar prompt "current = within last 35 days").
+    // No new window policy: reuses the established rule, applied dynamically per-call.
+    let _edgarProbeResult = null;
+    if (_edgarInsider && typeof window.runEdgarForm4Probe === 'function') {
+      const _winEnd = _today;
+      const _winStart = (()=>{ const d=new Date(_today+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-35); return d.toISOString().slice(0,10); })();
+      _edgarProbeResult = await window.runEdgarForm4Probe(sym, { windowStart:_winStart, windowEnd:_winEnd });
+    }
     let hardCatalystCount=0, staleRejectedCount=0, weakSourceCount=0, structuredCount=0, regexFallbackCount=0;
     const allTiers = [];
     // 7B-6C-9C-2: reuse the EXISTING _classify bestTier semantics (Tier-4 rejected; min of T1/T2 else 3 else null;
@@ -3998,6 +4262,14 @@ function renderMainPanel(item) {
       else { notFoundLowConfidenceCount++; c.status='not_found'; }   // retry NONE/unusable -> NOT_FOUND_LOW_CONFIDENCE
     }
     categories.forEach(c=>{ delete c._needsRetry; delete c._key; });  // drop transient runtime-only fields
+    // 7B-6E-4a: inject EDGAR insider category — after retry pass; EDGAR result is authoritative, never retried.
+    // Intentionally does NOT increment hardCatalystCount / weakSourceCount / staleRejectedCount
+    // and does NOT push into allTiers: EDGAR factual data is isolated from sonar-pro scoring metrics.
+    let _edgarCat = null;
+    if (_edgarInsider) {
+      _edgarCat = _buildEdgarInsiderCat(_edgarProbeResult);
+      categories.push(_edgarCat);
+    }
     const noneConfidentCount = categories.filter(c=>c.finalStatus==='NONE_CONFIDENT').length;
     const pts = allTiers.map(t=> t===1?3 : t===2?2 : t===3?0 : -1);   // allTiers now includes retry-call source tiers
     const sourceQualityScore = pts.length ? +(pts.reduce((a,b)=>a+b,0)/pts.length).toFixed(2) : null;
@@ -4011,7 +4283,10 @@ function renderMainPanel(item) {
       hardCatalystCount, staleRejectedCount, weakSourceCount, sourceQualityScore,
       structuredVerdictRate, regexFallbackCount:totalRegexFallbackCount,
       retryCount, recoveredByRetryCount, notFoundLowConfidenceCount, noneConfidentCount,
-      retryStructuredCount, retryRegexFallbackCount, categories
+      retryStructuredCount, retryRegexFallbackCount,
+      edgarInsider: _edgarInsider || false,
+      edgarTransactionCount: _edgarCat ? (_edgarCat.edgarTransactionCount ?? null) : null,
+      categories
     };
     if (!window._pplxDebug) window._pplxDebug = {};                 // memory-only (never persisted)
     window._pplxDebug[sym] = Object.assign(window._pplxDebug[sym]||{}, { deepDive:data });
@@ -4026,6 +4301,336 @@ function renderMainPanel(item) {
     return data;
   };
 })();
+
+// ============================================================================
+// Phase 7B-6E-3: Dedicated EDGAR Form 4 vertical slice (DEV-ONLY, default OFF).
+// Memory-only. Calls server-side /.netlify/functions/edgar-form4 (SEC primary).
+// Does NOT touch the normal scan, scoring, Actionable Take, technical setup,
+// pt_results, localStorage, _pplxDebug, or the existing sonar-pro insider path
+// (runQuerySplitDeepDive). Separate flag + separate namespace by design.
+// Enable for branch-dev QA:  window.PT_ENABLE_EDGAR_FORM4 = true
+// Run: await window.runEdgarForm4Probe('NVDA')
+//      await window.runEdgarForm4Probe('LUNR', { cik: '1844452' })            // optional CIK override
+//      await window.runEdgarForm4Probe('NVDA', { windowStart:'2026-03-01', windowEnd:'2026-05-30' })
+// Output: console + memory-only on window._edgarDebug[sym]
+// ============================================================================
+(function(){
+  const FLAG = 'PT_ENABLE_EDGAR_FORM4';
+  const ENDPOINT = '/.netlify/functions/edgar-form4';
+  const DEFAULT_START = '2026-03-01', DEFAULT_END = '2026-05-30';
+  const CALL_TIMEOUT_MS = 30000;
+  const _now = () => (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+
+  window.runEdgarForm4Probe = async function(sym, opts){
+    if (window[FLAG] !== true) { console.warn('[PT][EDGAR] disabled — set window.PT_ENABLE_EDGAR_FORM4 = true to enable (dev/QA only).'); return null; }
+    if (!sym) { console.warn('[PT][EDGAR] ticker required, e.g. runEdgarForm4Probe("NVDA")'); return null; }
+    const ticker = String(sym).toUpperCase();
+    opts = opts || {};
+    const windowStart = opts.windowStart || DEFAULT_START;
+    const windowEnd   = opts.windowEnd   || DEFAULT_END;
+    let issuerNameHint = '';
+    try { const _e = (typeof findTicker === 'function') && findTicker(ticker); if (_e && _e.name) issuerNameHint = _e.name; } catch(_){}
+    const t0 = _now();
+    let out;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+    try {
+      const resp = await fetch(ENDPOINT, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, issuerNameHint, cik: opts.cik, windowStart, windowEnd }),
+        signal: controller.signal
+      });
+      out = await resp.json().catch(() => ({ status: 'VERIFICATION_UNAVAILABLE', reason: 'bad_json' }));
+      out._httpStatus = resp.status;
+    } catch(e) {
+      out = { status: 'VERIFICATION_UNAVAILABLE', reason: 'client_fetch_failed', error: String(e && e.message || e) };
+    } finally {
+      clearTimeout(timer);
+    }
+    out._clientLatencyMs = Math.round(_now() - t0);
+    if (!window._edgarDebug) window._edgarDebug = {};   // memory-only (never persisted)
+    window._edgarDebug[ticker] = out;
+    try {
+      console.log('[PT][EDGAR]', ticker, JSON.stringify({ status: out.status, cik: out.cik, issuer: out.issuer, resolutionPath: out.resolutionPath, events: (out.events || []).length, latencyMs: out._clientLatencyMs }));
+      (out.events || []).forEach(ev => console.log(`  [${ev.classification}] ${ev.filerName} (${(ev.roles||[]).join('/')}${ev.officerTitle ? ': ' + ev.officerTitle : ''}) ${ev.transactionDate} code ${ev.transactionCode} ${ev.acquiredDisposed} shares=${ev.shares != null ? ev.shares : '—'}${ev.pricePerShare != null ? ' @ $' + ev.pricePerShare : ''} conf=${ev.confidence}`));
+    } catch(_){}
+    return out;
+  };
+})();
+
+// ============================================================================
+// Phase 7B-6F-4: Finance Search console probe (DEV-ONLY, default OFF).
+// Memory-only. Calls server-side /.netlify/functions/finance-search (Agent API).
+// Does NOT touch normal scan, Deep Dive, scoring, Actionable Take, pt_results,
+// localStorage, EDGAR, sonar-pro proxy, or any other existing path.
+// Enable:  window.PT_ENABLE_FINANCE_SEARCH_CLIENT = true  (in-session only; resets on reload)
+// Run:     await window.runFinanceSearchProbe('NVDA', 'earnings_history')
+//          await window.runFinanceSearchProbe('ARM', 'forward_guidance')
+//          await window.runFinanceSearchProbe('FROG', 'capital_returns')
+// Output:  window._financeSearchDebug['NVDA']['earnings_history'], etc.
+// ============================================================================
+window.runFinanceSearchProbe = async function (ticker, category) {
+  if (window.PT_ENABLE_FINANCE_SEARCH_CLIENT !== true) {
+    console.warn('[PT][FinSearch] disabled — set window.PT_ENABLE_FINANCE_SEARCH_CLIENT = true to enable (dev/QA only).');
+    return null;
+  }
+  if (!ticker || typeof ticker !== 'string') {
+    console.warn('[PT][FinSearch] ticker required, e.g. runFinanceSearchProbe("NVDA", "earnings_history")');
+    return null;
+  }
+  const sym = ticker.toUpperCase();
+  const cat = (typeof category === 'string' && category.trim()) ? category.trim() : 'earnings_history';
+  const t0 = Date.now();
+  let result;
+  try {
+    const r = await fetch('/.netlify/functions/finance-search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: sym, categories: [cat] })
+    });
+    const responseText = await r.text();
+    let raw = null;
+    try { raw = JSON.parse(responseText); } catch (_) {}
+    if (raw !== null && typeof raw === 'object') {
+      result = { ticker: sym, category: cat, latencyMs: Date.now() - t0, ...raw };
+      if (!r.ok) result.httpStatus = r.status;
+    } else {
+      result = {
+        ticker: sym, category: cat, latencyMs: Date.now() - t0,
+        status: 'CLIENT_HTTP_ERROR', httpStatus: r.status, httpStatusText: r.statusText,
+        bodyPreview: responseText.slice(0, 300),
+        evidence: [], invocations: 0, errors: ['CLIENT_HTTP_ERROR:' + r.status]
+      };
+    }
+  } catch (e) {
+    result = { ticker: sym, category: cat, error: String(e && e.message || e), latencyMs: Date.now() - t0 };
+  }
+  window._financeSearchDebug = window._financeSearchDebug || {};
+  window._financeSearchDebug[sym] = window._financeSearchDebug[sym] || {};
+  window._financeSearchDebug[sym][cat] = result;
+  try {
+    console.log('[PT][FinSearch]', sym, cat, JSON.stringify({
+      status: result.status, invocations: result.invocations,
+      evidenceLen: (result.evidence || []).length, latencyMs: result.latencyMs,
+      errors: result.errors
+    }));
+  } catch (_) {}
+  return result;
+};
+
+// ============================================================================
+// Phase 7B-6G-3: Capital Returns console probe (DEV-ONLY, default OFF).
+// Memory-only. Calls server-side /.netlify/functions/capital-returns (SEC XBRL).
+// Does NOT touch normal scan, Deep Dive, scoring, Actionable Take, pt_results,
+// localStorage, EDGAR, Finance Search, or any other existing path.
+// Enable:  window.PT_ENABLE_CAPITAL_RETURNS_CLIENT = true  (in-session only; resets on reload)
+// Run:     await window.runCapitalReturnsProbe('COP')
+//          await window.runCapitalReturnsProbe('NVDA')
+//          await window.runCapitalReturnsProbe('ON')
+// Output:  window._capitalReturnsDebug['COP'], etc.
+// ============================================================================
+window.runCapitalReturnsProbe = async function (ticker) {
+  if (window.PT_ENABLE_CAPITAL_RETURNS_CLIENT !== true) {
+    console.warn('[PT][CapReturns] disabled — set window.PT_ENABLE_CAPITAL_RETURNS_CLIENT = true to enable (dev/QA only).');
+    return null;
+  }
+  if (!ticker || typeof ticker !== 'string') {
+    console.warn('[PT][CapReturns] ticker required, e.g. runCapitalReturnsProbe("COP")');
+    return null;
+  }
+  const sym = ticker.toUpperCase();
+  const t0 = Date.now();
+  let result;
+  try {
+    const r = await fetch('/.netlify/functions/capital-returns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: sym })
+    });
+    const responseText = await r.text();
+    let raw = null;
+    try { raw = JSON.parse(responseText); } catch (_) {}
+    if (raw !== null && typeof raw === 'object') {
+      result = { ticker: sym, latencyMs: Date.now() - t0, ...raw };
+      if (!r.ok) result.httpStatus = r.status;
+    } else {
+      result = {
+        ticker: sym, latencyMs: Date.now() - t0,
+        status: 'CLIENT_HTTP_ERROR', httpStatus: r.status, httpStatusText: r.statusText,
+        bodyPreview: responseText.slice(0, 300),
+        buybacks: [], dividends: [], dividendsPerShare: [], authorizations: [],
+        errors: ['CLIENT_HTTP_ERROR:' + r.status]
+      };
+    }
+  } catch (e) {
+    result = { ticker: sym, error: String(e && e.message || e), latencyMs: Date.now() - t0 };
+  }
+  if (!window._capitalReturnsDebug) window._capitalReturnsDebug = {};
+  window._capitalReturnsDebug[sym] = result;
+  try {
+    const s = result.summary || {};
+    console.log('[PT][CapReturns]', sym, JSON.stringify({
+      status: result.status, cik: result.cik,
+      buybacks: (result.buybacks || []).length,
+      dividends: (result.dividends || []).length,
+      totalCapitalReturnedUSD: s.totalCapitalReturnedUSD,
+      latencyMs: result.latencyMs,
+      errors: result.errors
+    }));
+  } catch (_) {}
+  return result;
+};
+
+// ── 7B-6E-5a: EDGAR Insider Deep Dive UI ─────────────────────────────────────
+// Dev-only manual trigger. Gated behind PT_ENABLE_EDGAR_FORM4.
+// Memory-only: no pt_results, localStorage, scoring, or sonar-pro calls.
+// Uses window._buildEdgarInsiderCat as the single shared EDGAR-to-status mapper.
+// ─────────────────────────────────────────────────────────────────────────────
+function _edgarEsc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
+
+function _renderEdgarInsiderPanel(ef4) {
+  const cat = (typeof window._buildEdgarInsiderCat === 'function')
+    ? window._buildEdgarInsiderCat(ef4)
+    : { finalStatus:'VERIFICATION_UNAVAILABLE', edgarTransactions:null,
+        edgarAggregation:null, edgarWindowStart:null, edgarWindowEnd:null, edgarLatencyMs:null };
+
+  const fs = cat.finalStatus;
+
+  const _stLabel = {
+    VERIFIED_TRANSACTIONS:    'EDGAR Verified — Insider / Form 4',
+    VERIFIED_NO_TRANSACTIONS: 'EDGAR Verified — Insider / Form 4',
+    PARTIAL:                  'SEC/EDGAR — Insider / Form 4 · Partial',
+    IDENTITY_UNRESOLVED:      'SEC/EDGAR — Insider / Form 4 · Identity Unresolved',
+    VERIFICATION_UNAVAILABLE: 'SEC/EDGAR — Insider / Form 4 · Unavailable',
+    DISABLED:                 'SEC/EDGAR — Insider / Form 4'
+  };
+  const _stCls = {
+    VERIFIED_TRANSACTIONS:'pos',    VERIFIED_NO_TRANSACTIONS:'neutral-v',
+    PARTIAL:'warn',                 IDENTITY_UNRESOLVED:'warn',
+    VERIFICATION_UNAVAILABLE:'neg', DISABLED:'neutral-v'
+  };
+  const label = _stLabel[fs] || 'SEC/EDGAR — Insider / Form 4';
+  const cls   = _stCls[fs]   || 'neutral-v';
+  const ws    = _edgarEsc(cat.edgarWindowStart || '');
+  const we    = _edgarEsc(cat.edgarWindowEnd   || '');
+  const lms   = cat.edgarLatencyMs || 0;
+
+  // Confirmed classification keys from edgar-form4.js classify() — no invented values.
+  const _clsInfo = {
+    open_market_purchase:       { label:'Open market purchase',              matCls:'pos'       },
+    open_market_sale:           { label:'Open market sale',                  matCls:'neg'       },
+    sell_to_cover:              { label:'Sell to cover (non-discretionary)', matCls:'neutral-v' },
+    tax_withholding_or_payment: { label:'Tax withholding (non-discretionary)',matCls:'neutral-v' },
+    option_exercise:            { label:'Option exercise',                   matCls:'neutral-v' },
+    derivative_forward:         { label:'Forward / derivative',              matCls:'neutral-v' },
+    derivative_other_review:    { label:'Derivative — review required',      matCls:'warn'      },
+    gift:                       { label:'Gift (non-discretionary)',           matCls:'neutral-v' },
+    unknown_review:             { label:'Unclassified — review required',    matCls:'warn'      }
+  };
+  const _ci = c => _clsInfo[c] || { label:_edgarEsc((c||'').replace(/_/g,' ')), matCls:'neutral-v' };
+
+  let body = '';
+
+  if (fs === 'VERIFIED_TRANSACTIONS') {
+    const agg  = Array.isArray(cat.edgarAggregation)  ? cat.edgarAggregation  : [];
+    const evts = Array.isArray(cat.edgarTransactions) ? cat.edgarTransactions : [];
+    const issuer = _edgarEsc((ef4 && ef4.issuer) || '');
+    const cik    = _edgarEsc((ef4 && ef4.cik)    || '');
+    body += `<div style="font-size:10px;color:var(--text3);margin-bottom:8px">${issuer||'—'}${cik?' · CIK '+cik:''}</div>`;
+
+    // Aggregation summary — capped at 5 groups (AMKR-style: meaningful activity visible at a glance)
+    const AGG_CAP = 5;
+    if (agg.length > 0) {
+      body += `<div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:3px 0 6px 0;border-bottom:1px solid var(--border);display:grid;grid-template-columns:1fr 200px 80px 50px;gap:8px">
+        <span>Insider</span><span>Type</span><span style="text-align:right">Shares</span><span style="text-align:right">Txns</span></div>`;
+      agg.slice(0, AGG_CAP).forEach(a => {
+        const { label:clsLbl, matCls } = _ci(a.classification);
+        const shrs = (Number(a.shares)||0).toLocaleString();
+        body += `<div class="dd-detail-row">
+          <span class="dd-detail-body">${_edgarEsc(a.filerName||'?')}</span>
+          <span class="dd-detail-body ${matCls}" style="font-family:var(--mono);font-size:9px">${_edgarEsc(clsLbl)}</span>
+          <span class="dd-detail-body" style="font-family:var(--mono);font-size:10px;text-align:right">${_edgarEsc(shrs)}</span>
+          <span class="dd-detail-body neutral-v" style="font-family:var(--mono);font-size:10px;text-align:right">${a.count}</span>
+        </div>`;
+      });
+      if (agg.length > AGG_CAP)
+        body += `<div style="font-size:10px;color:var(--text3);padding-top:4px">+${agg.length-AGG_CAP} additional groups not shown.</div>`;
+    }
+
+    // Raw transaction rows — capped at 10 (VRT-style: mechanical vs discretionary clear per row)
+    if (evts.length > 0) {
+      body += `<div style="font-family:var(--mono);font-size:8px;color:var(--text3);margin-top:10px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">Transactions (${evts.length})</div>`;
+      evts.slice(0,10).forEach(ev => {
+        const { label:clsLbl, matCls } = _ci(ev.classification);
+        const shrs  = ev.shares!=null ? (Number(ev.shares)||0).toLocaleString() : '—';
+        const price = ev.pricePerShare!=null ? ' @ $'+Number(ev.pricePerShare).toFixed(2) : '';
+        const role  = _edgarEsc(ev.officerTitle||(ev.roles||[]).join('/'));
+        body += `<div class="dd-detail-row">
+          <span class="dd-detail-tag">${_edgarEsc(ev.transactionDate||'—')}</span>
+          <span class="dd-detail-body"><strong>${_edgarEsc(ev.filerName||'?')}</strong>
+            <span style="font-size:10px;color:var(--text3)"> · ${role}</span></span>
+          <span class="dd-detail-body ${matCls}" style="font-family:var(--mono);font-size:9px">${_edgarEsc(clsLbl)}</span>
+          <span class="dd-detail-body" style="font-family:var(--mono);font-size:10px;text-align:right;white-space:nowrap">${_edgarEsc(shrs)}${_edgarEsc(price)}</span>
+        </div>`;
+      });
+      if (evts.length > 10)
+        body += `<div style="font-size:10px;color:var(--text3);padding-top:6px">+${evts.length-10} additional transactions not shown.</div>`;
+    }
+
+  } else if (fs === 'VERIFIED_NO_TRANSACTIONS') {
+    const scanned = ef4&&ef4.filingsScanned!=null ? ef4.filingsScanned : '—';
+    const issuer  = _edgarEsc((ef4&&ef4.issuer)||'');
+    body = `<div style="font-size:12px;color:var(--text2);padding:4px 0">No insider transactions in the 35-day window.</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:4px">${issuer||'—'} · ${scanned} filing(s) scanned · coverage complete</div>`;
+
+  } else if (fs === 'PARTIAL') {
+    body = `<div style="font-size:11px;color:var(--text2)">Coverage is incomplete. Transaction data cannot be verified as complete or absent.</div>`;
+
+  } else if (fs === 'IDENTITY_UNRESOLVED') {
+    body = `<div style="font-size:11px;color:var(--text2)">Issuer identity could not be resolved for this ticker.</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:4px">No confidence in presence or absence of insider activity.</div>`;
+
+  } else if (fs === 'VERIFICATION_UNAVAILABLE') {
+    body = `<div style="font-size:11px;color:var(--text2)">Insider verification is unavailable.</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:4px">No confidence in presence or absence of insider activity.</div>`;
+
+  } else if (fs === 'DISABLED') {
+    body = `<div style="font-size:11px;color:var(--text3)">Insider verification is unavailable in this environment.</div>`;
+  }
+
+  // Tier 1 wording only for verified outcomes.
+  const tierNote = (fs==='VERIFIED_TRANSACTIONS'||fs==='VERIFIED_NO_TRANSACTIONS')
+    ? ' · SEC/EDGAR primary (Tier 1)' : '';
+  const footer = `<div style="font-family:var(--mono);font-size:8px;color:var(--text3);margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+    Window: ${ws||'—'} – ${we||'—'}${lms?' · '+lms+'ms':''}${tierNote}</div>`;
+
+  return `<div><span class="edgar-dd-status ${cls}">${_edgarEsc(label)}</span>${body}${footer}</div>`;
+}
+
+async function _runEdgarInsiderDeepDive(sym) {
+  if (window.PT_ENABLE_EDGAR_FORM4 !== true) { console.warn('[PT][EDGAR-UI] disabled — set PT_ENABLE_EDGAR_FORM4=true'); return; }
+  if (typeof window.runEdgarForm4Probe !== 'function') { console.warn('[PT][EDGAR-UI] runEdgarForm4Probe not available'); return; }
+  const btn   = document.getElementById('edgar-dd-btn-' + sym);
+  const panel = document.getElementById('edgar-dd-panel-' + sym);
+  if (!btn || !panel) return;
+  btn.disabled = true;
+  btn.textContent = '⟳ Checking EDGAR…';
+  panel.style.display = 'none';
+  panel.innerHTML = '';
+  const today    = new Date().toISOString().slice(0,10);
+  const winStart = (() => { const d=new Date(today+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()-35); return d.toISOString().slice(0,10); })();
+  let ef4 = null;
+  try {
+    ef4 = await window.runEdgarForm4Probe(sym, { windowStart:winStart, windowEnd:today });
+  } catch(e) {
+    ef4 = { status:'VERIFICATION_UNAVAILABLE', reason:'client_error',
+            error:String(e&&e.message||e), _clientLatencyMs:0 };
+  }
+  panel.innerHTML = _renderEdgarInsiderPanel(ef4);
+  panel.style.display = 'block';
+  btn.textContent = '▶ Run again';  // neutral manual-run copy; no auto-retry
+  btn.disabled = false;
+}
 
 function exportJSON() {
   if (!results.length) return;
@@ -4338,6 +4943,11 @@ function init() {
   }
 }
 
+// 7B-6E-6: auto-enable EDGAR Insider UI on branch-dev preview host only.
+// Server gate (PT_ENABLE_EDGAR_FORM4_SERVER) remains the real safety boundary.
+if (window.location.hostname === 'branch-dev--portfoliotrk.netlify.app') {
+  window.PT_ENABLE_EDGAR_FORM4 = true;
+}
 init();
 // ─────────────────────────────────────────────────────────────────────────────
 
