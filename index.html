@@ -3230,6 +3230,22 @@ function selectTicker(ticker) {
   }
 }
 
+async function _refreshPriceRow(ticker) {
+  const mkt = await fetchStockData(ticker).catch(() => null);
+  if (mkt && mkt.source === 'yahoo' && mkt.marketState) {
+    _extendedMktCache[ticker] = {
+      marketState:             mkt.marketState,
+      preMarketPrice:          mkt.preMarketPrice          ?? null,
+      preMarketChangePercent:  mkt.preMarketChangePercent  ?? null,
+      postMarketPrice:         mkt.postMarketPrice         ?? null,
+      postMarketChangePercent: mkt.postMarketChangePercent ?? null
+    };
+  } else {
+    delete _extendedMktCache[ticker];
+  }
+  selectTicker(ticker);
+}
+
 function renderTickerPlaceholder(ticker) {
   const panel = document.getElementById('mainPanel');
   if (!panel) return;
@@ -3626,7 +3642,7 @@ function renderMainPanel(item) {
         ${lastUpdated ? `<span class="ph-updated">updated ${lastUpdated}</span>` : ''}
         <div class="ph-spacer"></div>
         <div class="ph-mkt-pill ${mktCls}"><div class="ph-mkt-dot"></div>${mktLabel}</div>
-        <button class="ph-refresh" title="Refresh" onclick="selectTicker('${item.ticker}')">↻</button>
+        <button class="ph-refresh" title="Refresh" onclick="_refreshPriceRow('${item.ticker}')">↻</button>
       </div>
       ${hasData && _showExt && _extPrice !== null ? `<div class="ph-ext-row"><span class="ph-ext-price">$${_extPrice.toFixed(2)}</span>${_extChgPct !== null ? `<span class="ph-ext-chg ${_extChgPct >= 0 ? 'pos' : 'neg'}">${_extChgPct >= 0 ? '+' : ''}${_extChgPct.toFixed(2)}%</span>` : ''}<span class="ph-ext-lbl">${_ms === 'PRE' ? 'Pre-market' : 'After-hours'}</span></div>` : ''}
     </div>
