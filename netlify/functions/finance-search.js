@@ -29,7 +29,7 @@
 'use strict';
 
 const PPLX_AGENT_URL = 'https://api.perplexity.ai/v1/agent';
-const TIMEOUT_MS = 50000;
+const TIMEOUT_MS = 20000;
 
 const ALLOWED_CATEGORIES = new Set([
   'earnings_history',
