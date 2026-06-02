@@ -3230,6 +3230,24 @@ function selectTicker(ticker) {
   }
 }
 
+async function _refreshPriceRow(ticker) {
+  const mkt = await fetchStockData(ticker).catch(() => null);
+  if (mkt && mkt.source === 'yahoo' && mkt.marketState) {
+    _extendedMktCache[ticker] = {
+      marketState:             mkt.marketState,
+      preMarketPrice:          mkt.preMarketPrice          ?? null,
+      preMarketChangePercent:  mkt.preMarketChangePercent  ?? null,
+      postMarketPrice:         mkt.postMarketPrice         ?? null,
+      postMarketChangePercent: mkt.postMarketChangePercent ?? null,
+      regularPrice:            typeof mkt.price === 'number'          ? mkt.price          : null,
+      regularChangePct:        typeof mkt.change_percent === 'number' ? mkt.change_percent : null,
+    };
+  } else {
+    delete _extendedMktCache[ticker];
+  }
+  selectTicker(ticker);
+}
+
 function renderTickerPlaceholder(ticker) {
   const panel = document.getElementById('mainPanel');
   if (!panel) return;
@@ -3318,8 +3336,8 @@ function renderMainPanel(item) {
 
   const score = item.sentiment_score || 50;
   const sent  = item.sentiment==='positive'?'positive':item.sentiment==='negative'?'negative':'neutral';
-  const chg   = typeof item._verifiedChangePct==='number' ? item._verifiedChangePct : null;
-  const price = item._verifiedPrice ? `$${item._verifiedPrice.toFixed(2)}` : '—';
+  let chg   = typeof item._verifiedChangePct==='number' ? item._verifiedChangePct : null;
+  let price = item._verifiedPrice ? `$${item._verifiedPrice.toFixed(2)}` : '—';
   const sum   = item.summary || '';
   const sl    = sum.toLowerCase();
 
@@ -3531,6 +3549,13 @@ function renderMainPanel(item) {
   const _extChgPct = _ms === 'PRE'  ? _extC.preMarketChangePercent
                    : _ms === 'POST' ? _extC.postMarketChangePercent : null;
 
+  // After a ↻ refresh during PRE/POST, show the live regular-market price/change in the
+  // primary row so it matches the base used to calculate the extended-hours row
+  if (_showExt && _extC) {
+    if (typeof _extC.regularPrice    === 'number') price = `$${_extC.regularPrice.toFixed(2)}`;
+    if (typeof _extC.regularChangePct === 'number') chg  = _extC.regularChangePct;
+  }
+
   // Avatar initials (up to 2 chars)
   const avatarTxt = item.ticker.slice(0, 2);
   const avatarCls = sent === 'positive' ? 'sent-pos' : sent === 'negative' ? 'sent-neg' : 'sent-neu';
@@ -3543,7 +3568,8 @@ function renderMainPanel(item) {
   const chgAmtStr = chgAmt !== null ? `▲${Math.abs(parseFloat(chgAmt)).toFixed(2)}` : '';
   const chgPctStr = chg !== null ? `(${chgSign}${chg.toFixed(2)}%)` : '—';
   const chgDir    = chg !== null && chg < 0 ? '▼' : chg !== null && chg > 0 ? '▲' : '';
-  const chgCls2   = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
+  const chgCls2         = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
+  const _displayPriceBase = (_extC && typeof _extC.regularPrice === 'number') ? _extC.regularPrice : (item._verifiedPrice || 0);
   // Phase 6A-1: escape AI-generated prose fields before HTML insertion
   const _esc = s => s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : '';
 
@@ -3613,7 +3639,7 @@ function renderMainPanel(item) {
       <div class="ph-row2">
         <div class="ph-price-block">
           <span class="ph-price">${hasData ? price : '—'}</span>
-          <span class="ph-chg ${hasData ? chgCls2 : 'neu'}">${hasData ? (chgDir + (chg !== null ? Math.abs(chg * (item._verifiedPrice||0)/100).toFixed(2) : '—') + ' ' + chgPctStr) : '—'}</span>
+          <span class="ph-chg ${hasData ? chgCls2 : 'neu'}">${hasData ? (chgDir + (chg !== null ? Math.abs(chg * _displayPriceBase/100).toFixed(2) : '—') + ' ' + chgPctStr) : '—'}</span>
           <span class="ph-today">${_todayLbl}</span>
         </div>
         ${hasData && (typeof snap.spyChangePct === 'number' || typeof snap.qqqChangePct === 'number') ? `<div class="ph-divider"></div>` : ''}
@@ -3626,7 +3652,7 @@ function renderMainPanel(item) {
         ${lastUpdated ? `<span class="ph-updated">updated ${lastUpdated}</span>` : ''}
         <div class="ph-spacer"></div>
         <div class="ph-mkt-pill ${mktCls}"><div class="ph-mkt-dot"></div>${mktLabel}</div>
-        <button class="ph-refresh" title="Refresh" onclick="selectTicker('${item.ticker}')">↻</button>
+        <button class="ph-refresh" title="Refresh" onclick="_refreshPriceRow('${item.ticker}')">↻</button>
       </div>
       ${hasData && _showExt && _extPrice !== null ? `<div class="ph-ext-row"><span class="ph-ext-price">$${_extPrice.toFixed(2)}</span>${_extChgPct !== null ? `<span class="ph-ext-chg ${_extChgPct >= 0 ? 'pos' : 'neg'}">${_extChgPct >= 0 ? '+' : ''}${_extChgPct.toFixed(2)}%</span>` : ''}<span class="ph-ext-lbl">${_ms === 'PRE' ? 'Pre-market' : 'After-hours'}</span></div>` : ''}
     </div>
