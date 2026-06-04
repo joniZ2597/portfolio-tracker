@@ -4754,7 +4754,9 @@ function _renderCapitalReturnsPanel(cr) {
     </div>`;
 
   if (cr.status !== 'OK' && cr.status !== 'NONE') {
-    if (cr.errors && cr.errors.length) {
+    if (cr.status === 'DISABLED') {
+      html += `<div style="font-family:var(--mono);font-size:11px;color:var(--text3)">Capital Returns data not currently available.</div>`;
+    } else if (cr.errors && cr.errors.length) {
       html += `<div style="font-family:var(--mono);font-size:9px;color:var(--text3)">${cr.errors.map(e => esc(e)).join('<br>')}</div>`;
     }
     return html;
