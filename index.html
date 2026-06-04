@@ -559,6 +559,11 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pc-card-title{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
 .pc-card-sub{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-top:-8px;margin-bottom:10px}
 .pc-empty{font-family:var(--mono);font-size:10px;color:var(--text3);font-style:italic}
+/* ─── TOP-LEVEL NAV ───────────────────────────── */
+.app-nav{display:flex;align-items:center;gap:0;padding:0 18px;background:var(--sidebar);border-bottom:1px solid var(--border);flex-shrink:0}
+.app-nav-tab{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--text3);background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;cursor:default;text-transform:uppercase;letter-spacing:.8px;margin-bottom:-1px}
+.app-nav-tab.active{color:var(--text);border-bottom-color:var(--blue2);cursor:default}
+.app-nav-tab.deferred{color:var(--text3);opacity:.38;cursor:default}
 </style>
 </head>
 <body>
@@ -577,6 +582,13 @@ select.edit-inp{appearance:none;cursor:pointer}
     <button class="btn-gear" onclick="toggleApiStatus()" title="Settings / API Status">⚙</button>
   </div>
 </div>
+
+<!-- TOP-LEVEL NAV -->
+<nav class="app-nav" aria-label="Primary views">
+  <span class="app-nav-tab active" aria-current="page">Watchlist / Research</span>
+  <span class="app-nav-tab deferred">Portfolio</span>
+  <span class="app-nav-tab deferred">Learn</span>
+</nav>
 
 <!-- APP BODY -->
 <div class="app-body">
@@ -659,7 +671,7 @@ select.edit-inp{appearance:none;cursor:pointer}
     <div id="mainPanel">
       <div class="main-empty">
         <div class="main-empty-icon">[ ]</div>
-        <div class="main-empty-text">Select a ticker from the watchlist</div>
+        <div class="main-empty-text">Select a ticker to research</div>
       </div>
     </div>
     <!-- Hidden elements for compatibility -->
