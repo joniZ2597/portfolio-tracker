@@ -232,6 +232,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
   font-size:13px;padding:3px 7px;margin-left:6px;border-radius:3px;
 }
 .ph-refresh:hover{color:var(--text2);background:rgba(255,255,255,.04)}
+.ph-rating-chip{font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;padding:3px 8px;border-radius:3px;margin-left:8px;white-space:nowrap;border:1px solid var(--border2);background:var(--card2)}
+.ph-rating-chip.pos{color:var(--green2)}
+.ph-rating-chip.neg{color:var(--red2)}
+.ph-rating-chip.neutral-v{color:var(--text2)}
 /* Extended-hours row (pre / after-hours) */
 .ph-ext-row{display:flex;align-items:baseline;gap:8px;padding:2px 20px 8px}
 .ph-ext-price{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--text)}
@@ -1546,7 +1550,7 @@ function removeTicker(sym) {
       if (panel) panel.innerHTML =
         '<div class="main-empty">' +
           '<div class="main-empty-icon">[ ]</div>' +
-          '<div class="main-empty-text" style="color:var(--text3)">Select a ticker from the watchlist</div>' +
+          '<div class="main-empty-text" style="color:var(--text3)">Select a ticker to research</div>' +
         '</div>';
     }
   }
@@ -3663,6 +3667,7 @@ function renderMainPanel(item) {
         ${(dataSource && lastUpdated) ? `<span style="color:var(--border2);margin:0 5px">·</span>` : ''}
         ${lastUpdated ? `<span class="ph-updated">updated ${lastUpdated}</span>` : ''}
         <div class="ph-spacer"></div>
+        ${item.action ? `<span class="ph-rating-chip ${rCls}">RATING · ${rating.toUpperCase()}</span>` : ''}
         <div class="ph-mkt-pill ${mktCls}"><div class="ph-mkt-dot"></div>${mktLabel}</div>
         <button class="ph-refresh" title="Refresh" onclick="_refreshPriceRow('${item.ticker}')">↻</button>
       </div>
