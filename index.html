@@ -3761,6 +3761,7 @@ function renderMainPanel(item) {
       <!-- AI SUMMARY (Actionable Take) — span 12 -->
       <div class="pc-card pc-span-12">
         <div class="pc-card-title">${hasData ? 'Actionable Take' : 'Research-Context Analysis'}</div>
+        ${(item.action || actionable) ? '<div class="pc-card-sub">AI-generated analysis · Verify independently</div>' : ''}
         ${item.action ? `
           <div>
             ${item.news_bias       ? `<div class="mp-act-row"><span class="mp-act-lbl">Bias</span><span class="mp-act-val">${_esc(item.news_bias)}</span></div>` : ''}
