@@ -232,6 +232,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
   font-size:13px;padding:3px 7px;margin-left:6px;border-radius:3px;
 }
 .ph-refresh:hover{color:var(--text2);background:rgba(255,255,255,.04)}
+.ph-rating-chip{font-family:var(--mono);font-size:8px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;padding:3px 8px;border-radius:3px;margin-left:8px;white-space:nowrap;border:1px solid var(--border2);background:var(--card2)}
+.ph-rating-chip.pos{color:var(--green2)}
+.ph-rating-chip.neg{color:var(--red2)}
+.ph-rating-chip.neutral-v{color:var(--text2)}
 /* Extended-hours row (pre / after-hours) */
 .ph-ext-row{display:flex;align-items:baseline;gap:8px;padding:2px 20px 8px}
 .ph-ext-price{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--text)}
@@ -558,7 +562,13 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pc-span-12{grid-column:span 12}
 .pc-card-title{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
 .pc-card-sub{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-top:-8px;margin-bottom:10px}
+.cat-hdr{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-bottom:6px}
 .pc-empty{font-family:var(--mono);font-size:10px;color:var(--text3);font-style:italic}
+/* ─── TOP-LEVEL NAV ───────────────────────────── */
+.app-nav{display:flex;align-items:center;gap:0;padding:0 18px;background:var(--sidebar);border-bottom:1px solid var(--border);flex-shrink:0}
+.app-nav-tab{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--text3);background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;cursor:default;text-transform:uppercase;letter-spacing:.8px;margin-bottom:-1px}
+.app-nav-tab.active{color:var(--text);border-bottom-color:var(--blue2);cursor:default}
+.app-nav-tab.deferred{color:var(--text3);opacity:.38;cursor:default}
 </style>
 </head>
 <body>
@@ -577,6 +587,13 @@ select.edit-inp{appearance:none;cursor:pointer}
     <button class="btn-gear" onclick="toggleApiStatus()" title="Settings / API Status">⚙</button>
   </div>
 </div>
+
+<!-- TOP-LEVEL NAV -->
+<nav class="app-nav" aria-label="Primary views">
+  <span class="app-nav-tab active" aria-current="page">Watchlist / Research</span>
+  <span class="app-nav-tab deferred">Portfolio</span>
+  <span class="app-nav-tab deferred">Learn</span>
+</nav>
 
 <!-- APP BODY -->
 <div class="app-body">
@@ -659,7 +676,7 @@ select.edit-inp{appearance:none;cursor:pointer}
     <div id="mainPanel">
       <div class="main-empty">
         <div class="main-empty-icon">[ ]</div>
-        <div class="main-empty-text">Select a ticker from the watchlist</div>
+        <div class="main-empty-text">Select a ticker to research</div>
       </div>
     </div>
     <!-- Hidden elements for compatibility -->
@@ -1534,7 +1551,7 @@ function removeTicker(sym) {
       if (panel) panel.innerHTML =
         '<div class="main-empty">' +
           '<div class="main-empty-icon">[ ]</div>' +
-          '<div class="main-empty-text" style="color:var(--text3)">Select a ticker from the watchlist</div>' +
+          '<div class="main-empty-text" style="color:var(--text3)">Select a ticker to research</div>' +
         '</div>';
     }
   }
@@ -3651,6 +3668,7 @@ function renderMainPanel(item) {
         ${(dataSource && lastUpdated) ? `<span style="color:var(--border2);margin:0 5px">·</span>` : ''}
         ${lastUpdated ? `<span class="ph-updated">updated ${lastUpdated}</span>` : ''}
         <div class="ph-spacer"></div>
+        ${item.action ? `<span class="ph-rating-chip ${rCls}">RATING · ${rating.toUpperCase()}</span>` : ''}
         <div class="ph-mkt-pill ${mktCls}"><div class="ph-mkt-dot"></div>${mktLabel}</div>
         <button class="ph-refresh" title="Refresh" onclick="_refreshPriceRow('${item.ticker}')">↻</button>
       </div>
@@ -3722,6 +3740,7 @@ function renderMainPanel(item) {
           <div class="vol-row"><span class="vol-lbl">Volume trend (AI)</span><span class="vol-metric"></span><span class="vol-state ${volCls}">${volChar}</span></div>
         </div>`}
         <div class="cat-list" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
+          <div class="cat-hdr">Catalyst evidence · Verify independently</div>
           ${catalystRows.length ? catalystRows.map(({cls,lbl,state})=>`
           <div class="cat-row">
             <div class="cat-dot ${cls}"></div>
@@ -3742,6 +3761,7 @@ function renderMainPanel(item) {
       <!-- AI SUMMARY (Actionable Take) — span 12 -->
       <div class="pc-card pc-span-12">
         <div class="pc-card-title">${hasData ? 'Actionable Take' : 'Research-Context Analysis'}</div>
+        ${(item.action || actionable) ? '<div class="pc-card-sub">AI-generated analysis · Verify independently</div>' : ''}
         ${item.action ? `
           <div>
             ${item.news_bias       ? `<div class="mp-act-row"><span class="mp-act-lbl">Bias</span><span class="mp-act-val">${_esc(item.news_bias)}</span></div>` : ''}
