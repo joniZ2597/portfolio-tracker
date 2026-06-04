@@ -562,6 +562,7 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pc-span-12{grid-column:span 12}
 .pc-card-title{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
 .pc-card-sub{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-top:-8px;margin-bottom:10px}
+.cat-hdr{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-bottom:6px}
 .pc-empty{font-family:var(--mono);font-size:10px;color:var(--text3);font-style:italic}
 /* ─── TOP-LEVEL NAV ───────────────────────────── */
 .app-nav{display:flex;align-items:center;gap:0;padding:0 18px;background:var(--sidebar);border-bottom:1px solid var(--border);flex-shrink:0}
@@ -3739,6 +3740,7 @@ function renderMainPanel(item) {
           <div class="vol-row"><span class="vol-lbl">Volume trend (AI)</span><span class="vol-metric"></span><span class="vol-state ${volCls}">${volChar}</span></div>
         </div>`}
         <div class="cat-list" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
+          <div class="cat-hdr">Catalyst evidence · Verify independently</div>
           ${catalystRows.length ? catalystRows.map(({cls,lbl,state})=>`
           <div class="cat-row">
             <div class="cat-dot ${cls}"></div>
