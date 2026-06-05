@@ -3822,6 +3822,20 @@ function renderMainPanel(item) {
         </div>`}
       </div>
 
+${window.PT_ENABLE_CAPITAL_RETURNS_CLIENT === true ? `
+      <!-- CAPITAL RETURNS (SEC XBRL) — span 12 -->
+      <div class="pc-card pc-span-12">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <div class="pc-card-title" style="margin-bottom:4px">Capital Returns</div>
+            <div class="pc-card-sub" style="margin-top:0;margin-bottom:0">SEC XBRL · Verify via source links</div>
+          </div>
+          <button class="mp-dd-btn" id="cr-res-btn-${item.ticker}"
+            onclick="_runCRResearchCard('${item.ticker}')">Check Capital Returns</button>
+        </div>
+        <div id="cr-res-panel-${item.ticker}"></div>
+      </div>` : ''}
+
     </div>
 
     <div class="src-trace">
@@ -4832,6 +4846,45 @@ function _renderCapitalReturnsPanel(cr) {
 
   html += `<div style="margin-top:8px;font-family:var(--mono);font-size:8px;color:var(--text3)">Source evidence shown per row · window: ${esc(String(cr.windowYears || 5))} yr${Number.isFinite(+cr.latencyMs) ? ' · ' + +cr.latencyMs + 'ms' : ''}</div>`;
   return html;
+}
+
+// Research-view Capital Returns card handler. No client flag gate — server gate
+// (PT_ENABLE_CAPITAL_RETURNS_SERVER) is the production boundary. Display namespace
+// only: stores to window._crDisplay[sym], never writes _capitalReturnsDebug.
+async function _runCRResearchCard(sym) {
+  const btn   = document.getElementById('cr-res-btn-'   + sym);
+  const panel = document.getElementById('cr-res-panel-' + sym);
+  if (!btn || !panel) return;
+  btn.disabled = true;
+  btn.textContent = '⟳ Fetching SEC data…';
+  let result;
+  try {
+    const r = await fetch('/.netlify/functions/capital-returns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: sym })
+    });
+    const txt = await r.text();
+    let raw = null;
+    try { raw = JSON.parse(txt); } catch (_) {}
+    if (raw !== null && typeof raw === 'object') {
+      result = raw;
+      if (!r.ok) result._httpStatus = r.status;
+    } else {
+      result = { status: 'CLIENT_HTTP_ERROR', _httpStatus: r.status,
+                 buybacks: [], dividends: [], dividendsPerShare: [], authorizations: [],
+                 errors: ['CLIENT_HTTP_ERROR:' + r.status] };
+    }
+  } catch (e) {
+    result = { status: 'CLIENT_FETCH_ERROR', error: String(e && e.message || e),
+               buybacks: [], dividends: [], dividendsPerShare: [], authorizations: [],
+               errors: [String(e && e.message || e)] };
+  }
+  if (!window._crDisplay) window._crDisplay = {};
+  window._crDisplay[sym] = result;
+  panel.innerHTML = _renderCapitalReturnsPanel(result);
+  btn.textContent = '↺ Refresh';
+  btn.disabled = false;
 }
 
 function exportJSON() {
