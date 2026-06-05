@@ -392,6 +392,68 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .key-warn-line.soft{color:var(--text3);}
 .key-warn-icon{flex-shrink:0;font-size:10px;}
 
+/* ─── SCAN RESULTS OVERLAY (Phase 5D) ─────────────────────── */
+.btn-view-results{
+  display:block;width:100%;margin-top:6px;
+  font-family:var(--mono);font-size:9px;font-weight:600;
+  color:var(--blue2);background:rgba(96,165,250,.08);
+  border:1px solid rgba(96,165,250,.2);border-radius:3px;
+  padding:6px;cursor:pointer;letter-spacing:.6px;text-transform:uppercase;
+  text-align:center;
+}
+.btn-view-results:hover{background:rgba(96,165,250,.14);border-color:rgba(96,165,250,.35)}
+.sr-overlay{
+  position:fixed;inset:0;z-index:950;
+  background:rgba(8,13,22,.72);
+  display:flex;align-items:center;justify-content:center;
+}
+.sr-panel{
+  background:var(--card);border:1px solid var(--border2);
+  border-radius:6px;width:min(92vw,860px);
+  max-height:80vh;display:flex;flex-direction:column;
+  box-shadow:0 16px 48px rgba(0,0,0,.6);
+}
+.sr-header{
+  display:flex;align-items:center;gap:8px;
+  padding:12px 16px 10px;border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+.sr-title{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:1px;flex:1}
+.sr-count{font-family:var(--mono);font-size:9px;color:var(--text3)}
+.sr-density{font-family:var(--mono);font-size:9px;color:var(--text3);background:none;border:1px solid var(--border2);border-radius:2px;padding:3px 8px;cursor:pointer}
+.sr-density:hover{color:var(--text2);border-color:var(--text3)}
+.sr-close{font-size:14px;color:var(--text3);background:none;border:none;cursor:pointer;padding:2px 6px;line-height:1}
+.sr-close:hover{color:var(--text)}
+.sr-table-wrap{overflow-y:auto;flex:1}
+.sr-table{width:100%;border-collapse:collapse}
+.sr-table thead tr{border-bottom:1px solid var(--border)}
+.sr-table th{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;padding:7px 10px;text-align:left;white-space:nowrap}
+.sr-table th.r{text-align:right}
+.sr-table tbody tr{border-bottom:1px solid rgba(30,41,59,.4);cursor:pointer}
+.sr-table tbody tr:hover{background:rgba(255,255,255,.03)}
+.sr-table td{padding:9px 10px;font-family:var(--mono);font-size:11px;color:var(--text2);white-space:nowrap;vertical-align:middle}
+.sr-table td.r{text-align:right}
+.sr-panel.compact .sr-table td{padding:5px 10px;font-size:10px}
+.sr-panel.compact .sr-col-name{display:none}
+.sr-panel.compact .sr-th-name{display:none}
+.sr-rank{color:var(--text3);font-size:9px;width:28px}
+.sr-sym{font-weight:700;color:var(--text);font-size:12px}
+.sr-score{font-weight:700;font-size:12px;color:var(--text)}
+.sr-rating.pos{color:var(--green2)}.sr-rating.neg{color:var(--red2)}.sr-rating.neutral-v{color:var(--text3)}
+.sr-setup{font-size:9px;letter-spacing:.4px}
+.sr-setup.pos{color:var(--green2)}.sr-setup.warn{color:var(--yellow2)}.sr-setup.neg{color:var(--red2)}.sr-setup.neutral-v{color:var(--text3)}
+.sr-chg.pos{color:var(--green2)}.sr-chg.neg{color:var(--red2)}.sr-chg.neu{color:var(--text3)}
+.sr-empty{padding:32px;text-align:center;font-size:12px;color:var(--text3)}
+.sr-mode{font-family:var(--mono);font-size:9px;color:var(--text3);background:none;border:1px solid var(--border2);border-radius:2px;padding:3px 8px;cursor:pointer}
+.sr-mode:hover{color:var(--text2);border-color:var(--text3)}
+.sr-mode.active{color:var(--text);border-color:var(--blue2)}
+.sr-panel.mode-review .sr-table thead{display:none}
+.sr-group-hdr{border-top:1px solid var(--border)}
+.sr-group-hdr td{padding:10px 10px 4px;font-family:var(--mono);font-size:8px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;cursor:default}
+.sr-group-hdr:hover{background:none!important}
+.sr-panel.compact .sr-group-hdr td{padding:6px 10px 3px;font-size:8px}
+.sr-group-count{font-weight:400;margin-left:6px;opacity:.7}
+
 /* Watchlist header row */
 .sb-wl-header{display:flex;align-items:center;justify-content:space-between;padding:8px 12px 4px;flex-shrink:0;border-bottom:1px solid var(--border)}
 .sb-wl-tabs{display:flex;gap:0}
@@ -625,6 +687,8 @@ select.edit-inp{appearance:none;cursor:pointer}
       <div class="scan-note" id="scanNote">Checked tickers are included in the next scan. Unchecking does not remove them from the watchlist.</div>
       <!-- Missing key warning — shown by checkAndShowKeyWarn() on startup and on key save -->
       <div id="key-warn" class="key-warn" style="display:none"></div>
+      <!-- View Results button — shown only when scan results exist (Phase 5D) -->
+      <button id="viewResultsBtn" class="btn-view-results" onclick="openScanResultsOverlay()" style="display:none">⊞ View Results</button>
     </div>
 
     <!-- Stale results banner — shown by checkAndShowStaleBanner() on startup -->
@@ -2717,7 +2781,199 @@ function updateRunScanCount() {
   if (wlCount) wlCount.textContent = watchlist.length;
   if (allCount) allCount.textContent = watchlist.length;
   updateScanColToggle();
+  _updateViewResultsBtn();
 }
+
+// ─── Phase 5D: Scan Results Overlay ────────────────────────────────────────
+// Display-only. Reads _cockpitResults; pt_results fallback is a read, not a write.
+let _srDensity = 'regular';
+let _srMode = 'ranked'; // session-only; resets on reload
+
+const _SR_BULLISH_TIER = new Set(['healthy_uptrend', 'healthy_uptrend_near_ath', 'pullback_in_uptrend']);
+const _SR_BEARISH_TIER = new Set(['breakdown_risk', 'below_key_mas']);
+
+function _srGroupResults(source) {
+  const rRank = r => {
+    const m = (r.summary || '').match(/Rating:\s*(Buy|Neutral|Sell)/i);
+    const v = r.rating || (m ? m[1] : 'Neutral');
+    return v.toLowerCase() === 'buy' ? 0 : v.toLowerCase() === 'sell' ? 2 : 1;
+  };
+  const items = source.slice().sort((a, b) => {
+    const d = (b.sentiment_score || 50) - (a.sentiment_score || 50);
+    return d !== 0 ? d : rRank(a) - rRank(b);
+  });
+  // display order: Strong Setup → Watch → Extended / ATH → Caution
+  const groups = [
+    { name: 'Strong Setup',   items: [] },
+    { name: 'Watch',          items: [] },
+    { name: 'Extended / ATH', items: [] },
+    { name: 'Caution',        items: [] },
+  ];
+  items.forEach(r => {
+    const sc = r.sentiment_score || 50;
+    const ts = r.technical_setup || '';
+    if (_SR_BULLISH_TIER.has(ts) && sc >= 55)  groups[0].items.push(r);
+    else if (ts === 'extended_near_ath')         groups[2].items.push(r);
+    else if (_SR_BEARISH_TIER.has(ts))           groups[3].items.push(r);
+    else                                          groups[1].items.push(r);
+  });
+  return groups;
+}
+
+function _srRenderGrouped(source, tbody) {
+  if (!source.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="sr-empty">No scan results yet. Run a scan to see ranked results.</td></tr>';
+    return;
+  }
+  const tfMap = {
+    extended_near_ath:        ['EXTENDED', 'warn'],
+    healthy_uptrend_near_ath: ['BULLISH',  'pos'],
+    healthy_uptrend:          ['BULLISH',  'pos'],
+    pullback_in_uptrend:      ['MIXED',    'warn'],
+    support_test:             ['MIXED',    'warn'],
+    breakdown_risk:           ['BEARISH',  'neg'],
+    below_key_mas:            ['BEARISH',  'neg'],
+  };
+  const groups = _srGroupResults(source);
+  const rows = [];
+  groups.forEach(g => {
+    if (!g.items.length) return;
+    rows.push(`<tr class="sr-group-hdr"><td colspan="6">${_crEsc(g.name)}<span class="sr-group-count">${g.items.length}</span></td></tr>`);
+    g.items.forEach(r => {
+      const score  = r.sentiment_score || 50;
+      const chg    = typeof r._verifiedChangePct === 'number' ? r._verifiedChangePct : null;
+      const chgStr = chg !== null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
+      const chgCls = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
+      const rM     = (r.summary || '').match(/Rating:\s*(Buy|Neutral|Sell)/i);
+      const rating = r.rating || (rM ? rM[1] : 'Neutral');
+      const rCls   = rating.toLowerCase() === 'buy' ? 'pos' : rating.toLowerCase() === 'sell' ? 'neg' : 'neutral-v';
+      const [setupLbl, setupCls] = tfMap[r.technical_setup] || ['—', 'neutral-v'];
+      const sym  = _crEsc(r.ticker || '');
+      const name = _crEsc((r.company_name || '').slice(0, 30));
+      rows.push(`<tr data-ticker="${sym}">
+        <td class="sr-sym">${sym}</td>
+        <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
+        <td class="r sr-score">${score}</td>
+        <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>
+        <td class="sr-setup ${setupCls}">${setupLbl}</td>
+        <td class="r sr-chg ${chgCls}">${chgStr}</td>
+      </tr>`);
+    });
+  });
+  tbody.innerHTML = rows.join('');
+}
+
+function setSrMode(mode) {
+  _srMode = mode;
+  openScanResultsOverlay();
+}
+
+function _srSafeParseResults() {
+  try { return JSON.parse(localStorage.getItem('pt_results') || '[]') || []; }
+  catch (_) { return []; }
+}
+
+function _updateViewResultsBtn() {
+  const btn = document.getElementById('viewResultsBtn');
+  if (!btn) return;
+  let show = (_cockpitResults && _cockpitResults.length > 0);
+  if (!show) show = _srSafeParseResults().length > 0;
+  btn.style.display = show ? 'block' : 'none';
+}
+
+function openScanResultsOverlay() {
+  const overlay = document.getElementById('scanResultsOverlay');
+  const tbody   = document.getElementById('srRows');
+  const countEl = document.getElementById('srCount');
+  if (!overlay || !tbody) return;
+
+  // Prefer live in-memory results; fall back to persisted pt_results (read-only)
+  const source = (_cockpitResults && _cockpitResults.length)
+    ? _cockpitResults
+    : _srSafeParseResults();
+
+  const tfMap = {
+    extended_near_ath:        ['EXTENDED', 'warn'],
+    healthy_uptrend_near_ath: ['BULLISH',  'pos'],
+    healthy_uptrend:          ['BULLISH',  'pos'],
+    pullback_in_uptrend:      ['MIXED',    'warn'],
+    support_test:             ['MIXED',    'warn'],
+    breakdown_risk:           ['BEARISH',  'neg'],
+    below_key_mas:            ['BEARISH',  'neg'],
+  };
+
+  const sorted = source.slice().sort((a, b) =>
+    (b.sentiment_score || 50) - (a.sentiment_score || 50)
+  );
+
+  if (countEl) countEl.textContent = sorted.length + ' ticker' + (sorted.length !== 1 ? 's' : '');
+
+  // Phase 5E: mode buttons, panel class, density — always set for both modes
+  const btnR = document.getElementById('srModeRanked');
+  const btnD = document.getElementById('srModeReview');
+  if (btnR) btnR.classList.toggle('active', _srMode === 'ranked');
+  if (btnD) btnD.classList.toggle('active', _srMode === 'review');
+  const panel = document.getElementById('srPanel');
+  if (panel) { panel.classList.toggle('mode-review', _srMode === 'review'); panel.classList.toggle('compact', _srDensity === 'compact'); }
+  const densityBtn = document.getElementById('srDensityBtn');
+  if (densityBtn) densityBtn.textContent = _srDensity === 'compact' ? 'Regular' : 'Compact';
+  if (_srMode === 'review') { _srRenderGrouped(source, tbody); overlay.style.display = 'flex'; return; }
+
+  if (!sorted.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="sr-empty">No scan results yet. Run a scan to see ranked results.</td></tr>';
+  } else {
+    tbody.innerHTML = sorted.map((r, i) => {
+      const score  = r.sentiment_score || 50;
+      const chg    = typeof r._verifiedChangePct === 'number' ? r._verifiedChangePct : null;
+      const chgStr = chg !== null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
+      const chgCls = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
+      // Use explicit r.rating field if present; fallback to summary regex (same method as renderMainPanel)
+      const rM     = (r.summary || '').match(/Rating:\s*(Buy|Neutral|Sell)/i);
+      const rating = r.rating || (rM ? rM[1] : 'Neutral');
+      const rCls   = rating.toLowerCase() === 'buy' ? 'pos' : rating.toLowerCase() === 'sell' ? 'neg' : 'neutral-v';
+      const [setupLbl, setupCls] = tfMap[r.technical_setup] || ['—', 'neutral-v'];
+      const sym  = _crEsc(r.ticker || '');
+      const name = _crEsc((r.company_name || '').slice(0, 30));
+      return `<tr data-ticker="${sym}">
+        <td class="r sr-rank">${i + 1}</td>
+        <td class="sr-sym">${sym}</td>
+        <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
+        <td class="r sr-score">${score}</td>
+        <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>
+        <td class="sr-setup ${setupCls}">${setupLbl}</td>
+        <td class="r sr-chg ${chgCls}">${chgStr}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  overlay.style.display = 'flex';
+}
+
+function closeScanResultsOverlay() {
+  const o = document.getElementById('scanResultsOverlay');
+  if (o) o.style.display = 'none';
+}
+
+function toggleResultsDensity() {
+  _srDensity = _srDensity === 'compact' ? 'regular' : 'compact';
+  const panel = document.getElementById('srPanel');
+  if (panel) panel.classList.toggle('compact', _srDensity === 'compact');
+  const btn = document.getElementById('srDensityBtn');
+  if (btn) btn.textContent = _srDensity === 'compact' ? 'Regular' : 'Compact';
+}
+
+// Delegated row click — reads data-ticker attribute; no inline onclick interpolation
+document.addEventListener('click', function(e) {
+  const row = e.target.closest('#srRows tr[data-ticker]');
+  if (!row) return;
+  const sym = row.dataset.ticker;
+  if (sym) { closeScanResultsOverlay(); selectTicker(sym); }
+});
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeScanResultsOverlay();
+});
+// ─────────────────────────────────────────────────────────────────────────────
 
 function switchTab(tab) {
   _activeTab = tab;
@@ -5407,6 +5663,34 @@ async function checkAllApis() {
         <div class="api-info-title">About API Status</div>
         <div class="api-info-text">This section lets you verify all data providers are working correctly. Each check sends a minimal test request. All API keys are managed server-side.</div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCAN RESULTS OVERLAY (Phase 5D) — display-only, no localStorage/pt_results writes -->
+<div id="scanResultsOverlay" class="sr-overlay" style="display:none" onclick="if(event.target===this)closeScanResultsOverlay()">
+  <div id="srPanel" class="sr-panel">
+    <div class="sr-header">
+      <span class="sr-title">Scan Results</span>
+      <span class="sr-count" id="srCount"></span>
+      <button class="sr-mode active" id="srModeRanked" onclick="setSrMode('ranked')">Ranked</button>
+      <button class="sr-mode" id="srModeReview" onclick="setSrMode('review')">Daily Review</button>
+      <button class="sr-density" id="srDensityBtn" onclick="toggleResultsDensity()">Compact</button>
+      <button class="sr-close" onclick="closeScanResultsOverlay()" aria-label="Close">✕</button>
+    </div>
+    <div class="sr-table-wrap">
+      <table class="sr-table">
+        <thead><tr>
+          <th class="r">#</th>
+          <th>Ticker</th>
+          <th class="sr-th-name">Company</th>
+          <th class="r">Score</th>
+          <th>Rating</th>
+          <th>Setup</th>
+          <th class="r">Chg %</th>
+        </tr></thead>
+        <tbody id="srRows"></tbody>
+      </table>
     </div>
   </div>
 </div>
