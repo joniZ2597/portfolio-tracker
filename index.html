@@ -303,6 +303,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .rr-row:last-child{border-bottom:none}
 .rr-lbl{font-size:12px;color:var(--text2)}
 .rr-val{font-family:var(--mono);font-size:12px;font-weight:700}
+.ts-assess{margin-top:8px;padding-top:8px;border-top:1px solid var(--border2);font-size:11px;color:var(--text2);line-height:1.4}
 
 /* Actionable take */
 .mp-action{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 22px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:rgba(37,99,235,.05);border-left:4px solid var(--blue2)}
@@ -3912,6 +3913,17 @@ function renderMainPanel(item) {
     return text ? { tag, text: _esc(text) } : null;
   }).filter(Boolean);
 
+  const _tsAssessMap = {
+    bullish_stack:     '20 > 50 > 150 — Bullish stack, price above all means',
+    extended_near_ath: 'Price extended above all MAs and near all-time high',
+    pullback_to_ma50:  'Pulling back toward the 50-day — watch for support hold',
+    pullback_to_ma20:  'Pulling back toward the 20-day — watching for bounce',
+    below_key_mas:     'Below key moving averages — structure is bearish',
+    mixed:             'Mixed MA alignment — no clear directional stack',
+  };
+  const _tsAssess = hasData && item.technical_setup ? (_tsAssessMap[item.technical_setup] || '') : '';
+  const _tsAssessHtml = _tsAssess ? `<div class="ts-assess">${_tsAssess}</div>` : '';
+
   panel.innerHTML = `
     <!-- PULSE v1.1 TICKER HEADER -->
     <div class="ph-bar">
@@ -3993,7 +4005,8 @@ function renderMainPanel(item) {
           <div class="rr-row"><span class="rr-lbl">ATH Distance</span><span class="rr-val ${snap.hasATH ? (snap.athDist < -15 ? 'warn' : snap.athDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">${snap.hasATH ? fmtPct(snap.athDist) : '—'}</span></div>
           <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase}</span></div>
           <div class="rr-row"><span class="rr-lbl">Setup Quality</span><span class="rr-val">${score} / 100</span></div>
-        </div>`}
+        </div>
+        ${_tsAssessHtml}`}
       </div>
 
       <!-- SIGNALS (Volume + Catalysts) — span 6 -->
