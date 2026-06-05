@@ -312,6 +312,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .mp-action-label{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--blue2);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:5px}
 .mp-action-text{font-size:15px;font-weight:600;color:var(--text);line-height:1.5}
 .mp-action-time{font-family:var(--mono);font-size:9px;color:var(--text3);white-space:nowrap}
+.at-dial-row{display:flex;align-items:center;gap:14px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border2)}
+.at-dial{width:44px;height:44px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;position:relative}
+.at-dial::after{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--card)}
+.at-dial-num{position:relative;z-index:1;font-family:var(--mono);font-size:13px;font-weight:700}
+.at-dial-lbl{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--text3)}
+.at-dial-val{font-family:var(--sans);font-size:18px;font-weight:600}
 /* 7A-2: Position Context card — render-only, derived from local watchlist position data */
 .mp-pos{display:flex;flex-direction:column;gap:6px;padding:12px 22px;border-top:1px solid var(--border);background:rgba(96,165,250,.04);border-left:4px solid var(--blue2)}
 .mp-pos.mode-fresh,.mp-pos.mode-unknown{border-left-color:var(--text3);background:transparent;opacity:.75}
@@ -3927,6 +3933,11 @@ function renderMainPanel(item) {
   const _tsAssess = hasData && item.technical_setup ? (_tsAssessMap[item.technical_setup] || '') : '';
   const _tsAssessHtml = _tsAssess ? `<div class="ts-assess">${_tsAssess}</div>` : '';
 
+  const _dialColor = rCls === 'pos' ? 'var(--green2)' : rCls === 'neg' ? 'var(--red2)' : 'var(--blue2)';
+  const _dialHtml  = (item.action || actionable)
+    ? `<div class="at-dial-row"><div class="at-dial" style="background:conic-gradient(${_dialColor} 0 ${score}%,var(--border2) ${score}% 100%)"><span class="at-dial-num" style="color:${_dialColor}">${score}</span></div><div><div class="at-dial-lbl">Score</div><div class="at-dial-val ${rCls}">${rating}</div></div></div>`
+    : '';
+
   panel.innerHTML = `
     <!-- PULSE v1.1 TICKER HEADER -->
     <div class="ph-bar">
@@ -4051,6 +4062,7 @@ function renderMainPanel(item) {
       <div class="pc-card pc-span-12">
         <div class="pc-card-title">${hasData ? 'Actionable Take' : 'Research-Context Analysis'}</div>
         ${(item.action || actionable) ? '<div class="pc-card-sub">AI-generated analysis · Verify independently</div>' : ''}
+        ${_dialHtml}
         ${item.action ? `
           <div>
             ${item.news_bias       ? `<div class="mp-act-row"><span class="mp-act-lbl">Bias</span><span class="mp-act-val">${_esc(item.news_bias)}</span></div>` : ''}
