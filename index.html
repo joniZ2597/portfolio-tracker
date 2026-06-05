@@ -438,7 +438,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .sr-panel.compact .sr-th-name{display:none}
 .sr-rank{color:var(--text3);font-size:9px;width:28px}
 .sr-sym{font-weight:700;color:var(--text);font-size:12px}
-.sr-score{font-weight:700;font-size:12px;color:var(--text)}
+.sr-score{font-weight:700;font-size:12px;color:var(--text);display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.sr-score-track{width:28px;height:2px;background:rgba(255,255,255,.08);border-radius:1px;overflow:hidden}
+.sr-score-fill{height:100%;border-radius:1px;transition:width 180ms}
+.sr-score-fill.pos{background:var(--green2)}.sr-score-fill.warn{background:var(--yellow2)}.sr-score-fill.neg{background:var(--red2)}
 .sr-rating.pos{color:var(--green2)}.sr-rating.neg{color:var(--red2)}.sr-rating.neutral-v{color:var(--text3)}
 .sr-setup{font-size:9px;letter-spacing:.4px}
 .sr-setup.pos{color:var(--green2)}.sr-setup.warn{color:var(--yellow2)}.sr-setup.neg{color:var(--red2)}.sr-setup.neutral-v{color:var(--text3)}
@@ -2854,7 +2857,7 @@ function _srRenderGrouped(source, tbody) {
       rows.push(`<tr data-ticker="${sym}">
         <td class="sr-sym">${sym}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
-        <td class="r sr-score">${score}</td>
+        <td class="r sr-score"><span>${score}</span><div class="sr-score-track"><div class="sr-score-fill ${score>=65?'pos':score>=40?'warn':'neg'}" style="width:${score}%"></div></div></td>
         <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>
         <td class="sr-setup ${setupCls}">${setupLbl}</td>
         <td class="r sr-chg ${chgCls}">${chgStr}</td>
@@ -2939,7 +2942,7 @@ function openScanResultsOverlay() {
         <td class="r sr-rank">${i + 1}</td>
         <td class="sr-sym">${sym}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
-        <td class="r sr-score">${score}</td>
+        <td class="r sr-score"><span>${score}</span><div class="sr-score-track"><div class="sr-score-fill ${score>=65?'pos':score>=40?'warn':'neg'}" style="width:${score}%"></div></div></td>
         <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>
         <td class="sr-setup ${setupCls}">${setupLbl}</td>
         <td class="r sr-chg ${chgCls}">${chgStr}</td>
