@@ -3822,6 +3822,20 @@ function renderMainPanel(item) {
         </div>`}
       </div>
 
+${window.PT_ENABLE_CAPITAL_RETURNS_CLIENT === true ? `
+      <!-- CAPITAL RETURNS (SEC XBRL) — span 12 -->
+      <div class="pc-card pc-span-12">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <div class="pc-card-title" style="margin-bottom:4px">Capital Returns</div>
+            <div class="pc-card-sub" style="margin-top:0;margin-bottom:0">SEC XBRL · Verify via source links</div>
+          </div>
+          <button class="mp-dd-btn" id="cr-res-btn-${item.ticker}"
+            onclick="_runCRResearchCard('${item.ticker}')">Check Capital Returns</button>
+        </div>
+        <div id="cr-res-panel-${item.ticker}"></div>
+      </div>` : ''}
+
     </div>
 
     <div class="src-trace">
@@ -4678,6 +4692,152 @@ async function _runEdgarInsiderDeepDive(sym) {
   btn.disabled = false;
 }
 
+// ── 7B-6G-6: Capital Returns DEV Evidence Display Panel ──────────────────────
+// Display-only. Fetches /.netlify/functions/capital-returns on button click only.
+// Display-only namespace; intentionally isolated from analysis and persisted-result paths.
+// ─────────────────────────────────────────────────────────────────────────────
+function _crEsc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
+
+function _crSafeFilingUrl(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:' || u.hostname !== 'www.sec.gov') return null;
+    return u.href;
+  } catch (_) { return null; }
+}
+
+function _renderCapitalReturnsPanel(cr) {
+  if (!cr) return '<div style="font-family:var(--mono);font-size:10px;color:var(--text3)">No data.</div>';
+  const esc = _crEsc;
+
+  const statusCls = cr.status === 'OK' ? 'pos' : cr.status === 'NONE' ? 'neutral-v' : 'neg';
+  let html = `<div style="margin-bottom:10px">
+    <span class="edgar-dd-status ${statusCls}">${esc(cr.status)}</span>
+    ${cr.issuer ? `<span style="font-family:var(--mono);font-size:9px;color:var(--text2);margin-left:8px">${esc(cr.issuer)}</span>` : ''}
+    ${cr.cik    ? `<span style="font-family:var(--mono);font-size:8px;color:var(--text3);margin-left:8px">CIK ${esc(cr.cik)}</span>` : ''}
+    </div>`;
+
+  if (cr.status !== 'OK' && cr.status !== 'NONE') {
+    if (cr.status === 'DISABLED') {
+      html += `<div style="font-family:var(--mono);font-size:11px;color:var(--text3)">Capital Returns data not currently available.</div>`;
+    } else if (cr.errors && cr.errors.length) {
+      html += `<div style="font-family:var(--mono);font-size:9px;color:var(--text3)">${cr.errors.map(e => esc(e)).join('<br>')}</div>`;
+    }
+    return html;
+  }
+
+  const s = cr.summary || {};
+  const fmt = v => v != null ? '$' + (v / 1e9).toFixed(2) + 'B' : '—';
+  html += `<div style="display:flex;gap:20px;margin-bottom:10px;flex-wrap:wrap">
+    <div><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Total Buybacks</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--text1)">${fmt(s.totalBuybacksUSD)}</div></div>
+    <div><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Total Dividends</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--text1)">${fmt(s.totalDividendsUSD)}</div></div>
+    <div><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Total Returned</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--text1)">${fmt(s.totalCapitalReturnedUSD)}</div></div>
+    ${s.latestDividendPerShare != null ? `<div><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Div/Share</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--text1)">${Number.isFinite(+s.latestDividendPerShare) ? '$' + +s.latestDividendPerShare : esc(String(s.latestDividendPerShare))}<span style="font-size:8px;color:var(--text3)"> (${esc(s.latestDividendPerSharePeriod || '')})</span></div></div>` : ''}
+    ${s.latestRemainingAuthorizationUSD != null ? `<div><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Remaining Auth</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--text1)">${fmt(s.latestRemainingAuthorizationUSD)}</div></div>` : ''}
+    </div>`;
+
+  function evidenceRows(arr, label, valKey) {
+    if (!arr || !arr.length) return '';
+    let t = `<div style="margin-bottom:8px"><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">${label}</div>`;
+    for (const e of arr) {
+      const val = e[valKey] != null
+        ? (valKey === 'valuePerShare'
+            ? (Number.isFinite(+e[valKey]) ? '$' + +e[valKey] : esc(String(e[valKey])))
+            : fmt(e[valKey]))
+        : '—';
+      const safeUrl = _crSafeFilingUrl(e.filingUrl);
+      const link = safeUrl
+        ? `<a href="${esc(safeUrl)}" target="_blank" rel="noopener" style="font-family:var(--mono);font-size:8px;color:var(--accent)">${esc(e.accessionNumber || 'filing')}</a>`
+        : (e.accessionNumber ? `<span style="font-family:var(--mono);font-size:8px">${esc(e.accessionNumber)}</span>` : '—');
+      const isVerified = e.verificationStatus === 'xbrl_primary' && e.source_type === 'xbrl_companyfacts';
+      const provenanceBadge = isVerified
+        ? `<span style="font-family:var(--mono);font-size:8px;color:var(--green2)">✓ ${esc(e.verificationStatus)} · ${esc(e.source_type)}</span>`
+        : `<span style="font-family:var(--mono);font-size:8px;color:var(--text3)">${esc(e.verificationStatus || 'unverified')}</span>`;
+      t += `<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-bottom:2px">
+        <span style="font-family:var(--mono);font-size:9px;color:var(--text1);min-width:44px">FY${esc(String(e.fiscalYear))}${e.fiscalPeriod && e.fiscalPeriod !== 'FY' ? ' ' + esc(e.fiscalPeriod) : ''}</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--text1)">${val}</span>
+        <span style="font-family:var(--mono);font-size:8px;color:var(--text3)">${esc(e.signalType || '')}</span>
+        ${provenanceBadge}
+        ${link}
+        ${e.filed ? `<span style="font-family:var(--mono);font-size:8px;color:var(--text3)">filed ${esc(e.filed)}</span>` : ''}
+        </div>`;
+      if (e.contributingFilings && e.contributingFilings.length) {
+        for (const cf of e.contributingFilings) {
+          const cfSafeUrl = _crSafeFilingUrl(cf.filingUrl);
+          const cfLink = cfSafeUrl
+            ? `<a href="${esc(cfSafeUrl)}" target="_blank" rel="noopener" style="font-family:var(--mono);font-size:8px;color:var(--accent)">${esc(cf.accessionNumber || 'filing')}</a>`
+            : (cf.accessionNumber ? `<span style="font-family:var(--mono);font-size:8px">${esc(cf.accessionNumber)}</span>` : '—');
+          t += `<div style="margin-left:20px;font-family:var(--mono);font-size:8px;color:var(--text3)">↳ ${esc(cf.concept || '')} filed ${esc(cf.filed || '')} ${cfLink}</div>`;
+        }
+      }
+    }
+    t += '</div>';
+    return t;
+  }
+
+  html += evidenceRows(cr.buybacks,         'Buybacks (Executed)',       'valueUSD');
+  html += evidenceRows(cr.dividends,         'Dividends Paid',            'valueUSD');
+  html += evidenceRows(cr.dividendsPerShare, 'Dividend / Share Declared', 'valuePerShare');
+  html += evidenceRows(cr.authorizations,    'Buyback Authorizations',    'valueUSD');
+
+  const gaps = s.xbrlGaps || [];
+  if (gaps.length) {
+    html += `<div style="margin-top:8px"><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">XBRL Coverage Gaps</div>`;
+    for (const g of gaps) {
+      html += `<div style="font-family:var(--mono);font-size:8px;color:var(--text3);margin-bottom:2px">⚠ ${esc(g.signalType)} — ${esc(g.reason)}: ${esc(g.detail)}</div>`;
+    }
+    html += '</div>';
+  }
+
+  html += `<div style="margin-top:8px;font-family:var(--mono);font-size:8px;color:var(--text3)">Source evidence shown per row · window: ${esc(String(cr.windowYears || 5))} yr${Number.isFinite(+cr.latencyMs) ? ' · ' + +cr.latencyMs + 'ms' : ''}</div>`;
+  return html;
+}
+
+// Research-view Capital Returns card handler. No client flag gate — server gate
+// (PT_ENABLE_CAPITAL_RETURNS_SERVER) is the production boundary. Display namespace
+// only: stores to window._crDisplay[sym], never writes _capitalReturnsDebug.
+async function _runCRResearchCard(sym) {
+  const btn   = document.getElementById('cr-res-btn-'   + sym);
+  const panel = document.getElementById('cr-res-panel-' + sym);
+  if (!btn || !panel) return;
+  btn.disabled = true;
+  btn.textContent = '⟳ Fetching SEC data…';
+  let result;
+  try {
+    const r = await fetch('/.netlify/functions/capital-returns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: sym })
+    });
+    const txt = await r.text();
+    let raw = null;
+    try { raw = JSON.parse(txt); } catch (_) {}
+    if (raw !== null && typeof raw === 'object') {
+      result = raw;
+      if (!r.ok) result._httpStatus = r.status;
+    } else {
+      result = { status: 'CLIENT_HTTP_ERROR', _httpStatus: r.status,
+                 buybacks: [], dividends: [], dividendsPerShare: [], authorizations: [],
+                 errors: ['CLIENT_HTTP_ERROR:' + r.status] };
+    }
+  } catch (e) {
+    result = { status: 'CLIENT_FETCH_ERROR', error: String(e && e.message || e),
+               buybacks: [], dividends: [], dividendsPerShare: [], authorizations: [],
+               errors: [String(e && e.message || e)] };
+  }
+  if (!window._crDisplay) window._crDisplay = {};
+  window._crDisplay[sym] = result;
+  panel.innerHTML = _renderCapitalReturnsPanel(result);
+  btn.textContent = '↺ Refresh';
+  btn.disabled = false;
+}
+
 function exportJSON() {
   if (!results.length) return;
   const blob = new Blob([JSON.stringify({ date: localStorage.getItem('pt_date'), results }, null, 2)], { type: 'application/json' });
@@ -4993,6 +5153,7 @@ function init() {
 // Server gate (PT_ENABLE_EDGAR_FORM4_SERVER) remains the real safety boundary.
 if (window.location.hostname === 'branch-dev--portfoliotrk.netlify.app') {
   window.PT_ENABLE_EDGAR_FORM4 = true;
+  window.PT_ENABLE_CAPITAL_RETURNS_CLIENT = true;
 }
 init();
 // ─────────────────────────────────────────────────────────────────────────────

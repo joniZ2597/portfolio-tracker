@@ -145,15 +145,17 @@ exports.handler = async function (event) {
   const minYear = new Date().getFullYear() - windowYears;
 
   // 3) Extract capital returns data
-  const buybacks          = extractBuybacks(usgaap, minYear);
-  const dividends         = extractDividends(usgaap, minYear);
-  const dividendsPerShare = extractDividendPerShare(usgaap, minYear);
-  const authorizations    = extractBuybackAuthorizations(usgaap, minYear);
+  const cik               = ident.cik;
+  const buybacks          = extractBuybacks(usgaap, minYear, cik);
+  const dividends         = extractDividends(usgaap, minYear, cik);
+  const dividendsPerShare = extractDividendPerShare(usgaap, minYear, cik);
+  const authorizations    = extractBuybackAuthorizations(usgaap, minYear, cik);
 
-  const hasData = buybacks.length > 0 || dividends.length > 0 ||
-                  dividendsPerShare.length > 0 || authorizations.length > 0;
-  const status  = hasData ? 'OK' : 'NONE';
-  const summary = buildSummary(buybacks, dividends, dividendsPerShare, authorizations);
+  const hasData  = buybacks.length > 0 || dividends.length > 0 ||
+                   dividendsPerShare.length > 0 || authorizations.length > 0;
+  const status   = hasData ? 'OK' : 'NONE';
+  const xbrlGaps = detectXbrlGaps(usgaap, buybacks, dividends, dividendsPerShare, authorizations);
+  const summary  = buildSummary(buybacks, dividends, dividendsPerShare, authorizations, xbrlGaps);
 
   return res(200, base(status, ticker, facts.entityName || ident.issuer, ident.cik,
     ident.resolutionPath, windowYears, buybacks, dividends, dividendsPerShare, authorizations,
@@ -164,7 +166,7 @@ exports.handler = async function (event) {
 
 // Returns sorted annual entries for a single US-GAAP USD concept.
 // Keeps 10-K FY rows only; deduplicates per fiscal year keeping most recently filed.
-function extractAnnualEntries(usgaap, concept, minYear) {
+function extractAnnualEntries(usgaap, concept, minYear, signalType, cik) {
   const node = usgaap[concept];
   if (!node || !node.units || !Array.isArray(node.units.USD)) return [];
 
@@ -187,29 +189,43 @@ function extractAnnualEntries(usgaap, concept, minYear) {
   return [...byYear.values()]
     .sort((a, b) => a.fy - b.fy)
     .map(e => ({
-      fiscalYear:   e.fy,
-      fiscalPeriod: e.fp,
-      periodStart:  e.start || null,
-      periodEnd:    e.end,
-      filed:        e.filed,
-      form:         e.form,
-      valueUSD:     e.val,
-      concept
+      fiscalYear:         e.fy,
+      fiscalPeriod:       e.fp,
+      periodStart:        e.start || null,
+      periodEnd:          e.end,
+      filed:              e.filed,
+      form:               e.form,
+      valueUSD:           e.val,
+      concept,
+      signalType,
+      source_type:        'xbrl_companyfacts',
+      verificationStatus: 'xbrl_primary',
+      accessionNumber:    e.accn || null,
+      filingUrl:          makeFilingUrl(cik, e.accn)
     }));
 }
 
-function extractBuybacks(usgaap, minYear) {
+function extractBuybacks(usgaap, minYear, cik) {
   for (const concept of BUYBACK_CONCEPTS) {
-    const entries = extractAnnualEntries(usgaap, concept, minYear);
+    const entries = extractAnnualEntries(usgaap, concept, minYear, 'repurchases_executed', cik);
     if (entries.length > 0) return entries;
   }
   return [];
 }
 
 // Sums common + preferred per fiscal year when both are present; falls back to aggregate.
-function extractDividends(usgaap, minYear) {
-  const common    = extractAnnualEntries(usgaap, DIVIDEND_CONCEPT_COMMON, minYear);
-  const preferred = extractAnnualEntries(usgaap, DIVIDEND_CONCEPT_PREFERRED, minYear);
+// signalType 'dividends_paid' is set by extractAnnualEntries for all paths.
+// When common and preferred entries merge into one annual row:
+//   - accessionNumber/filingUrl are preserved as a single value only when both contributing
+//     entries share the same explicit non-null accession number (same filing confirmed).
+//   - When accessions differ, one is null, or both are null, accessionNumber and filingUrl
+//     are set to null; contributingFilings records both contributions including filed/form so
+//     the merged row remains fully traceable. Row-level filed/form are left unchanged for
+//     backward compatibility but must not be treated as sole provenance for the combined value.
+// Individual non-merged entries (common-only or preferred-only years) carry full provenance.
+function extractDividends(usgaap, minYear, cik) {
+  const common    = extractAnnualEntries(usgaap, DIVIDEND_CONCEPT_COMMON,    minYear, 'dividends_paid', cik);
+  const preferred = extractAnnualEntries(usgaap, DIVIDEND_CONCEPT_PREFERRED, minYear, 'dividends_paid', cik);
 
   if (common.length > 0 || preferred.length > 0) {
     const byYear = new Map();
@@ -224,7 +240,23 @@ function extractDividends(usgaap, minYear) {
         row.preferredUSD = e.valueUSD;
         row.valueUSD     = (row.commonUSD || 0) + e.valueUSD;
         row.concept      = 'PaymentsOfDividendsCommonStock+Preferred';
+        // Provenance: single filing identity only when both accessions are explicitly equal
+        // and non-null. Different accessions, one null, or both null all require
+        // contributingFilings to avoid attributing the combined value to one filing.
+        const sameExplicitFiling =
+          row.accessionNumber &&
+          e.accessionNumber &&
+          row.accessionNumber === e.accessionNumber;
+        if (!sameExplicitFiling) {
+          row.contributingFilings = [
+            { concept: DIVIDEND_CONCEPT_COMMON,    filed: row.filed, form: row.form, accessionNumber: row.accessionNumber, filingUrl: row.filingUrl },
+            { concept: DIVIDEND_CONCEPT_PREFERRED, filed: e.filed,   form: e.form,   accessionNumber: e.accessionNumber,   filingUrl: e.filingUrl   }
+          ];
+          row.accessionNumber = null;
+          row.filingUrl       = null;
+        }
       } else {
+        // Preferred-only year — provenance fully intact from extractAnnualEntries.
         byYear.set(e.fiscalYear, {
           ...e, concept: DIVIDEND_CONCEPT_PREFERRED, commonUSD: 0, preferredUSD: e.valueUSD
         });
@@ -233,14 +265,15 @@ function extractDividends(usgaap, minYear) {
     return [...byYear.values()].sort((a, b) => a.fiscalYear - b.fiscalYear);
   }
 
-  return extractAnnualEntries(usgaap, DIVIDEND_CONCEPT_AGGREGATE, minYear);
+  return extractAnnualEntries(usgaap, DIVIDEND_CONCEPT_AGGREGATE, minYear, 'dividends_paid', cik);
 }
 
 // ── XBRL per-share dividend extraction (duration; units: "USD/shares") ───────
 
 // Returns per-period declared dividend rate from both 10-K and 10-Q filings.
-// Deduplicates by (fy, fp); most recently filed entry wins.
-function extractDividendPerShare(usgaap, minYear) {
+// Deduplicates by (fy, fp); most recently filed entry wins. Raw e.accn survives
+// deduplication because byPeriod stores raw entries; .map() reads e.accn after.
+function extractDividendPerShare(usgaap, minYear, cik) {
   const node = usgaap[DIVIDEND_PER_SHARE_CONCEPT];
   if (!node || !node.units || !Array.isArray(node.units['USD/shares'])) return [];
 
@@ -257,21 +290,27 @@ function extractDividendPerShare(usgaap, minYear) {
   return [...byPeriod.values()]
     .sort((a, b) => a.fy !== b.fy ? a.fy - b.fy : (fpOrd[a.fp] || 9) - (fpOrd[b.fp] || 9))
     .map(e => ({
-      fiscalYear:    e.fy,
-      fiscalPeriod:  e.fp,
-      periodStart:   e.start || null,
-      periodEnd:     e.end,
-      filed:         e.filed,
-      form:          e.form,
-      valuePerShare: e.val,
-      concept:       DIVIDEND_PER_SHARE_CONCEPT
+      fiscalYear:         e.fy,
+      fiscalPeriod:       e.fp,
+      periodStart:        e.start || null,
+      periodEnd:          e.end,
+      filed:              e.filed,
+      form:               e.form,
+      valuePerShare:      e.val,
+      concept:            DIVIDEND_PER_SHARE_CONCEPT,
+      signalType:         'dividend_declared_per_share',
+      source_type:        'xbrl_companyfacts',
+      verificationStatus: 'xbrl_primary',
+      accessionNumber:    e.accn || null,
+      filingUrl:          makeFilingUrl(cik, e.accn)
     }));
 }
 
 // ── XBRL buyback authorization extraction (instant; units: "USD") ────────────
 
 // Instant entries have no start date; filters out any duration entries that share the concept.
-function extractInstantEntries(usgaap, concept, minYear) {
+// Raw e.accn survives deduplication because byPeriod stores raw entries; .map() reads e.accn after.
+function extractInstantEntries(usgaap, concept, minYear, signalType, cik) {
   const node = usgaap[concept];
   if (!node || !node.units || !Array.isArray(node.units.USD)) return [];
 
@@ -289,22 +328,32 @@ function extractInstantEntries(usgaap, concept, minYear) {
   return [...byPeriod.values()]
     .sort((a, b) => a.fy !== b.fy ? a.fy - b.fy : (fpOrd[a.fp] || 9) - (fpOrd[b.fp] || 9))
     .map(e => ({
-      fiscalYear:   e.fy,
-      fiscalPeriod: e.fp,
-      periodEnd:    e.end,
-      filed:        e.filed,
-      form:         e.form,
-      valueUSD:     e.val,
-      concept
+      fiscalYear:         e.fy,
+      fiscalPeriod:       e.fp,
+      periodEnd:          e.end,
+      filed:              e.filed,
+      form:               e.form,
+      valueUSD:           e.val,
+      concept,
+      signalType,
+      source_type:        'xbrl_companyfacts',
+      verificationStatus: 'xbrl_primary',
+      accessionNumber:    e.accn || null,
+      filingUrl:          makeFilingUrl(cik, e.accn)
     }));
 }
 
 // Combines all authorization concepts into one chronologically sorted array.
-function extractBuybackAuthorizations(usgaap, minYear) {
+// Each concept maps to a distinct signalType so callers can filter without inspecting concept strings.
+function extractBuybackAuthorizations(usgaap, minYear, cik) {
+  const AUTH_SIGNAL_MAP = {
+    'StockRepurchaseProgramAuthorizedAmount1':                    'authorization_new',
+    'StockRepurchaseProgramRemainingAuthorizedRepurchaseAmount1': 'authorization_remaining'
+  };
   const fpOrd = { Q1: 1, Q2: 2, Q3: 3, Q4: 4, FY: 5 };
   const all   = [];
   for (const concept of BUYBACK_AUTH_CONCEPTS) {
-    all.push(...extractInstantEntries(usgaap, concept, minYear));
+    all.push(...extractInstantEntries(usgaap, concept, minYear, AUTH_SIGNAL_MAP[concept], cik));
   }
   return all.sort((a, b) => {
     if (a.fy !== b.fy)   return a.fy - b.fy;
@@ -313,9 +362,99 @@ function extractBuybackAuthorizations(usgaap, minYear) {
   });
 }
 
+// ── XBRL gap detection ────────────────────────────────────────────────────────
+
+// Returns an array of gap descriptors for signal types where XBRL evidence is absent or
+// produced no qualifying entries. Gaps are auto-detectable from the extraction results and
+// the raw usgaap object. xbrl_lag (announcement post-dating the most recent filing) is not
+// emitted here — it resolves implicitly when a supplemental sec_8k entry is added for the
+// same signalType in a future phase.
+//
+// reason ∈ 'concept_absent'        — concept node not present in companyfacts for this CIK.
+//           'no_qualifying_entries' — concept present but no entries pass form/window filter.
+function detectXbrlGaps(usgaap, buybacks, dividends, dividendsPerShare, authorizations) {
+  const gaps = [];
+
+  const hasUsdNode = concept => {
+    const n = usgaap[concept];
+    return !!(n && n.units && Array.isArray(n.units.USD));
+  };
+
+  // repurchases_executed
+  if (buybacks.length === 0) {
+    const anyPresent = BUYBACK_CONCEPTS.some(hasUsdNode);
+    gaps.push({
+      signalType: 'repurchases_executed',
+      concept:    BUYBACK_CONCEPTS.join(' | '),
+      reason:     anyPresent ? 'no_qualifying_entries' : 'concept_absent',
+      detail:     anyPresent
+        ? 'Buyback cash-flow concept(s) present but no annual 10-K FY entries qualify within the requested window.'
+        : 'No buyback cash-flow concepts tagged in XBRL for this issuer; absence does not confirm no repurchase activity.'
+    });
+  }
+
+  // dividends_paid
+  if (dividends.length === 0) {
+    const DPAID     = [DIVIDEND_CONCEPT_COMMON, DIVIDEND_CONCEPT_PREFERRED, DIVIDEND_CONCEPT_AGGREGATE];
+    const anyPresent = DPAID.some(hasUsdNode);
+    gaps.push({
+      signalType: 'dividends_paid',
+      concept:    DPAID.join(' | '),
+      reason:     anyPresent ? 'no_qualifying_entries' : 'concept_absent',
+      detail:     anyPresent
+        ? 'Dividend cash-flow concept(s) present but no annual 10-K FY entries qualify within the requested window.'
+        : 'No dividend cash-flow concepts tagged in XBRL for this issuer; absence does not confirm no dividend was paid.'
+    });
+  }
+
+  // dividend_declared_per_share
+  if (dividendsPerShare.length === 0) {
+    const psNode     = usgaap[DIVIDEND_PER_SHARE_CONCEPT];
+    const anyPresent = !!(psNode && psNode.units && Array.isArray(psNode.units['USD/shares']));
+    gaps.push({
+      signalType: 'dividend_declared_per_share',
+      concept:    DIVIDEND_PER_SHARE_CONCEPT,
+      reason:     anyPresent ? 'no_qualifying_entries' : 'concept_absent',
+      detail:     anyPresent
+        ? 'CommonStockDividendsPerShareDeclared present but no 10-K/10-Q entries qualify within the requested window.'
+        : 'CommonStockDividendsPerShareDeclared not tagged in XBRL; absence does not confirm no per-share dividend was declared.'
+    });
+  }
+
+  // authorization_remaining
+  if (!authorizations.some(e => e.signalType === 'authorization_remaining')) {
+    const concept    = 'StockRepurchaseProgramRemainingAuthorizedRepurchaseAmount1';
+    const anyPresent = hasUsdNode(concept);
+    gaps.push({
+      signalType: 'authorization_remaining',
+      concept,
+      reason:     anyPresent ? 'no_qualifying_entries' : 'concept_absent',
+      detail:     anyPresent
+        ? 'Remaining buyback authorization concept present but no qualifying instant entries within the requested window.'
+        : 'StockRepurchaseProgramRemainingAuthorizedRepurchaseAmount1 not tagged in XBRL for this issuer.'
+    });
+  }
+
+  // authorization_new
+  if (!authorizations.some(e => e.signalType === 'authorization_new')) {
+    const concept    = 'StockRepurchaseProgramAuthorizedAmount1';
+    const anyPresent = hasUsdNode(concept);
+    gaps.push({
+      signalType: 'authorization_new',
+      concept,
+      reason:     anyPresent ? 'no_qualifying_entries' : 'concept_absent',
+      detail:     anyPresent
+        ? 'Total buyback authorization concept present but no qualifying instant entries within the requested window.'
+        : 'StockRepurchaseProgramAuthorizedAmount1 not tagged in XBRL for this issuer; absence does not confirm no buyback program exists.'
+    });
+  }
+
+  return gaps;
+}
+
 // ── Summary ──────────────────────────────────────────────────────────────────
 
-function buildSummary(buybacks, dividends, dividendsPerShare, authorizations) {
+function buildSummary(buybacks, dividends, dividendsPerShare, authorizations, xbrlGaps) {
   const sumUSD         = arr => arr.reduce((s, e) => s + (e.valueUSD || 0), 0);
   const totalBuybacks  = sumUSD(buybacks);
   const totalDividends = sumUSD(dividends);
@@ -346,7 +485,8 @@ function buildSummary(buybacks, dividends, dividendsPerShare, authorizations) {
     latestRemainingAuthorizationUSD: latestRemaining  ? latestRemaining.valueUSD  : null,
     latestTotalAuthorizedUSD:        latestAuthorized ? latestAuthorized.valueUSD  : null,
     oldestFiscalYear:                allYears[0]                   || null,
-    newestFiscalYear:                allYears[allYears.length - 1] || null
+    newestFiscalYear:                allYears[allYears.length - 1] || null,
+    xbrlGaps:                        xbrlGaps || []
   };
 }
 
@@ -455,6 +595,14 @@ async function timedFetch(url, options, timeoutMs) {
 function pad10(c)  { return String(c).padStart(10, '0'); }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function redact(u) { return String(u).split('?')[0]; }
+
+// Derives a stable EDGAR filing-index permalink from a padded 10-digit CIK and
+// an accession number in the standard dashed format (e.g. "0001045810-25-000024").
+// Returns null if either argument is absent.
+function makeFilingUrl(cik, accn) {
+  if (!accn || !cik) return null;
+  return `https://www.sec.gov/Archives/edgar/data/${parseInt(cik, 10)}/${String(accn).replace(/-/g, '')}/`;
+}
 
 function base(status, ticker, issuer, cik, resolutionPath, windowYears,
               buybacks, dividends, dividendsPerShare, authorizations,
