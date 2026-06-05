@@ -625,6 +625,7 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pc-card-title{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
 .pc-card-sub{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-top:-8px;margin-bottom:10px}
 .cat-hdr{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-bottom:6px}
+.nd-list{display:flex;flex-direction:column;gap:2px}.nd-row{display:flex;align-items:flex-start;gap:6px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.4)}.nd-row:last-child{border-bottom:none}.nd-tag{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--text3);letter-spacing:.5px;min-width:68px;padding-top:2px;flex-shrink:0}.nd-txt{font-size:12px;color:var(--text2);line-height:1.45;flex:1}
 .pc-empty{font-family:var(--mono);font-size:10px;color:var(--text3);font-style:italic}
 /* ─── TOP-LEVEL NAV ───────────────────────────── */
 .app-nav{display:flex;align-items:center;gap:0;padding:0 18px;background:var(--sidebar);border-bottom:1px solid var(--border);flex-shrink:0}
@@ -3896,6 +3897,18 @@ function renderMainPanel(item) {
     }
   }
 
+  // 9A-1: build news driver rows from item.news (already in pt_results; display-only).
+  const _trunc150 = s => { s = String(s == null ? '' : s); return s.length > 150 ? s.slice(0, 147) + '…' : s; };
+  const _ND_TAGS = ['PRIMARY', 'SECONDARY', 'BACKGROUND'];
+  const _newsRows = (Array.isArray(item.news) ? item.news : []).slice(0, 3).map((s, i) => {
+    const str = String(s || '').trim();
+    if (!str) return null;
+    const m = str.match(/^(Primary|Secondary|Background)\s*:\s*/i);
+    const tag = m ? m[1].toUpperCase() : (_ND_TAGS[i] || 'NOTE');
+    const text = _trunc150(m ? str.slice(m[0].length).trim() : str);
+    return text ? { tag, text: _esc(text) } : null;
+  }).filter(Boolean);
+
   panel.innerHTML = `
     <!-- PULSE v1.1 TICKER HEADER -->
     <div class="ph-bar">
@@ -3995,6 +4008,7 @@ function renderMainPanel(item) {
           </div>
           <div class="vol-row"><span class="vol-lbl">Volume trend (AI)</span><span class="vol-metric"></span><span class="vol-state ${volCls}">${volChar}</span></div>
         </div>`}
+        ${_newsRows.length ? `<div class="nd-list" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px"><div class="cat-hdr">News drivers · AI-synthesized</div>${_newsRows.map(({tag,text})=>`<div class="nd-row"><span class="nd-tag">${tag}</span><span class="nd-txt">${text}</span></div>`).join('')}</div>` : ''}
         <div class="cat-list" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
           <div class="cat-hdr">Catalyst evidence · Verify independently</div>
           ${catalystRows.length ? catalystRows.map(({cls,lbl,state})=>`
