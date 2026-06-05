@@ -80,6 +80,31 @@ Never alter scoring, Actionable Take, recommendations, normal scan, persistence,
 
 Use local-only `CHECKPOINT.md` as the sole source for current commits, deployed state, completed phases, QA results, enabled DEV gates, and next planned work. Do not duplicate or hard-code changing project state in this file.
 
+## Frontend aesthetics
+
+<frontend_aesthetics>
+
+- Pulse is a premium, calm, evidence-driven U.S. equities research workspace.
+- Dark palette: background `#080D16`, surfaces `#101A2A`, primary accent `#4B82F1`.
+- Typography: Space Grotesk headings, Inter or IBM Plex Sans body, JetBrains Mono/tabular numbers for tickers and financial metrics.
+- Semantic colors only: green `#22C58B` for positive/verified evidence; red `#F05D6C` for negative/risk/error; amber `#F4B860` for extended-hours/partial/pending status.
+- Avoid generic SaaS styling, crypto-terminal neon, glow gradients, glassmorphism, decorative semantic colors, and distracting motion.
+- Keep UI transitions subtle, generally `120ms–240ms`.
+
+</frontend_aesthetics>
+
+## Deployment and QA policy
+
+<deployment_and_qa_policy>
+
+- Netlify Personal permits Branch Deploys and Deploy Previews for DEV/browser QA; do not avoid a necessary `branch-dev` deploy solely to conserve deploy credits.
+- Local validation remains required before DEV deploy whenever feasible; batch related fixes when practical.
+- DEV deploy permission does not authorize scope expansion, state/localStorage/scoring/provenance changes, uncontrolled runtime testing, or production actions.
+- Explicit approval remains required before Netlify environment-variable changes, live external API/SEC/Perplexity canaries, repeated or long-running Function/background-runtime tests, commit, push, merge, production deploy, or any `main`/production change.
+- Production remains protected and requires reviewed diff, clean Git state, successful relevant DEV QA, and separate approval.
+
+</deployment_and_qa_policy>
+
 ---
 
 ### Agent Pre-Flight Skills & Goal Checklist

@@ -303,6 +303,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .rr-row:last-child{border-bottom:none}
 .rr-lbl{font-size:12px;color:var(--text2)}
 .rr-val{font-family:var(--mono);font-size:12px;font-weight:700}
+.ts-assess{margin-top:8px;padding-top:8px;border-top:1px solid var(--border2);font-size:11px;color:var(--text2);line-height:1.4}
 
 /* Actionable take */
 .mp-action{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 22px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:rgba(37,99,235,.05);border-left:4px solid var(--blue2)}
@@ -311,6 +312,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .mp-action-label{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--blue2);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:5px}
 .mp-action-text{font-size:15px;font-weight:600;color:var(--text);line-height:1.5}
 .mp-action-time{font-family:var(--mono);font-size:9px;color:var(--text3);white-space:nowrap}
+.at-dial-row{display:flex;align-items:center;gap:14px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border2)}
+.at-dial{width:44px;height:44px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;position:relative}
+.at-dial::after{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--card)}
+.at-dial-num{position:relative;z-index:1;font-family:var(--mono);font-size:13px;font-weight:700}
+.at-dial-lbl{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--text3)}
+.at-dial-val{font-family:var(--sans);font-size:18px;font-weight:600}
 /* 7A-2: Position Context card — render-only, derived from local watchlist position data */
 .mp-pos{display:flex;flex-direction:column;gap:6px;padding:12px 22px;border-top:1px solid var(--border);background:rgba(96,165,250,.04);border-left:4px solid var(--blue2)}
 .mp-pos.mode-fresh,.mp-pos.mode-unknown{border-left-color:var(--text3);background:transparent;opacity:.75}
@@ -438,7 +445,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .sr-panel.compact .sr-th-name{display:none}
 .sr-rank{color:var(--text3);font-size:9px;width:28px}
 .sr-sym{font-weight:700;color:var(--text);font-size:12px}
-.sr-score{font-weight:700;font-size:12px;color:var(--text)}
+.sr-score{font-weight:700;font-size:12px;color:var(--text);display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.sr-score-track{width:28px;height:2px;background:rgba(255,255,255,.08);border-radius:1px;overflow:hidden}
+.sr-score-fill{height:100%;border-radius:1px;transition:width 180ms}
+.sr-score-fill.pos{background:var(--green2)}.sr-score-fill.warn{background:var(--yellow2)}.sr-score-fill.neg{background:var(--red2)}
 .sr-rating.pos{color:var(--green2)}.sr-rating.neg{color:var(--red2)}.sr-rating.neutral-v{color:var(--text3)}
 .sr-setup{font-size:9px;letter-spacing:.4px}
 .sr-setup.pos{color:var(--green2)}.sr-setup.warn{color:var(--yellow2)}.sr-setup.neg{color:var(--red2)}.sr-setup.neutral-v{color:var(--text3)}
@@ -625,6 +635,7 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pc-card-title{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
 .pc-card-sub{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-top:-8px;margin-bottom:10px}
 .cat-hdr{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-bottom:6px}
+.nd-list{display:flex;flex-direction:column;gap:2px}.nd-row{display:flex;align-items:flex-start;gap:6px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.4)}.nd-row:last-child{border-bottom:none}.nd-tag{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--text3);letter-spacing:.5px;min-width:68px;padding-top:2px;flex-shrink:0}.nd-txt{font-size:12px;color:var(--text2);line-height:1.45;flex:1}
 .pc-empty{font-family:var(--mono);font-size:10px;color:var(--text3);font-style:italic}
 /* ─── TOP-LEVEL NAV ───────────────────────────── */
 .app-nav{display:flex;align-items:center;gap:0;padding:0 18px;background:var(--sidebar);border-bottom:1px solid var(--border);flex-shrink:0}
@@ -2853,7 +2864,7 @@ function _srRenderGrouped(source, tbody) {
       rows.push(`<tr data-ticker="${sym}">
         <td class="sr-sym">${sym}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
-        <td class="r sr-score">${score}</td>
+        <td class="r sr-score"><span>${score}</span><div class="sr-score-track"><div class="sr-score-fill ${score>=65?'pos':score>=40?'warn':'neg'}" style="width:${score}%"></div></div></td>
         <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>
         <td class="sr-setup ${setupCls}">${setupLbl}</td>
         <td class="r sr-chg ${chgCls}">${chgStr}</td>
@@ -2938,7 +2949,7 @@ function openScanResultsOverlay() {
         <td class="r sr-rank">${i + 1}</td>
         <td class="sr-sym">${sym}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
-        <td class="r sr-score">${score}</td>
+        <td class="r sr-score"><span>${score}</span><div class="sr-score-track"><div class="sr-score-fill ${score>=65?'pos':score>=40?'warn':'neg'}" style="width:${score}%"></div></div></td>
         <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>
         <td class="sr-setup ${setupCls}">${setupLbl}</td>
         <td class="r sr-chg ${chgCls}">${chgStr}</td>
@@ -3896,6 +3907,37 @@ function renderMainPanel(item) {
     }
   }
 
+  // 9A-1: build news driver rows from item.news (already in pt_results; display-only).
+  const _trunc150 = s => { s = String(s == null ? '' : s); return s.length > 150 ? s.slice(0, 147) + '…' : s; };
+  const _ND_TAGS = ['PRIMARY', 'SECONDARY', 'BACKGROUND'];
+  const _newsRows = (Array.isArray(item.news) ? item.news : []).slice(0, 3).map((s, i) => {
+    const str = String(s || '').trim();
+    if (!str) return null;
+    const m = str.match(/^(Primary|Secondary|Background)\s*:\s*/i);
+    const tag = m ? m[1].toUpperCase() : (_ND_TAGS[i] || 'NOTE');
+    const text = _trunc150(m ? str.slice(m[0].length).trim() : str);
+    return text ? { tag, text: _esc(text) } : null;
+  }).filter(Boolean);
+
+  const _tsAssessMap = {
+    healthy_uptrend:          '20 > 50 > 150 — Healthy uptrend, price above key moving averages',
+    bullish_stack:            '20 > 50 > 150 — Healthy uptrend, price above key moving averages',
+    healthy_uptrend_near_ath: 'Healthy uptrend near all-time high — trend intact but extended',
+    extended_near_ath:        'Price extended above key moving averages and near all-time high',
+    pullback_in_uptrend:      'Pullback within an uptrend — watch for support to hold',
+    pullback_to_ma50:         'Pulling back toward the 50-day — watch for support hold',
+    pullback_to_ma20:         'Pulling back toward the 20-day — watching for bounce',
+    below_key_mas:            'Below key moving averages — structure is bearish',
+    mixed:                    'Mixed MA alignment — no clear directional stack',
+  };
+  const _tsAssess = hasData && item.technical_setup ? (_tsAssessMap[item.technical_setup] || '') : '';
+  const _tsAssessHtml = _tsAssess ? `<div class="ts-assess">${_tsAssess}</div>` : '';
+
+  const _dialColor = rCls === 'pos' ? 'var(--green2)' : rCls === 'neg' ? 'var(--red2)' : 'var(--blue2)';
+  const _dialHtml  = (item.action || actionable)
+    ? `<div class="at-dial-row"><div class="at-dial" style="background:conic-gradient(${_dialColor} 0 ${score}%,var(--border2) ${score}% 100%)"><span class="at-dial-num" style="color:${_dialColor}">${score}</span></div><div><div class="at-dial-lbl">Score</div><div class="at-dial-val ${rCls}">${rating}</div></div></div>`
+    : '';
+
   panel.innerHTML = `
     <!-- PULSE v1.1 TICKER HEADER -->
     <div class="ph-bar">
@@ -3977,7 +4019,8 @@ function renderMainPanel(item) {
           <div class="rr-row"><span class="rr-lbl">ATH Distance</span><span class="rr-val ${snap.hasATH ? (snap.athDist < -15 ? 'warn' : snap.athDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">${snap.hasATH ? fmtPct(snap.athDist) : '—'}</span></div>
           <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase}</span></div>
           <div class="rr-row"><span class="rr-lbl">Setup Quality</span><span class="rr-val">${score} / 100</span></div>
-        </div>`}
+        </div>
+        ${_tsAssessHtml}`}
       </div>
 
       <!-- SIGNALS (Volume + Catalysts) — span 6 -->
@@ -3995,6 +4038,7 @@ function renderMainPanel(item) {
           </div>
           <div class="vol-row"><span class="vol-lbl">Volume trend (AI)</span><span class="vol-metric"></span><span class="vol-state ${volCls}">${volChar}</span></div>
         </div>`}
+        ${_newsRows.length ? `<div class="nd-list" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px"><div class="cat-hdr">News drivers · AI-synthesized</div>${_newsRows.map(({tag,text})=>`<div class="nd-row"><span class="nd-tag">${tag}</span><span class="nd-txt">${text}</span></div>`).join('')}</div>` : ''}
         <div class="cat-list" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
           <div class="cat-hdr">Catalyst evidence · Verify independently</div>
           ${catalystRows.length ? catalystRows.map(({cls,lbl,state})=>`
@@ -4018,6 +4062,7 @@ function renderMainPanel(item) {
       <div class="pc-card pc-span-12">
         <div class="pc-card-title">${hasData ? 'Actionable Take' : 'Research-Context Analysis'}</div>
         ${(item.action || actionable) ? '<div class="pc-card-sub">AI-generated analysis · Verify independently</div>' : ''}
+        ${_dialHtml}
         ${item.action ? `
           <div>
             ${item.news_bias       ? `<div class="mp-act-row"><span class="mp-act-lbl">Bias</span><span class="mp-act-val">${_esc(item.news_bias)}</span></div>` : ''}
