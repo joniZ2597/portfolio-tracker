@@ -3914,12 +3914,15 @@ function renderMainPanel(item) {
   }).filter(Boolean);
 
   const _tsAssessMap = {
-    bullish_stack:     '20 > 50 > 150 — Bullish stack, price above all means',
-    extended_near_ath: 'Price extended above all MAs and near all-time high',
-    pullback_to_ma50:  'Pulling back toward the 50-day — watch for support hold',
-    pullback_to_ma20:  'Pulling back toward the 20-day — watching for bounce',
-    below_key_mas:     'Below key moving averages — structure is bearish',
-    mixed:             'Mixed MA alignment — no clear directional stack',
+    healthy_uptrend:          '20 > 50 > 150 — Healthy uptrend, price above key moving averages',
+    bullish_stack:            '20 > 50 > 150 — Healthy uptrend, price above key moving averages',
+    healthy_uptrend_near_ath: 'Healthy uptrend near all-time high — trend intact but extended',
+    extended_near_ath:        'Price extended above key moving averages and near all-time high',
+    pullback_in_uptrend:      'Pullback within an uptrend — watch for support to hold',
+    pullback_to_ma50:         'Pulling back toward the 50-day — watch for support hold',
+    pullback_to_ma20:         'Pulling back toward the 20-day — watching for bounce',
+    below_key_mas:            'Below key moving averages — structure is bearish',
+    mixed:                    'Mixed MA alignment — no clear directional stack',
   };
   const _tsAssess = hasData && item.technical_setup ? (_tsAssessMap[item.technical_setup] || '') : '';
   const _tsAssessHtml = _tsAssess ? `<div class="ts-assess">${_tsAssess}</div>` : '';
