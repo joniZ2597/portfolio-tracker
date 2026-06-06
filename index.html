@@ -318,6 +318,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .at-dial-num{position:relative;z-index:1;font-family:var(--mono);font-size:13px;font-weight:700}
 .at-dial-lbl{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--text3)}
 .at-dial-val{font-family:var(--sans);font-size:18px;font-weight:600}
+.cr-nudge-row{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-family:var(--mono);font-size:10px}
+.cr-nudge-tag{font-weight:600;letter-spacing:.4px}
+.cr-nudge-tag.pos{color:var(--green2)}
+.cr-nudge-tag.warn{color:var(--yellow2)}
+.cr-nudge-val{color:var(--text3)}
 /* 7A-2: Position Context card — render-only, derived from local watchlist position data */
 .mp-pos{display:flex;flex-direction:column;gap:6px;padding:12px 22px;border-top:1px solid var(--border);background:rgba(96,165,250,.04);border-left:4px solid var(--blue2)}
 .mp-pos.mode-fresh,.mp-pos.mode-unknown{border-left-color:var(--text3);background:transparent;opacity:.75}
@@ -2412,6 +2417,24 @@ function applyCapitalReturnsNudge(results) {
   });
 }
 
+// ── 9B-2A: Capital Returns scan-time prefetch helper (LAB / DEV-ONLY) ────────
+// Thin wrapper for future use inside analyzeChunk (9B-2B). NOT wired into scan
+// pipeline yet. Guards: client gate strict-true; probe function must exist;
+// all errors caught and isolated. Side-effect only: delegates to
+// window.runCapitalReturnsProbe, which writes to window._capitalReturnsDebug[sym].
+// Zero impact on persisted scan data, browser storage, scoring, or scan behavior.
+// ─────────────────────────────────────────────────────────────────────────────
+async function _crFetchForScan(sym) {
+  if (window.PT_ENABLE_CAPITAL_RETURNS_CLIENT !== true) return null;
+  if (typeof window.runCapitalReturnsProbe !== 'function') return null;
+  try {
+    return await window.runCapitalReturnsProbe(sym);
+  } catch (e) {
+    console.warn('[PT][CapReturns][scan] probe threw for ' + sym + ': ' + (e && e.message || e));
+    return null;
+  }
+}
+
 // ── analyzeChunk ─────────────────────────────────────────────────────────────
 async function analyzeChunk(batch, today) {
   // Enforce single-ticker mode — split multi-ticker into sequential single runs
@@ -2486,6 +2509,7 @@ async function analyzeChunk(batch, today) {
     if (d) console.log(`[PT] Market OK: ${sym} $${d.price} ${d.change_percent}% [${d.source}]`);
     else   console.warn(`[PT] Market MISS: ${sym}`);
   });
+  const _crFetchPromise9B = _crFetchForScan(batch[0]); // 9B-2B: fire CR prefetch in parallel with Perplexity/Anthropic
   const stockContext = formatStockContext(stockData);
 
   // Phase 6A-1: Compute technical snapshot before Anthropic call
@@ -2725,6 +2749,7 @@ async function analyzeChunk(batch, today) {
     batch.forEach(sym => { if (window._pplxDebug && window._pplxDebug[sym]) window._pplxDebug[sym].fallbackUsed = true; });
   }
 
+  await Promise.allSettled([_crFetchPromise9B]); // 9B-2B: settle CR prefetch before nudge; side-effect only, never throws
   const orchestrated = orchestrate(raw, pplxData, stockData);
 
   // 7B-3D0: mirror the memory-only debug accumulator into _lastRunState for ergonomic access
@@ -3938,6 +3963,19 @@ function renderMainPanel(item) {
     ? `<div class="at-dial-row"><div class="at-dial" style="background:conic-gradient(${_dialColor} 0 ${score}%,var(--border2) ${score}% 100%)"><span class="at-dial-num" style="color:${_dialColor}">${score}</span></div><div><div class="at-dial-lbl">Score</div><div class="at-dial-val ${rCls}">${rating}</div></div></div>`
     : '';
 
+  const _crn = item._crNudge;
+  const _crNudgeHtml = (_crn && typeof _crn.nudge === 'number' && _crn.nudge > 0) ? (() => {
+    const _parts = [];
+    if (_crn.hasDividend)   _parts.push('Dividend confirmed');
+    if (_crn.hasActiveAuth) _parts.push('Active buyback auth');
+    const _tag = _parts.join(' · ') || 'Capital Returns signal';
+    const _cls = _crn.absorbedByCeiling ? 'warn' : 'pos';
+    const _detail = _crn.absorbedByCeiling
+      ? `+${_crn.nudge} pts · ceiling applied`
+      : `+${_crn.nudge} pts (${_crn.scoreBefore} → ${_crn.scoreAfter})`;
+    return `<div class="cr-nudge-row"><span class="cr-nudge-tag ${_cls}">${_tag}</span><span class="cr-nudge-val">${_detail}</span></div>`;
+  })() : '';
+
   panel.innerHTML = `
     <!-- PULSE v1.1 TICKER HEADER -->
     <div class="ph-bar">
@@ -4063,6 +4101,7 @@ function renderMainPanel(item) {
         <div class="pc-card-title">${hasData ? 'Actionable Take' : 'Research-Context Analysis'}</div>
         ${(item.action || actionable) ? '<div class="pc-card-sub">AI-generated analysis · Verify independently</div>' : ''}
         ${_dialHtml}
+        ${_crNudgeHtml}
         ${item.action ? `
           <div>
             ${item.news_bias       ? `<div class="mp-act-row"><span class="mp-act-lbl">Bias</span><span class="mp-act-val">${_esc(item.news_bias)}</span></div>` : ''}
@@ -5489,7 +5528,6 @@ function init() {
 // Server gate (PT_ENABLE_EDGAR_FORM4_SERVER) remains the real safety boundary.
 if (window.location.hostname === 'branch-dev--portfoliotrk.netlify.app') {
   window.PT_ENABLE_EDGAR_FORM4 = true;
-  window.PT_ENABLE_CAPITAL_RETURNS_CLIENT = true;
 }
 init();
 // ─────────────────────────────────────────────────────────────────────────────
