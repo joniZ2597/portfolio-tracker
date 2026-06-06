@@ -2417,6 +2417,24 @@ function applyCapitalReturnsNudge(results) {
   });
 }
 
+// ── 9B-2A: Capital Returns scan-time prefetch helper (LAB / DEV-ONLY) ────────
+// Thin wrapper for future use inside analyzeChunk (9B-2B). NOT wired into scan
+// pipeline yet. Guards: client gate strict-true; probe function must exist;
+// all errors caught and isolated. Side-effect only: delegates to
+// window.runCapitalReturnsProbe, which writes to window._capitalReturnsDebug[sym].
+// Zero impact on persisted scan data, browser storage, scoring, or scan behavior.
+// ─────────────────────────────────────────────────────────────────────────────
+async function _crFetchForScan(sym) {
+  if (window.PT_ENABLE_CAPITAL_RETURNS_CLIENT !== true) return null;
+  if (typeof window.runCapitalReturnsProbe !== 'function') return null;
+  try {
+    return await window.runCapitalReturnsProbe(sym);
+  } catch (e) {
+    console.warn('[PT][CapReturns][scan] probe threw for ' + sym + ': ' + (e && e.message || e));
+    return null;
+  }
+}
+
 // ── analyzeChunk ─────────────────────────────────────────────────────────────
 async function analyzeChunk(batch, today) {
   // Enforce single-ticker mode — split multi-ticker into sequential single runs
