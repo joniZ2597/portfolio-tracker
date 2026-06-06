@@ -2509,6 +2509,7 @@ async function analyzeChunk(batch, today) {
     if (d) console.log(`[PT] Market OK: ${sym} $${d.price} ${d.change_percent}% [${d.source}]`);
     else   console.warn(`[PT] Market MISS: ${sym}`);
   });
+  const _crFetchPromise9B = _crFetchForScan(batch[0]); // 9B-2B: fire CR prefetch in parallel with Perplexity/Anthropic
   const stockContext = formatStockContext(stockData);
 
   // Phase 6A-1: Compute technical snapshot before Anthropic call
@@ -2748,6 +2749,7 @@ async function analyzeChunk(batch, today) {
     batch.forEach(sym => { if (window._pplxDebug && window._pplxDebug[sym]) window._pplxDebug[sym].fallbackUsed = true; });
   }
 
+  await Promise.allSettled([_crFetchPromise9B]); // 9B-2B: settle CR prefetch before nudge; side-effect only, never throws
   const orchestrated = orchestrate(raw, pplxData, stockData);
 
   // 7B-3D0: mirror the memory-only debug accumulator into _lastRunState for ergonomic access
