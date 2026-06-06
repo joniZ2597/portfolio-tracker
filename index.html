@@ -5028,9 +5028,34 @@ function _renderCapitalReturnsPanel(cr) {
     return html;
   }
 
-  const s = cr.summary || {};
+  const s   = cr.summary || {};
   const fmt = v => v != null ? '$' + (v / 1e9).toFixed(2) + 'B' : '—';
-  html += `<div style="display:flex;gap:20px;margin-bottom:10px;flex-wrap:wrap">
+
+  // Improvement 1: human-readable gap message map (used in gap section below)
+  function crGapMsg(g) {
+    const key = (g.signalType || '') + '/' + (g.reason || '');
+    const msgs = {
+      'authorization_remaining/concept_absent':            'Active buyback balance not disclosed in XBRL — see latest 8-K or press release',
+      'authorization_new/concept_absent':                  'New buyback authorization not tagged in XBRL — may appear in press release or 8-K',
+      'repurchases_executed/concept_absent':               'No buyback cash flows found in XBRL annual filings',
+      'repurchases_executed/no_qualifying_entries':        'No buyback cash flows found in XBRL annual filings',
+      'dividends_paid/concept_absent':                     'No dividend cash flows found in XBRL annual filings',
+      'dividends_paid/no_qualifying_entries':              'No dividend cash flows found in XBRL annual filings',
+      'dividend_declared_per_share/concept_absent':        'Per-share dividend rate not tagged in XBRL filings',
+      'dividend_declared_per_share/no_qualifying_entries': 'No dividend per-share data found in XBRL filings',
+    };
+    return msgs[key] || esc(g.signalType || 'Unknown signal') + ' not found in XBRL filings — check SEC filings directly';
+  }
+
+  // Improvement 3: unique fiscal years across annual buyback/dividend rows (avoids double-counting)
+  const _fySet = new Set([
+    ...(cr.buybacks  || []).map(e => e.fiscalYear).filter(Boolean),
+    ...(cr.dividends || []).map(e => e.fiscalYear).filter(Boolean),
+  ]);
+  const _fyRange   = (s.oldestFiscalYear && s.newestFiscalYear) ? `FY${s.oldestFiscalYear}–FY${s.newestFiscalYear}` : '';
+  const _fyPeriods = _fySet.size > 0 ? `${_fySet.size} annual period${_fySet.size !== 1 ? 's' : ''}` : '';
+
+  html += `<div style="display:flex;gap:20px;margin-bottom:4px;flex-wrap:wrap">
     <div><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Total Buybacks</div>
       <div style="font-family:var(--mono);font-size:11px;color:var(--text1)">${fmt(s.totalBuybacksUSD)}</div></div>
     <div><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Total Dividends</div>
@@ -5039,13 +5064,25 @@ function _renderCapitalReturnsPanel(cr) {
       <div style="font-family:var(--mono);font-size:11px;color:var(--text1)">${fmt(s.totalCapitalReturnedUSD)}</div></div>
     ${s.latestDividendPerShare != null ? `<div><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Div/Share</div>
       <div style="font-family:var(--mono);font-size:11px;color:var(--text1)">${Number.isFinite(+s.latestDividendPerShare) ? '$' + +s.latestDividendPerShare : esc(String(s.latestDividendPerShare))}<span style="font-size:8px;color:var(--text3)"> (${esc(s.latestDividendPerSharePeriod || '')})</span></div></div>` : ''}
-    ${s.latestRemainingAuthorizationUSD != null ? `<div><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Remaining Auth</div>
-      <div style="font-family:var(--mono);font-size:11px;color:var(--text1)">${fmt(s.latestRemainingAuthorizationUSD)}</div></div>` : ''}
+    <div><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">Remaining Auth</div>
+      <div style="font-family:var(--mono);font-size:11px;color:${s.latestRemainingAuthorizationUSD != null ? 'var(--text1)' : 'var(--text3)'}" title="${s.latestRemainingAuthorizationUSD == null ? 'Not disclosed in XBRL filings' : ''}">${s.latestRemainingAuthorizationUSD != null ? fmt(s.latestRemainingAuthorizationUSD) : '&#x2014;'}</div></div>
     </div>`;
+  if (_fyRange || _fyPeriods) {
+    html += `<div style="font-family:var(--mono);font-size:8px;color:var(--text3);margin-bottom:10px">${[_fyRange, _fyPeriods].filter(Boolean).join(' \xb7 ')}</div>`;
+  }
 
+  // Improvement 2: section-level provenance badge (three states); per-row badge removed
   function evidenceRows(arr, label, valKey) {
     if (!arr || !arr.length) return '';
-    let t = `<div style="margin-bottom:8px"><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">${label}</div>`;
+    const _verCount     = arr.filter(e => e.verificationStatus === 'xbrl_primary' && e.source_type === 'xbrl_companyfacts').length;
+    const _allVerified  = _verCount === arr.length;
+    const _noneVerified = _verCount === 0;
+    const sectionBadge  = _allVerified
+      ? `<span style="font-family:var(--mono);font-size:8px;color:var(--green2);margin-left:8px">&#x2713; XBRL PRIMARY</span>`
+      : _noneVerified
+        ? `<span style="font-family:var(--mono);font-size:8px;color:var(--text3);margin-left:8px">UNVERIFIED &#x2014; REVIEW FILINGS</span>`
+        : `<span style="font-family:var(--mono);font-size:8px;color:var(--yellow2);margin-left:8px">MIXED PROVENANCE</span>`;
+    let t = `<div style="margin-bottom:8px"><div style="display:flex;align-items:center;margin-bottom:4px"><span style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">${label}</span>${sectionBadge}</div>`;
     for (const e of arr) {
       const val = e[valKey] != null
         ? (valKey === 'valuePerShare'
@@ -5056,15 +5093,10 @@ function _renderCapitalReturnsPanel(cr) {
       const link = safeUrl
         ? `<a href="${esc(safeUrl)}" target="_blank" rel="noopener" style="font-family:var(--mono);font-size:8px;color:var(--accent)">${esc(e.accessionNumber || 'filing')}</a>`
         : (e.accessionNumber ? `<span style="font-family:var(--mono);font-size:8px">${esc(e.accessionNumber)}</span>` : '—');
-      const isVerified = e.verificationStatus === 'xbrl_primary' && e.source_type === 'xbrl_companyfacts';
-      const provenanceBadge = isVerified
-        ? `<span style="font-family:var(--mono);font-size:8px;color:var(--green2)">✓ ${esc(e.verificationStatus)} · ${esc(e.source_type)}</span>`
-        : `<span style="font-family:var(--mono);font-size:8px;color:var(--text3)">${esc(e.verificationStatus || 'unverified')}</span>`;
       t += `<div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-bottom:2px">
         <span style="font-family:var(--mono);font-size:9px;color:var(--text1);min-width:44px">FY${esc(String(e.fiscalYear))}${e.fiscalPeriod && e.fiscalPeriod !== 'FY' ? ' ' + esc(e.fiscalPeriod) : ''}</span>
         <span style="font-family:var(--mono);font-size:10px;color:var(--text1)">${val}</span>
         <span style="font-family:var(--mono);font-size:8px;color:var(--text3)">${esc(e.signalType || '')}</span>
-        ${provenanceBadge}
         ${link}
         ${e.filed ? `<span style="font-family:var(--mono);font-size:8px;color:var(--text3)">filed ${esc(e.filed)}</span>` : ''}
         </div>`;
@@ -5087,12 +5119,15 @@ function _renderCapitalReturnsPanel(cr) {
   html += evidenceRows(cr.dividendsPerShare, 'Dividend / Share Declared', 'valuePerShare');
   html += evidenceRows(cr.authorizations,    'Buyback Authorizations',    'valueUSD');
 
+  // Improvement 1: humanized gap messages + title tooltip with raw debug context + filing-lag footnote
   const gaps = s.xbrlGaps || [];
   if (gaps.length) {
-    html += `<div style="margin-top:8px"><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">XBRL Coverage Gaps</div>`;
+    html += `<div style="margin-top:8px"><div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Data Gaps</div>`;
     for (const g of gaps) {
-      html += `<div style="font-family:var(--mono);font-size:8px;color:var(--text3);margin-bottom:2px">⚠ ${esc(g.signalType)} — ${esc(g.reason)}: ${esc(g.detail)}</div>`;
+      const _gRaw = esc((g.signalType || '') + ' — ' + (g.reason || '') + ': ' + (g.detail || ''));
+      html += `<div style="font-family:var(--mono);font-size:8px;color:var(--text3);margin-bottom:2px" title="${_gRaw}">&#x26A0; ${crGapMsg(g)}</div>`;
     }
+    html += `<div style="font-family:var(--mono);font-size:8px;color:var(--text3);margin-top:4px">XBRL reflects filed 10-K/10-Q disclosures. New announcements appear with a ~90&#x2011;day filing lag.</div>`;
     html += '</div>';
   }
 
