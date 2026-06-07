@@ -236,6 +236,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .ph-rating-chip.pos{color:var(--green2)}
 .ph-rating-chip.neg{color:var(--red2)}
 .ph-rating-chip.neutral-v{color:var(--text2)}
+.ph-rating-chip.warn{color:var(--yellow2)}
+.ph-rating-chip.err{color:var(--red2);border-color:rgba(248,113,113,.3)}
+.pwl-status-badge{font-family:var(--mono);font-size:7px;font-weight:700;letter-spacing:.5px;padding:1px 5px;border-radius:2px;border:1px solid;white-space:nowrap;flex-shrink:0;margin-left:4px}
 /* Extended-hours row (pre / after-hours) */
 .ph-ext-row{display:flex;align-items:baseline;gap:8px;padding:2px 20px 8px}
 .ph-ext-price{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--text)}
@@ -1353,6 +1356,7 @@ Object.defineProperty(window, 'tickers', {
   configurable: true,
 });
 let results = JSON.parse(localStorage.getItem('pt_results') || '[]');
+const _mktFailCache = {}; // display-only session flag: true=known failure, false=known success, absent=unchecked
 // Phase 4: remove obsolete client-side secret keys (idempotent, one-time)
 ['pt_apikey', 'pt_pplxkey', 'pt_avkey'].forEach(function(k) { localStorage.removeItem(k); });
 
@@ -1574,6 +1578,8 @@ async function fetchBatchStockData(symbols) {
   results.forEach((r, i) => {
     if (r.status === 'fulfilled' && r.value) map[symbols[i]] = r.value;
   });
+  // Record scan-time outcome — read only by display/render functions, never by scoring
+  results.forEach((r, i) => { _mktFailCache[symbols[i]] = !(r.status === 'fulfilled' && r.value); });
   return map; // { AAPL: {...}, NVDA: {...}, ... }
 }
 
@@ -3457,7 +3463,15 @@ function renderWatchlistRows(scanResults) {
     const sub     = name
       ? (hint ? name.slice(0,14) + ' · ' + hint : name.slice(0,22))
       : hint;
-    const active  = (typeof _activeTicker !== 'undefined') && _activeTicker === sym;
+    const active      = (typeof _activeTicker !== 'undefined') && _activeTicker === sym;
+    const _mktFailed  = _mktFailCache[sym] === true;
+    const _hasResPrice = res && typeof res._verifiedPrice === 'number' && res._verifiedPrice > 0;
+    // Amber ⚠ when cache says failed but stale stored price exists; red ⊘ when scan result has no price
+    const _badge = _mktFailed && _hasResPrice
+      ? `<span class="pwl-status-badge" style="color:var(--yellow2);border-color:rgba(252,211,77,.25);background:rgba(252,211,77,.06)" title="Market data fetch failed — price may be stale">⚠</span>`
+      : res && !_hasResPrice
+        ? `<span class="pwl-status-badge" style="color:var(--red2);border-color:rgba(248,113,113,.25);background:rgba(248,113,113,.06)" title="Data unavailable">⊘</span>`
+        : '';
 
     return `<div class="pwl-row${active ? ' active' : ''}" id="pwl-${sym}" onclick="selectTicker('${sym}')">
       <div class="pwl-cb" onclick="event.stopPropagation()">
@@ -3469,6 +3483,7 @@ function renderWatchlistRows(scanResults) {
         ${sub ? `<span class="pwl-name">${sub}</span>` : ''}
       </div>
       <span class="pwl-chg ${chgCls}">${chgStr}</span>
+      ${_badge}
       <span class="pwl-dots" onclick="openTickerMenu('${sym}', event)" title="More options">···</span>
     </div>`;
   }).join('');
@@ -3541,6 +3556,7 @@ function selectTicker(ticker) {
 
 async function _refreshPriceRow(ticker) {
   const mkt = await fetchStockData(ticker).catch(() => null);
+  _mktFailCache[ticker] = !mkt; // display-only; clears on success, sets on failure
   if (mkt && mkt.source === 'yahoo' && mkt.marketState) {
     _extendedMktCache[ticker] = {
       marketState:             mkt.marketState,
@@ -3554,6 +3570,7 @@ async function _refreshPriceRow(ticker) {
   } else {
     delete _extendedMktCache[ticker];
   }
+  renderWatchlistRows(); // refresh row badges to reflect updated _mktFailCache state
   selectTicker(ticker);
 }
 
@@ -3664,7 +3681,8 @@ function renderMainPanel(item) {
   const rCls   = rating.toLowerCase()==='buy'?'pos':rating.toLowerCase()==='sell'?'neg':'neutral-v';
 
   // Data-quality flag — gates all derived technical/RS/volume metrics
-  const hasData = hasVerifiedMarketData(item);
+  const hasData    = hasVerifiedMarketData(item);
+  const _mktFailed = _mktFailCache[item.ticker] === true; // display-only; never read by scoring
 
   // Setup grade — removed from header in Phase 2b; kept as dead vars to avoid refactor
   // of lower body panels that may still reference sc/sg (safe: not rendered in header)
@@ -4004,23 +4022,35 @@ function renderMainPanel(item) {
         ${(dataSource && lastUpdated) ? `<span style="color:var(--border2);margin:0 5px">·</span>` : ''}
         ${lastUpdated ? `<span class="ph-updated">updated ${lastUpdated}</span>` : ''}
         <div class="ph-spacer"></div>
-        ${item.action ? `<span class="ph-rating-chip ${rCls}">RATING · ${rating.toUpperCase()}</span>` : ''}
+        ${item.action && hasData && !_mktFailed
+          ? `<span class="ph-rating-chip ${rCls}">RATING · ${rating.toUpperCase()}</span>`
+          : item.action && _mktFailed && hasData
+            ? `<span class="ph-rating-chip warn">NEEDS REVIEW</span>`
+            : item.action && !hasData
+              ? `<span class="ph-rating-chip err">DATA UNAVAILABLE</span>`
+              : ''}
         <div class="ph-mkt-pill ${mktCls}"><div class="ph-mkt-dot"></div>${mktLabel}</div>
         <button class="ph-refresh" title="Refresh" onclick="_refreshPriceRow('${item.ticker}')">↻</button>
       </div>
       ${hasData && _showExt && _extPrice !== null ? `<div class="ph-ext-row"><span class="ph-ext-price">$${_extPrice.toFixed(2)}</span>${_extChgPct !== null ? `<span class="ph-ext-chg ${_extChgPct >= 0 ? 'pos' : 'neg'}">${_extChgPct >= 0 ? '+' : ''}${_extChgPct.toFixed(2)}%</span>` : ''}<span class="ph-ext-lbl">${_ms === 'PRE' ? 'Pre-market' : 'After-hours'}</span></div>` : ''}
     </div>
 
-    ${!hasData ? `
+    ${!hasData && item._aiUnavailable ? `
+    <div class="dq-warn" style="background:rgba(220,38,38,.07);border-bottom-color:rgba(248,113,113,.25)">
+      <span class="dq-warn-icon" style="color:var(--red2)">⊘</span>
+      <span class="dq-warn-text" style="color:var(--red2)">Data unavailable — market data and AI analysis both failed. Re-run scan to refresh, or remove this ticker if invalid.</span>
+    </div>` : !hasData ? `
     <div class="dq-warn">
       <span class="dq-warn-icon">⚠</span>
       <span class="dq-warn-text">Verified price unavailable — analysis based on research context only. Technical, RS, and volume metrics are not shown.</span>
-    </div>` : ''}
-
-    ${item._aiUnavailable ? `
+    </div>` : item._aiUnavailable ? `
     <div class="dq-warn">
       <span class="dq-warn-icon">⚠</span>
       <span class="dq-warn-text">AI analysis unavailable — market data shown only. Technical panels reflect verified price and candle data.</span>
+    </div>` : _mktFailed ? `
+    <div class="dq-warn">
+      <span class="dq-warn-icon">⚠</span>
+      <span class="dq-warn-text">Market data could not be retrieved — live price may be stale. Press ↻ to retry or re-run scan.</span>
     </div>` : ''}
 
     <!-- POSITION BANNER — always rendered above grid (7A-2 / 7A-3) -->
@@ -4110,7 +4140,9 @@ function renderMainPanel(item) {
             ${item.conflict        ? `<div class="mp-act-row mp-act-conflict"><span class="mp-act-lbl">⚠ Conflict</span><span class="mp-act-val" style="color:var(--yellow2)">${_esc(item.conflict)}</span></div>` : ''}
           </div>` : actionable ? `
           <div class="mp-action-text">${actionable.replace(/Rating:.*$/s,'').replace(/\*\*/g,'').replace(/^[\]\[:\-"'\s]+/,'').trim()}</div>
-        ` : '<div class="pc-empty">No analysis available — run scan for actionable take</div>'}
+        ` : !hasData && item._aiUnavailable
+            ? '<div class="pc-empty" style="color:var(--red2);opacity:.8">Data unavailable — run scan to refresh or verify ticker validity</div>'
+            : '<div class="pc-empty">No analysis available — run scan for actionable take</div>'}
         <div class="mp-action-time" style="margin-top:8px">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
       </div>
 
@@ -5524,11 +5556,8 @@ function init() {
   }
 }
 
-// 7B-6E-6: auto-enable EDGAR Insider UI on branch-dev preview host only.
+// EDGAR Insider UI: set window.PT_ENABLE_EDGAR_FORM4 = true in DevTools to enable (branch-dev only).
 // Server gate (PT_ENABLE_EDGAR_FORM4_SERVER) remains the real safety boundary.
-if (window.location.hostname === 'branch-dev--portfoliotrk.netlify.app') {
-  window.PT_ENABLE_EDGAR_FORM4 = true;
-}
 init();
 // ─────────────────────────────────────────────────────────────────────────────
 
