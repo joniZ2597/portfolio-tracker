@@ -3570,6 +3570,7 @@ async function _refreshPriceRow(ticker) {
   } else {
     delete _extendedMktCache[ticker];
   }
+  renderWatchlistRows(); // refresh row badges to reflect updated _mktFailCache state
   selectTicker(ticker);
 }
 
