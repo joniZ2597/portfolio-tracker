@@ -5556,11 +5556,8 @@ function init() {
   }
 }
 
-// 7B-6E-6: auto-enable EDGAR Insider UI on branch-dev preview host only.
+// EDGAR Insider UI: set window.PT_ENABLE_EDGAR_FORM4 = true in DevTools to enable (branch-dev only).
 // Server gate (PT_ENABLE_EDGAR_FORM4_SERVER) remains the real safety boundary.
-if (window.location.hostname === 'branch-dev--portfoliotrk.netlify.app') {
-  window.PT_ENABLE_EDGAR_FORM4 = true;
-}
 init();
 // ─────────────────────────────────────────────────────────────────────────────
 
