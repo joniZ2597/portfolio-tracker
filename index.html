@@ -4151,6 +4151,9 @@ function renderMainPanel(item) {
             ${item.technical_setup ? `<div class="mp-act-row"><span class="mp-act-lbl">Setup</span><span class="mp-act-val">${_esc(item.technical_setup).replace(/_/g,' ')}</span></div>` : ''}
             ${item.action          ? `<div class="mp-act-row"><span class="mp-act-lbl">Action</span><span class="mp-act-val">${_esc(item.action).replace(/_/g,' ')}</span></div>` : ''}
             ${item.conflict        ? `<div class="mp-act-row mp-act-conflict"><span class="mp-act-lbl">⚠ Conflict</span><span class="mp-act-val" style="color:var(--yellow2)">${_esc(item.conflict)}</span></div>` : ''}
+            ${item.entry_zone      ? `<div class="mp-act-row"><span class="mp-act-lbl">Entry Zone</span><span class="mp-act-val">${_esc(item.entry_zone)}</span></div>` : ''}
+            ${item.invalidation    ? `<div class="mp-act-row"><span class="mp-act-lbl">Invalidation</span><span class="mp-act-val">${_esc(item.invalidation)}</span></div>` : ''}
+            ${item.key_risk        ? `<div class="mp-act-row"><span class="mp-act-lbl">Key Risk</span><span class="mp-act-val">${_esc(item.key_risk)}</span></div>` : ''}
           </div>` : actionable ? `
           <div class="mp-action-text">${actionable.replace(/Rating:.*$/s,'').replace(/\*\*/g,'').replace(/^[\]\[:\-"'\s]+/,'').trim()}</div>
         ` : !hasData && item._aiUnavailable
@@ -4192,12 +4195,6 @@ function renderMainPanel(item) {
       <!-- KEY LEVELS (Entry / Invalidation / Risk) — span 6 -->
       <div id="kl-card" class="pc-card pc-span-6${_klCardCollapsed ? ' collapsed' : ''}">
         <div class="pc-card-title">Key Levels <span class="ts-chevron">${_klCardCollapsed ? '▶' : '▼'}</span></div>
-        ${item.action ? `
-          <div>
-            ${item.entry_zone   ? `<div class="mp-act-row"><span class="mp-act-lbl">Entry Zone</span><span class="mp-act-val">${_esc(item.entry_zone)}</span></div>` : ''}
-            ${item.invalidation ? `<div class="mp-act-row"><span class="mp-act-lbl">Invalidation</span><span class="mp-act-val">${_esc(item.invalidation)}</span></div>` : ''}
-            ${item.key_risk     ? `<div class="mp-act-row"><span class="mp-act-lbl">Key Risk</span><span class="mp-act-val">${_esc(item.key_risk)}</span></div>` : ''}
-          </div>` : '<div class="pc-empty">Run analysis for key levels</div>'}
         ${hasData ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
           <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val ${riskCls}">${riskState.replace(' RISK','')}</span></div>
           <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val ${score>=65?'pos':score>=48?'neutral-v':'neg'}">${score>=65?'HIGH':score>=48?'MODERATE':'LIMITED'}</span></div>
