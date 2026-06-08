@@ -643,6 +643,10 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pc-card-title{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
 .pc-card-sub{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-top:-8px;margin-bottom:10px}
 .cat-hdr{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-bottom:6px}
+#ts-card .pc-card-title{cursor:pointer;user-select:none}
+.ts-chevron{display:inline-block;float:right;transition:transform 120ms;color:var(--text3);font-size:10px}
+#ts-card.collapsed .ts-chevron{transform:rotate(-90deg)}
+#ts-card.collapsed>:not(.pc-card-title){display:none}
 .nd-list{display:flex;flex-direction:column;gap:2px}.nd-row{display:flex;align-items:flex-start;gap:6px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.4)}.nd-row:last-child{border-bottom:none}.nd-tag{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--text3);letter-spacing:.5px;min-width:68px;padding-top:2px;flex-shrink:0}.nd-txt{font-size:12px;color:var(--text2);line-height:1.45;flex:1}
 .pc-empty{font-family:var(--mono);font-size:10px;color:var(--text3);font-style:italic}
 /* ─── TOP-LEVEL NAV ───────────────────────────── */
@@ -2774,6 +2778,7 @@ async function analyzeChunk(batch, today) {
 // ── COCKPIT STATE ─────────────────────────────────────────
 let _cockpitResults = [];
 let _activeTicker   = null;
+let _tsCardCollapsed = true; // in-memory only; resets on reload
 
 // ─── Phase 2a: Pulse sidebar functions ───────────────────────────────────────
 
@@ -4063,8 +4068,8 @@ function renderMainPanel(item) {
     <div class="pulse-grid">
 
       <!-- TECHNICAL SETUP — span 6 -->
-      <div class="pc-card pc-span-6">
-        <div class="pc-card-title">Technical Setup</div>
+      <div id="ts-card" class="pc-card pc-span-6${_tsCardCollapsed ? ' collapsed' : ''}">
+        <div class="pc-card-title">Technical Setup <span class="ts-chevron">&#9660;</span></div>
         ${!hasData ? '<div class="pc-empty">No verified price data — MA levels unavailable</div>' :
           snap.hasMA20 === undefined ? '<div class="pc-empty">Loading candle data…</div>' :
         `<div class="mp-ma-table">
@@ -4236,6 +4241,16 @@ ${window.PT_ENABLE_EDGAR_FORM4 === true ? `
       <div id="edgar-dd-panel-${item.ticker}" style="display:none;margin-top:10px"></div>
     </div>` : ''}
   `; /* Deep Dive deferred to v1.2 — not rendered */
+  _initTsCard();
+}
+
+function _initTsCard() {
+  const card = document.getElementById('ts-card');
+  if (!card) return;
+  card.querySelector('.pc-card-title').onclick = function() {
+    _tsCardCollapsed = !_tsCardCollapsed;
+    card.classList.toggle('collapsed', _tsCardCollapsed);
+  };
 }
 
 // ============================================================================
