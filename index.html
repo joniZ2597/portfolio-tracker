@@ -643,6 +643,15 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pc-card-title{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px}
 .pc-card-sub{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-top:-8px;margin-bottom:10px}
 .cat-hdr{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-bottom:6px}
+#ts-card .pc-card-title{cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center}
+.ts-chevron{display:inline-block;color:var(--text3);font-size:10px;flex-shrink:0}
+#ts-card.collapsed>:not(.pc-card-title){display:none}
+#ts-card.collapsed{align-self:start}
+#ts-card.collapsed .pc-card-title{margin-bottom:0}
+#sig-card .pc-card-title,#cmp-card .pc-card-title,#kl-card .pc-card-title{cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center}
+#sig-card.collapsed>:not(.pc-card-title),#cmp-card.collapsed>:not(.pc-card-title),#kl-card.collapsed>:not(.pc-card-title){display:none}
+#sig-card.collapsed,#cmp-card.collapsed,#kl-card.collapsed{align-self:start}
+#sig-card.collapsed .pc-card-title,#cmp-card.collapsed .pc-card-title,#kl-card.collapsed .pc-card-title{margin-bottom:0}
 .nd-list{display:flex;flex-direction:column;gap:2px}.nd-row{display:flex;align-items:flex-start;gap:6px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.4)}.nd-row:last-child{border-bottom:none}.nd-tag{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--text3);letter-spacing:.5px;min-width:68px;padding-top:2px;flex-shrink:0}.nd-txt{font-size:12px;color:var(--text2);line-height:1.45;flex:1}
 .pc-empty{font-family:var(--mono);font-size:10px;color:var(--text3);font-style:italic}
 /* ─── TOP-LEVEL NAV ───────────────────────────── */
@@ -2774,6 +2783,10 @@ async function analyzeChunk(batch, today) {
 // ── COCKPIT STATE ─────────────────────────────────────────
 let _cockpitResults = [];
 let _activeTicker   = null;
+let _tsCardCollapsed = true; // in-memory only; resets on reload
+let _sigCardCollapsed = true;
+let _cmpCardCollapsed = true;
+let _klCardCollapsed  = true;
 
 // ─── Phase 2a: Pulse sidebar functions ───────────────────────────────────────
 
@@ -4063,8 +4076,8 @@ function renderMainPanel(item) {
     <div class="pulse-grid">
 
       <!-- TECHNICAL SETUP — span 6 -->
-      <div class="pc-card pc-span-6">
-        <div class="pc-card-title">Technical Setup</div>
+      <div id="ts-card" class="pc-card pc-span-6${_tsCardCollapsed ? ' collapsed' : ''}">
+        <div class="pc-card-title">Technical Setup <span class="ts-chevron">${_tsCardCollapsed ? '▶' : '▼'}</span></div>
         ${!hasData ? '<div class="pc-empty">No verified price data — MA levels unavailable</div>' :
           snap.hasMA20 === undefined ? '<div class="pc-empty">Loading candle data…</div>' :
         `<div class="mp-ma-table">
@@ -4092,8 +4105,8 @@ function renderMainPanel(item) {
       </div>
 
       <!-- SIGNALS (Volume + Catalysts) — span 6 -->
-      <div class="pc-card pc-span-6">
-        <div class="pc-card-title">Signals</div>
+      <div id="sig-card" class="pc-card pc-span-6${_sigCardCollapsed ? ' collapsed' : ''}">
+        <div class="pc-card-title">Signals <span class="ts-chevron">${_sigCardCollapsed ? '▶' : '▼'}</span></div>
         ${!hasData ? '<div class="pc-empty">No verified price data — volume metrics unavailable</div>' :
           snap.candleCount === undefined ? '<div class="pc-empty">Loading candle data…</div>' :
         `<div class="vol-table">
@@ -4147,8 +4160,8 @@ function renderMainPanel(item) {
       </div>
 
       <!-- COMPARISON (RS + Rating) — span 6 -->
-      <div class="pc-card pc-span-6">
-        <div class="pc-card-title">Comparison</div>
+      <div id="cmp-card" class="pc-card pc-span-6${_cmpCardCollapsed ? ' collapsed' : ''}">
+        <div class="pc-card-title">Comparison <span class="ts-chevron">${_cmpCardCollapsed ? '▶' : '▼'}</span></div>
         <div class="pc-card-sub">3-month performance vs benchmarks</div>
         ${!hasData ? '<div class="pc-empty">No verified price data — RS unavailable</div>' :
           snap.candleCount === undefined ? '<div class="pc-empty">Loading candle data…</div>' :
@@ -4177,8 +4190,8 @@ function renderMainPanel(item) {
       </div>
 
       <!-- KEY LEVELS (Entry / Invalidation / Risk) — span 6 -->
-      <div class="pc-card pc-span-6">
-        <div class="pc-card-title">Key Levels</div>
+      <div id="kl-card" class="pc-card pc-span-6${_klCardCollapsed ? ' collapsed' : ''}">
+        <div class="pc-card-title">Key Levels <span class="ts-chevron">${_klCardCollapsed ? '▶' : '▼'}</span></div>
         ${item.action ? `
           <div>
             ${item.entry_zone   ? `<div class="mp-act-row"><span class="mp-act-lbl">Entry Zone</span><span class="mp-act-val">${_esc(item.entry_zone)}</span></div>` : ''}
@@ -4236,6 +4249,47 @@ ${window.PT_ENABLE_EDGAR_FORM4 === true ? `
       <div id="edgar-dd-panel-${item.ticker}" style="display:none;margin-top:10px"></div>
     </div>` : ''}
   `; /* Deep Dive deferred to v1.2 — not rendered */
+  _initTsCard();
+  _initSigCard();
+  _initCmpCard();
+  _initKlCard();
+}
+
+function _initTsCard() {
+  const card = document.getElementById('ts-card');
+  if (!card) return;
+  card.querySelector('.pc-card-title').onclick = function() {
+    _tsCardCollapsed = !_tsCardCollapsed;
+    card.classList.toggle('collapsed', _tsCardCollapsed);
+    card.querySelector('.ts-chevron').textContent = _tsCardCollapsed ? '▶' : '▼';
+  };
+}
+function _initSigCard() {
+  const card = document.getElementById('sig-card');
+  if (!card) return;
+  card.querySelector('.pc-card-title').onclick = function() {
+    _sigCardCollapsed = !_sigCardCollapsed;
+    card.classList.toggle('collapsed', _sigCardCollapsed);
+    card.querySelector('.ts-chevron').textContent = _sigCardCollapsed ? '▶' : '▼';
+  };
+}
+function _initCmpCard() {
+  const card = document.getElementById('cmp-card');
+  if (!card) return;
+  card.querySelector('.pc-card-title').onclick = function() {
+    _cmpCardCollapsed = !_cmpCardCollapsed;
+    card.classList.toggle('collapsed', _cmpCardCollapsed);
+    card.querySelector('.ts-chevron').textContent = _cmpCardCollapsed ? '▶' : '▼';
+  };
+}
+function _initKlCard() {
+  const card = document.getElementById('kl-card');
+  if (!card) return;
+  card.querySelector('.pc-card-title').onclick = function() {
+    _klCardCollapsed = !_klCardCollapsed;
+    card.classList.toggle('collapsed', _klCardCollapsed);
+    card.querySelector('.ts-chevron').textContent = _klCardCollapsed ? '▶' : '▼';
+  };
 }
 
 // ============================================================================
