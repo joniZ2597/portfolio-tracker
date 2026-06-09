@@ -677,8 +677,8 @@ select.edit-inp{appearance:none;cursor:pointer}
 /* ─── PORTFOLIO PANEL (Slice 1B-1: Add Position) ────────────────── */
 .btn-add-position{font-family:var(--mono);font-size:9px;font-weight:700;background:var(--blue);color:#fff;border:none;border-radius:3px;padding:5px 10px;cursor:pointer;flex-shrink:0}
 .btn-add-position:hover{background:#1D4ED8}
-#addPositionOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center}
-#addPositionOverlay.open{display:flex}
+#addPositionOverlay,#editPositionOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center}
+#addPositionOverlay.open,#editPositionOverlay.open{display:flex}
 .ap-modal{background:var(--card);border:1px solid var(--border);border-radius:8px;width:340px;max-width:95vw;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.6)}
 .ap-modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 12px;border-bottom:1px solid var(--border)}
 .ap-modal-title{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px}
@@ -693,6 +693,11 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-pos-card{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 14px}
 .pf-pos-sym{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)}
 .pf-pos-meta{font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:.4px;margin-top:3px}
+.pf-pos-card-actions{display:flex;gap:8px;margin-top:10px}
+.btn-pf-edit{font-family:var(--mono);font-size:9px;color:var(--text2);background:none;border:1px solid var(--border2);border-radius:3px;padding:4px 9px;cursor:pointer}
+.btn-pf-edit:hover{color:var(--text);border-color:var(--text3)}
+.btn-pf-delete{font-family:var(--mono);font-size:9px;color:var(--text3);background:none;border:1px solid var(--border2);border-radius:3px;padding:4px 9px;cursor:pointer}
+.btn-pf-delete:hover{color:var(--red2);border-color:var(--red2)}
 </style>
 </head>
 <body>
@@ -4427,6 +4432,19 @@ function _renderPortfolioPanel() {
       meta.textContent = h.shares + ' shares · avg cost $' + Number(h.avgCost).toFixed(2);
       card.appendChild(symEl);
       card.appendChild(meta);
+      var cardActions = document.createElement('div');
+      cardActions.className = 'pf-pos-card-actions';
+      var editBtn = document.createElement('button');
+      editBtn.className   = 'btn-pf-edit';
+      editBtn.textContent = 'Edit';
+      editBtn.onclick     = function(){ openEditPositionModal(sym); };
+      var delBtn = document.createElement('button');
+      delBtn.className   = 'btn-pf-delete';
+      delBtn.textContent = 'Delete';
+      delBtn.onclick     = function(){ deletePosition(sym); };
+      cardActions.appendChild(editBtn);
+      cardActions.appendChild(delBtn);
+      card.appendChild(cardActions);
       list.appendChild(card);
     });
     panel.appendChild(list);
@@ -4559,6 +4577,152 @@ function saveAddPosition() {
     warnEl.textContent = sym + ' already existed — position updated.';
   }
   closeAddPositionModal();
+  _renderPortfolioPanel();
+}
+
+// ─── Portfolio / Holdings — Slice 1B-2: Edit & Delete Position ───────────────
+
+var _editPosSym = null;
+
+function openEditPositionModal(sym) {
+  var overlay  = document.getElementById('editPositionOverlay');
+  var modal    = document.getElementById('editPositionModal');
+  if (!overlay || !modal) return;
+  var holdings = loadHoldings();
+  var h        = holdings[sym];
+  if (!h) return;
+  _editPosSym    = sym;
+  modal.innerHTML = '';
+
+  var hdr = document.createElement('div');
+  hdr.className = 'ap-modal-hdr';
+
+  var titleWrap = document.createElement('div');
+  titleWrap.style.cssText = 'display:flex;align-items:center;gap:0';
+
+  var titleEl = document.createElement('span');
+  titleEl.className   = 'ap-modal-title';
+  titleEl.textContent = 'Edit Position';
+
+  var symSpan = document.createElement('span');
+  symSpan.className   = 'edit-modal-sym';
+  symSpan.textContent = sym;
+
+  var closeBtn = document.createElement('button');
+  closeBtn.className   = 'api-close-btn';
+  closeBtn.textContent = '✕';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.onclick     = closeEditPositionModal;
+
+  titleWrap.appendChild(titleEl);
+  titleWrap.appendChild(symSpan);
+  hdr.appendChild(titleWrap);
+  hdr.appendChild(closeBtn);
+
+  var body = document.createElement('div');
+  body.className = 'ap-modal-body';
+
+  function _epField(labelText, inputId, placeholder, currentVal) {
+    var row = document.createElement('div');
+    row.className = 'ap-field-row';
+    var lbl = document.createElement('label');
+    lbl.className   = 'ap-lbl';
+    lbl.textContent = labelText;
+    lbl.htmlFor     = inputId;
+    var inp = document.createElement('input');
+    inp.id          = inputId;
+    inp.type        = 'text';
+    inp.className   = 'ap-inp';
+    inp.placeholder = placeholder;
+    inp.value       = currentVal !== undefined ? String(currentVal) : '';
+    row.appendChild(lbl);
+    row.appendChild(inp);
+    return row;
+  }
+
+  body.appendChild(_epField('Shares',       'apEditShares',  'e.g. 10',     h.shares));
+  body.appendChild(_epField('Avg Cost ($)', 'apEditAvgCost', 'e.g. 175.50', h.avgCost));
+
+  var warn = document.createElement('div');
+  warn.id        = 'apEditWarnMsg';
+  warn.className = 'ap-warn';
+  body.appendChild(warn);
+
+  var actions = document.createElement('div');
+  actions.className = 'ap-actions';
+
+  var cancelBtn = document.createElement('button');
+  cancelBtn.className   = 'btn-edit-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick     = closeEditPositionModal;
+
+  var saveBtn = document.createElement('button');
+  saveBtn.className   = 'btn-edit-save';
+  saveBtn.textContent = 'Save';
+  saveBtn.onclick     = saveEditPosition;
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(saveBtn);
+
+  modal.appendChild(hdr);
+  modal.appendChild(body);
+  modal.appendChild(actions);
+
+  overlay.classList.add('open');
+  document.addEventListener('keydown', _onEditPositionEscape);
+
+  setTimeout(function() { var f = document.getElementById('apEditShares'); if (f) f.focus(); }, 30);
+}
+
+function _onEditPositionEscape(e) {
+  if (e.key === 'Escape') closeEditPositionModal();
+}
+
+function closeEditPositionModal() {
+  var overlay = document.getElementById('editPositionOverlay');
+  if (overlay) overlay.classList.remove('open');
+  _editPosSym = null;
+  document.removeEventListener('keydown', _onEditPositionEscape);
+}
+
+function saveEditPosition() {
+  var sharesInp  = document.getElementById('apEditShares');
+  var avgCostInp = document.getElementById('apEditAvgCost');
+  var warnEl     = document.getElementById('apEditWarnMsg');
+  if (!sharesInp || !avgCostInp || !warnEl || !_editPosSym) return;
+  warnEl.textContent = '';
+
+  var shares  = parseFloat(sharesInp.value.trim());
+  var avgCost = parseFloat(avgCostInp.value.trim());
+
+  if (!isFinite(shares) || shares <= 0) {
+    warnEl.textContent = 'Shares must be a number greater than 0.';
+    sharesInp.focus();
+    return;
+  }
+  if (!isFinite(avgCost) || avgCost <= 0) {
+    warnEl.textContent = 'Avg cost must be a number greater than 0.';
+    avgCostInp.focus();
+    return;
+  }
+
+  var holdings = loadHoldings();
+  if (!Object.prototype.hasOwnProperty.call(holdings, _editPosSym)) {
+    warnEl.textContent = 'Position no longer exists.';
+    return;
+  }
+  holdings[_editPosSym].shares  = shares;
+  holdings[_editPosSym].avgCost = avgCost;
+  saveHoldings(holdings);
+  closeEditPositionModal();
+  _renderPortfolioPanel();
+}
+
+function deletePosition(sym) {
+  if (!confirm('Remove ' + sym + ' from your portfolio?')) return;
+  var holdings = loadHoldings();
+  delete holdings[sym];
+  saveHoldings(holdings);
   _renderPortfolioPanel();
 }
 
@@ -6166,6 +6330,11 @@ async function checkAllApis() {
       </table>
     </div>
   </div>
+</div>
+
+<!-- EDIT POSITION MODAL — content built by openEditPositionModal() via DOM methods -->
+<div id="editPositionOverlay" onclick="if(event.target===this)closeEditPositionModal()">
+  <div class="ap-modal" id="editPositionModal"></div>
 </div>
 
 <!-- ADD POSITION MODAL — content built by openAddPositionModal() via DOM methods -->
