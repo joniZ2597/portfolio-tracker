@@ -668,12 +668,31 @@ select.edit-inp{appearance:none;cursor:pointer}
 .app-nav-tab.nav-clickable:hover:not(.active){color:var(--text2)}
 /* ─── PORTFOLIO PANEL (Slice 1A) ────────────────── */
 #portfolioPanel{padding:24px}
-.pf-panel-hdr{margin-bottom:20px}
+.pf-panel-hdr{margin-bottom:20px;display:flex;align-items:flex-start;justify-content:space-between}
 .pf-panel-title{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px}
 .pf-panel-count{font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:.5px;margin-top:4px}
 .pf-empty{text-align:center;padding:48px 20px}
 .pf-empty-icon{font-family:var(--mono);font-size:26px;color:var(--border2);margin-bottom:14px}
 .pf-empty-text{font-family:var(--mono);font-size:11px;color:var(--text3);letter-spacing:.5px}
+/* ─── PORTFOLIO PANEL (Slice 1B-1: Add Position) ────────────────── */
+.btn-add-position{font-family:var(--mono);font-size:9px;font-weight:700;background:var(--blue);color:#fff;border:none;border-radius:3px;padding:5px 10px;cursor:pointer;flex-shrink:0}
+.btn-add-position:hover{background:#1D4ED8}
+#addPositionOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center}
+#addPositionOverlay.open{display:flex}
+.ap-modal{background:var(--card);border:1px solid var(--border);border-radius:8px;width:340px;max-width:95vw;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.6)}
+.ap-modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 12px;border-bottom:1px solid var(--border)}
+.ap-modal-title{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px}
+.ap-modal-body{padding:16px;display:flex;flex-direction:column}
+.ap-field-row{display:flex;flex-direction:column;gap:4px;margin-bottom:14px}
+.ap-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+.ap-inp{background:var(--bg);border:1px solid var(--border2);border-radius:3px;color:var(--text);font-family:var(--mono);font-size:13px;padding:7px 9px;outline:none;width:100%;box-sizing:border-box}
+.ap-inp:focus{border-color:var(--blue2)}
+.ap-warn{font-family:var(--mono);font-size:9px;color:var(--yellow2);margin-top:8px;min-height:13px}
+.ap-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
+.pf-positions-list{display:flex;flex-direction:column;gap:8px}
+.pf-pos-card{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 14px}
+.pf-pos-sym{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)}
+.pf-pos-meta{font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:.4px;margin-top:3px}
 </style>
 </head>
 <body>
@@ -4359,16 +4378,26 @@ function _renderPortfolioPanel() {
   var count    = Object.keys(holdings).length;
   panel.innerHTML = '';
 
-  var hdr   = document.createElement('div');
+  var hdr = document.createElement('div');
   hdr.className = 'pf-panel-hdr';
-  var title = document.createElement('div');
+
+  var hdrLeft = document.createElement('div');
+  var title   = document.createElement('div');
   title.className   = 'pf-panel-title';
   title.textContent = 'Portfolio';
   var countEl = document.createElement('div');
   countEl.className   = 'pf-panel-count';
   countEl.textContent = count === 0 ? 'No positions' : count + (count === 1 ? ' position' : ' positions');
-  hdr.appendChild(title);
-  hdr.appendChild(countEl);
+  hdrLeft.appendChild(title);
+  hdrLeft.appendChild(countEl);
+
+  var addBtn = document.createElement('button');
+  addBtn.className   = 'btn-add-position';
+  addBtn.textContent = '＋ Add Position';
+  addBtn.onclick     = openAddPositionModal;
+
+  hdr.appendChild(hdrLeft);
+  hdr.appendChild(addBtn);
   panel.appendChild(hdr);
 
   if (count === 0) {
@@ -4383,8 +4412,156 @@ function _renderPortfolioPanel() {
     empty.appendChild(icon);
     empty.appendChild(txt);
     panel.appendChild(empty);
+  } else {
+    var list = document.createElement('div');
+    list.className = 'pf-positions-list';
+    Object.keys(holdings).sort().forEach(function(sym) {
+      var h    = holdings[sym];
+      var card = document.createElement('div');
+      card.className = 'pf-pos-card';
+      var symEl = document.createElement('div');
+      symEl.className   = 'pf-pos-sym';
+      symEl.textContent = sym;
+      var meta = document.createElement('div');
+      meta.className   = 'pf-pos-meta';
+      meta.textContent = h.shares + ' shares · avg cost $' + Number(h.avgCost).toFixed(2);
+      card.appendChild(symEl);
+      card.appendChild(meta);
+      list.appendChild(card);
+    });
+    panel.appendChild(list);
   }
 }
+
+// ─── Portfolio / Holdings — Slice 1B-1: Add Position ─────────────────────────
+
+function openAddPositionModal() {
+  var overlay = document.getElementById('addPositionOverlay');
+  var modal   = document.getElementById('addPositionModal');
+  if (!overlay || !modal) return;
+  modal.innerHTML = '';
+
+  var hdr = document.createElement('div');
+  hdr.className = 'ap-modal-hdr';
+
+  var titleEl = document.createElement('span');
+  titleEl.className   = 'ap-modal-title';
+  titleEl.textContent = 'Add Position';
+
+  var closeBtn = document.createElement('button');
+  closeBtn.className   = 'api-close-btn';
+  closeBtn.textContent = '✕';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.onclick     = closeAddPositionModal;
+
+  hdr.appendChild(titleEl);
+  hdr.appendChild(closeBtn);
+
+  var body = document.createElement('div');
+  body.className = 'ap-modal-body';
+
+  function _apField(labelText, inputId, placeholder) {
+    var row = document.createElement('div');
+    row.className = 'ap-field-row';
+    var lbl = document.createElement('label');
+    lbl.className   = 'ap-lbl';
+    lbl.textContent = labelText;
+    lbl.htmlFor     = inputId;
+    var inp = document.createElement('input');
+    inp.id          = inputId;
+    inp.type        = 'text';
+    inp.className   = 'ap-inp';
+    inp.placeholder = placeholder;
+    row.appendChild(lbl);
+    row.appendChild(inp);
+    return row;
+  }
+
+  body.appendChild(_apField('Symbol',       'apSymbol',  'e.g. AAPL'));
+  body.appendChild(_apField('Shares',       'apShares',  'e.g. 10'));
+  body.appendChild(_apField('Avg Cost ($)', 'apAvgCost', 'e.g. 175.50'));
+
+  var warn = document.createElement('div');
+  warn.id        = 'apWarnMsg';
+  warn.className = 'ap-warn';
+  body.appendChild(warn);
+
+  var actions = document.createElement('div');
+  actions.className = 'ap-actions';
+
+  var cancelBtn = document.createElement('button');
+  cancelBtn.className   = 'btn-edit-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick     = closeAddPositionModal;
+
+  var saveBtn = document.createElement('button');
+  saveBtn.className   = 'btn-edit-save';
+  saveBtn.textContent = 'Save';
+  saveBtn.onclick     = saveAddPosition;
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(saveBtn);
+
+  modal.appendChild(hdr);
+  modal.appendChild(body);
+  modal.appendChild(actions);
+
+  overlay.classList.add('open');
+  document.addEventListener('keydown', _onAddPositionEscape);
+
+  setTimeout(function() { var f = document.getElementById('apSymbol'); if (f) f.focus(); }, 30);
+}
+
+function _onAddPositionEscape(e) {
+  if (e.key === 'Escape') closeAddPositionModal();
+}
+
+function closeAddPositionModal() {
+  var overlay = document.getElementById('addPositionOverlay');
+  if (overlay) overlay.classList.remove('open');
+  document.removeEventListener('keydown', _onAddPositionEscape);
+}
+
+function saveAddPosition() {
+  var symInp     = document.getElementById('apSymbol');
+  var sharesInp  = document.getElementById('apShares');
+  var avgCostInp = document.getElementById('apAvgCost');
+  var warnEl     = document.getElementById('apWarnMsg');
+  if (!symInp || !sharesInp || !avgCostInp || !warnEl) return;
+  warnEl.textContent = '';
+
+  var sym     = symInp.value.trim().toUpperCase();
+  var shares  = parseFloat(sharesInp.value.trim());
+  var avgCost = parseFloat(avgCostInp.value.trim());
+
+  if (!/^[A-Z]{1,10}$/.test(sym)) {
+    warnEl.textContent = 'Symbol must be 1–10 letters (A–Z only).';
+    symInp.focus();
+    return;
+  }
+  if (!isFinite(shares) || shares <= 0) {
+    warnEl.textContent = 'Shares must be a number greater than 0.';
+    sharesInp.focus();
+    return;
+  }
+  if (!isFinite(avgCost) || avgCost <= 0) {
+    warnEl.textContent = 'Avg cost must be a number greater than 0.';
+    avgCostInp.focus();
+    return;
+  }
+
+  var holdings    = loadHoldings();
+  var isDuplicate = Object.prototype.hasOwnProperty.call(holdings, sym);
+  holdings[sym]   = { symbol: sym, shares: shares, avgCost: avgCost };
+  saveHoldings(holdings);
+
+  if (isDuplicate) {
+    warnEl.textContent = sym + ' already existed — position updated.';
+  }
+  closeAddPositionModal();
+  _renderPortfolioPanel();
+}
+
 // ════════════════════════════════════════════════════════════════════
 
 // ============================================================================
@@ -5989,6 +6166,11 @@ async function checkAllApis() {
       </table>
     </div>
   </div>
+</div>
+
+<!-- ADD POSITION MODAL — content built by openAddPositionModal() via DOM methods -->
+<div id="addPositionOverlay" onclick="if(event.target===this)closeAddPositionModal()">
+  <div class="ap-modal" id="addPositionModal"></div>
 </div>
 
 <!-- EDIT TICKER MODAL — content built by openEditModal() via DOM methods -->
