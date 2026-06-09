@@ -326,6 +326,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .cr-nudge-tag.pos{color:var(--green2)}
 .cr-nudge-tag.warn{color:var(--yellow2)}
 .cr-nudge-val{color:var(--text3)}
+.dc-row{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-family:var(--mono);font-size:10px}
+.dc-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;background:var(--text3)}
+.dc-dot.pos{background:var(--green2)}.dc-dot.warn{background:var(--yellow2)}.dc-dot.neg{background:var(--red2)}
+.dc-lbl{font-weight:600;letter-spacing:.4px}.dc-lbl.pos{color:var(--green2)}.dc-lbl.warn{color:var(--yellow2)}.dc-lbl.neg{color:var(--red2)}.dc-lbl.neutral-v{color:var(--text3)}
+.dc-reason{color:var(--text3)}
 /* 7A-2: Position Context card — render-only, derived from local watchlist position data */
 .mp-pos{display:flex;flex-direction:column;gap:6px;padding:12px 22px;border-top:1px solid var(--border);background:rgba(96,165,250,.04);border-left:4px solid var(--blue2)}
 .mp-pos.mode-fresh,.mp-pos.mode-unknown{border-left-color:var(--text3);background:transparent;opacity:.75}
@@ -4007,6 +4012,25 @@ function renderMainPanel(item) {
     return `<div class="cr-nudge-row"><span class="cr-nudge-tag ${_cls}">${_tag}</span><span class="cr-nudge-val">${_detail}</span></div>`;
   })() : '';
 
+  // 11A-1: Data Confidence — display-only, reads existing pt_results fields, no side effects
+  function deriveDataConfidence(it) {
+    const _c = it._catalysts || {};
+    const _hasCat = (_c.bullish && _c.bullish.length > 0) ||
+                    (_c.bearish && _c.bearish.length > 0) ||
+                    (_c.analystActions && _c.analystActions.length > 0);
+    if (it._aiUnavailable === true)
+      return { level: 'AI_UNAVAILABLE', label: 'AI unavailable',      reason: 'Stored market data is available, but AI analysis failed or fell back.', cls: 'neg' };
+    if (it._catalystDataMissing === true)
+      return { level: 'LIMITED',        label: 'Limited data',        reason: 'Catalyst/news context is missing or incomplete.', cls: 'warn' };
+    if (_hasCat)
+      return { level: 'HIGH',           label: 'High confidence',     reason: 'Market data and catalyst context are present.', cls: 'pos' };
+    if (it._auditTrail && it._auditTrail.sourceTrace)
+      return { level: 'MODERATE',       label: 'Moderate confidence', reason: 'Core analysis exists, but supporting catalyst richness is limited.', cls: 'warn' };
+    return   { level: 'MODERATE',       label: 'Moderate confidence', reason: 'Stored analysis is available; source detail is limited.', cls: 'warn' };
+  }
+  const _dc    = deriveDataConfidence(item);
+  const _dcHtml = `<div class="dc-row"><div class="dc-dot ${_dc.cls}"></div><span class="dc-lbl ${_dc.cls}">${_esc(_dc.label.toUpperCase())}</span><span class="dc-reason">${_esc(_dc.reason)}</span></div>`;
+
   panel.innerHTML = `
     <!-- PULSE v1.1 TICKER HEADER -->
     <div class="ph-bar">
@@ -4143,6 +4167,7 @@ function renderMainPanel(item) {
       <div class="pc-card pc-span-12">
         <div class="pc-card-title">${hasData ? 'Actionable Take' : 'Research-Context Analysis'}</div>
         ${(item.action || actionable) ? '<div class="pc-card-sub">AI-generated analysis · Verify independently</div>' : ''}
+        ${_dcHtml}
         ${_dialHtml}
         ${_crNudgeHtml}
         ${item.action ? `
