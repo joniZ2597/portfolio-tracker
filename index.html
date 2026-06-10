@@ -4355,8 +4355,21 @@ function _initKlCard() {
 // scoring engines, scan flow, Actionable Take, or any existing key.
 
 function loadHoldings() {
-  try { return JSON.parse(localStorage.getItem('pt_holdings') || '{}'); }
-  catch(e) { console.warn('[portfolio] loadHoldings parse error:', e.message); return {}; }
+  var raw = localStorage.getItem('pt_holdings');
+  if (raw === null) return {};
+  var parsed;
+  try { parsed = JSON.parse(raw); }
+  catch(e) { localStorage.removeItem('pt_holdings'); return {}; }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    localStorage.removeItem('pt_holdings'); return {};
+  }
+  var valid = Object.values(parsed).every(function(h) {
+    return h !== null && typeof h === 'object' && !Array.isArray(h) &&
+           typeof h.symbol === 'string' && /^[A-Z]{1,10}$/.test(h.symbol) &&
+           typeof h.positionSize === 'number' && isFinite(h.positionSize) && h.positionSize > 0;
+  });
+  if (!valid) { localStorage.removeItem('pt_holdings'); return {}; }
+  return parsed;
 }
 
 function saveHoldings(h) {
@@ -4429,7 +4442,7 @@ function _renderPortfolioPanel() {
       symEl.textContent = sym;
       var meta = document.createElement('div');
       meta.className   = 'pf-pos-meta';
-      meta.textContent = h.shares + ' shares · avg cost $' + Number(h.avgCost).toFixed(2);
+      meta.textContent = '$' + Number(h.positionSize).toFixed(2) + ' invested';
       card.appendChild(symEl);
       card.appendChild(meta);
       var cardActions = document.createElement('div');
@@ -4495,9 +4508,8 @@ function openAddPositionModal() {
     return row;
   }
 
-  body.appendChild(_apField('Symbol',       'apSymbol',  'e.g. AAPL'));
-  body.appendChild(_apField('Shares',       'apShares',  'e.g. 10'));
-  body.appendChild(_apField('Avg Cost ($)', 'apAvgCost', 'e.g. 175.50'));
+  body.appendChild(_apField('Symbol',       'apSymbol',   'e.g. AAPL'));
+  body.appendChild(_apField('Invested ($)', 'apInvested', 'e.g. 5000'));
 
   var warn = document.createElement('div');
   warn.id        = 'apWarnMsg';
@@ -4541,36 +4553,29 @@ function closeAddPositionModal() {
 }
 
 function saveAddPosition() {
-  var symInp     = document.getElementById('apSymbol');
-  var sharesInp  = document.getElementById('apShares');
-  var avgCostInp = document.getElementById('apAvgCost');
-  var warnEl     = document.getElementById('apWarnMsg');
-  if (!symInp || !sharesInp || !avgCostInp || !warnEl) return;
+  var symInp      = document.getElementById('apSymbol');
+  var investedInp = document.getElementById('apInvested');
+  var warnEl      = document.getElementById('apWarnMsg');
+  if (!symInp || !investedInp || !warnEl) return;
   warnEl.textContent = '';
 
-  var sym     = symInp.value.trim().toUpperCase();
-  var shares  = parseFloat(sharesInp.value.trim());
-  var avgCost = parseFloat(avgCostInp.value.trim());
+  var sym          = symInp.value.trim().toUpperCase();
+  var positionSize = parseFloat(investedInp.value.trim());
 
   if (!/^[A-Z]{1,10}$/.test(sym)) {
     warnEl.textContent = 'Symbol must be 1–10 letters (A–Z only).';
     symInp.focus();
     return;
   }
-  if (!isFinite(shares) || shares <= 0) {
-    warnEl.textContent = 'Shares must be a number greater than 0.';
-    sharesInp.focus();
-    return;
-  }
-  if (!isFinite(avgCost) || avgCost <= 0) {
-    warnEl.textContent = 'Avg cost must be a number greater than 0.';
-    avgCostInp.focus();
+  if (!isFinite(positionSize) || positionSize <= 0) {
+    warnEl.textContent = 'Invested amount must be a number greater than 0.';
+    investedInp.focus();
     return;
   }
 
   var holdings    = loadHoldings();
   var isDuplicate = Object.prototype.hasOwnProperty.call(holdings, sym);
-  holdings[sym]   = { symbol: sym, shares: shares, avgCost: avgCost };
+  holdings[sym]   = { symbol: sym, positionSize: positionSize };
   saveHoldings(holdings);
 
   if (isDuplicate) {
@@ -4640,8 +4645,7 @@ function openEditPositionModal(sym) {
     return row;
   }
 
-  body.appendChild(_epField('Shares',       'apEditShares',  'e.g. 10',     h.shares));
-  body.appendChild(_epField('Avg Cost ($)', 'apEditAvgCost', 'e.g. 175.50', h.avgCost));
+  body.appendChild(_epField('Invested ($)', 'apEditInvested', 'e.g. 5000', h.positionSize));
 
   var warn = document.createElement('div');
   warn.id        = 'apEditWarnMsg';
@@ -4671,7 +4675,7 @@ function openEditPositionModal(sym) {
   overlay.classList.add('open');
   document.addEventListener('keydown', _onEditPositionEscape);
 
-  setTimeout(function() { var f = document.getElementById('apEditShares'); if (f) f.focus(); }, 30);
+  setTimeout(function() { var f = document.getElementById('apEditInvested'); if (f) f.focus(); }, 30);
 }
 
 function _onEditPositionEscape(e) {
@@ -4686,23 +4690,16 @@ function closeEditPositionModal() {
 }
 
 function saveEditPosition() {
-  var sharesInp  = document.getElementById('apEditShares');
-  var avgCostInp = document.getElementById('apEditAvgCost');
-  var warnEl     = document.getElementById('apEditWarnMsg');
-  if (!sharesInp || !avgCostInp || !warnEl || !_editPosSym) return;
+  var investedInp = document.getElementById('apEditInvested');
+  var warnEl      = document.getElementById('apEditWarnMsg');
+  if (!investedInp || !warnEl || !_editPosSym) return;
   warnEl.textContent = '';
 
-  var shares  = parseFloat(sharesInp.value.trim());
-  var avgCost = parseFloat(avgCostInp.value.trim());
+  var positionSize = parseFloat(investedInp.value.trim());
 
-  if (!isFinite(shares) || shares <= 0) {
-    warnEl.textContent = 'Shares must be a number greater than 0.';
-    sharesInp.focus();
-    return;
-  }
-  if (!isFinite(avgCost) || avgCost <= 0) {
-    warnEl.textContent = 'Avg cost must be a number greater than 0.';
-    avgCostInp.focus();
+  if (!isFinite(positionSize) || positionSize <= 0) {
+    warnEl.textContent = 'Invested amount must be a number greater than 0.';
+    investedInp.focus();
     return;
   }
 
@@ -4711,8 +4708,7 @@ function saveEditPosition() {
     warnEl.textContent = 'Position no longer exists.';
     return;
   }
-  holdings[_editPosSym].shares  = shares;
-  holdings[_editPosSym].avgCost = avgCost;
+  holdings[_editPosSym].positionSize = positionSize;
   saveHoldings(holdings);
   closeEditPositionModal();
   _renderPortfolioPanel();
