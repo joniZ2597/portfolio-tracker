@@ -326,6 +326,11 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .cr-nudge-tag.pos{color:var(--green2)}
 .cr-nudge-tag.warn{color:var(--yellow2)}
 .cr-nudge-val{color:var(--text3)}
+.dc-row{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-family:var(--mono);font-size:10px}
+.dc-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;background:var(--text3)}
+.dc-dot.pos{background:var(--green2)}.dc-dot.warn{background:var(--yellow2)}.dc-dot.neg{background:var(--red2)}
+.dc-lbl{font-weight:600;letter-spacing:.4px}.dc-lbl.pos{color:var(--green2)}.dc-lbl.warn{color:var(--yellow2)}.dc-lbl.neg{color:var(--red2)}.dc-lbl.neutral-v{color:var(--text3)}
+.dc-reason{color:var(--text3)}
 /* 7A-2: Position Context card — render-only, derived from local watchlist position data */
 .mp-pos{display:flex;flex-direction:column;gap:6px;padding:12px 22px;border-top:1px solid var(--border);background:rgba(96,165,250,.04);border-left:4px solid var(--blue2)}
 .mp-pos.mode-fresh,.mp-pos.mode-unknown{border-left-color:var(--text3);background:transparent;opacity:.75}
@@ -659,6 +664,49 @@ select.edit-inp{appearance:none;cursor:pointer}
 .app-nav-tab{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--text3);background:none;border:none;border-bottom:2px solid transparent;padding:9px 14px;cursor:default;text-transform:uppercase;letter-spacing:.8px;margin-bottom:-1px}
 .app-nav-tab.active{color:var(--text);border-bottom-color:var(--blue2);cursor:default}
 .app-nav-tab.deferred{color:var(--text3);opacity:.38;cursor:default}
+.app-nav-tab.nav-clickable{cursor:pointer}
+.app-nav-tab.nav-clickable:hover:not(.active){color:var(--text2)}
+/* ─── PORTFOLIO PANEL (Slice 1A) ────────────────── */
+#portfolioPanel{padding:24px}
+.pf-panel-hdr{margin-bottom:20px;display:flex;align-items:flex-start;justify-content:space-between}
+.pf-panel-title{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px}
+.pf-panel-count{font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:.5px;margin-top:4px}
+.pf-empty{text-align:center;padding:48px 20px}
+.pf-empty-icon{font-family:var(--mono);font-size:26px;color:var(--border2);margin-bottom:14px}
+.pf-empty-text{font-family:var(--mono);font-size:11px;color:var(--text3);letter-spacing:.5px}
+/* ─── PORTFOLIO PANEL (Slice 1B-1: Add Position) ────────────────── */
+.btn-add-position{font-family:var(--mono);font-size:9px;font-weight:700;background:var(--blue);color:#fff;border:none;border-radius:3px;padding:5px 10px;cursor:pointer;flex-shrink:0}
+.btn-add-position:hover{background:#1D4ED8}
+#addPositionOverlay,#editPositionOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center}
+#addPositionOverlay.open,#editPositionOverlay.open{display:flex}
+.ap-modal{background:var(--card);border:1px solid var(--border);border-radius:8px;width:340px;max-width:95vw;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.6)}
+.ap-modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 12px;border-bottom:1px solid var(--border)}
+.ap-modal-title{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px}
+.ap-modal-body{padding:16px;display:flex;flex-direction:column}
+.ap-field-row{display:flex;flex-direction:column;gap:4px;margin-bottom:14px}
+.ap-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+.ap-inp{background:var(--bg);border:1px solid var(--border2);border-radius:3px;color:var(--text);font-family:var(--mono);font-size:13px;padding:7px 9px;outline:none;width:100%;box-sizing:border-box}
+.ap-inp:focus{border-color:var(--blue2)}
+.ap-warn{font-family:var(--mono);font-size:9px;color:var(--yellow2);margin-top:8px;min-height:13px}
+.ap-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
+.pf-positions-list{display:flex;flex-direction:column;gap:8px}
+.pf-pos-card{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:10px 14px}
+.pf-pos-sym{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--text)}
+.pf-pos-meta{font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:.4px;margin-top:3px}
+.pf-pos-card-actions{display:flex;gap:8px;margin-top:10px}
+.btn-pf-edit{font-family:var(--mono);font-size:9px;color:var(--text2);background:none;border:1px solid var(--border2);border-radius:3px;padding:4px 9px;cursor:pointer}
+.btn-pf-edit:hover{color:var(--text);border-color:var(--text3)}
+.btn-pf-delete{font-family:var(--mono);font-size:9px;color:var(--text3);background:none;border:1px solid var(--border2);border-radius:3px;padding:4px 9px;cursor:pointer}
+.btn-pf-delete:hover{color:var(--red2);border-color:var(--red2)}
+/* ─── PORTFOLIO PANEL (Slice 1B-3: Summary / Allocation) ─── */
+.pf-summary{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:12px 16px;margin-bottom:12px;display:flex;justify-content:space-between}
+.pf-summary-stat{display:flex;flex-direction:column;gap:4px}
+.pf-summary-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+.pf-summary-val{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--text)}
+.pf-pos-pl{font-family:var(--mono);font-size:10px;letter-spacing:.4px;margin-top:3px}
+.pf-pos-pl--pos{color:var(--green2)}
+.pf-pos-pl--neg{color:var(--red2)}
+.pf-pos-pl--zero{color:var(--text3)}
 </style>
 </head>
 <body>
@@ -680,8 +728,8 @@ select.edit-inp{appearance:none;cursor:pointer}
 
 <!-- TOP-LEVEL NAV -->
 <nav class="app-nav" aria-label="Primary views">
-  <span class="app-nav-tab active" aria-current="page">Watchlist / Research</span>
-  <span class="app-nav-tab deferred">Portfolio</span>
+  <button class="app-nav-tab nav-clickable active" data-view="research" onclick="switchMainView('research')" aria-current="page">Watchlist / Research</button>
+  <button class="app-nav-tab nav-clickable" data-view="portfolio" onclick="switchMainView('portfolio')">Portfolio</button>
   <span class="app-nav-tab deferred">Learn</span>
 </nav>
 
@@ -778,6 +826,8 @@ select.edit-inp{appearance:none;cursor:pointer}
     <div id="emptyState" style="display:none"></div>
     <div id="errorBox" class="error-box"></div>
     <div id="debugPanel" class="debug-panel"><div id="debugContent"></div></div>
+    <!-- PORTFOLIO PANEL (Slice 1A) — sibling to #mainPanel inside #mainPanelWrap -->
+    <div id="portfolioPanel" style="display:none"></div>
   </div>
 
 </div>
@@ -4007,6 +4057,25 @@ function renderMainPanel(item) {
     return `<div class="cr-nudge-row"><span class="cr-nudge-tag ${_cls}">${_tag}</span><span class="cr-nudge-val">${_detail}</span></div>`;
   })() : '';
 
+  // 11A-1: Data Confidence — display-only, reads existing pt_results fields, no side effects
+  function deriveDataConfidence(it) {
+    const _c = it._catalysts || {};
+    const _hasCat = (_c.bullish && _c.bullish.length > 0) ||
+                    (_c.bearish && _c.bearish.length > 0) ||
+                    (_c.analystActions && _c.analystActions.length > 0);
+    if (it._aiUnavailable === true)
+      return { level: 'AI_UNAVAILABLE', label: 'AI unavailable',      reason: 'Stored market data is available, but AI analysis failed or fell back.', cls: 'neg' };
+    if (it._catalystDataMissing === true)
+      return { level: 'LIMITED',        label: 'Limited data',        reason: 'Catalyst/news context is missing or incomplete.', cls: 'warn' };
+    if (_hasCat)
+      return { level: 'HIGH',           label: 'High confidence',     reason: 'Market data and catalyst context are present.', cls: 'pos' };
+    if (it._auditTrail && it._auditTrail.sourceTrace)
+      return { level: 'MODERATE',       label: 'Moderate confidence', reason: 'Core analysis exists, but supporting catalyst richness is limited.', cls: 'warn' };
+    return   { level: 'MODERATE',       label: 'Moderate confidence', reason: 'Stored analysis is available; source detail is limited.', cls: 'warn' };
+  }
+  const _dc    = deriveDataConfidence(item);
+  const _dcHtml = `<div class="dc-row"><div class="dc-dot ${_dc.cls}"></div><span class="dc-lbl ${_dc.cls}">${_esc(_dc.label.toUpperCase())}</span><span class="dc-reason">${_esc(_dc.reason)}</span></div>`;
+
   panel.innerHTML = `
     <!-- PULSE v1.1 TICKER HEADER -->
     <div class="ph-bar">
@@ -4143,6 +4212,7 @@ function renderMainPanel(item) {
       <div class="pc-card pc-span-12">
         <div class="pc-card-title">${hasData ? 'Actionable Take' : 'Research-Context Analysis'}</div>
         ${(item.action || actionable) ? '<div class="pc-card-sub">AI-generated analysis · Verify independently</div>' : ''}
+        ${_dcHtml}
         ${_dialHtml}
         ${_crNudgeHtml}
         ${item.action ? `
@@ -4288,6 +4358,460 @@ function _initKlCard() {
     card.querySelector('.ts-chevron').textContent = _klCardCollapsed ? '▶' : '▼';
   };
 }
+
+// ═══ Portfolio / Holdings — Slice 1A skeleton ════════════════════════════════
+// Storage: pt_holdings only. Never reads/writes pt_results, pt_tickers,
+// scoring engines, scan flow, Actionable Take, or any existing key.
+
+function loadHoldings() {
+  var raw = localStorage.getItem('pt_holdings');
+  if (raw === null) return {};
+  var parsed;
+  try { parsed = JSON.parse(raw); }
+  catch(e) { localStorage.removeItem('pt_holdings'); return {}; }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    localStorage.removeItem('pt_holdings'); return {};
+  }
+  var valid = Object.values(parsed).every(function(h) {
+    return h !== null && typeof h === 'object' && !Array.isArray(h) &&
+           typeof h.symbol === 'string' && /^[A-Z]{1,10}$/.test(h.symbol) &&
+           typeof h.positionSize === 'number' && isFinite(h.positionSize) && h.positionSize > 0 &&
+           (h.manualPlPct === undefined || h.manualPlPct === null ||
+            (typeof h.manualPlPct === 'number' && isFinite(h.manualPlPct)));
+  });
+  if (!valid) { localStorage.removeItem('pt_holdings'); return {}; }
+  return parsed;
+}
+
+function saveHoldings(h) {
+  localStorage.setItem('pt_holdings', JSON.stringify(h));
+}
+
+function switchMainView(view) {
+  document.querySelectorAll('.app-nav-tab[data-view]').forEach(function(t) {
+    var isThis = t.dataset.view === view;
+    t.classList.toggle('active', isThis);
+    t.setAttribute('aria-current', isThis ? 'page' : 'false');
+  });
+  var mainPanel = document.getElementById('mainPanel');
+  var pfPanel   = document.getElementById('portfolioPanel');
+  if (mainPanel) mainPanel.style.display = view === 'research'  ? '' : 'none';
+  if (pfPanel)   pfPanel.style.display   = view === 'portfolio' ? '' : 'none';
+  if (view === 'portfolio') _renderPortfolioPanel();
+}
+
+function _renderPortfolioPanel() {
+  var panel = document.getElementById('portfolioPanel');
+  if (!panel) return;
+  var holdings = loadHoldings();
+  var count    = Object.keys(holdings).length;
+  panel.innerHTML = '';
+
+  var hdr = document.createElement('div');
+  hdr.className = 'pf-panel-hdr';
+
+  var hdrLeft = document.createElement('div');
+  var title   = document.createElement('div');
+  title.className   = 'pf-panel-title';
+  title.textContent = 'Portfolio';
+  var countEl = document.createElement('div');
+  countEl.className   = 'pf-panel-count';
+  countEl.textContent = count === 0 ? 'No positions' : count + (count === 1 ? ' position' : ' positions');
+  hdrLeft.appendChild(title);
+  hdrLeft.appendChild(countEl);
+
+  var addBtn = document.createElement('button');
+  addBtn.className   = 'btn-add-position';
+  addBtn.textContent = '＋ Add Position';
+  addBtn.onclick     = openAddPositionModal;
+
+  hdr.appendChild(hdrLeft);
+  hdr.appendChild(addBtn);
+  panel.appendChild(hdr);
+
+  if (count === 0) {
+    var empty = document.createElement('div');
+    empty.className = 'pf-empty';
+    var icon = document.createElement('div');
+    icon.className   = 'pf-empty-icon';
+    icon.textContent = '[ ]';
+    var txt = document.createElement('div');
+    txt.className   = 'pf-empty-text';
+    txt.textContent = 'No positions yet. Add your first holding.';
+    empty.appendChild(icon);
+    empty.appendChild(txt);
+    panel.appendChild(empty);
+  } else {
+    var totalInvested = Object.values(holdings).reduce(function(s,h){ return s + h.positionSize; }, 0);
+
+    var summary = document.createElement('div');
+    summary.className = 'pf-summary';
+    var statPos = document.createElement('div');
+    statPos.className = 'pf-summary-stat';
+    var statPosLbl = document.createElement('div');
+    statPosLbl.className   = 'pf-summary-lbl';
+    statPosLbl.textContent = 'Positions';
+    var statPosVal = document.createElement('div');
+    statPosVal.className   = 'pf-summary-val';
+    statPosVal.textContent = String(count);
+    statPos.appendChild(statPosLbl);
+    statPos.appendChild(statPosVal);
+    var statInv = document.createElement('div');
+    statInv.className = 'pf-summary-stat';
+    var statInvLbl = document.createElement('div');
+    statInvLbl.className   = 'pf-summary-lbl';
+    statInvLbl.textContent = 'Total Invested';
+    var statInvVal = document.createElement('div');
+    statInvVal.className   = 'pf-summary-val';
+    statInvVal.textContent = '$' + totalInvested.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    statInv.appendChild(statInvLbl);
+    statInv.appendChild(statInvVal);
+    summary.appendChild(statPos);
+    summary.appendChild(statInv);
+    panel.appendChild(summary);
+
+    var list = document.createElement('div');
+    list.className = 'pf-positions-list';
+    Object.keys(holdings).sort().forEach(function(sym) {
+      var h    = holdings[sym];
+      var card = document.createElement('div');
+      card.className = 'pf-pos-card';
+      var symEl = document.createElement('div');
+      symEl.className   = 'pf-pos-sym';
+      symEl.textContent = sym;
+      var meta = document.createElement('div');
+      meta.className   = 'pf-pos-meta';
+      var allocPct = totalInvested > 0 ? (h.positionSize / totalInvested * 100).toFixed(1) + '%' : '—';
+      meta.textContent = '$' + Number(h.positionSize).toFixed(2) + ' invested · ' + allocPct;
+      card.appendChild(symEl);
+      card.appendChild(meta);
+      if (h.manualPlPct !== undefined && h.manualPlPct !== null) {
+        var plEl = document.createElement('div');
+        plEl.className = 'pf-pos-pl';
+        var prefix = h.manualPlPct > 0 ? '+' : '';
+        plEl.textContent = 'Manual P/L ' + prefix + Number(h.manualPlPct).toFixed(1) + '%';
+        if (h.manualPlPct > 0)      plEl.classList.add('pf-pos-pl--pos');
+        else if (h.manualPlPct < 0) plEl.classList.add('pf-pos-pl--neg');
+        else                        plEl.classList.add('pf-pos-pl--zero');
+        card.appendChild(plEl);
+      }
+      var cardActions = document.createElement('div');
+      cardActions.className = 'pf-pos-card-actions';
+      var editBtn = document.createElement('button');
+      editBtn.className   = 'btn-pf-edit';
+      editBtn.textContent = 'Edit';
+      editBtn.onclick     = function(){ openEditPositionModal(sym); };
+      var delBtn = document.createElement('button');
+      delBtn.className   = 'btn-pf-delete';
+      delBtn.textContent = 'Delete';
+      delBtn.onclick     = function(){ deletePosition(sym); };
+      cardActions.appendChild(editBtn);
+      cardActions.appendChild(delBtn);
+      card.appendChild(cardActions);
+      list.appendChild(card);
+    });
+    panel.appendChild(list);
+  }
+}
+
+// ─── Portfolio / Holdings — Slice 1B-1: Add Position ─────────────────────────
+
+function openAddPositionModal() {
+  var overlay = document.getElementById('addPositionOverlay');
+  var modal   = document.getElementById('addPositionModal');
+  if (!overlay || !modal) return;
+  modal.innerHTML = '';
+
+  var hdr = document.createElement('div');
+  hdr.className = 'ap-modal-hdr';
+
+  var titleEl = document.createElement('span');
+  titleEl.className   = 'ap-modal-title';
+  titleEl.textContent = 'Add Position';
+
+  var closeBtn = document.createElement('button');
+  closeBtn.className   = 'api-close-btn';
+  closeBtn.textContent = '✕';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.onclick     = closeAddPositionModal;
+
+  hdr.appendChild(titleEl);
+  hdr.appendChild(closeBtn);
+
+  var body = document.createElement('div');
+  body.className = 'ap-modal-body';
+
+  function _apField(labelText, inputId, placeholder) {
+    var row = document.createElement('div');
+    row.className = 'ap-field-row';
+    var lbl = document.createElement('label');
+    lbl.className   = 'ap-lbl';
+    lbl.textContent = labelText;
+    lbl.htmlFor     = inputId;
+    var inp = document.createElement('input');
+    inp.id          = inputId;
+    inp.type        = 'text';
+    inp.className   = 'ap-inp';
+    inp.placeholder = placeholder;
+    row.appendChild(lbl);
+    row.appendChild(inp);
+    return row;
+  }
+
+  body.appendChild(_apField('Symbol',           'apSymbol',   'e.g. AAPL'));
+  body.appendChild(_apField('Invested ($)',      'apInvested', 'e.g. 5000'));
+  body.appendChild(_apField('P/L % (optional)', 'apPlPct',    'e.g. 12.5 or -8.2'));
+
+  var warn = document.createElement('div');
+  warn.id        = 'apWarnMsg';
+  warn.className = 'ap-warn';
+  body.appendChild(warn);
+
+  var actions = document.createElement('div');
+  actions.className = 'ap-actions';
+
+  var cancelBtn = document.createElement('button');
+  cancelBtn.className   = 'btn-edit-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick     = closeAddPositionModal;
+
+  var saveBtn = document.createElement('button');
+  saveBtn.className   = 'btn-edit-save';
+  saveBtn.textContent = 'Save';
+  saveBtn.onclick     = saveAddPosition;
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(saveBtn);
+
+  modal.appendChild(hdr);
+  modal.appendChild(body);
+  modal.appendChild(actions);
+
+  overlay.classList.add('open');
+  document.addEventListener('keydown', _onAddPositionEscape);
+
+  setTimeout(function() { var f = document.getElementById('apSymbol'); if (f) f.focus(); }, 30);
+}
+
+function _onAddPositionEscape(e) {
+  if (e.key === 'Escape') closeAddPositionModal();
+}
+
+function closeAddPositionModal() {
+  var overlay = document.getElementById('addPositionOverlay');
+  if (overlay) overlay.classList.remove('open');
+  document.removeEventListener('keydown', _onAddPositionEscape);
+}
+
+function saveAddPosition() {
+  var symInp      = document.getElementById('apSymbol');
+  var investedInp = document.getElementById('apInvested');
+  var plPctInp    = document.getElementById('apPlPct');
+  var warnEl      = document.getElementById('apWarnMsg');
+  if (!symInp || !investedInp || !warnEl) return;
+  warnEl.textContent = '';
+
+  var sym          = symInp.value.trim().toUpperCase();
+  var positionSize = parseFloat(investedInp.value.trim());
+
+  if (!/^[A-Z]{1,10}$/.test(sym)) {
+    warnEl.textContent = 'Symbol must be 1–10 letters (A–Z only).';
+    symInp.focus();
+    return;
+  }
+  if (!isFinite(positionSize) || positionSize <= 0) {
+    warnEl.textContent = 'Invested amount must be a number greater than 0.';
+    investedInp.focus();
+    return;
+  }
+
+  var manualPlPct;
+  if (plPctInp) {
+    var plPctRaw = plPctInp.value.trim();
+    if (plPctRaw !== '') {
+      var plPctVal = parseFloat(plPctRaw);
+      if (!isFinite(plPctVal)) {
+        warnEl.textContent = 'P/L % must be a number (e.g. 12.5 or -8.2), or leave blank.';
+        plPctInp.focus();
+        return;
+      }
+      manualPlPct = plPctVal;
+    }
+  }
+
+  var holdings    = loadHoldings();
+  var isDuplicate = Object.prototype.hasOwnProperty.call(holdings, sym);
+  var entry       = { symbol: sym, positionSize: positionSize };
+  if (manualPlPct !== undefined) entry.manualPlPct = manualPlPct;
+  holdings[sym]   = entry;
+  saveHoldings(holdings);
+
+  if (isDuplicate) {
+    warnEl.textContent = sym + ' already existed — position updated.';
+  }
+  closeAddPositionModal();
+  _renderPortfolioPanel();
+}
+
+// ─── Portfolio / Holdings — Slice 1B-2: Edit & Delete Position ───────────────
+
+var _editPosSym = null;
+
+function openEditPositionModal(sym) {
+  var overlay  = document.getElementById('editPositionOverlay');
+  var modal    = document.getElementById('editPositionModal');
+  if (!overlay || !modal) return;
+  var holdings = loadHoldings();
+  var h        = holdings[sym];
+  if (!h) return;
+  _editPosSym    = sym;
+  modal.innerHTML = '';
+
+  var hdr = document.createElement('div');
+  hdr.className = 'ap-modal-hdr';
+
+  var titleWrap = document.createElement('div');
+  titleWrap.style.cssText = 'display:flex;align-items:center;gap:0';
+
+  var titleEl = document.createElement('span');
+  titleEl.className   = 'ap-modal-title';
+  titleEl.textContent = 'Edit Position';
+
+  var symSpan = document.createElement('span');
+  symSpan.className   = 'edit-modal-sym';
+  symSpan.textContent = sym;
+
+  var closeBtn = document.createElement('button');
+  closeBtn.className   = 'api-close-btn';
+  closeBtn.textContent = '✕';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.onclick     = closeEditPositionModal;
+
+  titleWrap.appendChild(titleEl);
+  titleWrap.appendChild(symSpan);
+  hdr.appendChild(titleWrap);
+  hdr.appendChild(closeBtn);
+
+  var body = document.createElement('div');
+  body.className = 'ap-modal-body';
+
+  function _epField(labelText, inputId, placeholder, currentVal) {
+    var row = document.createElement('div');
+    row.className = 'ap-field-row';
+    var lbl = document.createElement('label');
+    lbl.className   = 'ap-lbl';
+    lbl.textContent = labelText;
+    lbl.htmlFor     = inputId;
+    var inp = document.createElement('input');
+    inp.id          = inputId;
+    inp.type        = 'text';
+    inp.className   = 'ap-inp';
+    inp.placeholder = placeholder;
+    inp.value       = currentVal !== undefined ? String(currentVal) : '';
+    row.appendChild(lbl);
+    row.appendChild(inp);
+    return row;
+  }
+
+  body.appendChild(_epField('Invested ($)',      'apEditInvested', 'e.g. 5000',           h.positionSize));
+  body.appendChild(_epField('P/L % (optional)', 'apEditPlPct',    'e.g. 12.5 or -8.2',   h.manualPlPct));
+
+  var warn = document.createElement('div');
+  warn.id        = 'apEditWarnMsg';
+  warn.className = 'ap-warn';
+  body.appendChild(warn);
+
+  var actions = document.createElement('div');
+  actions.className = 'ap-actions';
+
+  var cancelBtn = document.createElement('button');
+  cancelBtn.className   = 'btn-edit-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick     = closeEditPositionModal;
+
+  var saveBtn = document.createElement('button');
+  saveBtn.className   = 'btn-edit-save';
+  saveBtn.textContent = 'Save';
+  saveBtn.onclick     = saveEditPosition;
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(saveBtn);
+
+  modal.appendChild(hdr);
+  modal.appendChild(body);
+  modal.appendChild(actions);
+
+  overlay.classList.add('open');
+  document.addEventListener('keydown', _onEditPositionEscape);
+
+  setTimeout(function() { var f = document.getElementById('apEditInvested'); if (f) f.focus(); }, 30);
+}
+
+function _onEditPositionEscape(e) {
+  if (e.key === 'Escape') closeEditPositionModal();
+}
+
+function closeEditPositionModal() {
+  var overlay = document.getElementById('editPositionOverlay');
+  if (overlay) overlay.classList.remove('open');
+  _editPosSym = null;
+  document.removeEventListener('keydown', _onEditPositionEscape);
+}
+
+function saveEditPosition() {
+  var investedInp = document.getElementById('apEditInvested');
+  var plPctInp    = document.getElementById('apEditPlPct');
+  var warnEl      = document.getElementById('apEditWarnMsg');
+  if (!investedInp || !warnEl || !_editPosSym) return;
+  warnEl.textContent = '';
+
+  var positionSize = parseFloat(investedInp.value.trim());
+
+  if (!isFinite(positionSize) || positionSize <= 0) {
+    warnEl.textContent = 'Invested amount must be a number greater than 0.';
+    investedInp.focus();
+    return;
+  }
+
+  var manualPlPct;
+  if (plPctInp) {
+    var plPctRaw = plPctInp.value.trim();
+    if (plPctRaw !== '') {
+      var plPctVal = parseFloat(plPctRaw);
+      if (!isFinite(plPctVal)) {
+        warnEl.textContent = 'P/L % must be a number (e.g. 12.5 or -8.2), or leave blank.';
+        plPctInp.focus();
+        return;
+      }
+      manualPlPct = plPctVal;
+    }
+  }
+
+  var holdings = loadHoldings();
+  if (!Object.prototype.hasOwnProperty.call(holdings, _editPosSym)) {
+    warnEl.textContent = 'Position no longer exists.';
+    return;
+  }
+  holdings[_editPosSym].positionSize = positionSize;
+  if (manualPlPct !== undefined) {
+    holdings[_editPosSym].manualPlPct = manualPlPct;
+  } else {
+    delete holdings[_editPosSym].manualPlPct;
+  }
+  saveHoldings(holdings);
+  closeEditPositionModal();
+  _renderPortfolioPanel();
+}
+
+function deletePosition(sym) {
+  if (!confirm('Remove ' + sym + ' from your portfolio?')) return;
+  var holdings = loadHoldings();
+  delete holdings[sym];
+  saveHoldings(holdings);
+  _renderPortfolioPanel();
+}
+
+// ════════════════════════════════════════════════════════════════════
 
 // ============================================================================
 // Phase 7B-6C-4: Deep Dive query-splitting retrieval (DEV-ONLY, default OFF).
@@ -5891,6 +6415,16 @@ async function checkAllApis() {
       </table>
     </div>
   </div>
+</div>
+
+<!-- EDIT POSITION MODAL — content built by openEditPositionModal() via DOM methods -->
+<div id="editPositionOverlay" onclick="if(event.target===this)closeEditPositionModal()">
+  <div class="ap-modal" id="editPositionModal"></div>
+</div>
+
+<!-- ADD POSITION MODAL — content built by openAddPositionModal() via DOM methods -->
+<div id="addPositionOverlay" onclick="if(event.target===this)closeAddPositionModal()">
+  <div class="ap-modal" id="addPositionModal"></div>
 </div>
 
 <!-- EDIT TICKER MODAL — content built by openEditModal() via DOM methods -->
