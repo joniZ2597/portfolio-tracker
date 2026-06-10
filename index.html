@@ -698,6 +698,11 @@ select.edit-inp{appearance:none;cursor:pointer}
 .btn-pf-edit:hover{color:var(--text);border-color:var(--text3)}
 .btn-pf-delete{font-family:var(--mono);font-size:9px;color:var(--text3);background:none;border:1px solid var(--border2);border-radius:3px;padding:4px 9px;cursor:pointer}
 .btn-pf-delete:hover{color:var(--red2);border-color:var(--red2)}
+/* ─── PORTFOLIO PANEL (Slice 1B-3: Summary / Allocation) ─── */
+.pf-summary{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:12px 16px;margin-bottom:12px;display:flex;justify-content:space-between}
+.pf-summary-stat{display:flex;flex-direction:column;gap:4px}
+.pf-summary-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+.pf-summary-val{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--text)}
 </style>
 </head>
 <body>
@@ -4431,6 +4436,34 @@ function _renderPortfolioPanel() {
     empty.appendChild(txt);
     panel.appendChild(empty);
   } else {
+    var totalInvested = Object.values(holdings).reduce(function(s,h){ return s + h.positionSize; }, 0);
+
+    var summary = document.createElement('div');
+    summary.className = 'pf-summary';
+    var statPos = document.createElement('div');
+    statPos.className = 'pf-summary-stat';
+    var statPosLbl = document.createElement('div');
+    statPosLbl.className   = 'pf-summary-lbl';
+    statPosLbl.textContent = 'Positions';
+    var statPosVal = document.createElement('div');
+    statPosVal.className   = 'pf-summary-val';
+    statPosVal.textContent = String(count);
+    statPos.appendChild(statPosLbl);
+    statPos.appendChild(statPosVal);
+    var statInv = document.createElement('div');
+    statInv.className = 'pf-summary-stat';
+    var statInvLbl = document.createElement('div');
+    statInvLbl.className   = 'pf-summary-lbl';
+    statInvLbl.textContent = 'Total Invested';
+    var statInvVal = document.createElement('div');
+    statInvVal.className   = 'pf-summary-val';
+    statInvVal.textContent = '$' + totalInvested.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    statInv.appendChild(statInvLbl);
+    statInv.appendChild(statInvVal);
+    summary.appendChild(statPos);
+    summary.appendChild(statInv);
+    panel.appendChild(summary);
+
     var list = document.createElement('div');
     list.className = 'pf-positions-list';
     Object.keys(holdings).sort().forEach(function(sym) {
@@ -4442,7 +4475,8 @@ function _renderPortfolioPanel() {
       symEl.textContent = sym;
       var meta = document.createElement('div');
       meta.className   = 'pf-pos-meta';
-      meta.textContent = '$' + Number(h.positionSize).toFixed(2) + ' invested';
+      var allocPct = totalInvested > 0 ? (h.positionSize / totalInvested * 100).toFixed(1) + '%' : '—';
+      meta.textContent = '$' + Number(h.positionSize).toFixed(2) + ' invested · ' + allocPct;
       card.appendChild(symEl);
       card.appendChild(meta);
       var cardActions = document.createElement('div');
