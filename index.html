@@ -910,6 +910,8 @@ const _extendedMktCache = {};
 // ── Portfolio runtime — session-only, never serialized, never merged into pt_holdings ──
 const _portfolioRuntime = {};
 let _portfolioFetching = false;
+let _portfolioFetchedAt = null;
+const PORTFOLIO_TTL_MS = 5 * 60 * 1000;
 
 // ── Pure math helpers ─────────────────────────────────────────────────────────
 
@@ -4605,8 +4607,14 @@ function _renderPortfolioPanel() {
     });
     panel.appendChild(list);
   }
-  if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true && count > 0 && !_portfolioFetching) {
-    _portfolioFetchPrices(Object.keys(holdings));
+  if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true && count > 0) {
+    var _pfSyms  = Object.keys(holdings);
+    var _pfFresh   = _portfolioFetchedAt !== null && (Date.now() - _portfolioFetchedAt) < PORTFOLIO_TTL_MS;
+    if (_pfFresh) {
+      _pfSyms.forEach(function(s) { _updatePortfolioCard(s, _portfolioRuntime[s] || null); });
+    } else if (!_portfolioFetching) {
+      _portfolioFetchPrices(_pfSyms);
+    }
   }
 }
 
@@ -4624,6 +4632,7 @@ async function _portfolioFetchPrices(syms) {
       if (map[sym]) _portfolioRuntime[sym] = map[sym];
       _updatePortfolioCard(sym, map[sym] || null);
     });
+    if (syms.some(function(s) { return map[s]; })) _portfolioFetchedAt = Date.now();
   } catch(e) {
     console.warn('[Portfolio] price fetch error:', e && e.message);
     syms.forEach(function(sym) { _updatePortfolioCard(sym, null); });
