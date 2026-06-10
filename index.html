@@ -713,6 +713,21 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-pos-mkt-chg--pos{color:var(--green2)}
 .pf-pos-mkt-chg--neg{color:var(--red2)}
 .pf-pos-mkt-chg--zero{color:var(--text3)}
+.pf-pos-research{display:flex;align-items:center;gap:5px;margin-top:4px;flex-wrap:wrap}
+.pf-res-state{font-family:var(--mono);font-size:9px;letter-spacing:.4px;padding:2px 5px;border-radius:2px;border:1px solid var(--border2);color:var(--text3)}
+.pf-res-state.found{color:var(--text2)}
+.pf-res-state.missing{font-style:italic}
+.pf-res-state.stale{color:var(--yellow2);border-color:rgba(244,184,96,.3)}
+.pf-res-state.unavail{color:var(--red2);border-color:rgba(248,113,113,.3)}
+.pf-res-score{font-family:var(--mono);font-size:9px;color:var(--text2);padding:2px 5px;border:1px solid var(--border2);border-radius:2px}
+.pf-res-score.pos{color:var(--green2)}
+.pf-res-score.warn{color:var(--yellow2)}
+.pf-res-score.neg{color:var(--red2)}
+.pf-res-rating{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.4px;color:var(--text3);padding:2px 5px;border:1px solid var(--border2);border-radius:2px}
+.pf-res-rating.pos{color:var(--green2)}
+.pf-res-rating.neg{color:var(--red2)}
+.pf-res-rating.neutral-v{color:var(--text3)}
+.pf-res-age{font-family:var(--mono);font-size:9px;color:var(--text3)}
 </style>
 </head>
 <body>
@@ -2988,6 +3003,13 @@ function _srSafeParseResults() {
   catch (_) { return []; }
 }
 
+function _getResearchForHolding(symbol) {
+  var source = (window._cockpitResults && window._cockpitResults.length)
+    ? window._cockpitResults
+    : _srSafeParseResults();
+  return source.find(function(r) { return r && r.ticker === symbol; }) || null;
+}
+
 function _updateViewResultsBtn() {
   const btn = document.getElementById('viewResultsBtn');
   if (!btn) return;
@@ -4514,6 +4536,57 @@ function _renderPortfolioPanel() {
         mktLoading.textContent = '…';
         mktEl.appendChild(mktLoading);
         card.appendChild(mktEl);
+      }
+      if (window.PT_ENABLE_PORTFOLIO_RESEARCH === true) {
+        var res = _getResearchForHolding(sym);
+        var resRow = document.createElement('div');
+        resRow.className = 'pf-pos-research';
+        if (!res) {
+          var resStEl = document.createElement('span');
+          resStEl.className = 'pf-res-state missing';
+          resStEl.textContent = 'No research';
+          resRow.appendChild(resStEl);
+        } else if (res._aiUnavailable === true) {
+          var resStEl = document.createElement('span');
+          resStEl.className = 'pf-res-state unavail';
+          resStEl.textContent = 'AI unavailable';
+          resRow.appendChild(resStEl);
+        } else {
+          var ts = res._timestamp || res._orchestratedAt || null;
+          var tsMs = ts ? new Date(ts).getTime() : NaN;
+          var ageMs = (ts && !isNaN(tsMs)) ? (Date.now() - tsMs) : null;
+          var isStale = (ageMs === null) || (ageMs > 48 * 60 * 60 * 1000);
+          var resStEl = document.createElement('span');
+          resStEl.className = 'pf-res-state ' + (isStale ? 'stale' : 'found');
+          resStEl.textContent = isStale ? (ageMs === null ? 'Legacy stale' : 'Stale') : 'Research';
+          resRow.appendChild(resStEl);
+          var scEl = document.createElement('span');
+          if (typeof res.sentiment_score === 'number') {
+            var score = res.sentiment_score;
+            var scoreCls = score >= 65 ? 'pos' : score >= 40 ? 'warn' : 'neg';
+            scEl.className = 'pf-res-score ' + scoreCls;
+            scEl.textContent = 'Score ' + score;
+          } else {
+            scEl.className = 'pf-res-score';
+            scEl.textContent = 'Score —';
+          }
+          resRow.appendChild(scEl);
+          var rM = (res.summary || '').match(/Rating:\s*(Buy|Neutral|Sell)/i);
+          if (rM) {
+            var rCls = rM[1].toLowerCase() === 'buy' ? 'pos' : rM[1].toLowerCase() === 'sell' ? 'neg' : 'neutral-v';
+            var rEl = document.createElement('span');
+            rEl.className = 'pf-res-rating ' + rCls;
+            rEl.textContent = rM[1].toUpperCase();
+            resRow.appendChild(rEl);
+          }
+          if (ageMs !== null) {
+            var ageEl = document.createElement('span');
+            ageEl.className = 'pf-res-age';
+            ageEl.textContent = Math.round(ageMs / 3600000) + 'h ago';
+            resRow.appendChild(ageEl);
+          }
+        }
+        card.appendChild(resRow);
       }
       var cardActions = document.createElement('div');
       cardActions.className = 'pf-pos-card-actions';
