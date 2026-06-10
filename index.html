@@ -4489,7 +4489,7 @@ function _renderPortfolioPanel() {
         var plEl = document.createElement('div');
         plEl.className = 'pf-pos-pl';
         var prefix = h.manualPlPct > 0 ? '+' : '';
-        plEl.textContent = 'P/L ' + prefix + Number(h.manualPlPct).toFixed(1) + '%';
+        plEl.textContent = 'Manual P/L ' + prefix + Number(h.manualPlPct).toFixed(1) + '%';
         if (h.manualPlPct > 0)      plEl.classList.add('pf-pos-pl--pos');
         else if (h.manualPlPct < 0) plEl.classList.add('pf-pos-pl--neg');
         else                        plEl.classList.add('pf-pos-pl--zero');
