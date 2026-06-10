@@ -707,6 +707,12 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-pos-pl--pos{color:var(--green2)}
 .pf-pos-pl--neg{color:var(--red2)}
 .pf-pos-pl--zero{color:var(--text3)}
+/* ─── PORTFOLIO PANEL (Slice 1C-1A: Runtime Price Bridge) ─── */
+.pf-pos-mkt{font-family:var(--mono);font-size:10px;letter-spacing:.4px;margin-top:3px;display:flex;gap:6px;align-items:baseline}
+.pf-pos-mkt-price{color:var(--text2)}
+.pf-pos-mkt-chg--pos{color:var(--green2)}
+.pf-pos-mkt-chg--neg{color:var(--red2)}
+.pf-pos-mkt-chg--zero{color:var(--text3)}
 </style>
 </head>
 <body>
@@ -885,6 +891,10 @@ const _techCache = {};
 
 // ── Extended-hours display cache — session-only, never serialized ────────────
 const _extendedMktCache = {};
+
+// ── Portfolio runtime — session-only, never serialized, never merged into pt_holdings ──
+const _portfolioRuntime = {};
+let _portfolioFetching = false;
 
 // ── Pure math helpers ─────────────────────────────────────────────────────────
 
@@ -4495,6 +4505,16 @@ function _renderPortfolioPanel() {
         else                        plEl.classList.add('pf-pos-pl--zero');
         card.appendChild(plEl);
       }
+      if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true) {
+        var mktEl      = document.createElement('div');
+        mktEl.id        = 'pf-mkt-' + sym;
+        mktEl.className = 'pf-pos-mkt';
+        var mktLoading  = document.createElement('span');
+        mktLoading.className   = 'pf-pos-mkt-price';
+        mktLoading.textContent = '…';
+        mktEl.appendChild(mktLoading);
+        card.appendChild(mktEl);
+      }
       var cardActions = document.createElement('div');
       cardActions.className = 'pf-pos-card-actions';
       var editBtn = document.createElement('button');
@@ -4511,6 +4531,59 @@ function _renderPortfolioPanel() {
       list.appendChild(card);
     });
     panel.appendChild(list);
+  }
+  if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true && count > 0 && !_portfolioFetching) {
+    _portfolioFetchPrices(Object.keys(holdings));
+  }
+}
+
+// ─── Portfolio / Holdings — Slice 1C-1A: Runtime Price Bridge ─────────────────
+// Memory-only. Never persisted. Never written to pt_holdings.
+// Only active when window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true (default off).
+
+async function _portfolioFetchPrices(syms) {
+  if (!syms || !syms.length) return;
+  _portfolioFetching = true;
+  try {
+    var timeout = new Promise(function(resolve) { setTimeout(function() { resolve({}); }, 8000); });
+    var map = await Promise.race([fetchBatchStockData(syms), timeout]);
+    syms.forEach(function(sym) {
+      if (map[sym]) _portfolioRuntime[sym] = map[sym];
+      _updatePortfolioCard(sym, map[sym] || null);
+    });
+  } catch(e) {
+    console.warn('[Portfolio] price fetch error:', e && e.message);
+    syms.forEach(function(sym) { _updatePortfolioCard(sym, null); });
+  } finally {
+    _portfolioFetching = false;
+  }
+}
+
+function _updatePortfolioCard(sym, mkt) {
+  var el = document.getElementById('pf-mkt-' + sym);
+  if (!el) return;
+  while (el.firstChild) el.removeChild(el.firstChild);
+  var priceSpan = document.createElement('span');
+  priceSpan.className = 'pf-pos-mkt-price';
+  if (!mkt || typeof mkt.price !== 'number' || !isFinite(mkt.price)) {
+    priceSpan.textContent = '—';
+    el.appendChild(priceSpan);
+    return;
+  }
+  priceSpan.textContent = '$' + mkt.price.toFixed(2);
+  el.appendChild(priceSpan);
+  if (typeof mkt.change_percent === 'number' && isFinite(mkt.change_percent)) {
+    var sep = document.createElement('span');
+    sep.className   = 'pf-pos-mkt-price';
+    sep.textContent = '·';
+    el.appendChild(sep);
+    var chgSpan = document.createElement('span');
+    var sign    = mkt.change_percent > 0 ? '+' : '';
+    chgSpan.textContent = sign + mkt.change_percent.toFixed(2) + '%';
+    chgSpan.className   = mkt.change_percent > 0 ? 'pf-pos-mkt-chg--pos'
+                        : mkt.change_percent < 0 ? 'pf-pos-mkt-chg--neg'
+                        : 'pf-pos-mkt-chg--zero';
+    el.appendChild(chgSpan);
   }
 }
 
