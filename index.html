@@ -4573,8 +4573,7 @@ function _renderPortfolioPanel() {
       symEl.textContent = sym;
       var meta = document.createElement('div');
       meta.className   = 'pf-pos-meta';
-      var allocPct = totalInvested > 0 ? (h.positionSize / totalInvested * 100).toFixed(1) + '%' : '—';
-      meta.textContent = '$' + Number(h.positionSize).toFixed(2) + ' invested · ' + allocPct;
+      meta.textContent = '$' + Number(h.positionSize).toFixed(2) + ' invested';
       card.appendChild(symEl);
       card.appendChild(meta);
       if (h.manualPlPct !== undefined && h.manualPlPct !== null) {
