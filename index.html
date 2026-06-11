@@ -733,6 +733,8 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-cov-stat{display:flex;flex-direction:column;gap:3px}
 .pf-cov-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
 .pf-cov-val{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text2)}
+/* ─── PORTFOLIO PANEL (Slice 1D-1: Passive Data Guidance) ─── */
+.pf-guidance{font-size:11px;color:var(--text3);margin-top:6px;margin-bottom:4px}
 </style>
 </head>
 <body>
@@ -4561,6 +4563,25 @@ function _renderPortfolioPanel() {
       covRow.appendChild(_mkCovStat('Live Price Coverage', agg.livePrice.covered, agg.livePrice.total));
     }
     panel.appendChild(covRow);
+
+    // ─── Slice 1D-1: Passive Data Guidance ────────────────────────────────────
+    var guidanceText = null;
+    if (agg.manualPl.covered < agg.manualPl.total) {
+      var missing = agg.manualPl.total - agg.manualPl.covered;
+      guidanceText = 'Manual P/L not entered for ' + missing + ' holding' + (missing === 1 ? '' : 's');
+    } else if (agg.research !== null && agg.research.covered < agg.research.total) {
+      var rMissing = agg.research.total - agg.research.covered;
+      guidanceText = 'Research data missing for ' + rMissing + ' holding' + (rMissing === 1 ? '' : 's');
+    } else if (agg.livePrice !== null && agg.livePrice.covered < agg.livePrice.total) {
+      var lMissing = agg.livePrice.total - agg.livePrice.covered;
+      guidanceText = 'Live prices not loaded for ' + lMissing + ' holding' + (lMissing === 1 ? '' : 's');
+    }
+    if (guidanceText !== null) {
+      var guidance = document.createElement('div');
+      guidance.className   = 'pf-guidance';
+      guidance.textContent = guidanceText;
+      panel.appendChild(guidance);
+    }
 
     var list = document.createElement('div');
     list.className = 'pf-positions-list';
