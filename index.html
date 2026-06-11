@@ -733,6 +733,14 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-cov-stat{display:flex;flex-direction:column;gap:3px}
 .pf-cov-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
 .pf-cov-val{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text2)}
+/* ─── PORTFOLIO PANEL (Slice 1D-1: Passive Data Guidance) ─── */
+.pf-guidance{font-size:11px;color:var(--text3);margin-top:6px;margin-bottom:4px}
+/* ─── PORTFOLIO PANEL (Slice 1D-2: Session Sort Control) ─── */
+.pf-sort-bar{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.pf-sort-lbl{font-family:var(--mono);font-size:9px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+.pf-sort-btn{font-family:var(--mono);font-size:10px;color:var(--text3);background:none;border:1px solid var(--border2);border-radius:3px;padding:2px 7px;cursor:pointer;transition:color 120ms,border-color 120ms}
+.pf-sort-btn:hover{color:var(--text2);border-color:var(--text3)}
+.pf-sort-btn.active{color:var(--accent);border-color:var(--accent)}
 </style>
 </head>
 <body>
@@ -917,6 +925,7 @@ const _portfolioRuntime = {};
 let _portfolioFetching = false;
 let _portfolioFetchedAt = null;
 const PORTFOLIO_TTL_MS = 5 * 60 * 1000;
+let _portfolioSortMode = 'symbol'; // session-only; never persisted
 
 // ── Pure math helpers ─────────────────────────────────────────────────────────
 
@@ -4467,6 +4476,25 @@ function _calcPortfolioAggregates(holdings) {
   return { manualPl: { covered: manualPl, total: total }, research: research, livePrice: livePrice };
 }
 
+// ─── Slice 1D-2: Pure sort helper — read-only, no mutation ──────────────────
+function _sortHoldingsEntries(entries, mode) {
+  var out = entries.slice();
+  if (mode === 'invested-desc') {
+    out.sort(function(a, b) {
+      var diff = b[1].positionSize - a[1].positionSize;
+      return diff !== 0 ? diff : a[0].localeCompare(b[0]);
+    });
+  } else if (mode === 'invested-asc') {
+    out.sort(function(a, b) {
+      var diff = a[1].positionSize - b[1].positionSize;
+      return diff !== 0 ? diff : a[0].localeCompare(b[0]);
+    });
+  } else {
+    out.sort(function(a, b) { return a[0].localeCompare(b[0]); });
+  }
+  return out;
+}
+
 function _renderPortfolioPanel() {
   var panel = document.getElementById('portfolioPanel');
   if (!panel) return;
@@ -4562,10 +4590,53 @@ function _renderPortfolioPanel() {
     }
     panel.appendChild(covRow);
 
+    // ─── Slice 1D-1: Passive Data Guidance ────────────────────────────────────
+    var guidanceText = null;
+    if (agg.manualPl.covered < agg.manualPl.total) {
+      var missing = agg.manualPl.total - agg.manualPl.covered;
+      guidanceText = 'Manual P/L not entered for ' + missing + ' holding' + (missing === 1 ? '' : 's');
+    } else if (agg.research !== null && agg.research.covered < agg.research.total) {
+      var rMissing = agg.research.total - agg.research.covered;
+      guidanceText = 'Research data missing for ' + rMissing + ' holding' + (rMissing === 1 ? '' : 's');
+    } else if (agg.livePrice !== null && agg.livePrice.covered < agg.livePrice.total) {
+      var lMissing = agg.livePrice.total - agg.livePrice.covered;
+      guidanceText = 'Live prices not loaded for ' + lMissing + ' holding' + (lMissing === 1 ? '' : 's');
+    }
+    if (guidanceText !== null) {
+      var guidance = document.createElement('div');
+      guidance.className   = 'pf-guidance';
+      guidance.textContent = guidanceText;
+      panel.appendChild(guidance);
+    }
+
+    // ─── Slice 1D-2: Sort bar ─────────────────────────────────────────────────
+    var sortBar = document.createElement('div');
+    sortBar.className = 'pf-sort-bar';
+    var sortLbl = document.createElement('span');
+    sortLbl.className   = 'pf-sort-lbl';
+    sortLbl.textContent = 'Sort';
+    sortBar.appendChild(sortLbl);
+    [
+      { mode: 'symbol',        label: 'Symbol A–Z' },
+      { mode: 'invested-desc', label: 'Invested ↓' },
+      { mode: 'invested-asc',  label: 'Invested ↑' }
+    ].forEach(function(opt) {
+      var btn = document.createElement('button');
+      btn.className   = 'pf-sort-btn' + (_portfolioSortMode === opt.mode ? ' active' : '');
+      btn.textContent = opt.label;
+      btn.onclick     = function() {
+        _portfolioSortMode = opt.mode;
+        _renderPortfolioPanel();
+      };
+      sortBar.appendChild(btn);
+    });
+    panel.appendChild(sortBar);
+
     var list = document.createElement('div');
     list.className = 'pf-positions-list';
-    Object.keys(holdings).sort().forEach(function(sym) {
-      var h    = holdings[sym];
+    _sortHoldingsEntries(Object.entries(holdings), _portfolioSortMode).forEach(function(entry) {
+      var sym = entry[0];
+      var h   = entry[1];
       var card = document.createElement('div');
       card.className = 'pf-pos-card';
       var symEl = document.createElement('div');
