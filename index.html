@@ -728,6 +728,10 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-res-rating.pos{color:var(--green2)}
 .pf-res-rating.neg{color:var(--red2)}
 .pf-res-rating.neutral-v{color:var(--text3)}
+.pf-res-setup{font-family:var(--mono);font-size:9px;letter-spacing:.4px;padding:2px 5px;border-radius:2px;border:1px solid var(--border2);color:var(--text3)}
+.pf-res-setup.pos{color:var(--green2)}
+.pf-res-setup.warn{color:var(--yellow2)}
+.pf-res-setup.neg{color:var(--red2)}
 .pf-res-age{font-family:var(--mono);font-size:9px;color:var(--text3)}
 /* ─── PORTFOLIO PANEL (Slice 1C-4A: Coverage Aggregates) ─── */
 .pf-coverage{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 16px;margin-bottom:12px;display:flex;gap:24px;flex-wrap:wrap}
@@ -4712,6 +4716,14 @@ function _renderPortfolioPanel() {
             rEl.className = 'pf-res-rating ' + rCls;
             rEl.textContent = rM[1].toUpperCase();
             resRow.appendChild(rEl);
+          }
+          var _setupMap = {healthy_uptrend:['BULLISH','pos'],healthy_uptrend_near_ath:['BULLISH','pos'],pullback_in_uptrend:['MIXED','warn'],support_test:['MIXED','warn'],extended_near_ath:['EXTENDED','warn'],breakdown_risk:['BEARISH','neg'],below_key_mas:['BEARISH','neg']};
+          var _setupEntry = _setupMap[res.technical_setup];
+          if (_setupEntry) {
+            var setupEl = document.createElement('span');
+            setupEl.className = 'pf-res-setup ' + _setupEntry[1];
+            setupEl.textContent = _setupEntry[0];
+            resRow.appendChild(setupEl);
           }
           if (ageMs !== null) {
             var ageEl = document.createElement('span');
