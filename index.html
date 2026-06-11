@@ -707,6 +707,32 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-pos-pl--pos{color:var(--green2)}
 .pf-pos-pl--neg{color:var(--red2)}
 .pf-pos-pl--zero{color:var(--text3)}
+/* ─── PORTFOLIO PANEL (Slice 1C-1A: Runtime Price Bridge) ─── */
+.pf-pos-mkt{font-family:var(--mono);font-size:10px;letter-spacing:.4px;margin-top:3px;display:flex;gap:6px;align-items:baseline}
+.pf-pos-mkt-price{color:var(--text2)}
+.pf-pos-mkt-chg--pos{color:var(--green2)}
+.pf-pos-mkt-chg--neg{color:var(--red2)}
+.pf-pos-mkt-chg--zero{color:var(--text3)}
+.pf-pos-research{display:flex;align-items:center;gap:5px;margin-top:4px;flex-wrap:wrap}
+.pf-res-state{font-family:var(--mono);font-size:9px;letter-spacing:.4px;padding:2px 5px;border-radius:2px;border:1px solid var(--border2);color:var(--text3)}
+.pf-res-state.found{color:var(--text2)}
+.pf-res-state.missing{font-style:italic}
+.pf-res-state.stale{color:var(--yellow2);border-color:rgba(244,184,96,.3)}
+.pf-res-state.unavail{color:var(--red2);border-color:rgba(248,113,113,.3)}
+.pf-res-score{font-family:var(--mono);font-size:9px;color:var(--text2);padding:2px 5px;border:1px solid var(--border2);border-radius:2px}
+.pf-res-score.pos{color:var(--green2)}
+.pf-res-score.warn{color:var(--yellow2)}
+.pf-res-score.neg{color:var(--red2)}
+.pf-res-rating{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.4px;color:var(--text3);padding:2px 5px;border:1px solid var(--border2);border-radius:2px}
+.pf-res-rating.pos{color:var(--green2)}
+.pf-res-rating.neg{color:var(--red2)}
+.pf-res-rating.neutral-v{color:var(--text3)}
+.pf-res-age{font-family:var(--mono);font-size:9px;color:var(--text3)}
+/* ─── PORTFOLIO PANEL (Slice 1C-4A: Coverage Aggregates) ─── */
+.pf-coverage{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 16px;margin-bottom:12px;display:flex;gap:24px;flex-wrap:wrap}
+.pf-cov-stat{display:flex;flex-direction:column;gap:3px}
+.pf-cov-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+.pf-cov-val{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text2)}
 </style>
 </head>
 <body>
@@ -885,6 +911,12 @@ const _techCache = {};
 
 // ── Extended-hours display cache — session-only, never serialized ────────────
 const _extendedMktCache = {};
+
+// ── Portfolio runtime — session-only, never serialized, never merged into pt_holdings ──
+const _portfolioRuntime = {};
+let _portfolioFetching = false;
+let _portfolioFetchedAt = null;
+const PORTFOLIO_TTL_MS = 5 * 60 * 1000;
 
 // ── Pure math helpers ─────────────────────────────────────────────────────────
 
@@ -2978,6 +3010,13 @@ function _srSafeParseResults() {
   catch (_) { return []; }
 }
 
+function _getResearchForHolding(symbol) {
+  var source = (window._cockpitResults && window._cockpitResults.length)
+    ? window._cockpitResults
+    : _srSafeParseResults();
+  return source.find(function(r) { return r && r.ticker === symbol; }) || null;
+}
+
 function _updateViewResultsBtn() {
   const btn = document.getElementById('viewResultsBtn');
   if (!btn) return;
@@ -4400,6 +4439,34 @@ function switchMainView(view) {
   if (view === 'portfolio') _renderPortfolioPanel();
 }
 
+// ─── Portfolio / Holdings — Slice 1C-4A: Coverage Aggregates ─────────────────
+// Pure read-only. No localStorage writes. No API calls. No mutations.
+function _calcPortfolioAggregates(holdings) {
+  var syms  = Object.keys(holdings);
+  var total = syms.length;
+  var manualPl = syms.filter(function(s) {
+    var v = holdings[s].manualPlPct;
+    return v !== undefined && v !== null && typeof v === 'number' && isFinite(v);
+  }).length;
+  var research = null;
+  if (window.PT_ENABLE_PORTFOLIO_RESEARCH === true) {
+    var resCovered = syms.filter(function(s) {
+      var r = _getResearchForHolding(s);
+      return r !== null && r._aiUnavailable !== true;
+    }).length;
+    research = { covered: resCovered, total: total };
+  }
+  var livePrice = null;
+  if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true) {
+    var liveCovered = syms.filter(function(s) {
+      var rt = _portfolioRuntime[s];
+      return rt && typeof rt.price === 'number' && isFinite(rt.price) && rt.price > 0;
+    }).length;
+    livePrice = { covered: liveCovered, total: total };
+  }
+  return { manualPl: { covered: manualPl, total: total }, research: research, livePrice: livePrice };
+}
+
 function _renderPortfolioPanel() {
   var panel = document.getElementById('portfolioPanel');
   if (!panel) return;
@@ -4470,6 +4537,31 @@ function _renderPortfolioPanel() {
     summary.appendChild(statInv);
     panel.appendChild(summary);
 
+    var agg = _calcPortfolioAggregates(holdings);
+    var covRow = document.createElement('div');
+    covRow.className = 'pf-coverage';
+    function _mkCovStat(label, covered, total) {
+      var s = document.createElement('div');
+      s.className = 'pf-cov-stat';
+      var l = document.createElement('div');
+      l.className = 'pf-cov-lbl';
+      l.textContent = label;
+      var v = document.createElement('div');
+      v.className = 'pf-cov-val';
+      v.textContent = covered + ' / ' + total;
+      s.appendChild(l);
+      s.appendChild(v);
+      return s;
+    }
+    covRow.appendChild(_mkCovStat('Manual P/L Coverage', agg.manualPl.covered, agg.manualPl.total));
+    if (agg.research !== null) {
+      covRow.appendChild(_mkCovStat('Research Coverage', agg.research.covered, agg.research.total));
+    }
+    if (agg.livePrice !== null) {
+      covRow.appendChild(_mkCovStat('Live Price Coverage', agg.livePrice.covered, agg.livePrice.total));
+    }
+    panel.appendChild(covRow);
+
     var list = document.createElement('div');
     list.className = 'pf-positions-list';
     Object.keys(holdings).sort().forEach(function(sym) {
@@ -4495,6 +4587,67 @@ function _renderPortfolioPanel() {
         else                        plEl.classList.add('pf-pos-pl--zero');
         card.appendChild(plEl);
       }
+      if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true) {
+        var mktEl      = document.createElement('div');
+        mktEl.id        = 'pf-mkt-' + sym;
+        mktEl.className = 'pf-pos-mkt';
+        var mktLoading  = document.createElement('span');
+        mktLoading.className   = 'pf-pos-mkt-price';
+        mktLoading.textContent = '…';
+        mktEl.appendChild(mktLoading);
+        card.appendChild(mktEl);
+      }
+      if (window.PT_ENABLE_PORTFOLIO_RESEARCH === true) {
+        var res = _getResearchForHolding(sym);
+        var resRow = document.createElement('div');
+        resRow.className = 'pf-pos-research';
+        if (!res) {
+          var resStEl = document.createElement('span');
+          resStEl.className = 'pf-res-state missing';
+          resStEl.textContent = 'No research';
+          resRow.appendChild(resStEl);
+        } else if (res._aiUnavailable === true) {
+          var resStEl = document.createElement('span');
+          resStEl.className = 'pf-res-state unavail';
+          resStEl.textContent = 'AI unavailable';
+          resRow.appendChild(resStEl);
+        } else {
+          var ts = res._timestamp || res._orchestratedAt || null;
+          var tsMs = ts ? new Date(ts).getTime() : NaN;
+          var ageMs = (ts && !isNaN(tsMs)) ? (Date.now() - tsMs) : null;
+          var isStale = (ageMs === null) || (ageMs > 48 * 60 * 60 * 1000);
+          var resStEl = document.createElement('span');
+          resStEl.className = 'pf-res-state ' + (isStale ? 'stale' : 'found');
+          resStEl.textContent = isStale ? (ageMs === null ? 'Legacy stale' : 'Stale') : 'Research';
+          resRow.appendChild(resStEl);
+          var scEl = document.createElement('span');
+          if (typeof res.sentiment_score === 'number') {
+            var score = res.sentiment_score;
+            var scoreCls = score >= 65 ? 'pos' : score >= 40 ? 'warn' : 'neg';
+            scEl.className = 'pf-res-score ' + scoreCls;
+            scEl.textContent = 'Score ' + score;
+          } else {
+            scEl.className = 'pf-res-score';
+            scEl.textContent = 'Score —';
+          }
+          resRow.appendChild(scEl);
+          var rM = (res.summary || '').match(/Rating:\s*(Buy|Neutral|Sell)/i);
+          if (rM) {
+            var rCls = rM[1].toLowerCase() === 'buy' ? 'pos' : rM[1].toLowerCase() === 'sell' ? 'neg' : 'neutral-v';
+            var rEl = document.createElement('span');
+            rEl.className = 'pf-res-rating ' + rCls;
+            rEl.textContent = rM[1].toUpperCase();
+            resRow.appendChild(rEl);
+          }
+          if (ageMs !== null) {
+            var ageEl = document.createElement('span');
+            ageEl.className = 'pf-res-age';
+            ageEl.textContent = Math.round(ageMs / 3600000) + 'h ago';
+            resRow.appendChild(ageEl);
+          }
+        }
+        card.appendChild(resRow);
+      }
       var cardActions = document.createElement('div');
       cardActions.className = 'pf-pos-card-actions';
       var editBtn = document.createElement('button');
@@ -4511,6 +4664,66 @@ function _renderPortfolioPanel() {
       list.appendChild(card);
     });
     panel.appendChild(list);
+  }
+  if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true && count > 0) {
+    var _pfSyms  = Object.keys(holdings);
+    var _pfFresh   = _portfolioFetchedAt !== null && (Date.now() - _portfolioFetchedAt) < PORTFOLIO_TTL_MS;
+    if (_pfFresh) {
+      _pfSyms.forEach(function(s) { _updatePortfolioCard(s, _portfolioRuntime[s] || null); });
+    } else if (!_portfolioFetching) {
+      _portfolioFetchPrices(_pfSyms);
+    }
+  }
+}
+
+// ─── Portfolio / Holdings — Slice 1C-1A: Runtime Price Bridge ─────────────────
+// Memory-only. Never persisted. Never written to pt_holdings.
+// Only active when window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true (default off).
+
+async function _portfolioFetchPrices(syms) {
+  if (!syms || !syms.length) return;
+  _portfolioFetching = true;
+  try {
+    var timeout = new Promise(function(resolve) { setTimeout(function() { resolve({}); }, 8000); });
+    var map = await Promise.race([fetchBatchStockData(syms), timeout]);
+    syms.forEach(function(sym) {
+      if (map[sym]) _portfolioRuntime[sym] = map[sym];
+      _updatePortfolioCard(sym, map[sym] || null);
+    });
+    if (syms.some(function(s) { return map[s]; })) _portfolioFetchedAt = Date.now();
+  } catch(e) {
+    console.warn('[Portfolio] price fetch error:', e && e.message);
+    syms.forEach(function(sym) { _updatePortfolioCard(sym, null); });
+  } finally {
+    _portfolioFetching = false;
+  }
+}
+
+function _updatePortfolioCard(sym, mkt) {
+  var el = document.getElementById('pf-mkt-' + sym);
+  if (!el) return;
+  while (el.firstChild) el.removeChild(el.firstChild);
+  var priceSpan = document.createElement('span');
+  priceSpan.className = 'pf-pos-mkt-price';
+  if (!mkt || typeof mkt.price !== 'number' || !isFinite(mkt.price)) {
+    priceSpan.textContent = '—';
+    el.appendChild(priceSpan);
+    return;
+  }
+  priceSpan.textContent = '$' + mkt.price.toFixed(2);
+  el.appendChild(priceSpan);
+  if (typeof mkt.change_percent === 'number' && isFinite(mkt.change_percent)) {
+    var sep = document.createElement('span');
+    sep.className   = 'pf-pos-mkt-price';
+    sep.textContent = '·';
+    el.appendChild(sep);
+    var chgSpan = document.createElement('span');
+    var sign    = mkt.change_percent > 0 ? '+' : '';
+    chgSpan.textContent = sign + mkt.change_percent.toFixed(2) + '%';
+    chgSpan.className   = mkt.change_percent > 0 ? 'pf-pos-mkt-chg--pos'
+                        : mkt.change_percent < 0 ? 'pf-pos-mkt-chg--neg'
+                        : 'pf-pos-mkt-chg--zero';
+    el.appendChild(chgSpan);
   }
 }
 
