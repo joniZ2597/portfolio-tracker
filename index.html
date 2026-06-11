@@ -728,6 +728,11 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-res-rating.neg{color:var(--red2)}
 .pf-res-rating.neutral-v{color:var(--text3)}
 .pf-res-age{font-family:var(--mono);font-size:9px;color:var(--text3)}
+/* ─── PORTFOLIO PANEL (Slice 1C-4A: Coverage Aggregates) ─── */
+.pf-coverage{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 16px;margin-bottom:12px;display:flex;gap:24px;flex-wrap:wrap}
+.pf-cov-stat{display:flex;flex-direction:column;gap:3px}
+.pf-cov-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+.pf-cov-val{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text2)}
 </style>
 </head>
 <body>
@@ -4434,6 +4439,34 @@ function switchMainView(view) {
   if (view === 'portfolio') _renderPortfolioPanel();
 }
 
+// ─── Portfolio / Holdings — Slice 1C-4A: Coverage Aggregates ─────────────────
+// Pure read-only. No localStorage writes. No API calls. No mutations.
+function _calcPortfolioAggregates(holdings) {
+  var syms  = Object.keys(holdings);
+  var total = syms.length;
+  var manualPl = syms.filter(function(s) {
+    var v = holdings[s].manualPlPct;
+    return v !== undefined && v !== null && typeof v === 'number' && isFinite(v);
+  }).length;
+  var research = null;
+  if (window.PT_ENABLE_PORTFOLIO_RESEARCH === true) {
+    var resCovered = syms.filter(function(s) {
+      var r = _getResearchForHolding(s);
+      return r !== null && r._aiUnavailable !== true;
+    }).length;
+    research = { covered: resCovered, total: total };
+  }
+  var livePrice = null;
+  if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true) {
+    var liveCovered = syms.filter(function(s) {
+      var rt = _portfolioRuntime[s];
+      return rt && typeof rt.price === 'number' && isFinite(rt.price) && rt.price > 0;
+    }).length;
+    livePrice = { covered: liveCovered, total: total };
+  }
+  return { manualPl: { covered: manualPl, total: total }, research: research, livePrice: livePrice };
+}
+
 function _renderPortfolioPanel() {
   var panel = document.getElementById('portfolioPanel');
   if (!panel) return;
@@ -4503,6 +4536,31 @@ function _renderPortfolioPanel() {
     summary.appendChild(statPos);
     summary.appendChild(statInv);
     panel.appendChild(summary);
+
+    var agg = _calcPortfolioAggregates(holdings);
+    var covRow = document.createElement('div');
+    covRow.className = 'pf-coverage';
+    function _mkCovStat(label, covered, total) {
+      var s = document.createElement('div');
+      s.className = 'pf-cov-stat';
+      var l = document.createElement('div');
+      l.className = 'pf-cov-lbl';
+      l.textContent = label;
+      var v = document.createElement('div');
+      v.className = 'pf-cov-val';
+      v.textContent = covered + ' / ' + total;
+      s.appendChild(l);
+      s.appendChild(v);
+      return s;
+    }
+    covRow.appendChild(_mkCovStat('Manual P/L Coverage', agg.manualPl.covered, agg.manualPl.total));
+    if (agg.research !== null) {
+      covRow.appendChild(_mkCovStat('Research Coverage', agg.research.covered, agg.research.total));
+    }
+    if (agg.livePrice !== null) {
+      covRow.appendChild(_mkCovStat('Live Price Coverage', agg.livePrice.covered, agg.livePrice.total));
+    }
+    panel.appendChild(covRow);
 
     var list = document.createElement('div');
     list.className = 'pf-positions-list';
