@@ -4229,7 +4229,7 @@ function renderMainPanel(item) {
         <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
           <div class="rr-row"><span class="rr-lbl">ATH Distance</span><span class="rr-val ${snap.hasATH ? (snap.athDist < -15 ? 'warn' : snap.athDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">${snap.hasATH ? fmtPct(snap.athDist) : '—'}</span></div>
           <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Setup Quality</span><span class="rr-val">${score} / 100</span></div>
+          <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score>=65?'pos':score>=40?'warn':'neg'}">${score} / 100</span></div>
         </div>
         ${_tsAssessHtml}`}
       </div>
