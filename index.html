@@ -2481,6 +2481,7 @@ function enforceScoreConsistency(results, newsContext) {
     const chgPct = item._changePct || 0;
     if (typeof chgPct === 'number' && chgPct < -3) { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (down day ${chgPct}%)`); return item; }
     if (item.technical_setup === 'extended_near_ath') { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (extended_near_ath)`); return item; }
+    if (item.technical_setup === 'below_key_mas') { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (below_key_mas)`); return item; }
     if (bullishCount >= 2 && bearishCount === 0 && score < 65) { console.warn(`[PT-SCORE] ${item.ticker}: Tier1 boost ${score} → 72`); return { ...item, sentiment: 'positive', sentiment_score: 72 }; }
     return item;
   });
