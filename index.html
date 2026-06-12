@@ -3969,7 +3969,9 @@ function renderMainPanel(item) {
   if (_ts) {
     try {
       const d = new Date(_ts);
-      lastUpdated = d.toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit'});
+      const _tsNow = new Date();
+      const _tsSD = d.getFullYear()===_tsNow.getFullYear()&&d.getMonth()===_tsNow.getMonth()&&d.getDate()===_tsNow.getDate();
+      lastUpdated = _tsSD ? d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' · '+d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
     } catch(e) { lastUpdated = ''; }
   }
 
@@ -4362,7 +4364,7 @@ ${window.PT_ENABLE_CAPITAL_RETURNS_CLIENT === true ? `
         <span class="src-trace-sep">·</span>
         <span class="src-trace-chip">AI: <span class="src-trace-val ${item._aiUnavailable ? 'neg' : 'neutral-v'}">${item._aiUnavailable ? 'unavailable' : (item._auditTrail?.sourceTrace?.aiSynthesis || '—').replace('anthropic-proxy / ', '').replace('claude-haiku-4-5-20251001', 'claude-haiku-4-5')}</span></span>
         <span class="src-trace-sep">·</span>
-        <span class="src-trace-chip">Updated: <span class="src-trace-val neutral-v">${(() => { const t = item._orchestratedAt || item._timestamp; if (!t) return '—'; try { return new Date(t).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'}); } catch(e) { return '—'; } })()}</span></span>
+        <span class="src-trace-chip">Updated: <span class="src-trace-val neutral-v">${(() => { const t = item._orchestratedAt || item._timestamp; if (!t) return '—'; try { const d = new Date(t); const n = new Date(); const same = d.getFullYear()===n.getFullYear()&&d.getMonth()===n.getMonth()&&d.getDate()===n.getDate(); return same ? d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' · '+d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}); } catch(e) { return '—'; } })()}</span></span>
       </div>
     </div>
 ${window.PT_ENABLE_EDGAR_FORM4 === true ? `
@@ -4702,7 +4704,7 @@ function _renderPortfolioPanel() {
           var isStale = (ageMs === null) || (ageMs > 48 * 60 * 60 * 1000);
           var resStEl = document.createElement('span');
           resStEl.className = 'pf-res-state ' + (isStale ? 'stale' : 'found');
-          resStEl.textContent = isStale ? (ageMs === null ? 'Legacy stale' : 'Stale') : 'Research';
+          resStEl.textContent = isStale ? 'Stale' : 'Research';
           resRow.appendChild(resStEl);
           var scEl = document.createElement('span');
           if (typeof res.sentiment_score === 'number') {
@@ -4740,7 +4742,8 @@ function _renderPortfolioPanel() {
           if (ageMs !== null) {
             var ageEl = document.createElement('span');
             ageEl.className = 'pf-res-age';
-            ageEl.textContent = Math.round(ageMs / 3600000) + 'h ago';
+            var _ageH = Math.round(ageMs / 3600000);
+            ageEl.textContent = _ageH < 1 ? '< 1h ago' : _ageH < 48 ? _ageH + 'h ago' : Math.round(ageMs / 86400000) + 'd ago';
             resRow.appendChild(ageEl);
           }
         }
