@@ -733,6 +733,10 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-res-setup.pos{color:var(--green2)}
 .pf-res-setup.warn{color:var(--yellow2)}
 .pf-res-setup.neg{color:var(--red2)}
+.pf-res-catalyst{font-family:var(--mono);font-size:9px;letter-spacing:.4px;padding:2px 5px;border-radius:2px;border:1px solid var(--border2);color:var(--text3)}
+.pf-res-catalyst.pos{color:var(--green2)}
+.pf-res-catalyst.warn{color:var(--yellow2)}
+.pf-res-catalyst.neg{color:var(--red2)}
 .pf-res-age{font-family:var(--mono);font-size:9px;color:var(--text3)}
 /* ─── PORTFOLIO PANEL (Slice 1C-4A: Coverage Aggregates) ─── */
 .pf-coverage{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 16px;margin-bottom:12px;display:flex;gap:24px;flex-wrap:wrap}
@@ -4725,6 +4729,12 @@ function _renderPortfolioPanel() {
             setupEl.className = 'pf-res-setup ' + _setupEntry[1];
             setupEl.textContent = _setupEntry[0];
             resRow.appendChild(setupEl);
+          }
+          if (!isStale && (res._catalystDirection === 'bullish' || res._catalystDirection === 'mixed' || res._catalystDirection === 'bearish')) {
+            var catEl = document.createElement('span');
+            catEl.className = 'pf-res-catalyst ' + (res._catalystDirection === 'bullish' ? 'pos' : res._catalystDirection === 'bearish' ? 'neg' : 'warn');
+            catEl.textContent = 'CATALYST ' + res._catalystDirection.toUpperCase();
+            resRow.appendChild(catEl);
           }
           if (ageMs !== null) {
             var ageEl = document.createElement('span');
