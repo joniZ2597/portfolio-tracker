@@ -714,6 +714,7 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-pos-mkt-chg--pos{color:var(--green2)}
 .pf-pos-mkt-chg--neg{color:var(--red2)}
 .pf-pos-mkt-chg--zero{color:var(--text3)}
+.pf-pos-mkt-day-lbl{color:var(--text3);opacity:.65}
 .pf-pos-research{display:flex;align-items:center;gap:5px;margin-top:4px;flex-wrap:wrap}
 .pf-res-state{font-family:var(--mono);font-size:9px;letter-spacing:.4px;padding:2px 5px;border-radius:2px;border:1px solid var(--border2);color:var(--text3)}
 .pf-res-state.found{color:var(--text2)}
@@ -4803,6 +4804,10 @@ function _updatePortfolioCard(sym, mkt) {
     sep.className   = 'pf-pos-mkt-price';
     sep.textContent = '·';
     el.appendChild(sep);
+    var dayLbl = document.createElement('span');
+    dayLbl.className = 'pf-pos-mkt-day-lbl';
+    dayLbl.textContent = 'Day';
+    el.appendChild(dayLbl);
     var chgSpan = document.createElement('span');
     var sign    = mkt.change_percent > 0 ? '+' : '';
     chgSpan.textContent = sign + mkt.change_percent.toFixed(2) + '%';
