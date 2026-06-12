@@ -1,16 +1,16 @@
 ---
 name: lab-planner
-description: Planning-only skill to classify Portfolio Tracker / Pulse lab, overnight, audit, or implementation requests and generate one safe copy-ready Claude Code prompt. Does not execute the task.
+description: Manual lab router for Portfolio Tracker / Pulse. Classifies every request into a Work Mode, recommends a model, identifies the target, and returns a structured routing card. Does not execute tasks.
 disable-model-invocation: true
 ---
 
-# Lab Planner
+# Lab Planner / Lab Router
 
-This skill is planning-only. It must not implement changes, edit files, commit, push, deploy, change Netlify settings, invoke live APIs, run browser QA, or start the lab task. Its only output is one safe, copy-ready Claude Code prompt for a future session.
+This skill is a manual router only. It does not execute tasks. It must not implement changes, edit files, commit, push, deploy, change Netlify settings, invoke live APIs, or run browser QA. Its only output is a structured routing card for a future session.
 
 ## 1. Required Pre-checks
 
-Before producing the prompt, read CLAUDE.md and local-only CHECKPOINT.md.
+Before producing the routing card, read CLAUDE.md and local-only CHECKPOINT.md.
 
 Run and report these read-only checks:
 
@@ -24,20 +24,67 @@ Run and report these read-only checks:
 
 Stop if the current branch is main, Git state is dirty beyond expected untracked files, CHECKPOINT.md is staged/tracked/modified, or project state cannot be confirmed.
 
-## 2. Classification Modes
+## 2. Work Mode Classification
 
-Classify the requested task into exactly one mode:
+Classify the requested task into exactly one Work Mode:
 
-* READ-ONLY AUDIT: inspection, search, mapping, or analysis only. No file edits.
-* EXPERIMENT/LAB BRANCH: prototype, spike, exploratory implementation, or uncertain scope. Prefer this for new arcs.
-* BRANCH-DEV IMPLEMENTATION: approved scoped work already cleared for branch-dev in CHECKPOINT.md.
-* BLOCKED / DEFERRED: unsafe, unclear, production-facing, missing approval, or touches protected surfaces.
+* `READ_ONLY_LAB`
+  Inspection, audit, grep, mapping, or analysis only. No file edits. No worktree required.
 
-State the classification and reason before the generated prompt.
+* `IMPLEMENTATION_PLANNING`
+  Drafting a plan, spec, or prompt for a future session. No file edits. No execution.
 
-## 3. Safety Boundaries
+* `EXPERIMENT_IMPLEMENTATION`
+  Scoped prototype or exploratory implementation on `experiment/*` only. Not branch-dev. Not production.
 
-The generated prompt must enforce:
+* `IMPLEMENTATION`
+  Approved scoped work on `branch-dev`. Must have a cleared plan in CHECKPOINT.md before proceeding.
+
+* `QA_ONLY`
+  Browser, static, or fixture QA only. No app code edits. No schema or storage mutation unless explicitly restored.
+
+* `RELEASE_DECISION`
+  Cherry-pick planning, release branch creation, promotion to main, or production deploy decision. Requires explicit user approval before any action.
+
+* `LOCAL_MAINTENANCE`
+  Tooling, skills, CLAUDE.md, non-app local-only files. No app runtime code. No CHECKPOINT edit unless explicitly approved.
+
+State the classification and reason before the routing card.
+
+## 3. Recommended Model
+
+Select exactly one model based on the Work Mode and task complexity:
+
+* `Fable 5`
+  Use for: wide planning, architecture, roadmap, endgame planning, release strategy memos, risk analysis, implementation planning, prompt/spec design, and Claude Design / NLM handoff briefs.
+  Do not use for: direct implementation, commits, deploys, or CHECKPOINT edits.
+
+* `Sonnet 4.6`
+  Use for: standard Claude Code work — scoped implementation on `branch-dev`, local QA, small fixes, controlled file edits, validation, and normal engineering execution.
+
+* `Haiku 4.5`
+  Use for: summaries, extraction, short audits, text cleanup, local maintenance drafts, CHECKPOINT cleanup drafts, and lightweight read-only organization work.
+
+* `Opus 4.7`
+  Use only for: hard blockers — complex debugging, persistent regressions, architecture conflicts, difficult multi-step reasoning, or failed attempts by Sonnet or Fable.
+  Not a default model for normal release decisions.
+
+## 4. Target
+
+Select the primary target surface for the task:
+
+* `No files` — read-only inspection, no writes anywhere
+* `experiment/*` — isolated lab branch only
+* `branch-dev` — staging branch implementation
+* `local-only doc` — CLAUDE.md, skill files, local non-repo docs
+* `CHECKPOINT local-only` — CHECKPOINT.md only; never staged or committed
+* `Claude Design` — Figma / design system handoff
+* `NLM` — NotebookLM source or podcast handoff
+* `Cowork` — browser/visual QA and runtime verification only; no repo edits unless explicitly approved
+
+## 5. Safety Boundaries
+
+The routing card must enforce:
 
 * No main or production changes.
 * No Netlify env var, gate, deploy configuration, or deploy action.
@@ -47,27 +94,29 @@ The generated prompt must enforce:
 * No writes to pt_results, pt_tickers, localStorage schema, scoring engines, orchestrate, analyzeChunk, enforceScoreConsistency, _techCache, Actionable Take, normal scan behavior, or production scoring unless explicitly approved.
 * No scope expansion or bundling unrelated work.
 
-## 4. Output Requirements
+## 6. Required Output — Routing Card
 
-Generate one copy-ready Claude Code prompt using plain Markdown only. Do not use markdown code fences.
+Return exactly this structure:
 
-The prompt must include:
+```
+Work Mode:          <mode>
+Recommended Model:  <model>
+Target:             <target>
 
-* Classification line
-* Target branch or branch requirement
-* Goal
-* Scope in
-* Scope out
-* Required pre-flight checks
-* Tasks
-* STOP markers before any approval-gated action
-* Definition of Done
-* Validation requirements
-* Handoff report
+Collision check:    <what this might conflict with — branch, gate, schema, or open arc>
+Allowed actions:    <explicit list of permitted actions for this routing>
+Forbidden actions:  <explicit list of prohibited actions for this routing>
+Required output:    <what a PASS looks like — specific artifact or observable result>
+Stop condition:     <what triggers BLOCKED or NEEDS DECISION>
 
-## 5. Stop Conditions
+Final status:       PASS / BLOCKED / NEEDS DECISION
+```
 
-Stop and return BLOCKED / DEFERRED if:
+If the status is BLOCKED or NEEDS DECISION, state the exact blocker or decision required before proceeding.
+
+## 7. Stop Conditions
+
+Return `BLOCKED` or `NEEDS DECISION` if:
 
 * The current branch is main or cannot be confirmed.
 * CHECKPOINT.md is staged, tracked, modified, missing, or unreadable.
@@ -76,18 +125,19 @@ Stop and return BLOCKED / DEFERRED if:
 * The task touches protected surfaces without explicit approval.
 * The task requires a new experiment branch without approval.
 * The scope is unclear or too broad.
+* More than one Work Mode is plausible — surface the ambiguity and stop.
 
-## 6. Handoff Report
+## 8. Handoff Report
 
 At the end, return only:
 
-* Classification
-* Reason
-* Generated prompt status
+* Work Mode and reason
+* Recommended Model and reason
+* Target
+* Routing card (Section 6 format)
 * Files expected to change, or none
 * Files protected
-* Required approvals
-* Validation required
+* Required approvals before execution
 * Git state
-* Blockers, if any
-* One recommended next step
+* Blockers or open decisions, if any
+* One recommended next step only
