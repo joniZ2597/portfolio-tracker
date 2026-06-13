@@ -3031,8 +3031,8 @@ function _srSafeParseResults() {
 }
 
 function _getResearchForHolding(symbol) {
-  var source = (window._cockpitResults && window._cockpitResults.length)
-    ? window._cockpitResults
+  var source = (_cockpitResults && _cockpitResults.length)
+    ? _cockpitResults
     : _srSafeParseResults();
   return source.find(function(r) { return r && r.ticker === symbol; }) || null;
 }
