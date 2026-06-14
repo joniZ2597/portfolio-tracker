@@ -733,7 +733,12 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-res-setup.pos{color:var(--green2)}
 .pf-res-setup.warn{color:var(--yellow2)}
 .pf-res-setup.neg{color:var(--red2)}
+.pf-res-catalyst{font-family:var(--mono);font-size:9px;letter-spacing:.4px;padding:2px 5px;border-radius:2px;border:1px solid var(--border2);color:var(--text3)}
+.pf-res-catalyst.pos{color:var(--green2)}
+.pf-res-catalyst.warn{color:var(--yellow2)}
+.pf-res-catalyst.neg{color:var(--red2)}
 .pf-res-age{font-family:var(--mono);font-size:9px;color:var(--text3)}
+.pf-res-provenance{font-family:var(--mono);font-size:8px;color:var(--text3);opacity:.6;width:100%;margin-top:1px;border-top:1px dashed rgba(255,255,255,.06);padding-top:2px}
 /* ─── PORTFOLIO PANEL (Slice 1C-4A: Coverage Aggregates) ─── */
 .pf-coverage{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 16px;margin-bottom:12px;display:flex;gap:24px;flex-wrap:wrap}
 .pf-cov-stat{display:flex;flex-direction:column;gap:3px}
@@ -1461,7 +1466,7 @@ Object.defineProperty(window, 'tickers', {
   get() { return getSymbols(); },
   configurable: true,
 });
-let results = JSON.parse(localStorage.getItem('pt_results') || '[]');
+let results = (function(){ try { var _p = JSON.parse(localStorage.getItem('pt_results') || '[]'); return Array.isArray(_p) ? _p : []; } catch (_) { return []; } })();
 const _mktFailCache = {}; // display-only session flag: true=known failure, false=known success, absent=unchecked
 // Phase 4: remove obsolete client-side secret keys (idempotent, one-time)
 ['pt_apikey', 'pt_pplxkey', 'pt_avkey'].forEach(function(k) { localStorage.removeItem(k); });
@@ -2477,6 +2482,7 @@ function enforceScoreConsistency(results, newsContext) {
     const chgPct = item._changePct || 0;
     if (typeof chgPct === 'number' && chgPct < -3) { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (down day ${chgPct}%)`); return item; }
     if (item.technical_setup === 'extended_near_ath') { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (extended_near_ath)`); return item; }
+    if (item.technical_setup === 'below_key_mas') { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (below_key_mas)`); return item; }
     if (bullishCount >= 2 && bearishCount === 0 && score < 65) { console.warn(`[PT-SCORE] ${item.ticker}: Tier1 boost ${score} → 72`); return { ...item, sentiment: 'positive', sentiment_score: 72 }; }
     return item;
   });
@@ -3021,16 +3027,30 @@ function setSrMode(mode) {
 }
 
 function _srSafeParseResults() {
-  try { return JSON.parse(localStorage.getItem('pt_results') || '[]') || []; }
+  try { var _p = JSON.parse(localStorage.getItem('pt_results') || '[]'); return Array.isArray(_p) ? _p : []; }
   catch (_) { return []; }
 }
 
 function _getResearchForHolding(symbol) {
-  var source = (window._cockpitResults && window._cockpitResults.length)
-    ? window._cockpitResults
+  var source = (_cockpitResults && _cockpitResults.length)
+    ? _cockpitResults
     : _srSafeParseResults();
   return source.find(function(r) { return r && r.ticker === symbol; }) || null;
 }
+
+function _resolveResearchForHolding(symbol) {
+  var hasCockpit = _cockpitResults && _cockpitResults.length > 0;
+  var src = hasCockpit ? _cockpitResults : _srSafeParseResults();
+  var srcLabel = hasCockpit ? 'session' : 'saved';
+  var result = src.find(function(r) { return r && r.ticker === symbol; }) || null;
+  var source = result ? srcLabel : 'none';
+  var timestamp = result ? (result._timestamp || result._orchestratedAt || null) : null;
+  var tsMs = timestamp ? new Date(timestamp).getTime() : NaN;
+  var ageMs = (timestamp && !isNaN(tsMs)) ? (Date.now() - tsMs) : null;
+  var stale = (ageMs === null) || (ageMs > 48 * 60 * 60 * 1000);
+  return { result: result, source: source, timestamp: timestamp, ageMs: ageMs, stale: stale };
+}
+
 
 function _updateViewResultsBtn() {
   const btn = document.getElementById('viewResultsBtn');
@@ -3964,7 +3984,9 @@ function renderMainPanel(item) {
   if (_ts) {
     try {
       const d = new Date(_ts);
-      lastUpdated = d.toLocaleTimeString('en-US', {hour:'2-digit',minute:'2-digit'});
+      const _tsNow = new Date();
+      const _tsSD = d.getFullYear()===_tsNow.getFullYear()&&d.getMonth()===_tsNow.getMonth()&&d.getDate()===_tsNow.getDate();
+      lastUpdated = _tsSD ? d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' · '+d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
     } catch(e) { lastUpdated = ''; }
   }
 
@@ -4222,7 +4244,7 @@ function renderMainPanel(item) {
         <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
           <div class="rr-row"><span class="rr-lbl">ATH Distance</span><span class="rr-val ${snap.hasATH ? (snap.athDist < -15 ? 'warn' : snap.athDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">${snap.hasATH ? fmtPct(snap.athDist) : '—'}</span></div>
           <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Setup Quality</span><span class="rr-val">${score} / 100</span></div>
+          <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score>=65?'pos':score>=40?'warn':'neg'}">${score} / 100</span></div>
         </div>
         ${_tsAssessHtml}`}
       </div>
@@ -4357,7 +4379,7 @@ ${window.PT_ENABLE_CAPITAL_RETURNS_CLIENT === true ? `
         <span class="src-trace-sep">·</span>
         <span class="src-trace-chip">AI: <span class="src-trace-val ${item._aiUnavailable ? 'neg' : 'neutral-v'}">${item._aiUnavailable ? 'unavailable' : (item._auditTrail?.sourceTrace?.aiSynthesis || '—').replace('anthropic-proxy / ', '').replace('claude-haiku-4-5-20251001', 'claude-haiku-4-5')}</span></span>
         <span class="src-trace-sep">·</span>
-        <span class="src-trace-chip">Updated: <span class="src-trace-val neutral-v">${(() => { const t = item._orchestratedAt || item._timestamp; if (!t) return '—'; try { return new Date(t).toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'}); } catch(e) { return '—'; } })()}</span></span>
+        <span class="src-trace-chip">Updated: <span class="src-trace-val neutral-v">${(() => { const t = item._orchestratedAt || item._timestamp; if (!t) return '—'; try { const d = new Date(t); const n = new Date(); const same = d.getFullYear()===n.getFullYear()&&d.getMonth()===n.getMonth()&&d.getDate()===n.getDate(); return same ? d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' · '+d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}); } catch(e) { return '—'; } })()}</span></span>
       </div>
     </div>
 ${window.PT_ENABLE_EDGAR_FORM4 === true ? `
@@ -4677,7 +4699,8 @@ function _renderPortfolioPanel() {
         card.appendChild(mktEl);
       }
       if (window.PT_ENABLE_PORTFOLIO_RESEARCH === true) {
-        var res = _getResearchForHolding(sym);
+        var _resolved = _resolveResearchForHolding(sym);
+        var res = _resolved.result;
         var resRow = document.createElement('div');
         resRow.className = 'pf-pos-research';
         if (!res) {
@@ -4691,13 +4714,11 @@ function _renderPortfolioPanel() {
           resStEl.textContent = 'AI unavailable';
           resRow.appendChild(resStEl);
         } else {
-          var ts = res._timestamp || res._orchestratedAt || null;
-          var tsMs = ts ? new Date(ts).getTime() : NaN;
-          var ageMs = (ts && !isNaN(tsMs)) ? (Date.now() - tsMs) : null;
-          var isStale = (ageMs === null) || (ageMs > 48 * 60 * 60 * 1000);
+          var isStale = _resolved.stale;
+          var ageMs = _resolved.ageMs;
           var resStEl = document.createElement('span');
           resStEl.className = 'pf-res-state ' + (isStale ? 'stale' : 'found');
-          resStEl.textContent = isStale ? (ageMs === null ? 'Legacy stale' : 'Stale') : 'Research';
+          resStEl.textContent = isStale ? 'Stale' : 'Research';
           resRow.appendChild(resStEl);
           var scEl = document.createElement('span');
           if (typeof res.sentiment_score === 'number') {
@@ -4726,11 +4747,24 @@ function _renderPortfolioPanel() {
             setupEl.textContent = _setupEntry[0];
             resRow.appendChild(setupEl);
           }
+          if (!isStale && (res._catalystDirection === ‘bullish’ || res._catalystDirection === ‘mixed’ || res._catalystDirection === ‘bearish’)) {
+            var catEl = document.createElement(‘span’);
+            catEl.className = ‘pf-res-catalyst ‘ + (res._catalystDirection === ‘bullish’ ? ‘pos’ : res._catalystDirection === ‘bearish’ ? ‘neg’ : ‘warn’);
+            catEl.textContent = ‘CATALYST ‘ + res._catalystDirection.toUpperCase();
+            resRow.appendChild(catEl);
+          }
           if (ageMs !== null) {
-            var ageEl = document.createElement('span');
-            ageEl.className = 'pf-res-age';
-            ageEl.textContent = Math.round(ageMs / 3600000) + 'h ago';
+            var ageEl = document.createElement(‘span’);
+            ageEl.className = ‘pf-res-age’;
+            var _ageH = Math.round(ageMs / 3600000);
+            ageEl.textContent = _ageH < 1 ? ‘< 1h ago’ : _ageH < 48 ? _ageH + ‘h ago’ : Math.round(ageMs / 86400000) + ‘d ago’;
             resRow.appendChild(ageEl);
+          }
+          if (_resolved.source !== ‘none’) {
+            var provEl = document.createElement(‘span’);
+            provEl.className = ‘pf-res-provenance’;
+            provEl.textContent = _resolved.source === "session" ? "· This session’s scan" : "· Saved scan";
+            resRow.appendChild(provEl);
           }
         }
         card.appendChild(resRow);

@@ -1,0 +1,24 @@
+{
+  "name": "portfolio-tracker",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:qa": "playwright test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joniZ2597/portfolio-tracker.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/joniZ2597/portfolio-tracker/issues"
+  },
+  "homepage": "https://github.com/joniZ2597/portfolio-tracker#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
+  }
+}
