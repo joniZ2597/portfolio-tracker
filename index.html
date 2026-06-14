@@ -738,6 +738,7 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-res-catalyst.warn{color:var(--yellow2)}
 .pf-res-catalyst.neg{color:var(--red2)}
 .pf-res-age{font-family:var(--mono);font-size:9px;color:var(--text3)}
+.pf-res-provenance{font-family:var(--mono);font-size:8px;color:var(--text3);opacity:.6;width:100%;margin-top:1px;border-top:1px dashed rgba(255,255,255,.06);padding-top:2px}
 /* ─── PORTFOLIO PANEL (Slice 1C-4A: Coverage Aggregates) ─── */
 .pf-coverage{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 16px;margin-bottom:12px;display:flex;gap:24px;flex-wrap:wrap}
 .pf-cov-stat{display:flex;flex-direction:column;gap:3px}
@@ -1465,7 +1466,7 @@ Object.defineProperty(window, 'tickers', {
   get() { return getSymbols(); },
   configurable: true,
 });
-let results = JSON.parse(localStorage.getItem('pt_results') || '[]');
+let results = (function(){ try { var _p = JSON.parse(localStorage.getItem('pt_results') || '[]'); return Array.isArray(_p) ? _p : []; } catch (_) { return []; } })();
 const _mktFailCache = {}; // display-only session flag: true=known failure, false=known success, absent=unchecked
 // Phase 4: remove obsolete client-side secret keys (idempotent, one-time)
 ['pt_apikey', 'pt_pplxkey', 'pt_avkey'].forEach(function(k) { localStorage.removeItem(k); });
@@ -3026,7 +3027,7 @@ function setSrMode(mode) {
 }
 
 function _srSafeParseResults() {
-  try { return JSON.parse(localStorage.getItem('pt_results') || '[]') || []; }
+  try { var _p = JSON.parse(localStorage.getItem('pt_results') || '[]'); return Array.isArray(_p) ? _p : []; }
   catch (_) { return []; }
 }
 
@@ -3035,6 +3036,19 @@ function _getResearchForHolding(symbol) {
     ? _cockpitResults
     : _srSafeParseResults();
   return source.find(function(r) { return r && r.ticker === symbol; }) || null;
+}
+
+function _resolveResearchForHolding(symbol) {
+  var hasCockpit = _cockpitResults && _cockpitResults.length > 0;
+  var src = hasCockpit ? _cockpitResults : _srSafeParseResults();
+  var srcLabel = hasCockpit ? 'session' : 'saved';
+  var result = src.find(function(r) { return r && r.ticker === symbol; }) || null;
+  var source = result ? srcLabel : 'none';
+  var timestamp = result ? (result._timestamp || result._orchestratedAt || null) : null;
+  var tsMs = timestamp ? new Date(timestamp).getTime() : NaN;
+  var ageMs = (timestamp && !isNaN(tsMs)) ? (Date.now() - tsMs) : null;
+  var stale = (ageMs === null) || (ageMs > 48 * 60 * 60 * 1000);
+  return { result: result, source: source, timestamp: timestamp, ageMs: ageMs, stale: stale };
 }
 
 function _updateViewResultsBtn() {
@@ -4684,7 +4698,8 @@ function _renderPortfolioPanel() {
         card.appendChild(mktEl);
       }
       if (window.PT_ENABLE_PORTFOLIO_RESEARCH === true) {
-        var res = _getResearchForHolding(sym);
+        var _resolved = _resolveResearchForHolding(sym);
+        var res = _resolved.result;
         var resRow = document.createElement('div');
         resRow.className = 'pf-pos-research';
         if (!res) {
@@ -4698,10 +4713,8 @@ function _renderPortfolioPanel() {
           resStEl.textContent = 'AI unavailable';
           resRow.appendChild(resStEl);
         } else {
-          var ts = res._timestamp || res._orchestratedAt || null;
-          var tsMs = ts ? new Date(ts).getTime() : NaN;
-          var ageMs = (ts && !isNaN(tsMs)) ? (Date.now() - tsMs) : null;
-          var isStale = (ageMs === null) || (ageMs > 48 * 60 * 60 * 1000);
+          var isStale = _resolved.stale;
+          var ageMs = _resolved.ageMs;
           var resStEl = document.createElement('span');
           resStEl.className = 'pf-res-state ' + (isStale ? 'stale' : 'found');
           resStEl.textContent = isStale ? 'Stale' : 'Research';
@@ -4745,6 +4758,12 @@ function _renderPortfolioPanel() {
             var _ageH = Math.round(ageMs / 3600000);
             ageEl.textContent = _ageH < 1 ? '< 1h ago' : _ageH < 48 ? _ageH + 'h ago' : Math.round(ageMs / 86400000) + 'd ago';
             resRow.appendChild(ageEl);
+          }
+          if (_resolved.source !== 'none') {
+            var provEl = document.createElement('span');
+            provEl.className = 'pf-res-provenance';
+            provEl.textContent = _resolved.source === "session" ? "· This session’s scan" : "· Saved scan";
+            resRow.appendChild(provEl);
           }
         }
         card.appendChild(resRow);
