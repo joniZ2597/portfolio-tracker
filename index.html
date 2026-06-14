@@ -2885,6 +2885,7 @@ async function analyzeChunk(batch, today) {
 
 // ── COCKPIT STATE ─────────────────────────────────────────
 let _cockpitResults = [];
+let _cockpitResultsSource = 'session'; // in-memory only; 'session' = current-session scan, 'saved' = restored from pt_results
 let _activeTicker   = null;
 let _tsCardCollapsed = true; // in-memory only; resets on reload
 let _sigCardCollapsed = true;
@@ -3041,7 +3042,7 @@ function _getResearchForHolding(symbol) {
 function _resolveResearchForHolding(symbol) {
   var hasCockpit = _cockpitResults && _cockpitResults.length > 0;
   var src = hasCockpit ? _cockpitResults : _srSafeParseResults();
-  var srcLabel = hasCockpit ? 'session' : 'saved';
+  var srcLabel = hasCockpit ? (_cockpitResultsSource || 'session') : 'saved';
   var result = src.find(function(r) { return r && r.ticker === symbol; }) || null;
   var source = result ? srcLabel : 'none';
   var timestamp = result ? (result._timestamp || result._orchestratedAt || null) : null;
@@ -3050,7 +3051,6 @@ function _resolveResearchForHolding(symbol) {
   var stale = (ageMs === null) || (ageMs > 48 * 60 * 60 * 1000);
   return { result: result, source: source, timestamp: timestamp, ageMs: ageMs, stale: stale };
 }
-
 
 function _updateViewResultsBtn() {
   const btn = document.getElementById('viewResultsBtn');
@@ -3627,8 +3627,9 @@ function renderWatchlistRows(scanResults) {
   updateScanColToggle();
 }
 
-function renderResults(allResults, dateStr) {
+function renderResults(allResults, dateStr, sourceTag) {
   _cockpitResults = allResults;
+  _cockpitResultsSource = sourceTag || 'session';
   const section = document.getElementById('resultsSection');
   if (section) section.style.display = 'block';
   const es = document.getElementById('emptyState');
@@ -4748,22 +4749,22 @@ function _renderPortfolioPanel() {
             setupEl.textContent = _setupEntry[0];
             resRow.appendChild(setupEl);
           }
-          if (!isStale && (res._catalystDirection === ‘bullish’ || res._catalystDirection === ‘mixed’ || res._catalystDirection === ‘bearish’)) {
-            var catEl = document.createElement(‘span’);
-            catEl.className = ‘pf-res-catalyst ‘ + (res._catalystDirection === ‘bullish’ ? ‘pos’ : res._catalystDirection === ‘bearish’ ? ‘neg’ : ‘warn’);
-            catEl.textContent = ‘CATALYST ‘ + res._catalystDirection.toUpperCase();
+          if (!isStale && (res._catalystDirection === 'bullish' || res._catalystDirection === 'mixed' || res._catalystDirection === 'bearish')) {
+            var catEl = document.createElement('span');
+            catEl.className = 'pf-res-catalyst ' + (res._catalystDirection === 'bullish' ? 'pos' : res._catalystDirection === 'bearish' ? 'neg' : 'warn');
+            catEl.textContent = 'CATALYST ' + res._catalystDirection.toUpperCase();
             resRow.appendChild(catEl);
           }
           if (ageMs !== null) {
-            var ageEl = document.createElement(‘span’);
-            ageEl.className = ‘pf-res-age’;
+            var ageEl = document.createElement('span');
+            ageEl.className = 'pf-res-age';
             var _ageH = Math.round(ageMs / 3600000);
-            ageEl.textContent = _ageH < 1 ? ‘< 1h ago’ : _ageH < 48 ? _ageH + ‘h ago’ : Math.round(ageMs / 86400000) + ‘d ago’;
+            ageEl.textContent = _ageH < 1 ? '< 1h ago' : _ageH < 48 ? _ageH + 'h ago' : Math.round(ageMs / 86400000) + 'd ago';
             resRow.appendChild(ageEl);
           }
-          if (_resolved.source !== ‘none’) {
-            var provEl = document.createElement(‘span’);
-            provEl.className = ‘pf-res-provenance’;
+          if (_resolved.source !== 'none') {
+            var provEl = document.createElement('span');
+            provEl.className = 'pf-res-provenance';
             provEl.textContent = _resolved.source === "session" ? "· This session’s scan" : "· Saved scan";
             resRow.appendChild(provEl);
           }
@@ -6434,7 +6435,8 @@ function init() {
   // Restore saved results first (sets _cockpitResults without auto-selecting)
   if (results.length) {
     const dateStr = localStorage.getItem('pt_date') || '';
-    _cockpitResults = results;
+    _cockpitResults = Array.isArray(results) ? results : [];
+    _cockpitResultsSource = 'saved';
     const section = document.getElementById('resultsSection');
     if (section) section.style.display = 'block';
     const dateEl = document.getElementById('resultsDate');
@@ -6465,7 +6467,7 @@ function init() {
     if (savedActive) localStorage.removeItem('pt_active_ticker');
     if (results.length) {
       const dateStr = localStorage.getItem('pt_date') || '';
-      renderResults(results, dateStr);
+      renderResults(results, dateStr, 'saved');
     }
   }
 }
