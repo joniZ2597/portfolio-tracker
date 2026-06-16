@@ -746,6 +746,18 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-res-catalyst.neg{color:var(--red2)}
 .pf-res-age{font-family:var(--mono);font-size:9px;color:var(--text3)}
 .pf-res-provenance{font-family:var(--mono);font-size:8px;color:var(--text3);opacity:.6;width:100%;margin-top:1px;border-top:1px dashed rgba(255,255,255,.06);padding-top:2px}
+.pf-res-action{font-family:var(--mono);font-size:9px;letter-spacing:.4px;padding:2px 5px;border-radius:2px;border:1px solid;font-weight:600}
+.pf-res-action.buy{color:var(--green2);border-color:var(--green2)}
+.pf-res-action.hold-wait{color:var(--yellow2);border-color:var(--yellow2)}
+.pf-res-action.avoid{color:var(--red2);border-color:var(--red2)}
+.pf-res-revision{font-family:var(--mono);font-size:9px;letter-spacing:.4px;padding:2px 5px;border-radius:2px;border:1px solid var(--border2);color:var(--text3)}
+.pf-res-revision.up{color:var(--green2)}
+.pf-res-revision.down{color:var(--red2)}
+.pf-res-revision.mixed{color:var(--yellow2)}
+.pf-res-revision.stable{color:var(--text2)}
+.pf-res-analyst{font-family:var(--mono);font-size:9px;letter-spacing:.4px;padding:2px 5px;border-radius:2px;border:1px solid var(--border2);color:var(--text3)}
+.pf-res-detail{font-family:var(--mono);font-size:8px;color:var(--text3);opacity:.8;width:100%;margin-top:2px;padding-top:2px;white-space:normal;line-height:1.4}
+.pf-res-detail-lbl{font-weight:600;color:var(--text2);margin-right:4px}
 /* ─── PORTFOLIO PANEL (Slice 1C-4A: Coverage Aggregates) ─── */
 .pf-coverage{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 16px;margin-bottom:12px;display:flex;gap:24px;flex-wrap:wrap}
 .pf-cov-stat{display:flex;flex-direction:column;gap:3px}
@@ -4814,6 +4826,33 @@ function _renderPortfolioPanel() {
             catEl.textContent = 'CATALYST ' + res._catalystDirection.toUpperCase();
             resRow.appendChild(catEl);
           }
+          if (isStale === false) {
+            var _actionAllowlist = {buy:'BUY',hold_wait:'WAIT',avoid:'AVOID'};
+            var _actionClsMap = {buy:'buy',hold_wait:'hold-wait',avoid:'avoid'};
+            if (res.action && _actionAllowlist[res.action]) {
+              var actEl = document.createElement('span');
+              actEl.className = 'pf-res-action ' + _actionClsMap[res.action];
+              actEl.textContent = _actionAllowlist[res.action];
+              resRow.appendChild(actEl);
+            }
+            var _revAllowlist = {upgrading:'↑ UPGRADING',downgrading:'↓ DOWNGRADING',mixed:'MIXED',stable:'STABLE'};
+            var _revClsMap = {upgrading:'up',downgrading:'down',mixed:'mixed',stable:'stable'};
+            var _revDir = (res._catalysts && res._catalysts.revisionDir) || null;
+            if (_revDir && _revAllowlist[_revDir]) {
+              var revEl = document.createElement('span');
+              revEl.className = ('pf-res-revision ' + _revClsMap[_revDir]).trim();
+              revEl.textContent = _revAllowlist[_revDir];
+              resRow.appendChild(revEl);
+            }
+            var _catActs = (res._catalysts && Array.isArray(res._catalysts.analystActions)) ? res._catalysts.analystActions : [];
+            var _firstAct = _catActs.length > 0 ? _catActs[0] : null;
+            if (_firstAct && typeof _firstAct.bank === 'string' && _firstAct.bank && typeof _firstAct.target === 'number') {
+              var ptEl = document.createElement('span');
+              ptEl.className = 'pf-res-analyst';
+              ptEl.textContent = String(_firstAct.bank).slice(0, 25) + ' PT $' + _firstAct.target;
+              resRow.appendChild(ptEl);
+            }
+          }
           if (ageMs !== null) {
             var ageEl = document.createElement('span');
             ageEl.className = 'pf-res-age';
@@ -4829,6 +4868,21 @@ function _renderPortfolioPanel() {
           }
         }
         card.appendChild(resRow);
+        if (isStale === false) {
+          var _krVal = (typeof res.key_risk === 'string') ? res.key_risk.trim() : '';
+          if (_krVal && _krVal.toLowerCase() !== 'null') {
+            var detRow = document.createElement('div');
+            detRow.className = 'pf-res-detail';
+            var detLbl = document.createElement('span');
+            detLbl.className = 'pf-res-detail-lbl';
+            detLbl.textContent = 'Risk:';
+            var detVal = document.createElement('span');
+            detVal.textContent = _krVal;
+            detRow.appendChild(detLbl);
+            detRow.appendChild(detVal);
+            card.appendChild(detRow);
+          }
+        }
       }
       var cardActions = document.createElement('div');
       cardActions.className = 'pf-pos-card-actions';
