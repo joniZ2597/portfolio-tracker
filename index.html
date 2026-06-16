@@ -6440,6 +6440,12 @@ function checkAndShowKeyWarn() {
 
 // ── init ──────────────────────────────────────────────────────────────────────
 function init() {
+  try {
+    window.PT_ENABLE_PORTFOLIO_RESEARCH =
+      (localStorage.getItem('pt_enable_portfolio_research') === 'true');
+  } catch (_) {
+    window.PT_ENABLE_PORTFOLIO_RESEARCH = false;
+  }
   // Phase 1: load + normalize watchlist from localStorage on startup
   loadWatchlist();
   // Show missing key warning on startup
