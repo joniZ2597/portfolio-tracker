@@ -4993,6 +4993,10 @@ function saveAddPosition() {
   if (manualPlPct !== undefined) entry.manualPlPct = manualPlPct;
   holdings[sym]   = entry;
   saveHoldings(holdings);
+  // EG-17A: one-way bridge — holding in pt_holdings must be reflected in watchlist position awareness
+  var _wlEnt17a = findTicker(sym);
+  var _curPos17a = (_wlEnt17a && _wlEnt17a.position) || {};
+  upsertTicker(sym, { position: _normalizePosition(Object.assign({}, _curPos17a, { hasPosition: true })) });
 
   if (isDuplicate) {
     warnEl.textContent = sym + ' already existed — position updated.';
@@ -5147,6 +5151,10 @@ function saveEditPosition() {
     delete holdings[_editPosSym].manualPlPct;
   }
   saveHoldings(holdings);
+  // EG-17A: one-way bridge — holding in pt_holdings must be reflected in watchlist position awareness
+  var _wlEnt17a = findTicker(_editPosSym);
+  var _curPos17a = (_wlEnt17a && _wlEnt17a.position) || {};
+  upsertTicker(_editPosSym, { position: _normalizePosition(Object.assign({}, _curPos17a, { hasPosition: true })) });
   closeEditPositionModal();
   _renderPortfolioPanel();
 }
