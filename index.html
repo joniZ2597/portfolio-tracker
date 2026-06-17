@@ -771,6 +771,23 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-sort-btn{font-family:var(--mono);font-size:10px;color:var(--text3);background:none;border:1px solid var(--border2);border-radius:3px;padding:2px 7px;cursor:pointer;transition:color 120ms,border-color 120ms}
 .pf-sort-btn:hover{color:var(--text2);border-color:var(--text3)}
 .pf-sort-btn.active{color:var(--accent);border-color:var(--accent)}
+/* ─── EG-07: Research Detail Panel ─── */
+.btn-pf-details{font-family:var(--mono);font-size:9px;color:var(--accent);background:none;border:1px solid rgba(75,130,241,.5);border-radius:3px;padding:4px 9px;cursor:pointer;margin-top:6px;transition:border-color 120ms}
+.btn-pf-details:hover{border-color:var(--accent)}
+.pf-rdp-overlay{position:fixed;inset:0;background:rgba(8,13,22,.72);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;box-sizing:border-box;overflow-y:auto}
+.pf-rdp-panel{background:var(--card);border:1px solid var(--border);border-radius:8px;width:100%;max-width:420px;padding:20px 22px;box-sizing:border-box}
+.pf-rdp-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:16px}
+.pf-rdp-hdr-left{flex:1;min-width:0}
+.pf-rdp-ticker{font-family:var(--mono);font-size:15px;font-weight:700;color:var(--text);letter-spacing:.5px}
+.pf-rdp-subtitle{font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:1.2px;margin-top:3px}
+.btn-pf-rdp-close{font-family:var(--mono);font-size:12px;color:var(--text3);background:none;border:1px solid var(--border2);border-radius:3px;padding:3px 8px;cursor:pointer;flex-shrink:0;transition:color 120ms,border-color 120ms}
+.btn-pf-rdp-close:hover{color:var(--text);border-color:var(--text3)}
+.pf-rdp-sections{display:flex;flex-direction:column}
+.pf-rdp-section{border-top:1px solid var(--border);padding:8px 0}
+.pf-rdp-section:first-child{border-top:none;padding-top:0}
+.pf-rdp-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px}
+.pf-rdp-val{font-family:var(--mono);font-size:11px;color:var(--text2);line-height:1.5}
+.pf-rdp-fallback{font-family:var(--mono);font-size:11px;color:var(--text3);font-style:italic;opacity:.55}
 </style>
 </head>
 <body>
@@ -4882,6 +4899,14 @@ function _renderPortfolioPanel() {
             detRow.appendChild(detVal);
             card.appendChild(detRow);
           }
+          (function(_sym, _res, _ageMs) {
+            var detailBtn = document.createElement('button');
+            detailBtn.className = 'btn-pf-details';
+            detailBtn.textContent = 'Details';
+            detailBtn.setAttribute('aria-label', 'Open research details for ' + _sym);
+            detailBtn.onclick = function() { _openResearchDetailPanel(_sym, _res, _ageMs, detailBtn); };
+            card.appendChild(detailBtn);
+          })(sym, res, ageMs);
         }
       }
       var cardActions = document.createElement('div');
@@ -4965,6 +4990,110 @@ function _updatePortfolioCard(sym, mkt) {
                         : 'pf-pos-mkt-chg--zero';
     el.appendChild(chgSpan);
   }
+}
+
+// ─── EG-07 Slice 1: Portfolio Research Detail Panel ──────────────────────────
+// Read-only. No localStorage writes. No fetch. Caller ensures G-R gate.
+function _openResearchDetailPanel(sym, res, ageMs, triggerBtn) {
+  var existing = document.getElementById('pf-rdp-overlay');
+  if (existing) existing.parentNode.removeChild(existing);
+
+  var _actionLabels = { buy: 'BUY', hold_wait: 'WAIT', avoid: 'AVOID' };
+  var FALLBACK = 'Not available in current research.';
+
+  function _mkSection(label, value) {
+    var sec = document.createElement('div');
+    sec.className = 'pf-rdp-section';
+    var lbl = document.createElement('div');
+    lbl.className = 'pf-rdp-lbl';
+    lbl.textContent = label;
+    sec.appendChild(lbl);
+    var val = document.createElement('div');
+    var str = (value !== null && value !== undefined) ? String(value).trim() : '';
+    if (str) {
+      val.className = 'pf-rdp-val';
+      val.textContent = str;
+    } else {
+      val.className = 'pf-rdp-fallback';
+      val.textContent = FALLBACK;
+    }
+    sec.appendChild(val);
+    return sec;
+  }
+
+  var actionVal = (res.action && _actionLabels[res.action]) ? _actionLabels[res.action] : null;
+
+  var catDir = res._catalystDirection || null;
+  var catVal = (catDir && catDir !== 'null') ? catDir.toUpperCase() : null;
+
+  var analystVal = null;
+  var _catActs = (res._catalysts && Array.isArray(res._catalysts.analystActions)) ? res._catalysts.analystActions : [];
+  if (_catActs.length > 0 && typeof _catActs[0].bank === 'string' && _catActs[0].bank && typeof _catActs[0].target === 'number') {
+    analystVal = String(_catActs[0].bank).slice(0, 40) + ' — PT $' + _catActs[0].target;
+  }
+
+  var keyRiskVal = (typeof res.key_risk === 'string' && res.key_risk.trim() && res.key_risk.trim().toLowerCase() !== 'null') ? res.key_risk.trim() : null;
+
+  var ageVal = null;
+  if (ageMs !== null && isFinite(ageMs) && ageMs >= 0) {
+    var _h = Math.round(ageMs / 3600000);
+    ageVal = _h < 1 ? 'Less than 1 hour ago' : _h < 48 ? _h + ' hours ago' : Math.round(ageMs / 86400000) + ' days ago';
+  }
+
+  var overlay = document.createElement('div');
+  overlay.id        = 'pf-rdp-overlay';
+  overlay.className = 'pf-rdp-overlay';
+  overlay.setAttribute('role',       'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', sym + ' Research Details');
+
+  var panel = document.createElement('div');
+  panel.className = 'pf-rdp-panel';
+
+  var hdr = document.createElement('div');
+  hdr.className = 'pf-rdp-hdr';
+  var hdrLeft = document.createElement('div');
+  hdrLeft.className = 'pf-rdp-hdr-left';
+  var tickerEl = document.createElement('div');
+  tickerEl.className   = 'pf-rdp-ticker';
+  tickerEl.textContent = sym;
+  var subtitleEl = document.createElement('div');
+  subtitleEl.className   = 'pf-rdp-subtitle';
+  subtitleEl.textContent = 'Research Detail';
+  hdrLeft.appendChild(tickerEl);
+  hdrLeft.appendChild(subtitleEl);
+  var closeBtn = document.createElement('button');
+  closeBtn.className   = 'btn-pf-rdp-close';
+  closeBtn.textContent = '✕';
+  closeBtn.setAttribute('aria-label', 'Close research detail panel');
+  hdr.appendChild(hdrLeft);
+  hdr.appendChild(closeBtn);
+  panel.appendChild(hdr);
+
+  var sections = document.createElement('div');
+  sections.className = 'pf-rdp-sections';
+  sections.appendChild(_mkSection('Action',             actionVal));
+  sections.appendChild(_mkSection('Catalyst Direction', catVal));
+  sections.appendChild(_mkSection('Analyst Action',     analystVal));
+  sections.appendChild(_mkSection('Key Risk',           keyRiskVal));
+  sections.appendChild(_mkSection('Research Age',       ageVal));
+  panel.appendChild(sections);
+
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+  closeBtn.focus();
+
+  function _close() {
+    if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    document.removeEventListener('keydown', _escHandler);
+    if (triggerBtn) triggerBtn.focus();
+  }
+  function _escHandler(e) {
+    if (e.key === 'Escape') _close();
+  }
+  closeBtn.onclick = _close;
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) _close(); });
+  document.addEventListener('keydown', _escHandler);
 }
 
 // ─── Portfolio / Holdings — Slice 1B-1: Add Position ─────────────────────────
