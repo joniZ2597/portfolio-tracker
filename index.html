@@ -786,7 +786,7 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-rdp-section{border-top:1px solid var(--border);padding:8px 0}
 .pf-rdp-section:first-child{border-top:none;padding-top:0}
 .pf-rdp-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px}
-.pf-rdp-val{font-family:var(--mono);font-size:11px;color:var(--text2);line-height:1.5}
+.pf-rdp-val{font-family:var(--mono);font-size:11px;color:var(--text2);line-height:1.5;overflow-wrap:anywhere}
 .pf-rdp-fallback{font-family:var(--mono);font-size:11px;color:var(--text3);font-style:italic;opacity:.55}
 </style>
 </head>
@@ -4996,7 +4996,10 @@ function _updatePortfolioCard(sym, mkt) {
 // Read-only. No localStorage writes. No fetch. Caller ensures G-R gate.
 function _openResearchDetailPanel(sym, res, ageMs, triggerBtn) {
   var existing = document.getElementById('pf-rdp-overlay');
-  if (existing) existing.parentNode.removeChild(existing);
+  if (existing) {
+    if (typeof existing._pfRdpClose === 'function') existing._pfRdpClose({ skipFocus: true });
+    else if (existing.parentNode) existing.parentNode.removeChild(existing);
+  }
 
   var _actionLabels = { buy: 'BUY', hold_wait: 'WAIT', avoid: 'AVOID' };
   var FALLBACK = 'Not available in current research.';
@@ -5083,14 +5086,15 @@ function _openResearchDetailPanel(sym, res, ageMs, triggerBtn) {
   document.body.appendChild(overlay);
   closeBtn.focus();
 
-  function _close() {
+  function _close(opts) {
     if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
     document.removeEventListener('keydown', _escHandler);
-    if (triggerBtn) triggerBtn.focus();
+    if (triggerBtn && !(opts && opts.skipFocus)) triggerBtn.focus();
   }
   function _escHandler(e) {
     if (e.key === 'Escape') _close();
   }
+  overlay._pfRdpClose = _close;
   closeBtn.onclick = _close;
   overlay.addEventListener('click', function(e) { if (e.target === overlay) _close(); });
   document.addEventListener('keydown', _escHandler);
