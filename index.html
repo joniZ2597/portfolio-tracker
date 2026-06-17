@@ -193,6 +193,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
   padding:4px 20px 9px;
   border-top:1px solid rgba(255,255,255,.04);
 }
+@media (max-width:420px) {
+  .ph-row2 { flex-wrap:wrap; row-gap:3px; }
+}
 .ph-avatar{
   width:34px;height:34px;border-radius:6px;flex-shrink:0;
   display:flex;align-items:center;justify-content:center;
@@ -217,6 +220,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .ph-bench-chip{font-family:var(--mono);font-size:9px;color:var(--text2);background:rgba(255,255,255,.05);border:1px solid var(--border2);border-radius:3px;padding:2px 6px;letter-spacing:.3px}
 .mp-panel-sub{font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:.5px;margin-top:-8px;margin-bottom:10px}
 .ph-updated{font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:.3px}
+.ph-updated--stale{color:var(--yellow2)}
+.ph-updated--vhi{color:var(--red2);opacity:.8}
 .ph-spacer{flex:1}
 .ph-mkt-pill{
   display:flex;align-items:center;gap:5px;
@@ -4024,13 +4029,26 @@ function renderMainPanel(item) {
                                _src.toLowerCase().includes('alpha') ? 'alphavantage' :
                                _src.toLowerCase()) : '';
   const _ts = item._timestamp || item._orchestratedAt || '';
+  // EG-18: scan age — null only on parse error; ≤0 means future/clock-skew
+  const _scanAgeMs = (function() {
+    if (!_ts) return null;
+    try { var _d = new Date(_ts); var _a = Date.now() - _d.getTime(); return isFinite(_a) ? _a : null; } catch(_e) { return null; }
+  })();
+  const _scanAgeCls = !_ts                                    ? ''
+    : (_scanAgeMs === null || _scanAgeMs <= 0)                ? ' ph-updated--vhi'
+    : _scanAgeMs > 72 * 3600000                               ? ' ph-updated--vhi'
+    : _scanAgeMs > 24 * 3600000                               ? ' ph-updated--stale'
+    :                                                           '';
   let lastUpdated = '';
   if (_ts) {
     try {
       const d = new Date(_ts);
-      const _tsNow = new Date();
-      const _tsSD = d.getFullYear()===_tsNow.getFullYear()&&d.getMonth()===_tsNow.getMonth()&&d.getDate()===_tsNow.getDate();
-      lastUpdated = _tsSD ? d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' · '+d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+      if (isNaN(d.getTime())) { lastUpdated = 'timestamp unclear'; }
+      else {
+        const _tsNow = new Date();
+        const _tsSD = d.getFullYear()===_tsNow.getFullYear()&&d.getMonth()===_tsNow.getMonth()&&d.getDate()===_tsNow.getDate();
+        lastUpdated = _tsSD ? d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('en-US',{month:'short',day:'numeric'})+' · '+d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+      }
     } catch(e) { lastUpdated = ''; }
   }
 
@@ -4049,6 +4067,16 @@ function renderMainPanel(item) {
                  : _ms === 'CLOSED'  ? 'Market closed'
                  : (_isOpen ? 'Market open · closes 4:00 PM ET' : 'Market closed');
   const mktCls   = _ms === 'REGULAR' ? 'open' : _ms ? 'closed' : (_isOpen ? 'open' : 'closed');
+  // EG-18: display-only pill qualification — mirrors Change A classification exactly
+  const _scanAgeSuspicious   = !!_ts && (_scanAgeMs === null || _scanAgeMs <= 0);
+  const _scanAgeVeryStale    = !!_ts && _scanAgeMs !== null && _scanAgeMs > 72 * 3600000;
+  const _scanAgeNeedsContext = _scanAgeSuspicious || _scanAgeVeryStale;
+  const _mktDspCls = _scanAgeNeedsContext ? 'closed' : mktCls;
+  const _mktLbl    = !_scanAgeNeedsContext ? mktLabel
+    : _scanAgeMs === null                  ? 'Data timestamp unclear'
+    : _scanAgeMs <= 0                      ? 'Data timestamp needs review'
+    : lastUpdated                          ? 'Data from ' + lastUpdated
+    :                                        'Data from prior scan';
 
   const _todayLbl  = _ms === 'REGULAR' ? 'today'
                    : (_ms === 'PRE' || _ms === 'POST' || _ms === 'CLOSED') ? 'regular close'
@@ -4222,7 +4250,7 @@ function renderMainPanel(item) {
         ${(dataSource || lastUpdated) ? `<div class="ph-divider"></div>` : ''}
         ${dataSource  ? `<span class="ph-source">src: ${dataSource}</span>` : ''}
         ${(dataSource && lastUpdated) ? `<span style="color:var(--border2);margin:0 5px">·</span>` : ''}
-        ${lastUpdated ? `<span class="ph-updated">updated ${lastUpdated}</span>` : ''}
+        ${lastUpdated ? `<span class="ph-updated${_scanAgeCls}">updated ${lastUpdated}</span>` : ''}
         <div class="ph-spacer"></div>
         ${item.action && hasData && !_mktFailed
           ? `<span class="ph-rating-chip ${rCls}">RATING · ${rating.toUpperCase()}</span>`
@@ -4231,7 +4259,7 @@ function renderMainPanel(item) {
             : item.action && !hasData
               ? `<span class="ph-rating-chip err">DATA UNAVAILABLE</span>`
               : ''}
-        <div class="ph-mkt-pill ${mktCls}"><div class="ph-mkt-dot"></div>${mktLabel}</div>
+        <div class="ph-mkt-pill ${_mktDspCls}"><div class="ph-mkt-dot"></div>${_mktLbl}</div>
         <button class="ph-refresh" title="Refresh" onclick="_refreshPriceRow('${item.ticker}')">↻</button>
       </div>
       ${hasData && _showExt && _extPrice !== null ? `<div class="ph-ext-row"><span class="ph-ext-price">$${_extPrice.toFixed(2)}</span>${_extChgPct !== null ? `<span class="ph-ext-chg ${_extChgPct >= 0 ? 'pos' : 'neg'}">${_extChgPct >= 0 ? '+' : ''}${_extChgPct.toFixed(2)}%</span>` : ''}<span class="ph-ext-lbl">${_ms === 'PRE' ? 'Pre-market' : 'After-hours'}</span></div>` : ''}
@@ -6609,7 +6637,7 @@ async function runAnalysis() {
 }
 
 // ── Stale result guard (Improvement 3) ──────────────────────────────────────
-const STALE_RESULT_THRESHOLD_MS = 48 * 60 * 60 * 1000; // 48 hours
+const STALE_RESULT_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours (EG-18)
 
 function _hideStaleBanner() {
   const b = document.getElementById('stale-banner');
