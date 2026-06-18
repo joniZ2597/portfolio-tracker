@@ -20,5 +20,8 @@
   "homepage": "https://github.com/joniZ2597/portfolio-tracker#readme",
   "devDependencies": {
     "@playwright/test": "^1.60.0"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^10.7.9"
   }
 }
