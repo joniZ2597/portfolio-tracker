@@ -26,6 +26,10 @@ function json(statusCode, status, extra) {
   };
 }
 
+function isValidUpdatedAt(value) {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+}
+
 function isPlainObject(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -62,6 +66,13 @@ function isValidServerDoc(doc) {
     return false;
   }
 
+  if (
+    Object.prototype.hasOwnProperty.call(doc, "updatedAt") &&
+    !isValidUpdatedAt(doc.updatedAt)
+  ) {
+    return false;
+  }
+
   const list = Array.isArray(doc.tickers)
     ? doc.tickers
     : Array.isArray(doc.watchlist)
@@ -87,6 +98,10 @@ function whitelistServerDoc(doc) {
 
   if (Object.prototype.hasOwnProperty.call(doc, "sourceOrigin")) {
     whitelisted.sourceOrigin = doc.sourceOrigin;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(doc, "updatedAt")) {
+    whitelisted.updatedAt = doc.updatedAt;
   }
 
   return whitelisted;
