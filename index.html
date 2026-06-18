@@ -676,6 +676,11 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-panel-hdr{margin-bottom:20px;display:flex;align-items:flex-start;justify-content:space-between}
 .pf-panel-title{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px}
 .pf-panel-count{font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:.5px;margin-top:4px}
+/* EG-19B-2: narrow-width Portfolio header — let the action row (LOAD FROM CLOUD / BACKUP / RESTORE / Add Position) wrap so the rightmost button never clips at ~375-420px. CSS-only; desktop unchanged (wrap engages only on overflow). */
+@media (max-width:480px){
+  .pf-panel-hdr{flex-wrap:wrap;row-gap:10px}
+  .pf-panel-hdr>div:last-child{flex-wrap:wrap;justify-content:flex-end;row-gap:6px}
+}
 .pf-empty{text-align:center;padding:48px 20px}
 .pf-empty-icon{font-family:var(--mono);font-size:26px;color:var(--border2);margin-bottom:14px}
 .pf-empty-text{font-family:var(--mono);font-size:11px;color:var(--text3);letter-spacing:.5px}
