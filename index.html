@@ -4516,9 +4516,9 @@ function loadHoldings() {
   if (raw === null) return {};
   var parsed;
   try { parsed = JSON.parse(raw); }
-  catch(e) { localStorage.removeItem('pt_holdings'); return {}; }
+  catch(e) { console.warn('[PT] pt_holdings: JSON parse error — loading empty', e); return {}; }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    localStorage.removeItem('pt_holdings'); return {};
+    console.warn('[PT] pt_holdings: unexpected root type — loading empty'); return {};
   }
   var valid = Object.values(parsed).every(function(h) {
     return h !== null && typeof h === 'object' && !Array.isArray(h) &&
@@ -4527,7 +4527,7 @@ function loadHoldings() {
            (h.manualPlPct === undefined || h.manualPlPct === null ||
             (typeof h.manualPlPct === 'number' && isFinite(h.manualPlPct)));
   });
-  if (!valid) { localStorage.removeItem('pt_holdings'); return {}; }
+  if (!valid) { console.warn('[PT] pt_holdings: schema validation failed — loading empty'); return {}; }
   return parsed;
 }
 
@@ -4616,13 +4616,35 @@ function _renderPortfolioPanel() {
   hdrLeft.appendChild(title);
   hdrLeft.appendChild(countEl);
 
+  var hdrRight = document.createElement('div');
+  hdrRight.style.cssText = 'display:flex;align-items:center;gap:6px;flex-shrink:0';
+
+  var backupBtn = document.createElement('button');
+  backupBtn.className   = 'btn-export';
+  backupBtn.textContent = 'BACKUP ↓';
+  backupBtn.title       = 'Export holdings + watchlist backup';
+  backupBtn.onclick     = exportPortfolioBackup;
+
+  var restoreBtn = document.createElement('button');
+  restoreBtn.className   = 'btn-export';
+  restoreBtn.textContent = 'RESTORE ↑';
+  restoreBtn.title       = 'Import holdings + watchlist from backup file';
+  restoreBtn.onclick     = function() {
+    var inp = document.getElementById('pfImportInput');
+    if (inp) { inp.value = ''; inp.click(); }
+  };
+
   var addBtn = document.createElement('button');
   addBtn.className   = 'btn-add-position';
   addBtn.textContent = '＋ Add Position';
   addBtn.onclick     = openAddPositionModal;
 
+  hdrRight.appendChild(backupBtn);
+  hdrRight.appendChild(restoreBtn);
+  hdrRight.appendChild(addBtn);
+
   hdr.appendChild(hdrLeft);
-  hdr.appendChild(addBtn);
+  hdr.appendChild(hdrRight);
   panel.appendChild(hdr);
 
   if (count === 0) {
@@ -6451,6 +6473,181 @@ function exportJSON() {
   a.click();
 }
 
+// ── EG-19A: Timestamp + download helpers ─────────────────────────────────────
+function _ptTimestamp() {
+  var d = new Date(), pad = function(n) { return String(n).padStart(2, '0'); };
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+         '_' + pad(d.getHours()) + '-' + pad(d.getMinutes()) + '-' + pad(d.getSeconds());
+}
+function _ptDownload(blob, filename) {
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(function() { URL.revokeObjectURL(url); }, 0);
+}
+
+// ── EG-19A: Portfolio data backup export ─────────────────────────────────────
+function exportPortfolioBackup() {
+  var holdingsRaw = localStorage.getItem('pt_holdings');
+  var tickersRaw  = localStorage.getItem('pt_tickers');
+  var holdings, tickers;
+  if (holdingsRaw !== null) {
+    try { holdings = JSON.parse(holdingsRaw); }
+    catch(e) { showToast('Export failed: pt_holdings contains invalid JSON'); return; }
+    if (holdings === null || typeof holdings !== 'object' || Array.isArray(holdings)) {
+      showToast('Export failed: pt_holdings has unexpected format'); return;
+    }
+  } else { holdings = {}; }
+  if (tickersRaw !== null) {
+    try { tickers = JSON.parse(tickersRaw); }
+    catch(e) { showToast('Export failed: pt_tickers contains invalid JSON'); return; }
+    if (!Array.isArray(tickers)) {
+      showToast('Export failed: pt_tickers has unexpected format'); return;
+    }
+  } else { tickers = []; }
+  _ptDownload(
+    new Blob([JSON.stringify({
+      schemaVersion: 1,
+      exportedAt:    new Date().toISOString(),
+      appBaseline:   '5e26485',
+      sourceOrigin:  window.location.origin,
+      holdings:      holdings,
+      tickers:       tickers
+    }, null, 2)], { type: 'application/json' }),
+    'pt_backup_' + _ptTimestamp() + '.json'
+  );
+}
+
+// ── EG-19A: Pre-import backup — distinct filename, aborts on invalid current data ──
+// Returns true on success. Returns false and shows toast on failure (caller must not write).
+function _downloadPreImportBackup() {
+  var holdingsRaw = localStorage.getItem('pt_holdings');
+  var tickersRaw  = localStorage.getItem('pt_tickers');
+  var holdings, tickers;
+  if (holdingsRaw !== null) {
+    try { holdings = JSON.parse(holdingsRaw); }
+    catch(e) { showToast('Import aborted: current pt_holdings is invalid — cannot create pre-import backup.'); return false; }
+  } else { holdings = {}; }
+  if (tickersRaw !== null) {
+    try { tickers = JSON.parse(tickersRaw); }
+    catch(e) { showToast('Import aborted: current pt_tickers is invalid — cannot create pre-import backup.'); return false; }
+  } else { tickers = []; }
+  _ptDownload(
+    new Blob([JSON.stringify({
+      schemaVersion: 1,
+      exportedAt:    new Date().toISOString(),
+      appBaseline:   '5e26485',
+      sourceOrigin:  window.location.origin,
+      holdings:      holdings,
+      tickers:       tickers
+    }, null, 2)], { type: 'application/json' }),
+    'pt_pre_import_backup_' + _ptTimestamp() + '.json'
+  );
+  return true;
+}
+
+// ── EG-19A: Backup validation ─────────────────────────────────────────────────
+// Success: { error: null, holdings, tickers, exportedAt, sourceOrigin, appBaseline }
+// Failure: { error: string } — caller must write nothing.
+function _validatePortfolioBackup(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj))
+    return { error: 'Not a valid backup object.' };
+  if (obj.schemaVersion !== 1)
+    return { error: 'Unknown backup version (' + obj.schemaVersion + '). Only version 1 is supported.' };
+  if (typeof obj.exportedAt !== 'string' || !obj.exportedAt.trim())
+    return { error: 'exportedAt must be a non-empty string.' };
+  if (isNaN(Date.parse(obj.exportedAt)))
+    return { error: 'exportedAt is not a valid date: ' + obj.exportedAt };
+  if (typeof obj.sourceOrigin !== 'string' || !obj.sourceOrigin.trim())
+    return { error: 'sourceOrigin must be a non-empty string.' };
+  if (typeof obj.appBaseline !== 'string' || !obj.appBaseline.trim())
+    return { error: 'appBaseline must be a non-empty string.' };
+  var rawHoldings = obj.holdings;
+  if (rawHoldings === null || typeof rawHoldings !== 'object' || Array.isArray(rawHoldings))
+    return { error: 'holdings must be an object.' };
+  var normalizedHoldings = {};
+  var holdingVals = Object.values(rawHoldings);
+  for (var i = 0; i < holdingVals.length; i++) {
+    var h = holdingVals[i];
+    if (!h || typeof h !== 'object' || Array.isArray(h))
+      return { error: 'holdings entry ' + i + ' is not an object.' };
+    var sym = typeof h.symbol === 'string' ? h.symbol.trim().toUpperCase() : '';
+    if (!/^[A-Z]{1,10}$/.test(sym))
+      return { error: 'holdings entry has invalid symbol: ' + JSON.stringify(h.symbol) };
+    if (typeof h.positionSize !== 'number' || !isFinite(h.positionSize) || h.positionSize <= 0)
+      return { error: 'holdings[' + sym + ']: positionSize must be a positive finite number.' };
+    if (h.manualPlPct !== undefined && h.manualPlPct !== null &&
+        (typeof h.manualPlPct !== 'number' || !isFinite(h.manualPlPct)))
+      return { error: 'holdings[' + sym + ']: manualPlPct must be a finite number or null.' };
+    var entry = { symbol: sym, positionSize: h.positionSize };
+    if (typeof h.manualPlPct === 'number' && isFinite(h.manualPlPct)) entry.manualPlPct = h.manualPlPct;
+    normalizedHoldings[sym] = entry;
+  }
+  var rawTickers = obj.tickers;
+  if (!Array.isArray(rawTickers))
+    return { error: 'tickers must be an array.' };
+  if (rawTickers.length > 200)
+    return { error: 'tickers exceeds max size (got ' + rawTickers.length + ', max 200).' };
+  var seenSyms = new Set();
+  var normalizedTickers = [];
+  for (var j = 0; j < rawTickers.length; j++) {
+    var t = rawTickers[j];
+    if (!t || typeof t !== 'object' || Array.isArray(t))
+      return { error: 'tickers[' + j + ']: each item must be an object.' };
+    var tsym = typeof t.symbol === 'string' ? t.symbol.trim().toUpperCase() : '';
+    if (!/^[A-Z]{1,10}$/.test(tsym))
+      return { error: 'tickers[' + j + ']: invalid symbol: ' + JSON.stringify(t.symbol) };
+    if (seenSyms.has(tsym)) continue;
+    seenSyms.add(tsym);
+    normalizedTickers.push({
+      symbol:       tsym,
+      name:         typeof t.name === 'string' ? t.name.trim() : '',
+      exchange:     typeof t.exchange === 'string' ? t.exchange.trim() : '',
+      sector:       typeof t.sector === 'string' ? t.sector.trim() : '',
+      sectorEtf:    typeof t.sectorEtf === 'string' ? t.sectorEtf.trim().toUpperCase() : '',
+      personalNote: typeof t.personalNote === 'string' ? t.personalNote.trim() : '',
+      position:     _normalizePosition(t.position)
+    });
+  }
+  return {
+    error: null, holdings: normalizedHoldings, tickers: normalizedTickers,
+    exportedAt: obj.exportedAt.trim(), sourceOrigin: obj.sourceOrigin.trim(),
+    appBaseline: obj.appBaseline.trim()
+  };
+}
+
+// ── EG-19A: Portfolio data backup import ─────────────────────────────────────
+function importPortfolioBackup(file) {
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(ev) {
+    var parsed;
+    try { parsed = JSON.parse(ev.target.result); }
+    catch(e) { showToast('Import failed: invalid JSON'); return; }
+    var result = _validatePortfolioBackup(parsed);
+    if (result.error) { showToast('Import failed: ' + result.error); return; }
+    var hCount = Object.keys(result.holdings).length;
+    var tCount = result.tickers.length;
+    var msg = 'Restore from backup?\n\n' +
+              'From:     ' + result.sourceOrigin + '\n' +
+              'Exported: ' + result.exportedAt + '\n' +
+              'Baseline: ' + result.appBaseline + '\n\n' +
+              '• ' + hCount + ' holding' + (hCount !== 1 ? 's' : '') + '\n' +
+              '• ' + tCount + ' watchlist ticker' + (tCount !== 1 ? 's' : '') + '\n\n' +
+              'WARNING: This will replace your current holdings and watchlist.\n' +
+              'A pre-import backup will be downloaded first.';
+    if (!window.confirm(msg)) return;
+    if (!_downloadPreImportBackup()) return;
+    localStorage.setItem('pt_holdings', JSON.stringify(result.holdings));
+    localStorage.setItem('pt_tickers',  JSON.stringify(result.tickers));
+    loadWatchlist();
+    _renderPortfolioPanel();
+    showToast('Restored — ' + hCount + ' holding' + (hCount !== 1 ? 's' : '') + ', ' + tCount + ' ticker' + (tCount !== 1 ? 's' : ''));
+  };
+  reader.onerror = function() { showToast('Import failed: could not read file'); };
+  reader.readAsText(file);
+}
+
 // ── mergeResultsByTicker ────────────────────────────────────────────────────
 // Merges new results over previous, replacing per-ticker. Previous results
 // for tickers NOT in newResults are kept unchanged.
@@ -7060,6 +7257,10 @@ async function checkAllApis() {
 <div class="edit-overlay" id="editOverlay" onclick="if(event.target===this)closeEditModal()">
   <div class="edit-modal" id="editModal"></div>
 </div>
+
+<!-- EG-19A: portfolio backup import file picker — never visible, triggered programmatically -->
+<input type="file" id="pfImportInput" accept=".json" style="display:none"
+  onchange="if(this.files[0])importPortfolioBackup(this.files[0])">
 
 </body>
 </html>
