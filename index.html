@@ -687,8 +687,8 @@ select.edit-inp{appearance:none;cursor:pointer}
 /* ─── PORTFOLIO PANEL (Slice 1B-1: Add Position) ────────────────── */
 .btn-add-position{font-family:var(--mono);font-size:9px;font-weight:700;background:var(--blue);color:#fff;border:none;border-radius:3px;padding:5px 10px;cursor:pointer;flex-shrink:0}
 .btn-add-position:hover{background:#1D4ED8}
-#addPositionOverlay,#editPositionOverlay,#pfCloudOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center}
-#addPositionOverlay.open,#editPositionOverlay.open,#pfCloudOverlay.open{display:flex}
+#addPositionOverlay,#editPositionOverlay,#pfCloudOverlay,#pfCloudSaveOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center}
+#addPositionOverlay.open,#editPositionOverlay.open,#pfCloudOverlay.open,#pfCloudSaveOverlay.open{display:flex}
 .ap-modal{background:var(--card);border:1px solid var(--border);border-radius:8px;width:340px;max-width:95vw;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.6)}
 .ap-modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 12px;border-bottom:1px solid var(--border)}
 .ap-modal-title{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px}
@@ -4644,9 +4644,15 @@ function _renderPortfolioPanel() {
   addBtn.textContent = '＋ Add Position';
   addBtn.onclick     = openAddPositionModal;
 
-  // EG-19B-2: gated Load-From-Cloud button — left of BACKUP. Strict client gate;
-  // off (default / on reload) means no button, no modal, no fetch.
+  // EG-19B-2/4: gated cloud buttons — SAVE left of LOAD, both left of BACKUP. Strict client gate;
+  // off (default / on reload) means no buttons, no modals, no network.
   if (window.PT_ENABLE_PORTFOLIO_SYNC_CLIENT === true) {
+    var saveCloudBtn = document.createElement('button');
+    saveCloudBtn.className   = 'btn-export';
+    saveCloudBtn.textContent = 'SAVE TO CLOUD ☁︎↑';
+    saveCloudBtn.title       = 'Validate local data and push to cloud; overwrites the cloud copy entirely';
+    saveCloudBtn.onclick     = openSaveToCloudModal;
+    hdrRight.appendChild(saveCloudBtn);
     var cloudBtn = document.createElement('button');
     cloudBtn.className   = 'btn-export';
     cloudBtn.textContent = 'LOAD FROM CLOUD ☁︎↓';
@@ -7033,6 +7039,330 @@ function _applyCloudDoc(result) {
   showToast('Loaded from cloud — ' + hCount + ' holding' + (hCount !== 1 ? 's' : '') + ', ' + tCount + ' ticker' + (tCount !== 1 ? 's' : ''));
 }
 
+// ── EG-19B-4: Save To Cloud (gated · write · manual) ────────────────────────
+// Symmetric write pair to EG-19B-2. Reads raw localStorage, strictly validates,
+// confirms, then PUT to portfolio-sync. Never writes localStorage or echoes token.
+// Token memory-only: cleared immediately after read and in finally block.
+function openSaveToCloudModal() {
+  if (window.PT_ENABLE_PORTFOLIO_SYNC_CLIENT !== true) return;
+  var overlay = document.getElementById('pfCloudSaveOverlay');
+  var modal   = document.getElementById('pfCloudSaveModal');
+  if (!overlay || !modal) return;
+  modal.innerHTML = '';
+
+  var validated = _validateLocalForUpload();
+  var blocked = !!(validated.error || (validated.hCount === 0 && validated.tCount === 0));
+
+  var hdr = document.createElement('div');
+  hdr.className = 'ap-modal-hdr';
+  var titleEl = document.createElement('span');
+  titleEl.className   = 'ap-modal-title';
+  titleEl.textContent = 'Save To Cloud';
+  var closeBtn = document.createElement('button');
+  closeBtn.className   = 'api-close-btn';
+  closeBtn.textContent = '✕';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.onclick     = closeSaveToCloudModal;
+  hdr.appendChild(titleEl);
+  hdr.appendChild(closeBtn);
+
+  var body = document.createElement('div');
+  body.className = 'ap-modal-body';
+
+  function _sline(text, color) {
+    var d = document.createElement('div');
+    d.className = 'ap-lbl';
+    d.style.cssText = 'text-transform:none;letter-spacing:.3px;margin-bottom:6px;color:' + (color || 'var(--text2)');
+    d.textContent = text;
+    return d;
+  }
+
+  if (validated.error) {
+    body.appendChild(_sline('⚠ ' + validated.error, 'var(--red2)'));
+  } else if (validated.hCount === 0 && validated.tCount === 0) {
+    body.appendChild(_sline('⚠ Nothing to save — add a holding or watchlist ticker first.', 'var(--red2)'));
+  } else {
+    var row = document.createElement('div');
+    row.className = 'ap-field-row';
+    var lbl = document.createElement('label');
+    lbl.className   = 'ap-lbl';
+    lbl.textContent = 'Owner Token';
+    lbl.htmlFor     = 'pfCloudSaveToken';
+    var inp = document.createElement('input');
+    inp.id           = 'pfCloudSaveToken';
+    inp.type         = 'password';
+    inp.className    = 'ap-inp';
+    inp.placeholder  = 'Paste owner token';
+    inp.autocomplete = 'off';
+    inp.spellcheck   = false;
+    inp.setAttribute('autocapitalize', 'off');
+    inp.setAttribute('autocorrect', 'off');
+    row.appendChild(lbl);
+    row.appendChild(inp);
+    body.appendChild(row);
+
+    body.appendChild(_sline(
+      'Will upload: ' + validated.hCount + ' holding' + (validated.hCount !== 1 ? 's' : '') +
+      ', ' + validated.tCount + ' watchlist ticker' + (validated.tCount !== 1 ? 's' : '') + '.'));
+    body.appendChild(_sline(
+      'This overwrites the cloud copy entirely. Token is used once and never saved; it clears on reload.',
+      'var(--text3)'));
+
+    var snapBtn = document.createElement('button');
+    snapBtn.className   = 'btn-edit-cancel';
+    snapBtn.textContent = 'Download snapshot first (optional)';
+    snapBtn.style.cssText = 'margin-bottom:10px;font-size:9px';
+    snapBtn.onclick = function() { exportPortfolioBackup(); };
+    body.appendChild(snapBtn);
+
+    var cbRow = document.createElement('label');
+    cbRow.style.cssText = 'display:flex;align-items:flex-start;gap:8px;margin-top:4px;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--text2)';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id   = 'pfCloudSaveConfirm';
+    cb.style.cssText = 'margin-top:2px;flex-shrink:0';
+    var cbTxt = document.createElement('span');
+    cbTxt.textContent = 'I understand this overwrites the cloud portfolio.';
+    cbRow.appendChild(cb);
+    cbRow.appendChild(cbTxt);
+    body.appendChild(cbRow);
+  }
+
+  var warn = document.createElement('div');
+  warn.id        = 'pfCloudSaveWarn';
+  warn.className = 'ap-warn';
+  body.appendChild(warn);
+
+  var actions = document.createElement('div');
+  actions.className = 'ap-actions';
+  var cancelBtn = document.createElement('button');
+  cancelBtn.className   = 'btn-edit-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick     = closeSaveToCloudModal;
+  actions.appendChild(cancelBtn);
+  if (!blocked) {
+    var pushBtn = document.createElement('button');
+    pushBtn.id          = 'pfCloudSavePushBtn';
+    pushBtn.className    = 'btn-edit-save';
+    pushBtn.textContent = 'Push to Cloud';
+    pushBtn.onclick     = _runSaveToCloud;
+    actions.appendChild(pushBtn);
+  }
+
+  modal.appendChild(hdr);
+  modal.appendChild(body);
+  modal.appendChild(actions);
+
+  overlay.classList.add('open');
+  document.addEventListener('keydown', _pfSaveEscape);
+  if (!blocked) setTimeout(function() { var f = document.getElementById('pfCloudSaveToken'); if (f) f.focus(); }, 30);
+}
+
+function _pfSaveEscape(e) { if (e.key === 'Escape') closeSaveToCloudModal(); }
+
+function closeSaveToCloudModal() {
+  var inp = document.getElementById('pfCloudSaveToken');
+  if (inp) inp.value = '';
+  var overlay = document.getElementById('pfCloudSaveOverlay');
+  if (overlay) overlay.classList.remove('open');
+  document.removeEventListener('keydown', _pfSaveEscape);
+}
+
+// PUT status → user-facing message. Superset of Load map; adds 415/413/400/422.
+function _pfSaveStatusMsg(status) {
+  switch (status) {
+    case 'DISABLED':               return 'Cloud sync is disabled on the server.';
+    case 'CONFIGURATION_MISSING':  return 'Server is not configured for cloud sync.';
+    case 'AUTH_FAILED':            return 'Authentication failed — check the owner token.';
+    case 'UNSUPPORTED_MEDIA_TYPE': return 'Upload rejected (content type).';
+    case 'PAYLOAD_TOO_LARGE':      return 'Portfolio too large to sync (max 256 KB).';
+    case 'BAD_REQUEST':            return 'Upload was malformed. Try again.';
+    case 'INVALID_INPUT_DOC':      return 'Local data failed validation and was not saved.';
+    case 'SERVER_ERROR':           return 'The server reported an error. Try again later.';
+    default:                       return 'Unexpected server response (' + String(status) + ').';
+  }
+}
+
+// Reads raw localStorage and strictly validates holdings + tickers for upload.
+// Returns { error: string } on any failure, or { holdings, tickers, hCount, tCount }.
+// Never calls loadHoldings() or _pfLocalTickerCount(). Never normalizes invalid data.
+function _validateLocalForUpload() {
+  var rawH = localStorage.getItem('pt_holdings');
+  var rawT = localStorage.getItem('pt_tickers');
+
+  var parsedH, parsedT;
+  if (rawH === null) {
+    parsedH = {};
+  } else {
+    try { parsedH = JSON.parse(rawH); }
+    catch (_) { return { error: 'Local holdings data is corrupted (invalid JSON). Nothing was uploaded.' }; }
+  }
+  if (rawT === null) {
+    parsedT = [];
+  } else {
+    try { parsedT = JSON.parse(rawT); }
+    catch (_) { return { error: 'Local watchlist data is corrupted (invalid JSON). Nothing was uploaded.' }; }
+  }
+
+  if (parsedH === null || typeof parsedH !== 'object' || Array.isArray(parsedH))
+    return { error: 'Local holdings data has an unexpected format. Nothing was uploaded.' };
+  if (!Array.isArray(parsedT))
+    return { error: 'Local watchlist data is corrupted (not an array). Nothing was uploaded.' };
+  if (parsedT.length > 200)
+    return { error: 'Watchlist exceeds 200 tickers — cannot save to cloud.' };
+
+  var holdings = {};
+  var hVals = Object.values(parsedH);
+  for (var i = 0; i < hVals.length; i++) {
+    var h = hVals[i];
+    if (!h || typeof h !== 'object' || Array.isArray(h))
+      return { error: 'A holding entry has an invalid format. Nothing was uploaded.' };
+    var sym = typeof h.symbol === 'string' ? h.symbol.trim().toUpperCase() : '';
+    if (!/^[A-Z]{1,10}$/.test(sym))
+      return { error: 'A holding has an invalid symbol. Fix it before saving to cloud.' };
+    if (typeof h.positionSize !== 'number' || !isFinite(h.positionSize) || h.positionSize <= 0)
+      return { error: 'A holding has an invalid position size. Fix it before saving to cloud.' };
+    if (h.manualPlPct !== undefined && h.manualPlPct !== null &&
+        (typeof h.manualPlPct !== 'number' || !isFinite(h.manualPlPct)))
+      return { error: 'A holding has an invalid P&L value. Fix it before saving to cloud.' };
+    var entry = { symbol: sym, positionSize: h.positionSize };
+    if (typeof h.manualPlPct === 'number' && isFinite(h.manualPlPct)) entry.manualPlPct = h.manualPlPct;
+    holdings[sym] = entry;
+  }
+
+  var seenSyms = new Set();
+  var tickers = [];
+  for (var j = 0; j < parsedT.length; j++) {
+    var t = parsedT[j];
+    if (!t || typeof t !== 'object' || Array.isArray(t))
+      return { error: 'A watchlist entry has an invalid format. Nothing was uploaded.' };
+    var tsym = typeof t.symbol === 'string' ? t.symbol.trim().toUpperCase() : '';
+    if (!/^[A-Z]{1,10}$/.test(tsym))
+      return { error: 'A watchlist ticker has an invalid symbol. Nothing was uploaded.' };
+    // Validate position before dedup — invalid duplicate must still block PUT.
+    // _normalizePosition silently coerces bad values and must not be used here.
+    var pos = t.position;
+    if (!pos || typeof pos !== 'object' || Array.isArray(pos))
+      return { error: 'Watchlist ticker ' + tsym + ' has a missing or invalid position field. Nothing was uploaded.' };
+    if (typeof pos.hasPosition !== 'boolean')
+      return { error: 'Watchlist ticker ' + tsym + ': position.hasPosition must be boolean. Nothing was uploaded.' };
+    if (typeof pos.partialProfitTaken !== 'boolean')
+      return { error: 'Watchlist ticker ' + tsym + ': position.partialProfitTaken must be boolean. Nothing was uploaded.' };
+    if (pos.positionValue !== null &&
+        (typeof pos.positionValue !== 'number' || !isFinite(pos.positionValue) || pos.positionValue <= 0))
+      return { error: 'Watchlist ticker ' + tsym + ': position.positionValue is invalid. Nothing was uploaded.' };
+    if (pos.pnlPercent !== null &&
+        (typeof pos.pnlPercent !== 'number' || !isFinite(pos.pnlPercent)))
+      return { error: 'Watchlist ticker ' + tsym + ': position.pnlPercent is invalid. Nothing was uploaded.' };
+    // Dedup after full validation — first valid occurrence wins; valid duplicates skipped.
+    if (seenSyms.has(tsym)) continue;
+    seenSyms.add(tsym);
+    tickers.push({
+      symbol:       tsym,
+      name:         typeof t.name === 'string' ? t.name.trim() : '',
+      exchange:     typeof t.exchange === 'string' ? t.exchange.trim() : '',
+      sector:       typeof t.sector === 'string' ? t.sector.trim() : '',
+      sectorEtf:    typeof t.sectorEtf === 'string' ? t.sectorEtf.trim().toUpperCase() : '',
+      personalNote: typeof t.personalNote === 'string' ? t.personalNote.trim() : '',
+      position: {
+        hasPosition:        pos.hasPosition,
+        positionValue:      pos.positionValue,
+        pnlPercent:         pos.pnlPercent,
+        partialProfitTaken: pos.partialProfitTaken
+      }
+    });
+  }
+
+  var hCount = Object.keys(holdings).length;
+  var tCount = tickers.length;
+  return { holdings: holdings, tickers: tickers, hCount: hCount, tCount: tCount };
+}
+
+async function _runSaveToCloud() {
+  if (window.PT_ENABLE_PORTFOLIO_SYNC_CLIENT !== true) return;
+  var inp     = document.getElementById('pfCloudSaveToken');
+  var warnEl  = document.getElementById('pfCloudSaveWarn');
+  var pushBtn = document.getElementById('pfCloudSavePushBtn');
+  if (!inp || !warnEl) return;
+  warnEl.textContent = '';
+  warnEl.style.color = 'var(--yellow2)';
+
+  var token = inp.value.trim();
+  inp.value = '';
+  if (!token) {
+    warnEl.textContent = 'Enter the owner token to continue.';
+    inp.focus();
+    return;
+  }
+
+  var validated = _validateLocalForUpload();
+  if (validated.error) {
+    warnEl.style.color = 'var(--red2)';
+    warnEl.textContent = validated.error;
+    token = '';
+    return;
+  }
+  if (validated.hCount === 0 && validated.tCount === 0) {
+    warnEl.style.color = 'var(--red2)';
+    warnEl.textContent = 'Nothing to save — add a holding or watchlist ticker first.';
+    token = '';
+    return;
+  }
+
+  var cb = document.getElementById('pfCloudSaveConfirm');
+  if (!cb || !cb.checked) {
+    warnEl.textContent = 'Tick the confirmation box to proceed.';
+    token = '';
+    return;
+  }
+
+  if (pushBtn) { pushBtn.disabled = true; pushBtn.textContent = '⟳ Saving…'; }
+
+  var status = null, httpStatus = 0, serverUpdatedAt = null;
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, 12000);
+  try {
+    var payload = JSON.stringify({ schemaVersion: 1, holdings: validated.holdings, tickers: validated.tickers });
+    var r = await fetch('/.netlify/functions/portfolio-sync', {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: payload,
+      signal: controller.signal
+    });
+    httpStatus = r.status;
+    var txt = await r.text();
+    var raw = null;
+    try { raw = JSON.parse(txt); } catch (_) {}
+    if (raw && typeof raw === 'object') {
+      status = raw.status;
+      if (typeof raw.updatedAt === 'string') serverUpdatedAt = raw.updatedAt;
+    } else {
+      status = 'CLIENT_HTTP_ERROR';
+    }
+  } catch (e) {
+    status = (e && e.name === 'AbortError') ? 'CLIENT_TIMEOUT' : 'CLIENT_FETCH_ERROR';
+  } finally {
+    clearTimeout(timer);
+    token = '';
+  }
+
+  if (pushBtn) { pushBtn.disabled = false; pushBtn.textContent = 'Push to Cloud'; }
+
+  if (status === 'CLIENT_TIMEOUT')     { warnEl.textContent = 'Request timed out. Try again.'; return; }
+  if (status === 'CLIENT_FETCH_ERROR') { warnEl.textContent = 'Network error — could not reach the server.'; return; }
+  if (status === 'CLIENT_HTTP_ERROR')  { warnEl.textContent = 'Unreadable server response (HTTP ' + httpStatus + ').'; return; }
+
+  if (status !== 'OK') { warnEl.textContent = _pfSaveStatusMsg(status); return; }
+
+  if (window.PT_ENABLE_PORTFOLIO_SYNC_CLIENT !== true) return;
+  closeSaveToCloudModal();
+  var hc = validated.hCount, tc = validated.tCount;
+  var msg = 'Saved to cloud — ' + hc + ' holding' + (hc !== 1 ? 's' : '') +
+            ', ' + tc + ' ticker' + (tc !== 1 ? 's' : '');
+  if (serverUpdatedAt) msg += ' (updated ' + serverUpdatedAt + ')';
+  showToast(msg);
+}
+
 // ── mergeResultsByTicker ────────────────────────────────────────────────────
 // Merges new results over previous, replacing per-ticker. Previous results
 // for tickers NOT in newResults are kept unchanged.
@@ -7641,6 +7971,11 @@ async function checkAllApis() {
 <!-- EG-19B-2: LOAD FROM CLOUD MODAL — content built by openLoadFromCloudModal() via DOM methods -->
 <div id="pfCloudOverlay" onclick="if(event.target===this)closeLoadFromCloudModal()">
   <div class="ap-modal" id="pfCloudModal"></div>
+</div>
+
+<!-- EG-19B-4: SAVE TO CLOUD MODAL — content built by openSaveToCloudModal() via DOM methods -->
+<div id="pfCloudSaveOverlay" onclick="if(event.target===this)closeSaveToCloudModal()">
+  <div class="ap-modal" id="pfCloudSaveModal"></div>
 </div>
 
 <!-- EDIT TICKER MODAL — content built by openEditModal() via DOM methods -->
