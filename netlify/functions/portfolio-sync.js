@@ -1,4 +1,4 @@
-const { getStore } = require("@netlify/blobs");
+const { getStore, connectLambda } = require("@netlify/blobs");
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -337,6 +337,20 @@ exports.handler = async function(event) {
 
   if (getBearerToken(event) !== ownerToken) {
     return json(401, "AUTH_FAILED");
+  }
+
+  // connectLambda injects the Blobs context that legacy Lambda functions do not
+  // receive ambiently. Run after gate + auth, before any getStore(); guarded by
+  // event.blobs so an absent context falls through to the existing path.
+  if (event.blobs) {
+    try {
+      connectLambda(event);
+    } catch (error) {
+      console.error("portfolio-sync blobs context init failed", {
+        message: error && error.message ? error.message : "unknown"
+      });
+      return json(500, "SERVER_ERROR");
+    }
   }
 
   if (event.httpMethod === "PUT") {
