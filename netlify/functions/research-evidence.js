@@ -1,6 +1,7 @@
 'use strict';
 
 const SERVER_GATE = 'PT_ENABLE_RESEARCH_EVIDENCE_SERVER';
+const PROVIDER_SELECTOR = 'PT_EVIDENCE_PROVIDER';
 
 exports.handler = async function (event) {
   if (process.env[SERVER_GATE] !== 'true') {
@@ -56,18 +57,25 @@ function handlePost(event) {
     return error('INVALID_CATEGORIES');
   }
 
+  const providerName = process.env[PROVIDER_SELECTOR];
+  if (providerName !== 'mock') {
+    return res(500, { status: 'ERROR', reason: 'CONFIGURATION_MISSING' });
+  }
+
+  const provider = require('./lib/evidence-provider-mock');
+
   return res(200, {
     status: 'OK',
     schemaVersion: 1,
     ticker,
     categories,
     requestId: makeRequestId(),
-    results: [],
+    results: provider.getEvidence({ ticker, categories }),
     provenance: {
       evidenceClass: 'non_scoring_sidecar',
       scoringImpact: 'none',
       requiresVerification: true,
-      provider: null,
+      provider: 'mock',
       confidence: null
     },
     servedAt: new Date().toISOString()

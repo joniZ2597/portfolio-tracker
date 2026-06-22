@@ -4,6 +4,7 @@ const assert = require('assert');
 const { handler } = require('../netlify/functions/research-evidence');
 
 const GATE = 'PT_ENABLE_RESEARCH_EVIDENCE_SERVER';
+const PROVIDER = 'PT_EVIDENCE_PROVIDER';
 
 async function invoke(method, body) {
   const event = { httpMethod: method };
@@ -18,10 +19,14 @@ async function invoke(method, body) {
 }
 
 function setGate(value) {
+  setEnv(GATE, value);
+}
+
+function setEnv(name, value) {
   if (value === undefined) {
-    delete process.env[GATE];
+    delete process.env[name];
   } else {
-    process.env[GATE] = value;
+    process.env[name] = value;
   }
 }
 
@@ -33,9 +38,11 @@ function assertError(actual, statusCode, reason) {
 
 async function run() {
   const originalGate = process.env[GATE];
+  const originalProvider = process.env[PROVIDER];
 
   try {
     setGate(undefined);
+    setEnv(PROVIDER, undefined);
 
     let actual = await invoke('GET');
     assert.strictEqual(actual.response.statusCode, 200);
@@ -46,6 +53,7 @@ async function run() {
     assert.deepStrictEqual(actual.json, { status: 'DISABLED', reason: 'SERVER_DISABLED' });
 
     setGate('true');
+    setEnv(PROVIDER, undefined);
 
     actual = await invoke('OPTIONS');
     assert.strictEqual(actual.response.statusCode, 204);
@@ -59,6 +67,11 @@ async function run() {
     assertError(actual, 405, 'METHOD_NOT_ALLOWED');
 
     actual = await invoke('POST', JSON.stringify({ ticker: 'FROG', categories: ['earnings'] }));
+    assertError(actual, 500, 'CONFIGURATION_MISSING');
+
+    setEnv(PROVIDER, 'mock');
+
+    actual = await invoke('POST', JSON.stringify({ ticker: 'FROG', categories: ['earnings'] }));
     assert.strictEqual(actual.response.statusCode, 200);
     assert.strictEqual(actual.json.status, 'OK');
     assert.strictEqual(actual.json.schemaVersion, 1);
@@ -66,12 +79,13 @@ async function run() {
     assert.deepStrictEqual(actual.json.categories, ['earnings']);
     assert.strictEqual(typeof actual.json.requestId, 'string');
     assert.ok(actual.json.requestId.length > 0);
-    assert.deepStrictEqual(actual.json.results, []);
+    assert.ok(Array.isArray(actual.json.results));
+    assert.ok(actual.json.results.length > 0);
     assert.deepStrictEqual(actual.json.provenance, {
       evidenceClass: 'non_scoring_sidecar',
       scoringImpact: 'none',
       requiresVerification: true,
-      provider: null,
+      provider: 'mock',
       confidence: null
     });
     assert.strictEqual(typeof actual.json.servedAt, 'string');
@@ -123,6 +137,7 @@ async function run() {
     console.log('research_evidence_contract_test: PASS');
   } finally {
     setGate(originalGate);
+    setEnv(PROVIDER, originalProvider);
   }
 }
 
