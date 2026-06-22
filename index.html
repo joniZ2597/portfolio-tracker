@@ -1502,6 +1502,20 @@ function upsertTicker(symbol, fields) {
   saveWatchlist();
 }
 
+// EG-17: startup reconciliation — existing watchlist entries only; never creates new tickers.
+function _reconcileWatchlistPositionsFromHoldings() {
+  var held = loadHoldings();
+  var changed = false;
+  watchlist.forEach(function(entry) {
+    var sym = String((entry && entry.symbol) || '').trim().toUpperCase();
+    if (!sym || !Object.prototype.hasOwnProperty.call(held, sym)) return;
+    if (entry.position && entry.position.hasPosition === true) return;
+    entry.position = _normalizePosition(Object.assign({}, entry.position, { hasPosition: true }));
+    changed = true;
+  });
+  if (changed) saveWatchlist();
+}
+
 function setInScan(symbol, bool) {
   const entry = findTicker(symbol);
   if (entry) { entry.inScan = bool; }
@@ -7626,6 +7640,7 @@ function init() {
   }
   // Phase 1: load + normalize watchlist from localStorage on startup
   loadWatchlist();
+  _reconcileWatchlistPositionsFromHoldings(); // EG-17: repair hasPosition for existing holdings
   // Show missing key warning on startup
   checkAndShowKeyWarn();
   // Phase 2a: render sidebar rows on load (before any scan)
