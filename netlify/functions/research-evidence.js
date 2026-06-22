@@ -2,6 +2,7 @@
 
 const SERVER_GATE = 'PT_ENABLE_RESEARCH_EVIDENCE_SERVER';
 const PROVIDER_SELECTOR = 'PT_EVIDENCE_PROVIDER';
+const CACHE_GATE = 'PT_EVIDENCE_CACHE';
 
 exports.handler = async function (event) {
   if (process.env[SERVER_GATE] !== 'true') {
@@ -41,7 +42,7 @@ function res(statusCode, body) {
   };
 }
 
-function handlePost(event) {
+async function handlePost(event) {
   const body = parseBody(event && event.body);
   if (!body.ok) {
     return error('INVALID_JSON');
@@ -63,23 +64,62 @@ function handlePost(event) {
   }
 
   const provider = require('./lib/evidence-provider-mock');
+  const evidence = await getEvidence({
+    event,
+    provider,
+    providerName,
+    ticker,
+    categories
+  });
 
-  return res(200, {
-    status: 'OK',
-    schemaVersion: 1,
+  return res(200, okBody({
     ticker,
     categories,
+    results: evidence.results,
+    providerName,
+    cacheStatus: evidence.cacheStatus
+  }));
+}
+
+function getEvidence(params) {
+  const readProvider = () => params.provider.getEvidence({
+    ticker: params.ticker,
+    categories: params.categories
+  });
+
+  if (process.env[CACHE_GATE] !== 'true' || !(params.event && params.event.blobs)) {
+    return { results: readProvider(), cacheStatus: 'BYPASS' };
+  }
+
+  const cache = require('./lib/evidence-cache');
+  return cache.resolveEvidence({
+    event: params.event,
+    provider: params.providerName,
+    ticker: params.ticker,
+    categories: params.categories,
+    readProvider,
+    now: Date.now
+  });
+}
+
+function okBody(payload) {
+  return {
+    status: 'OK',
+    schemaVersion: 1,
+    ticker: payload.ticker,
+    categories: payload.categories,
     requestId: makeRequestId(),
-    results: provider.getEvidence({ ticker, categories }),
+    cacheStatus: payload.cacheStatus,
+    results: payload.results,
     provenance: {
       evidenceClass: 'non_scoring_sidecar',
       scoringImpact: 'none',
       requiresVerification: true,
-      provider: 'mock',
+      provider: payload.providerName,
       confidence: null
     },
     servedAt: new Date().toISOString()
-  });
+  };
 }
 
 function parseBody(rawBody) {

@@ -79,6 +79,7 @@ async function run() {
     assert.deepStrictEqual(actual.json.categories, ['earnings']);
     assert.strictEqual(typeof actual.json.requestId, 'string');
     assert.ok(actual.json.requestId.length > 0);
+    assert.strictEqual(actual.json.cacheStatus, 'BYPASS');
     assert.ok(Array.isArray(actual.json.results));
     assert.ok(actual.json.results.length > 0);
     assert.deepStrictEqual(actual.json.provenance, {
