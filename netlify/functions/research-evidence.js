@@ -13,8 +13,12 @@ exports.handler = async function (event) {
     return { statusCode: 204, headers: cors(), body: '' };
   }
 
-  if (method === 'GET' || method === 'POST') {
+  if (method === 'GET') {
     return res(200, { status: 'NOT_INVOKED', reason: 'SCAFFOLD_ONLY' });
+  }
+
+  if (method === 'POST') {
+    return handlePost(event);
   }
 
   return res(405, { status: 'ERROR', reason: 'METHOD_NOT_ALLOWED' });
@@ -34,4 +38,92 @@ function res(statusCode, body) {
     headers: { 'Content-Type': 'application/json', ...cors() },
     body: JSON.stringify(body)
   };
+}
+
+function handlePost(event) {
+  const body = parseBody(event && event.body);
+  if (!body.ok) {
+    return error('INVALID_JSON');
+  }
+
+  const ticker = normalizeTicker(body.value.ticker);
+  if (!ticker) {
+    return error('INVALID_TICKER');
+  }
+
+  const categories = normalizeCategories(body.value.categories);
+  if (!categories) {
+    return error('INVALID_CATEGORIES');
+  }
+
+  return res(200, {
+    status: 'OK',
+    schemaVersion: 1,
+    ticker,
+    categories,
+    requestId: makeRequestId(),
+    results: [],
+    provenance: {
+      evidenceClass: 'non_scoring_sidecar',
+      scoringImpact: 'none',
+      requiresVerification: true,
+      provider: null,
+      confidence: null
+    },
+    servedAt: new Date().toISOString()
+  });
+}
+
+function parseBody(rawBody) {
+  if (typeof rawBody !== 'string' || rawBody.trim() === '') {
+    return { ok: false };
+  }
+
+  try {
+    const value = JSON.parse(rawBody);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { ok: false };
+    }
+    return { ok: true, value };
+  } catch (_) {
+    return { ok: false };
+  }
+}
+
+function normalizeTicker(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const ticker = value.trim().toUpperCase();
+  return /^[A-Z]{1,10}$/.test(ticker) ? ticker : null;
+}
+
+function normalizeCategories(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 10) {
+    return null;
+  }
+
+  const categories = [];
+  for (const item of value) {
+    if (typeof item !== 'string') {
+      return null;
+    }
+
+    const category = item.trim();
+    if (!/^[a-z][a-z0-9_]{0,31}$/.test(category)) {
+      return null;
+    }
+    categories.push(category);
+  }
+
+  return categories;
+}
+
+function makeRequestId() {
+  return `re_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function error(reason) {
+  return res(400, { status: 'ERROR', reason });
 }
