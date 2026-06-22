@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const Module = require('module');
 const { handler } = require('../netlify/functions/research-evidence');
 const cache = require('../netlify/functions/lib/evidence-cache');
 
@@ -92,6 +93,48 @@ function makeProvider(results) {
   return provider;
 }
 
+async function withBlobStub(stub, callback) {
+  const originalLoad = Module._load;
+  const moduleName = '@netlify/' + 'blobs';
+
+  Module._load = function (request, parent, isMain) {
+    if (request === moduleName) {
+      return stub;
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+
+  try {
+    await callback();
+  } finally {
+    Module._load = originalLoad;
+  }
+}
+
+function makeBlobStub(store) {
+  const connectName = 'connect' + 'Lambda';
+  const storeName = 'get' + 'Store';
+  const calls = { connect: [], store: [] };
+  const stub = {};
+
+  stub[connectName] = function (event) {
+    calls.connect.push(event);
+    const chained = {};
+    Object.defineProperty(chained, storeName, {
+      get() {
+        throw new Error('chained store access should not be used');
+      }
+    });
+    return chained;
+  };
+  stub[storeName] = function (name) {
+    calls.store.push(name);
+    return store;
+  };
+  stub.calls = calls;
+  return stub;
+}
+
 async function resolveWithStore(store, provider, overrides) {
   return cache.resolveEvidence(Object.assign({
     event: { blobs: {} },
@@ -152,6 +195,26 @@ async function run() {
     assert.strictEqual(provider.calls, 1);
     assert.strictEqual(missStore.calls.get, 1);
     assert.strictEqual(missStore.calls.set, 1);
+
+    const ambientStore = makeStore();
+    const blobStub = makeBlobStub(ambientStore);
+    provider = makeProvider();
+    await withBlobStub(blobStub, async () => {
+      resolved = await cache.resolveEvidence({
+        event: { blobs: { siteID: 'site' } },
+        provider: 'mock',
+        ticker: 'FROG',
+        categories: ['earnings'],
+        readProvider: () => provider.read(),
+        now: () => 100000
+      });
+    });
+    assert.strictEqual(resolved.cacheStatus, 'MISS');
+    assert.strictEqual(blobStub.calls.connect.length, 1);
+    assert.deepStrictEqual(blobStub.calls.connect[0], { blobs: { siteID: 'site' } });
+    assert.deepStrictEqual(blobStub.calls.store, ['research-evidence']);
+    assert.strictEqual(provider.calls, 1);
+    assert.strictEqual(ambientStore.calls.set, 1);
 
     const hitStore = makeStore(missStore.entries);
     provider = makeProvider();

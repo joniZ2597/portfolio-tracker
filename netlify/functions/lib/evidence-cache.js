@@ -52,14 +52,14 @@ function getStoreForEvent(options) {
     return options.store;
   }
 
-  if (options.connectLambda) {
-    const connection = options.connectLambda(options.event);
-    return connection.getStore(STORE_NAME);
+  if (options.blobs) {
+    options.blobs.connectLambda(options.event);
+    return options.blobs.getStore(STORE_NAME);
   }
 
-  const blobs = require('@netlify/blobs');
-  const connection = blobs.connectLambda(options.event);
-  return connection.getStore(STORE_NAME);
+  const { connectLambda, getStore } = require('@netlify/blobs');
+  connectLambda(options.event);
+  return getStore(STORE_NAME);
 }
 
 async function readCache(store, key) {
