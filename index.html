@@ -1363,6 +1363,218 @@ function getHistoricalCacheStats() {
 
 // ═══ end services/history.js ══════════════════════════════════════════
 
+// ═══ services/research-evidence-client.js — inlined (EG-20E-2A) ═══════
+// Verbatim copy of the committed services/research-evidence-client.js (dd566bd),
+// minus the leading 'use strict' directive (a no-op mid-script). The dual-export
+// guard below is skipped in the browser (module is undefined). Inert until called
+// by the gated _runResearchEvidenceCard handler — no auto-invocation at load.
+/**
+ * services/research-evidence-client.js
+ *
+ * Inert client adapter for the dormant research-evidence Netlify function.
+ *
+ * Future EG-20E-2 call sites must guard invocations behind a strict
+ * client-side boolean feature gate (not persisted, reset on reload). The gate
+ * is intentionally not embedded here so this stays a pure, environment-free
+ * function.
+ *
+ * Server contract: POST /.netlify/functions/research-evidence
+ *   request  : { ticker, categories }
+ *   response : non-scoring evidence sidecar (status OK + results/provenance,
+ *              or a DISABLED / NOT_INVOKED / ERROR control body)
+ *
+ * Evidence is a non-scoring sidecar: provenance and per-item flags are passed
+ * through verbatim and are never converted into a score, rank, or confidence.
+ */
+
+var RESEARCH_EVIDENCE_ENDPOINT = '/.netlify/functions/research-evidence';
+var RESEARCH_EVIDENCE_TIMEOUT_MS = 12000;
+
+// Fixed category allow-list. No free-text categories are accepted. Each value
+// also satisfies the server-side category pattern /^[a-z][a-z0-9_]{0,31}$/.
+var RESEARCH_EVIDENCE_CATEGORIES = ['earnings', 'guidance', 'valuation', 'sec10q'];
+
+// Server-originated status values that are passed through unchanged.
+var SERVER_STATUSES = ['OK', 'DISABLED', 'NOT_INVOKED', 'ERROR'];
+
+// Mirrors the server-side ticker rule after trim + uppercase.
+var TICKER_PATTERN = /^[A-Z]{1,10}$/;
+
+/**
+ * Validate and normalize caller input. Returns either
+ *   { ok: true, ticker, categories } with a normalized ticker + deduped list, or
+ *   { ok: false, reason: 'TICKER' | 'CATEGORIES' }.
+ */
+function _validateInput(input) {
+  var src = (input && typeof input === 'object') ? input : {};
+
+  if (typeof src.ticker !== 'string') {
+    return { ok: false, reason: 'TICKER' };
+  }
+  var ticker = src.ticker.trim().toUpperCase();
+  if (!TICKER_PATTERN.test(ticker)) {
+    return { ok: false, reason: 'TICKER' };
+  }
+
+  if (!Array.isArray(src.categories) || src.categories.length < 1 || src.categories.length > 10) {
+    return { ok: false, reason: 'CATEGORIES' };
+  }
+
+  var categories = [];
+  for (var i = 0; i < src.categories.length; i += 1) {
+    var item = src.categories[i];
+    if (typeof item !== 'string') {
+      return { ok: false, reason: 'CATEGORIES' };
+    }
+    var category = item.trim();
+    if (RESEARCH_EVIDENCE_CATEGORIES.indexOf(category) === -1) {
+      return { ok: false, reason: 'CATEGORIES' };
+    }
+    if (categories.indexOf(category) === -1) {
+      categories.push(category);
+    }
+  }
+
+  return { ok: true, ticker: ticker, categories: categories };
+}
+
+/**
+ * Pure normalizer: maps an HTTP status + raw response text into a single
+ * discriminated result object. Never throws.
+ */
+function normalizeResearchEvidenceResponse(httpStatus, rawText) {
+  var parsed;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch (_) {
+    return { status: 'CLIENT_INVALID_RESPONSE', httpStatus: httpStatus };
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { status: 'CLIENT_INVALID_RESPONSE', httpStatus: httpStatus };
+  }
+
+  var status = parsed.status;
+  if (typeof status !== 'string') {
+    return { status: 'CLIENT_INVALID_RESPONSE', httpStatus: httpStatus };
+  }
+
+  if (SERVER_STATUSES.indexOf(status) === -1) {
+    // Unrecognized status string: treat a non-2xx transport as an HTTP error,
+    // otherwise as an invalid response body.
+    if (typeof httpStatus === 'number' && (httpStatus < 200 || httpStatus >= 300)) {
+      return { status: 'CLIENT_HTTP_ERROR', httpStatus: httpStatus };
+    }
+    return { status: 'CLIENT_INVALID_RESPONSE', httpStatus: httpStatus };
+  }
+
+  if (status === 'OK') {
+    var okValid = parsed.schemaVersion === 1 &&
+      Array.isArray(parsed.results) &&
+      parsed.provenance && typeof parsed.provenance === 'object' && !Array.isArray(parsed.provenance);
+    if (!okValid) {
+      return { status: 'CLIENT_INVALID_RESPONSE', httpStatus: httpStatus };
+    }
+    // Pass server fields through verbatim. Evidence, provenance and cacheStatus
+    // are never transformed here.
+    return {
+      status: 'OK',
+      httpStatus: httpStatus,
+      schemaVersion: parsed.schemaVersion,
+      ticker: parsed.ticker,
+      categories: parsed.categories,
+      requestId: parsed.requestId,
+      cacheStatus: parsed.cacheStatus,
+      results: parsed.results,
+      provenance: parsed.provenance,
+      servedAt: parsed.servedAt
+    };
+  }
+
+  // DISABLED | NOT_INVOKED | ERROR control bodies.
+  return {
+    status: status,
+    reason: (typeof parsed.reason === 'string') ? parsed.reason : null,
+    httpStatus: httpStatus
+  };
+}
+
+/**
+ * requestResearchEvidence({ ticker, categories }, deps?) -> Promise<Result>
+ *
+ * deps (all optional; used by offline tests):
+ *   { fetchImpl, timeoutMs }
+ *
+ * Invalid input short-circuits with CLIENT_INVALID_INPUT and sends no request.
+ * Network/transport failures map to synthetic CLIENT_* statuses. Never throws.
+ */
+function requestResearchEvidence(input, deps) {
+  var options = deps || {};
+  var timeoutMs = (typeof options.timeoutMs === 'number' && options.timeoutMs > 0)
+    ? options.timeoutMs
+    : RESEARCH_EVIDENCE_TIMEOUT_MS;
+
+  var validated = _validateInput(input);
+  if (!validated.ok) {
+    // No request is attempted for invalid input.
+    return Promise.resolve({ status: 'CLIENT_INVALID_INPUT', reason: validated.reason });
+  }
+
+  var doFetch = options.fetchImpl || (typeof fetch === 'function' ? fetch : null);
+  if (typeof doFetch !== 'function') {
+    return Promise.resolve({ status: 'CLIENT_FETCH_ERROR' });
+  }
+
+  var controller = (typeof AbortController === 'function') ? new AbortController() : null;
+  var timer = null;
+  if (controller) {
+    timer = setTimeout(function () { controller.abort(); }, timeoutMs);
+  }
+
+  var requestInit = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ticker: validated.ticker, categories: validated.categories })
+  };
+  if (controller) {
+    requestInit.signal = controller.signal;
+  }
+
+  return Promise.resolve()
+    .then(function () { return doFetch(RESEARCH_EVIDENCE_ENDPOINT, requestInit); })
+    .then(function (response) {
+      var httpStatus = (response && typeof response.status === 'number') ? response.status : 0;
+      return Promise.resolve(response.text()).then(function (text) {
+        return normalizeResearchEvidenceResponse(httpStatus, text);
+      });
+    })
+    .catch(function (err) {
+      if (err && err.name === 'AbortError') {
+        return { status: 'CLIENT_TIMEOUT' };
+      }
+      return { status: 'CLIENT_FETCH_ERROR' };
+    })
+    .then(function (result) {
+      if (timer) { clearTimeout(timer); }
+      return result;
+    });
+}
+
+// Dual export guard: CommonJS for offline Node tests; when this file is later
+// inlined into the browser app, `module` is undefined and the guard is skipped,
+// leaving the functions available in scope (matching the services/history.js
+// inlining pattern).
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    RESEARCH_EVIDENCE_ENDPOINT: RESEARCH_EVIDENCE_ENDPOINT,
+    RESEARCH_EVIDENCE_TIMEOUT_MS: RESEARCH_EVIDENCE_TIMEOUT_MS,
+    RESEARCH_EVIDENCE_CATEGORIES: RESEARCH_EVIDENCE_CATEGORIES,
+    requestResearchEvidence: requestResearchEvidence,
+    normalizeResearchEvidenceResponse: normalizeResearchEvidenceResponse
+  };
+}
+// ═══ end services/research-evidence-client.js ═════════════════════════
+
 
 
 const SAMPLE_TICKERS = ['AAPL','NVDA','MSFT','TSLA','GOOGL','META','AMZN'];
@@ -4455,6 +4667,26 @@ ${window.PT_ENABLE_CAPITAL_RETURNS_CLIENT === true ? `
         <div id="cr-res-panel-${item.ticker}"></div>
       </div>` : ''}
 
+${window.PT_ENABLE_RESEARCH_EVIDENCE_CLIENT === true ? `
+      <!-- RESEARCH EVIDENCE (non-scoring sidecar) — span 12 -->
+      <div class="pc-card pc-span-12">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <div class="pc-card-title" style="margin-bottom:4px">Research Evidence (non-scoring)</div>
+            <div class="pc-card-sub" style="margin-top:0;margin-bottom:0">Mock provider · non-scoring sidecar · verify independently</div>
+          </div>
+          <button class="mp-dd-btn" id="re-btn-${item.ticker}"
+            onclick="_runResearchEvidenceCard('${item.ticker}')">Check Research Evidence</button>
+        </div>
+        <div id="re-cats-${item.ticker}" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;font-family:var(--mono);font-size:10px;color:var(--text3)">
+          <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="re-cat-cb" value="earnings" checked> earnings</label>
+          <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="re-cat-cb" value="guidance" checked> guidance</label>
+          <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="re-cat-cb" value="valuation"> valuation</label>
+          <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" class="re-cat-cb" value="sec10q"> sec10q</label>
+        </div>
+        <div id="re-panel-${item.ticker}"></div>
+      </div>` : ''}
+
     </div>
 
     <div class="src-trace">
@@ -6496,6 +6728,116 @@ async function _runCRResearchCard(sym) {
   if (!window._crDisplay) window._crDisplay = {};
   window._crDisplay[sym] = result;
   panel.innerHTML = _renderCapitalReturnsPanel(result);
+  btn.textContent = '↺ Refresh';
+  btn.disabled = false;
+}
+
+// ── EG-20E-2A: Research Evidence gated manual UI (non-scoring sidecar) ────────
+// Client gate: window.PT_ENABLE_RESEARCH_EVIDENCE_CLIENT === true (default off,
+// resets on reload). Manual-only — a request happens solely inside the button
+// handler via the inlined requestResearchEvidence adapter. Display is memory-only
+// (_reLastDisplay); never reads/writes pt_* state or browser storage; never
+// touches scoring, scan, orchestration, or any Actionable-Take flow.
+var _reLastDisplay = {};
+
+function _reSelectedCategories(sym) {
+  var out = [];
+  var box = document.getElementById('re-cats-' + sym);
+  if (box) {
+    var cbs = box.querySelectorAll('input.re-cat-cb');
+    for (var i = 0; i < cbs.length; i += 1) {
+      if (cbs[i].checked) out.push(cbs[i].value);
+    }
+  }
+  return out;
+}
+
+function _reStatusMsg(status, reason, httpStatus) {
+  switch (status) {
+    case 'DISABLED':              return 'Research evidence is disabled on the server.';
+    case 'NOT_INVOKED':           return 'Server scaffold only — no evidence returned.';
+    case 'CLIENT_INVALID_INPUT':  return reason === 'TICKER'
+                                     ? 'Invalid ticker for research evidence.'
+                                     : 'Select at least one category.';
+    case 'CLIENT_TIMEOUT':        return 'Request timed out — try again.';
+    case 'CLIENT_FETCH_ERROR':    return 'Network error — could not reach the server.';
+    case 'CLIENT_HTTP_ERROR':     return 'Unexpected server response (HTTP ' + (httpStatus || '?') + ').';
+    case 'CLIENT_INVALID_RESPONSE': return 'Unreadable server response.';
+    case 'ERROR':
+      switch (reason) {
+        case 'INVALID_TICKER':        return 'Server rejected the ticker.';
+        case 'INVALID_CATEGORIES':    return 'Server rejected the selected categories.';
+        case 'INVALID_JSON':          return 'Server could not read the request.';
+        case 'CONFIGURATION_MISSING': return 'Server is not configured for research evidence.';
+        case 'METHOD_NOT_ALLOWED':    return 'Server rejected the request method.';
+        default:                      return 'The server reported an error.';
+      }
+    default:                      return 'Unexpected response (' + String(status) + ').';
+  }
+}
+
+function _reCacheBadge(cacheStatus) {
+  if (!cacheStatus) return '';
+  if (cacheStatus === 'DEGRADED') {
+    return '<span class="rr-val warn" style="font-family:var(--mono);font-size:9px">cache: served live (cache unavailable)</span>';
+  }
+  return '<span class="rr-val neutral-v" style="font-family:var(--mono);font-size:9px;color:var(--text3)">cache: ' + _edgarEsc(cacheStatus) + '</span>';
+}
+
+function _renderResearchEvidencePanel(result) {
+  if (!result || typeof result !== 'object') {
+    return '<div class="rr-table"><div class="rr-row"><span class="rr-val neutral-v">No response.</span></div></div>';
+  }
+  var status = result.status;
+
+  if (status === 'OK') {
+    var items = Array.isArray(result.results) ? result.results : [];
+    var prov = (result.provenance && typeof result.provenance === 'object') ? result.provenance : {};
+    var provider = (typeof prov.provider === 'string') ? prov.provider : 'unknown';
+    var cache = result.cacheStatus || 'BYPASS';
+    var body;
+    if (items.length === 0) {
+      body = '<div class="rr-row"><span class="rr-val neutral-v">No evidence returned for the selected categories.</span></div>';
+    } else {
+      body = items.map(function (ev) {
+        var dir = (ev && typeof ev.direction === 'string') ? ev.direction : 'neutral';
+        var dirCls = dir === 'positive' ? 'pos' : dir === 'negative' ? 'neg' : 'neutral-v';
+        return '<div class="rr-row" style="align-items:flex-start;gap:8px">'
+             + '<span class="rr-lbl" style="min-width:72px">' + _edgarEsc(ev && ev.category) + '</span>'
+             + '<span class="rr-val ' + dirCls + '" style="flex:1">' + _edgarEsc(ev && ev.claim) + '</span>'
+             + '<span class="rr-val ' + dirCls + '" style="font-family:var(--mono);font-size:9px">' + _edgarEsc(dir) + '</span>'
+             + '</div>';
+      }).join('');
+    }
+    var footer = '<div class="rr-row" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:6px;gap:8px;flex-wrap:wrap">'
+               + '<span class="rr-val neutral-v" style="font-family:var(--mono);font-size:9px;color:var(--text3)">Non-scoring · requires verification · confidence: n/a · provider: ' + _edgarEsc(provider) + '</span>'
+               + _reCacheBadge(cache)
+               + '</div>';
+    return '<div class="rr-table">' + body + footer + '</div>';
+  }
+
+  // Non-OK: neutral (server off / scaffold) vs. warn (error/client) — never echo raw payload.
+  var msg = _reStatusMsg(status, result.reason, result.httpStatus);
+  var cls = (status === 'DISABLED' || status === 'NOT_INVOKED') ? 'neutral-v' : 'warn';
+  return '<div class="rr-table"><div class="rr-row"><span class="rr-val ' + cls + '">' + _edgarEsc(msg) + '</span></div></div>';
+}
+
+async function _runResearchEvidenceCard(sym) {
+  if (window.PT_ENABLE_RESEARCH_EVIDENCE_CLIENT !== true) return;
+  if (typeof requestResearchEvidence !== 'function') return;
+  var btn   = document.getElementById('re-btn-' + sym);
+  var panel = document.getElementById('re-panel-' + sym);
+  if (!btn || !panel) return;
+  btn.disabled = true;
+  btn.textContent = '⟳ Fetching…';
+  var result;
+  try {
+    result = await requestResearchEvidence({ ticker: sym, categories: _reSelectedCategories(sym) });
+  } catch (e) {
+    result = { status: 'CLIENT_FETCH_ERROR' };
+  }
+  _reLastDisplay[sym] = result; // memory-only
+  panel.innerHTML = _renderResearchEvidencePanel(result);
   btn.textContent = '↺ Refresh';
   btn.disabled = false;
 }
