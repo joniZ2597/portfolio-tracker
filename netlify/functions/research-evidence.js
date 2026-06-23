@@ -60,11 +60,15 @@ async function handlePost(event) {
   }
 
   const providerName = process.env[PROVIDER_SELECTOR];
-  if (providerName !== 'mock') {
+  let provider;
+  if (providerName === 'mock') {
+    provider = require('./lib/evidence-provider-mock');
+  } else if (providerName === 'sec10q_fixture') {
+    provider = require('./lib/evidence-provider-sec10q-fixture');
+  } else {
     return res(500, { status: 'ERROR', reason: 'CONFIGURATION_MISSING' });
   }
 
-  const provider = require('./lib/evidence-provider-mock');
   const readProvider = () => provider.getEvidence({ ticker, categories });
 
   const outcome = await resolveEvidence({
