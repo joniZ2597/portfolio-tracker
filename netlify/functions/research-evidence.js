@@ -53,7 +53,8 @@ async function handlePost(event) {
     return error('INVALID_TICKER');
   }
 
-  const categories = normalizeCategories(body.value.categories);
+  const contract = require('./lib/evidence-contract');
+  const categories = contract.normalizeCategories(body.value.categories);
   if (!categories) {
     return error('INVALID_CATEGORIES');
   }
@@ -64,31 +65,37 @@ async function handlePost(event) {
   }
 
   const provider = require('./lib/evidence-provider-mock');
-  const evidence = await getEvidence({
+  const readProvider = () => provider.getEvidence({ ticker, categories });
+
+  const outcome = await resolveEvidence({
     event,
-    provider,
+    contract,
+    readProvider,
     providerName,
     ticker,
     categories
   });
 
+  if (!outcome.ok) {
+    return res(502, { status: 'ERROR', reason: outcome.reason });
+  }
+
   return res(200, okBody({
     ticker,
     categories,
-    results: evidence.results,
+    results: outcome.results,
     providerName,
-    cacheStatus: evidence.cacheStatus
+    cacheStatus: outcome.cacheStatus
   }));
 }
 
-function getEvidence(params) {
-  const readProvider = () => params.provider.getEvidence({
-    ticker: params.ticker,
-    categories: params.categories
-  });
-
+async function resolveEvidence(params) {
   if (process.env[CACHE_GATE] !== 'true' || !(params.event && params.event.blobs)) {
-    return { results: readProvider(), cacheStatus: 'BYPASS' };
+    const outcome = await params.contract.resolveProviderOutput(params.readProvider, params.categories);
+    if (!outcome.ok) {
+      return outcome;
+    }
+    return { ok: true, results: outcome.results, cacheStatus: 'BYPASS' };
   }
 
   const cache = require('./lib/evidence-cache');
@@ -97,7 +104,7 @@ function getEvidence(params) {
     provider: params.providerName,
     ticker: params.ticker,
     categories: params.categories,
-    readProvider,
+    readProvider: params.readProvider,
     now: Date.now
   });
 }
@@ -145,27 +152,6 @@ function normalizeTicker(value) {
 
   const ticker = value.trim().toUpperCase();
   return /^[A-Z]{1,10}$/.test(ticker) ? ticker : null;
-}
-
-function normalizeCategories(value) {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 10) {
-    return null;
-  }
-
-  const categories = [];
-  for (const item of value) {
-    if (typeof item !== 'string') {
-      return null;
-    }
-
-    const category = item.trim();
-    if (!/^[a-z][a-z0-9_]{0,31}$/.test(category)) {
-      return null;
-    }
-    categories.push(category);
-  }
-
-  return categories;
 }
 
 function makeRequestId() {

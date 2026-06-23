@@ -1,34 +1,79 @@
 'use strict';
 
+const contract = require('./evidence-contract');
+
 const STORE_NAME = 'research-evidence';
 const CACHE_TTL_MS = 15 * 60 * 1000;
+// Internal cache namespace. Public schemaVersion stays 1; bumping this to v2
+// invalidates every legacy entry written under the old contract.
+const CACHE_NAMESPACE = 're:v2';
 
+// Resolve evidence with the Blob cache. Returns
+//   { ok: true, results, cacheStatus }  (cacheStatus = HIT | MISS | DEGRADED)
+// or
+//   { ok: false, reason }               (PROVIDER_FAILURE | PROVIDER_INVALID_RESPONSE)
+//
+// Rules:
+// - The provider is always awaited and its output validated/projected before
+//   it is returned or written; invalid provider output is never cached.
+// - A valid cache HIT is re-validated before return; an invalid/legacy HIT is
+//   treated as a MISS (not DEGRADED).
+// - A cache failure (store acquisition / read / write) may only surface as
+//   DEGRADED once valid provider output exists; provider rejection or invalid
+//   provider output take precedence (PROVIDER_FAILURE / PROVIDER_INVALID_RESPONSE).
 async function resolveEvidence(options) {
-  const providerResult = () => options.readProvider();
-  let store;
+  const categories = options.categories;
+  const key = makeKey(options.provider, options.ticker, categories);
+  const now = getNow(options);
+
+  let store = null;
+  let cacheUsable = true;
 
   try {
     store = getStoreForEvent(options);
   } catch (err) {
     safeLog(err);
-    return { results: providerResult(), cacheStatus: 'DEGRADED' };
+    cacheUsable = false;
   }
 
-  const key = makeKey(options.provider, options.ticker, options.categories);
-  const now = getNow(options);
+  if (cacheUsable) {
+    try {
+      const cached = await readCache(store, key);
+      if (isFreshPayload(cached, options, now)) {
+        const projected = contract.validateAndProject(cached.results, categories);
+        if (projected.ok) {
+          return { ok: true, results: projected.results, cacheStatus: 'HIT' };
+        }
+        // Invalid / legacy HIT → fall through and treat as a MISS.
+      }
+    } catch (err) {
+      safeLog(err);
+      cacheUsable = false;
+    }
+  }
+
+  const outcome = await contract.resolveProviderOutput(options.readProvider, categories);
+  if (!outcome.ok) {
+    return outcome;
+  }
+  const results = outcome.results;
+
+  if (!cacheUsable) {
+    return { ok: true, results, cacheStatus: 'DEGRADED' };
+  }
 
   try {
-    const cached = await readCache(store, key);
-    if (isFreshPayload(cached, options, now)) {
-      return { results: cached.results, cacheStatus: 'HIT' };
-    }
+    await writeCache(store, key, makePayload(options, results, now));
   } catch (err) {
     safeLog(err);
-    return { results: providerResult(), cacheStatus: 'DEGRADED' };
+    return { ok: true, results, cacheStatus: 'DEGRADED' };
   }
 
-  const results = providerResult();
-  const payload = {
+  return { ok: true, results, cacheStatus: 'MISS' };
+}
+
+function makePayload(options, results, now) {
+  return {
     schemaVersion: 1,
     provider: options.provider,
     ticker: options.ticker,
@@ -36,15 +81,6 @@ async function resolveEvidence(options) {
     results,
     cachedAt: now
   };
-
-  try {
-    await writeCache(store, key, payload);
-  } catch (err) {
-    safeLog(err);
-    return { results, cacheStatus: 'DEGRADED' };
-  }
-
-  return { results, cacheStatus: 'MISS' };
 }
 
 function getStoreForEvent(options) {
@@ -116,7 +152,7 @@ function isFreshPayload(payload, options, now) {
 }
 
 function makeKey(provider, ticker, categories) {
-  return `re:v1:${provider}:${ticker}:${categories.join(',')}`;
+  return `${CACHE_NAMESPACE}:${provider}:${ticker}:${categories.join(',')}`;
 }
 
 function getNow(options) {
@@ -146,6 +182,7 @@ function safeLog(err) {
 module.exports = {
   CACHE_TTL_MS,
   STORE_NAME,
+  CACHE_NAMESPACE,
   makeKey,
   resolveEvidence
 };

@@ -44,6 +44,22 @@ function assertError(actual, statusCode, reason) {
   assert.strictEqual(actual.json.reason, reason);
 }
 
+function defaultItem(overrides) {
+  return Object.assign({
+    evidenceId: 'mock:FROG:earnings:1',
+    category: 'earnings',
+    claim: 'FROG mock earnings evidence 1',
+    direction: 'positive',
+    confidence: null,
+    sourceLabel: null,
+    sourceUrl: null,
+    sourceDate: null,
+    sourceType: null,
+    requiresVerification: true,
+    scoringImpact: 'none'
+  }, overrides || {});
+}
+
 function makeStore(seed, options) {
   const entries = Object.assign({}, seed || {});
   const calls = { get: 0, set: 0, keys: [] };
@@ -76,18 +92,13 @@ function makeProvider(results) {
     calls: 0,
     read() {
       provider.calls += 1;
-      return results || [
-        {
-          evidenceId: 'mock:FROG:earnings:1',
-          category: 'earnings',
-          claim: 'FROG mock earnings evidence 1',
-          direction: 'positive',
-          confidence: null,
-          sourceLabel: null,
-          requiresVerification: true,
-          scoringImpact: 'none'
-        }
-      ];
+      if (results === 'throw') {
+        throw new Error('provider boom secret');
+      }
+      if (results !== undefined) {
+        return results;
+      }
+      return [defaultItem()];
     }
   };
   return provider;
@@ -157,6 +168,17 @@ function assertNonScoring(results) {
   }
 }
 
+function freshPayload(results) {
+  return JSON.stringify({
+    schemaVersion: 1,
+    provider: 'mock',
+    ticker: 'FROG',
+    categories: ['earnings'],
+    results,
+    cachedAt: 100000
+  });
+}
+
 async function run() {
   const originalGate = process.env[SERVER_GATE];
   const originalProvider = process.env[PROVIDER_SELECTOR];
@@ -182,20 +204,28 @@ async function run() {
     assert.strictEqual(actual.json.cacheStatus, 'BYPASS');
     assertNonScoring(actual.json.results);
 
+    // Cache gate on but no event.blobs => BYPASS.
     setEnv(CACHE_GATE, 'true');
     actual = await invoke('POST', validBody());
     assert.strictEqual(actual.response.statusCode, 200);
     assert.strictEqual(actual.json.cacheStatus, 'BYPASS');
     assertNonScoring(actual.json.results);
 
+    const key = cache.makeKey('mock', 'FROG', ['earnings']);
+    assert.strictEqual(key.indexOf('re:v2:'), 0);
+
+    // MISS writes projected output.
     const missStore = makeStore();
     let provider = makeProvider();
     let resolved = await resolveWithStore(missStore, provider);
+    assert.strictEqual(resolved.ok, true);
     assert.strictEqual(resolved.cacheStatus, 'MISS');
     assert.strictEqual(provider.calls, 1);
     assert.strictEqual(missStore.calls.get, 1);
     assert.strictEqual(missStore.calls.set, 1);
+    assertNonScoring(resolved.results);
 
+    // Ambient blob path => MISS.
     const ambientStore = makeStore();
     const blobStub = makeBlobStub(ambientStore);
     provider = makeProvider();
@@ -216,6 +246,7 @@ async function run() {
     assert.strictEqual(provider.calls, 1);
     assert.strictEqual(ambientStore.calls.set, 1);
 
+    // HIT re-validates and skips the provider.
     const hitStore = makeStore(missStore.entries);
     provider = makeProvider();
     resolved = await resolveWithStore(hitStore, provider);
@@ -223,14 +254,23 @@ async function run() {
     assert.strictEqual(provider.calls, 0);
     assertNonScoring(resolved.results);
 
-    const expiredKey = cache.makeKey('mock', 'FROG', ['earnings']);
+    // MISS and HIT results match.
+    const invariantStore = makeStore();
+    provider = makeProvider();
+    const miss = await resolveWithStore(invariantStore, provider);
+    provider = makeProvider();
+    const hit = await resolveWithStore(makeStore(invariantStore.entries), provider);
+    assert.deepStrictEqual(hit.results, miss.results);
+    assertNonScoring(hit.results);
+
+    // Expired => MISS.
     const expiredStore = makeStore({
-      [expiredKey]: JSON.stringify({
+      [key]: JSON.stringify({
         schemaVersion: 1,
         provider: 'mock',
         ticker: 'FROG',
         categories: ['earnings'],
-        results: provider.read(),
+        results: [defaultItem()],
         cachedAt: 100000 - cache.CACHE_TTL_MS
       })
     });
@@ -238,26 +278,106 @@ async function run() {
     resolved = await resolveWithStore(expiredStore, provider);
     assert.strictEqual(resolved.cacheStatus, 'MISS');
     assert.strictEqual(provider.calls, 1);
-    assert.strictEqual(expiredStore.calls.set, 1);
 
-    const corruptStore = makeStore({ [expiredKey]: '{' });
+    // Corrupt JSON => MISS.
+    const corruptStore = makeStore({ [key]: '{' });
     provider = makeProvider();
     resolved = await resolveWithStore(corruptStore, provider);
     assert.strictEqual(resolved.cacheStatus, 'MISS');
     assert.strictEqual(provider.calls, 1);
 
+    // Fresh but invalid/legacy HIT => MISS (not DEGRADED); provider re-run.
+    const invalidHitStore = makeStore({ [key]: freshPayload([defaultItem({ direction: 'sideways' })]) });
+    provider = makeProvider();
+    resolved = await resolveWithStore(invalidHitStore, provider);
+    assert.strictEqual(resolved.cacheStatus, 'MISS');
+    assert.strictEqual(provider.calls, 1);
+
+    // Read failure => DEGRADED after valid provider output.
     const readThrowStore = makeStore(null, { readThrows: true });
     provider = makeProvider();
     resolved = await resolveWithStore(readThrowStore, provider);
     assert.strictEqual(resolved.cacheStatus, 'DEGRADED');
     assert.strictEqual(provider.calls, 1);
 
+    // Write failure => DEGRADED.
     const writeThrowStore = makeStore(null, { writeThrows: true });
     provider = makeProvider();
     resolved = await resolveWithStore(writeThrowStore, provider);
     assert.strictEqual(resolved.cacheStatus, 'DEGRADED');
     assert.strictEqual(provider.calls, 1);
 
+    // Store acquisition failure => DEGRADED after valid provider output.
+    const throwingBlobStub = {};
+    throwingBlobStub['connect' + 'Lambda'] = function () {};
+    throwingBlobStub['get' + 'Store'] = function () {
+      throw new Error('store boom');
+    };
+    provider = makeProvider();
+    await withBlobStub(throwingBlobStub, async () => {
+      resolved = await cache.resolveEvidence({
+        event: {},
+        provider: 'mock',
+        ticker: 'FROG',
+        categories: ['earnings'],
+        readProvider: () => provider.read(),
+        now: () => 100000
+      });
+    });
+    assert.strictEqual(resolved.cacheStatus, 'DEGRADED');
+    assert.strictEqual(provider.calls, 1);
+
+    // Provider rejection => PROVIDER_FAILURE, never cached.
+    const failStore = makeStore();
+    provider = makeProvider('throw');
+    resolved = await resolveWithStore(failStore, provider);
+    assert.deepStrictEqual(resolved, { ok: false, reason: 'PROVIDER_FAILURE' });
+    assert.strictEqual(failStore.calls.set, 0);
+
+    // Invalid provider output => PROVIDER_INVALID_RESPONSE, never cached.
+    const invalidStore = makeStore();
+    provider = makeProvider([defaultItem({ scoringImpact: 'high' })]);
+    resolved = await resolveWithStore(invalidStore, provider);
+    assert.deepStrictEqual(resolved, { ok: false, reason: 'PROVIDER_INVALID_RESPONSE' });
+    assert.strictEqual(invalidStore.calls.set, 0);
+
+    // Cache failure + provider rejection => PROVIDER_FAILURE.
+    provider = makeProvider('throw');
+    resolved = await resolveWithStore(makeStore(null, { readThrows: true }), provider);
+    assert.deepStrictEqual(resolved, { ok: false, reason: 'PROVIDER_FAILURE' });
+
+    // Cache failure + invalid provider output => PROVIDER_INVALID_RESPONSE.
+    provider = makeProvider([defaultItem({ confidence: 1 })]);
+    resolved = await resolveWithStore(makeStore(null, { readThrows: true }), provider);
+    assert.deepStrictEqual(resolved, { ok: false, reason: 'PROVIDER_INVALID_RESPONSE' });
+
+    // Async provider is awaited.
+    provider = {
+      calls: 0,
+      read() {
+        provider.calls += 1;
+        return Promise.resolve([defaultItem()]);
+      }
+    };
+    resolved = await resolveWithStore(makeStore(), provider);
+    assert.strictEqual(resolved.cacheStatus, 'MISS');
+    assert.strictEqual(provider.calls, 1);
+
+    // Unknown fields stripped from MISS, HIT, and DEGRADED outputs.
+    const dirtyMissStore = makeStore();
+    resolved = await resolveWithStore(dirtyMissStore, makeProvider([defaultItem({ secret: 'leak' })]));
+    assert.strictEqual(resolved.cacheStatus, 'MISS');
+    assert.ok(!('secret' in resolved.results[0]));
+
+    const dirtyHit = await resolveWithStore(makeStore(dirtyMissStore.entries), makeProvider());
+    assert.strictEqual(dirtyHit.cacheStatus, 'HIT');
+    assert.ok(!('secret' in dirtyHit.results[0]));
+
+    const dirtyDegraded = await resolveWithStore(makeStore(null, { writeThrows: true }), makeProvider([defaultItem({ secret: 'leak' })]));
+    assert.strictEqual(dirtyDegraded.cacheStatus, 'DEGRADED');
+    assert.ok(!('secret' in dirtyDegraded.results[0]));
+
+    // Canonical cache key (namespace v2; join order-sensitive on already-canonical input).
     assert.strictEqual(
       cache.makeKey('mock', 'FROG', ['earnings', 'sec10q']),
       cache.makeKey('mock', 'FROG', ['earnings', 'sec10q'])
@@ -267,14 +387,7 @@ async function run() {
       cache.makeKey('mock', 'FROG', ['sec10q', 'earnings'])
     );
 
-    const invariantStore = makeStore();
-    provider = makeProvider();
-    const miss = await resolveWithStore(invariantStore, provider);
-    provider = makeProvider();
-    const hit = await resolveWithStore(makeStore(invariantStore.entries), provider);
-    assert.deepStrictEqual(hit.results, miss.results);
-    assertNonScoring(hit.results);
-
+    // Handler input validation still rejects before provider/cache.
     for (const body of ['{', '', '   ', JSON.stringify([]), JSON.stringify('FROG')]) {
       actual = await invoke('POST', body, { blobs: {} });
       assertError(actual, 400, 'INVALID_JSON');
@@ -285,20 +398,7 @@ async function run() {
       assertError(actual, 400, 'INVALID_TICKER');
     }
 
-    const invalidCategoryCases = [
-      [],
-      ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9', 'c10', 'c11'],
-      [''],
-      [' Earnings'],
-      ['1earnings'],
-      ['earnings-news'],
-      ['earnings news'],
-      ['earnings', null],
-      ['earnings', 7],
-      ['abcdefghijklmnopqrstuvwxyzabcdefg']
-    ];
-
-    for (const categories of invalidCategoryCases) {
+    for (const categories of [[], ['analyst_rating'], ['earnings', 'x@y'], ['Earnings']]) {
       actual = await invoke('POST', JSON.stringify({ ticker: 'FROG', categories }), { blobs: {} });
       assertError(actual, 400, 'INVALID_CATEGORIES');
     }

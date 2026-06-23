@@ -1,6 +1,7 @@
 'use strict';
 
 const DIRECTIONS = ['positive', 'neutral', 'negative'];
+const SOURCE_TYPES = ['sec_filing', 'press_release', 'earnings_call'];
 
 function getEvidence(request) {
   const ticker = request.ticker;
@@ -26,6 +27,9 @@ function makeEvidenceItem(ticker, category, categoryIndex, itemIndex) {
     direction: DIRECTIONS[(categoryIndex + itemIndex) % DIRECTIONS.length],
     confidence: null,
     sourceLabel: null,
+    sourceUrl: `https://example.com/${ticker}/${category}/${ordinal}`,
+    sourceDate: null,
+    sourceType: SOURCE_TYPES[(categoryIndex + itemIndex) % SOURCE_TYPES.length],
     requiresVerification: true,
     scoringImpact: 'none'
   };
