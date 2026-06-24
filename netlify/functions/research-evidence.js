@@ -65,6 +65,8 @@ async function handlePost(event) {
     provider = require('./lib/evidence-provider-mock');
   } else if (providerName === 'sec10q_fixture') {
     provider = require('./lib/evidence-provider-sec10q-fixture');
+  } else if (providerName === 'sec10q_live') {
+    provider = require('./lib/evidence-provider-sec10q-live');
   } else {
     return res(500, { status: 'ERROR', reason: 'CONFIGURATION_MISSING' });
   }
