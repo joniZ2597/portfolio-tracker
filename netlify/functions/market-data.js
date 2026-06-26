@@ -24,8 +24,23 @@ const TIMEOUT_MS   = 10000; // per-provider timeout
 exports.handler = async function (event) {
   // ── 1. Validate query parameters ─────────────────────────────────────────
   const params             = event.queryStringParameters || {};
+  const multiParams        = event.multiValueQueryStringParameters || {};
   const { interval = '1d', range = '1d' } = params;
   const rawSym             = params.symbol || '';
+
+  // ── G-L purpose routing + server backstop (cooperative, not auth) ─────────
+  // Absent purpose / purpose=scan keep existing scan behavior unchanged.
+  // purpose=portfolio-live is gated; when off it returns the typed DISABLED
+  // envelope before any provider I/O. Duplicate → AMBIGUOUS; unknown → INVALID.
+  const purposeResult = resolvePurpose(params, multiParams);
+  if (purposeResult.error === 'AMBIGUOUS') return res(400, ENVELOPE_AMBIGUOUS_PURPOSE);
+  if (purposeResult.error === 'INVALID')   return res(400, ENVELOPE_INVALID_PURPOSE);
+  const purpose = purposeResult.purpose; // 'scan' | 'portfolio-live'
+
+  if (purpose === 'portfolio-live' &&
+      process.env.PT_ENABLE_PORTFOLIO_LIVE_PRICES_SERVER !== 'true') {
+    return res(200, ENVELOPE_SERVER_DISABLED); // typed 200, no upstream request
+  }
 
   if (!rawSym.trim()) {
     return res(400, { error: 'Missing required parameter: symbol' });
@@ -81,6 +96,7 @@ exports.handler = async function (event) {
       } else if (_needsOverlay && _overlayRes.status === 'rejected') {
         console.warn('[market-data] ext overlay fetch skipped for', sym + ':', _overlayRes.reason?.message);
       }
+      if (purpose === 'portfolio-live') ensureProvider(data, 'yahoo');
       return res(200, data);
     }
     if (_mainRes.status === 'rejected') {
@@ -125,6 +141,7 @@ exports.handler = async function (event) {
       const data = await fetchYahoo(sym, interval, range);
       if (data) {
         console.log('[market-data] yahoo OK for', sym, 'range=' + range);
+        if (purpose === 'portfolio-live') ensureProvider(data, 'yahoo');
         return res(200, data);
       }
       return res(404, { error: 'No chart data available for ' + sym });
@@ -429,6 +446,61 @@ function intervalToTimespan(interval) {
     case '1d':
     default:    return 'day';
   }
+}
+
+// ── G-L typed envelopes (approved contract schema) ────────────────────────────
+const ENVELOPE_SERVER_DISABLED = {
+  status: 'DISABLED',
+  reason: 'SERVER_DISABLED',
+  detail: 'portfolio live prices disabled on this deployment; no upstream request made.',
+  errors: ['SERVER_DISABLED'],
+};
+const ENVELOPE_INVALID_PURPOSE = {
+  status: 'ERROR',
+  reason: 'INVALID_PURPOSE',
+  detail: 'invalid request purpose',
+  errors: ['INVALID_PURPOSE'],
+};
+const ENVELOPE_AMBIGUOUS_PURPOSE = {
+  status: 'ERROR',
+  reason: 'AMBIGUOUS_PURPOSE',
+  detail: 'ambiguous request purpose',
+  errors: ['AMBIGUOUS_PURPOSE'],
+};
+const ALLOWED_PURPOSES = ['scan', 'portfolio-live'];
+
+// Returns { purpose } for valid input, or { error:'AMBIGUOUS' | 'INVALID' }.
+//   absent purpose         → 'scan'  (legacy behavior preserved)
+//   purpose=scan           → 'scan'
+//   purpose=portfolio-live → 'portfolio-live'
+//   duplicate purpose      → AMBIGUOUS  (via multiValueQueryStringParameters)
+//   unknown / malformed    → INVALID
+// Uses representable string values only — does not rely on URL-encoding rejection.
+function resolvePurpose(params, multiParams) {
+  let values;
+  if (multiParams && Array.isArray(multiParams.purpose)) {
+    values = multiParams.purpose;
+  } else if (params && Object.prototype.hasOwnProperty.call(params, 'purpose')) {
+    values = [params.purpose];
+  } else {
+    values = [];
+  }
+
+  if (values.length === 0) return { purpose: 'scan' };
+  if (values.length > 1)  return { error: 'AMBIGUOUS' };
+
+  const val = values[0];
+  if (typeof val !== 'string' || ALLOWED_PURPOSES.indexOf(val) === -1) return { error: 'INVALID' };
+  return { purpose: val };
+}
+
+// Stamp the actual provider onto meta when absent (never overwrites). Display-only.
+function ensureProvider(data, provider) {
+  try {
+    const meta = data && data.chart && data.chart.result &&
+                 data.chart.result[0] && data.chart.result[0].meta;
+    if (meta && !meta._provider) meta._provider = provider;
+  } catch (_) { /* provenance is display-only — never fatal */ }
 }
 
 // ── Fetch with timeout ────────────────────────────────────────────────────────
