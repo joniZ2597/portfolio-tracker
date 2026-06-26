@@ -7183,6 +7183,7 @@ function importPortfolioBackup(file) {
     localStorage.setItem('pt_holdings', JSON.stringify(result.holdings));
     localStorage.setItem('pt_tickers',  JSON.stringify(result.tickers));
     loadWatchlist();
+    _reconcileWatchlistPositionsFromHoldings();
     _renderPortfolioPanel();
     showToast('Restored — ' + hCount + ' holding' + (hCount !== 1 ? 's' : '') + ', ' + tCount + ' ticker' + (tCount !== 1 ? 's' : ''));
   };
@@ -7554,6 +7555,7 @@ function _applyCloudDoc(result) {
   localStorage.setItem('pt_holdings', JSON.stringify(result.holdings));
   localStorage.setItem('pt_tickers',  JSON.stringify(result.tickers));
   loadWatchlist();
+  _reconcileWatchlistPositionsFromHoldings();
   _renderPortfolioPanel();
   closeLoadFromCloudModal();
   showToast('Loaded from cloud — ' + hCount + ' holding' + (hCount !== 1 ? 's' : '') + ', ' + tCount + ' ticker' + (tCount !== 1 ? 's' : ''));
