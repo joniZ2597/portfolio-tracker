@@ -131,7 +131,8 @@ const OFFLINE_TESTS = [
   'qa/research_evidence_source_renderer_test.js',
   'qa/research_evidence_client_adapter_test.js',
   'qa/research_evidence_sec10q_fixture_provider_test.js',
-  'qa/research_evidence_sec10q_live_provider_test.js'
+  'qa/research_evidence_sec10q_live_provider_test.js',
+  'qa/sec_evidence_store_test.js'
 ];
 
 const CLIENT_GATES = [
@@ -161,6 +162,10 @@ const SERVER_GATES_DIRECT = [
   {
     file: 'netlify/functions/portfolio-sync.js',
     name: 'PT_ENABLE_PORTFOLIO_SYNC_SERVER'
+  },
+  {
+    file: 'netlify/functions/sec-evidence-store.js',
+    name: 'PT_ENABLE_SEC_EVIDENCE_STORE_SERVER'
   }
 ];
 
@@ -232,6 +237,7 @@ function evidenceAndSyncPaths() {
       .concat(walkJs('netlify/functions/lib').filter((file) => /evidence/.test(file)))
       .concat([
         'netlify/functions/research-evidence.js',
+        'netlify/functions/sec-evidence-store.js',
         'netlify/functions/portfolio-sync.js'
       ])
       .concat(walkJs('services').filter((file) => /research-evidence/.test(file)))
