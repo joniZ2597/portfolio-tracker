@@ -5682,6 +5682,17 @@ async function _pfLiveBatch(syms, allSyms) {
       _pfLiveFetching     = false;
       _pfLiveRunCanceller = null;
     }
+    if (batchCanceller.cause.value === 'batch-budget' && _pfLiveCanWrite(capturedRunId)) {
+      var _budgetNow = Date.now();
+      syms.forEach(function(s) {
+        var rt = _portfolioRuntime[s];
+        var hasFresh = rt
+          && typeof rt.price === 'number' && isFinite(rt.price) && rt.price > 0
+          && !!_pfLiveFreshAt[s]
+          && (_budgetNow - _pfLiveFreshAt[s]) < _PF_LIVE_SUCCESS_TTL;
+        if (!hasFresh) _updatePortfolioCard(s, null);
+      });
+    }
   }
 }
 
