@@ -4956,6 +4956,13 @@ function switchMainView(view) {
   var pfPanel   = document.getElementById('portfolioPanel');
   if (mainPanel) mainPanel.style.display = view === 'research'  ? '' : 'none';
   if (pfPanel)   pfPanel.style.display   = view === 'portfolio' ? '' : 'none';
+  if (view !== 'portfolio' && _pfLiveRunCanceller) {
+    ++_pfLiveRunId;
+    var _vcCanceller = _pfLiveRunCanceller;
+    _pfLiveRunCanceller = null;
+    _pfLiveFetching = false;
+    _vcCanceller.abort('view-cancel');
+  }
   if (view === 'portfolio') _renderPortfolioPanel();
 }
 window.switchMainView = switchMainView;
@@ -5418,6 +5425,17 @@ function _renderPortfolioPanel() {
       var failedRecently = _pfLiveFailAt[s] && (_pfNow - _pfLiveFailAt[s]) < _PF_LIVE_FAIL_TTL;
       return !_pfHasFreshLive(s) && !failedRecently;
     });
+    eligibleSyms.sort(function(a, b) {
+      var pa = (holdings[a] && isFinite(Number(holdings[a].positionSize))) ? Number(holdings[a].positionSize) : 0;
+      var pb = (holdings[b] && isFinite(Number(holdings[b].positionSize))) ? Number(holdings[b].positionSize) : 0;
+      var diff = pb - pa;
+      return diff !== 0 ? diff : a.localeCompare(b);
+    });
+    var _pfFailTtlSyms = _pfSyms.filter(function(s) {
+      return !_pfHasFreshLive(s) && _pfLiveFailAt[s] && (_pfNow - _pfLiveFailAt[s]) < _PF_LIVE_FAIL_TTL;
+    });
+    var _pfCapExcluded = eligibleSyms.slice(_PF_LIVE_BATCH_MAX);
+    _pfFailTtlSyms.concat(_pfCapExcluded).forEach(function(s) { _updatePortfolioCard(s, null); });
     if (eligibleSyms.length > 0 && !_pfLiveFetching) {
       _portfolioFetchPrices(eligibleSyms, _pfSyms);
     }
@@ -5547,23 +5565,31 @@ async function _pfLiveSingle(sym, allSyms, capturedRunId, batchCanceller) {
   var p = (async function() {
     try {
       var url = '/.netlify/functions/market-data?symbol='
-              + encodeURIComponent(sym) + '&purpose=portfolio-live';
+              + encodeURIComponent(sym) + '&purpose=portfolio-live&interval=1d&range=5d';
       var res;
       try {
         res = await fetch(url, { signal: symCanceller.signal });
       } catch (_fe) {
         if (symCanceller.signal.aborted) {
-          if (symCanceller.cause.value === 'symbol-timeout' && _pfLiveCanWrite(capturedRunId))
+          if (symCanceller.cause.value === 'symbol-timeout' && _pfLiveCanWrite(capturedRunId)) {
             _pfLiveFailAt[sym] = Date.now();
+            _updatePortfolioCard(sym, null);
+          }
           // batch-budget / superseded / view-cancel / terminal-stop → no fail TTL
         } else {
-          if (_pfLiveCanWrite(capturedRunId)) _pfLiveFailAt[sym] = Date.now();
+          if (_pfLiveCanWrite(capturedRunId)) {
+            _pfLiveFailAt[sym] = Date.now();
+            _updatePortfolioCard(sym, null);
+          }
         }
         return null;
       }
       var body;
       try { body = await res.json(); } catch (_) {
-        if (_pfLiveCanWrite(capturedRunId)) _pfLiveFailAt[sym] = Date.now();
+        if (_pfLiveCanWrite(capturedRunId)) {
+          _pfLiveFailAt[sym] = Date.now();
+          _updatePortfolioCard(sym, null);
+        }
         return null;
       }
       if (_pfLiveIsTerminalEnvelope(body)) {
@@ -5576,12 +5602,18 @@ async function _pfLiveSingle(sym, allSyms, capturedRunId, batchCanceller) {
         return null;
       }
       if (!res.ok) {
-        if (_pfLiveCanWrite(capturedRunId)) _pfLiveFailAt[sym] = Date.now();
+        if (_pfLiveCanWrite(capturedRunId)) {
+          _pfLiveFailAt[sym] = Date.now();
+          _updatePortfolioCard(sym, null);
+        }
         return null;
       }
       var norm = _pfLiveNormalize(body, sym);
       if (!norm) {
-        if (_pfLiveCanWrite(capturedRunId)) _pfLiveFailAt[sym] = Date.now();
+        if (_pfLiveCanWrite(capturedRunId)) {
+          _pfLiveFailAt[sym] = Date.now();
+          _updatePortfolioCard(sym, null);
+        }
         return null;
       }
       return norm;
@@ -5597,6 +5629,7 @@ async function _pfLiveSingle(sym, allSyms, capturedRunId, batchCanceller) {
 
 async function _pfLiveBatch(syms, allSyms) {
   if (!syms || !syms.length) return;
+  if (_pfLiveRunCanceller) _pfLiveRunCanceller.abort('superseded');
   var capturedRunId   = ++_pfLiveRunId;
   var batchCanceller  = _pfLiveMakeCanceller();
   _pfLiveRunCanceller = batchCanceller;
