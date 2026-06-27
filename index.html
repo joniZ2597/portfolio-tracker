@@ -3465,10 +3465,8 @@ function _srSafeParseResults() {
 }
 
 function _getResearchForHolding(symbol) {
-  var source = (_cockpitResults && _cockpitResults.length)
-    ? _cockpitResults
-    : _srSafeParseResults();
-  return source.find(function(r) { return r && r.ticker === symbol; }) || null;
+  // Slice A: thin delegate over the per-symbol resolver (single source of truth).
+  return _resolveResearchForHolding(symbol).result;
 }
 
 function _getDailyChangeForHolding(symbol) {
@@ -3479,16 +3477,78 @@ function _getDailyChangeForHolding(symbol) {
 }
 
 function _resolveResearchForHolding(symbol) {
-  var hasCockpit = _cockpitResults && _cockpitResults.length > 0;
-  var src = hasCockpit ? _cockpitResults : _srSafeParseResults();
-  var srcLabel = hasCockpit ? (_cockpitResultsSource || 'session') : 'saved';
-  var result = src.find(function(r) { return r && r.ticker === symbol; }) || null;
-  var source = result ? srcLabel : 'none';
-  var timestamp = result ? (result._timestamp || result._orchestratedAt || null) : null;
-  var tsMs = timestamp ? new Date(timestamp).getTime() : NaN;
-  var ageMs = (timestamp && !isNaN(tsMs)) ? (Date.now() - tsMs) : null;
-  var stale = (ageMs === null) || (ageMs > 48 * 60 * 60 * 1000);
-  return { result: result, source: source, timestamp: timestamp, ageMs: ageMs, stale: stale };
+  // Slice A: read-only per-symbol resolver. Normalizes the symbol, then merges
+  // candidates from both _cockpitResults and the persisted pt_results read
+  // (_srSafeParseResults) so a partial session scan no longer shadows saved data.
+  // Within each source the freshest valid record wins; across sources the
+  // freshest valid candidate wins; session beats saved only as a deterministic
+  // tie-break. No source array, candidate, _cockpitResults, pt_results, or
+  // localStorage mutation; no fetch.
+  var NO_MATCH = { result: null, source: 'none', timestamp: null, ageMs: null, stale: true };
+  if (typeof symbol !== 'string') return NO_MATCH;
+  var sym = symbol.trim().toUpperCase();
+  if (!/^[A-Z]{1,10}$/.test(sym)) return NO_MATCH;
+
+  var FUTURE_SKEW_MS = 5 * 60 * 1000;
+  var STALE_MS = 48 * 60 * 60 * 1000;
+  var nowMs = Date.now();
+
+  // Valid timestamp = finite parse and not more than 5 minutes in the future.
+  function _validTsMs(raw) {
+    if (raw === undefined || raw === null || raw === '') return NaN;
+    var ms = new Date(raw).getTime();
+    if (!isFinite(ms)) return NaN;
+    if (ms > nowMs + FUTURE_SKEW_MS) return NaN;
+    return ms;
+  }
+  // First valid of _timestamp then _orchestratedAt; else raw null with NaN ms.
+  function _pickTs(r) {
+    var t = _validTsMs(r._timestamp);
+    if (!isNaN(t)) return { raw: r._timestamp, ms: t };
+    var o = _validTsMs(r._orchestratedAt);
+    if (!isNaN(o)) return { raw: r._orchestratedAt, ms: o };
+    return { raw: null, ms: NaN };
+  }
+  // Preferred of two candidates: newest valid wins; one valid beats invalid or
+  // missing; ties and both-invalid keep the incumbent (deterministic first
+  // within a source, or session across sources).
+  function _better(incumbent, challenger) {
+    if (!incumbent) return challenger;
+    if (!challenger) return incumbent;
+    var iValid = !isNaN(incumbent.tsMs);
+    var cValid = !isNaN(challenger.tsMs);
+    if (iValid && cValid) return (challenger.tsMs > incumbent.tsMs) ? challenger : incumbent;
+    if (iValid) return incumbent;
+    if (cValid) return challenger;
+    return incumbent;
+  }
+  // Best matching record within one source array. Scans all matches and applies
+  // the timestamp policy; ticker is normalized before comparison.
+  function _buildCandidate(arr, label) {
+    if (!arr || !arr.length) return null;
+    var best = null;
+    for (var i = 0; i < arr.length; i++) {
+      var r = arr[i];
+      var candidateTicker = (r && typeof r.ticker === 'string') ? r.ticker.trim().toUpperCase() : '';
+      if (candidateTicker !== sym) continue;
+      var ts = _pickTs(r);
+      best = _better(best, { result: r, label: label, rawTs: ts.raw, tsMs: ts.ms });
+    }
+    return best;
+  }
+
+  var cockpitArr = (_cockpitResults && _cockpitResults.length > 0) ? _cockpitResults : null;
+  var sessionCand = _buildCandidate(cockpitArr, (_cockpitResultsSource || 'session'));
+  var savedCand = _buildCandidate(_srSafeParseResults(), 'saved');
+
+  var winner = _better(sessionCand, savedCand);
+  if (!winner) return NO_MATCH;
+
+  var hasValidTs = !isNaN(winner.tsMs);
+  var timestamp = hasValidTs ? winner.rawTs : null;
+  var ageMs = hasValidTs ? (nowMs - winner.tsMs) : null;
+  var stale = (ageMs === null) || (ageMs > STALE_MS);
+  return { result: winner.result, source: winner.label, timestamp: timestamp, ageMs: ageMs, stale: stale };
 }
 
 function _updateViewResultsBtn() {

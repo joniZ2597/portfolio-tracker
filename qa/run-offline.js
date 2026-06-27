@@ -96,6 +96,34 @@ function uniqueSorted(items) {
   return Array.from(new Set(items)).sort();
 }
 
+// Extract a top-level `function name(...) { ... }` source by brace-matching.
+// Used by the G-R resolver phase to exercise the real index.html functions in a
+// sandbox. Read-only: never edits index.html.
+function extractFunctionSource(content, name) {
+  const sig = 'function ' + name + '(';
+  const start = content.indexOf(sig);
+  if (start === -1) {
+    return null;
+  }
+  const braceStart = content.indexOf('{', start);
+  if (braceStart === -1) {
+    return null;
+  }
+  let depth = 0;
+  for (let i = braceStart; i < content.length; i += 1) {
+    const ch = content[i];
+    if (ch === '{') {
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return content.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
 const OFFLINE_TESTS = [
   'qa/research_evidence_contract_test.js',
   'qa/research_evidence_mock_provider_test.js',
@@ -473,6 +501,278 @@ function smartQuoteAdvisory() {
   );
 }
 
+function phaseResolverTests() {
+  header('Phase 4 - G-R read-only research resolver (Slice A)');
+
+  const content = read('index.html');
+  if (content === null) {
+    fail('resolver', 'index.html is missing');
+    return;
+  }
+
+  let factory;
+  try {
+    const srSrc = extractFunctionSource(content, '_srSafeParseResults');
+    const resolveSrc = extractFunctionSource(content, '_resolveResearchForHolding');
+    const getSrc = extractFunctionSource(content, '_getResearchForHolding');
+    if (!srSrc || !resolveSrc || !getSrc) {
+      fail('resolver', 'could not extract _srSafeParseResults / _resolveResearchForHolding / _getResearchForHolding from index.html');
+      return;
+    }
+    // eslint-disable-next-line no-new-func
+    factory = new Function(
+      '_cockpitResults',
+      '_cockpitResultsSource',
+      'localStorage',
+      srSrc + '\n' + resolveSrc + '\n' + getSrc +
+        '\nreturn { _resolveResearchForHolding: _resolveResearchForHolding, _getResearchForHolding: _getResearchForHolding };'
+    );
+  } catch (e) {
+    fail('resolver', 'factory build error: ' + e.message);
+    return;
+  }
+
+  const NOW = Date.now();
+  const HOUR = 3600 * 1000;
+
+  function iso(msAgo) {
+    return new Date(NOW - msAgo).toISOString();
+  }
+
+  function rec(ticker, opts) {
+    opts = opts || {};
+    const r = { ticker: ticker, sentiment_score: 70, summary: 'stub summary for resolver test' };
+    if ('_timestamp' in opts) {
+      r._timestamp = opts._timestamp;
+    }
+    if ('_orchestratedAt' in opts) {
+      r._orchestratedAt = opts._orchestratedAt;
+    }
+    if ('_aiUnavailable' in opts) {
+      r._aiUnavailable = opts._aiUnavailable;
+    }
+    return r;
+  }
+
+  function makeMockLocalStorage(savedArr) {
+    const store = { pt_results: JSON.stringify(savedArr || []) };
+    const writes = [];
+    return {
+      getItem: function (k) {
+        return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null;
+      },
+      setItem: function (k, v) {
+        writes.push(['set', k]);
+        store[k] = v;
+      },
+      removeItem: function (k) {
+        writes.push(['remove', k]);
+        delete store[k];
+      },
+      _writes: writes,
+      _raw: function () {
+        return store.pt_results;
+      }
+    };
+  }
+
+  function build(sessionArr, savedArr, sessionSource) {
+    const ls = makeMockLocalStorage(savedArr);
+    const api = factory(sessionArr, sessionSource || 'session', ls);
+    return { api: api, ls: ls };
+  }
+
+  let total = 0;
+  let okCount = 0;
+  function check(name, cond) {
+    total += 1;
+    if (cond) {
+      okCount += 1;
+    } else {
+      fail('resolver', 'assertion failed: ' + name);
+    }
+  }
+
+  // 1. partial-session shadowing: session AAPL, saved MSFT -> MSFT resolves saved.
+  (function () {
+    const s = build([rec('AAPL', { _timestamp: iso(HOUR) })], [rec('MSFT', { _timestamp: iso(2 * HOUR) })]);
+    const m = s.api._resolveResearchForHolding('MSFT');
+    check('shadowing: MSFT resolves from saved', m.result !== null && m.result.ticker === 'MSFT' && m.source === 'saved');
+    const a = s.api._resolveResearchForHolding('AAPL');
+    check('shadowing: AAPL still resolves from session', a.result !== null && a.source === 'session');
+    check('shadowing: delegate returns saved MSFT result', s.api._getResearchForHolding('MSFT') !== null);
+  })();
+
+  // 2. session newer wins.
+  (function () {
+    const sess = [rec('AAPL', { _timestamp: iso(HOUR) })];
+    const s = build(sess, [rec('AAPL', { _timestamp: iso(10 * HOUR) })]);
+    const r = s.api._resolveResearchForHolding('AAPL');
+    check('session newer wins', r.source === 'session' && r.result === sess[0]);
+  })();
+
+  // 3. saved newer wins.
+  (function () {
+    const s = build([rec('AAPL', { _timestamp: iso(10 * HOUR) })], [rec('AAPL', { _timestamp: iso(HOUR) })]);
+    const r = s.api._resolveResearchForHolding('AAPL');
+    check('saved newer wins', r.source === 'saved');
+  })();
+
+  // 4. timestamp tie -> session wins.
+  (function () {
+    const tie = iso(HOUR);
+    const s = build([rec('AAPL', { _timestamp: tie })], [rec('AAPL', { _timestamp: tie })]);
+    const r = s.api._resolveResearchForHolding('AAPL');
+    check('timestamp tie -> session wins', r.source === 'session');
+  })();
+
+  // 5. invalid _timestamp + valid _orchestratedAt.
+  (function () {
+    const orch = iso(HOUR);
+    const s = build([rec('AAPL', { _timestamp: 'garbage', _orchestratedAt: orch })], []);
+    const r = s.api._resolveResearchForHolding('AAPL');
+    check('falls back to _orchestratedAt timestamp', r.timestamp === orch);
+    check('falls back to _orchestratedAt age', r.ageMs !== null && r.ageMs > HOUR - 1000 && r.ageMs < HOUR + 60000 && r.stale === false);
+  })();
+
+  // 6. missing timestamp behavior.
+  (function () {
+    const s = build([rec('AAPL', {})], []);
+    const r = s.api._resolveResearchForHolding('AAPL');
+    check('missing timestamp -> result kept, ts null, stale true', r.result !== null && r.timestamp === null && r.ageMs === null && r.stale === true);
+  })();
+
+  // 7. invalid timestamp behavior.
+  (function () {
+    const s = build([rec('AAPL', { _timestamp: 'not-a-date' })], []);
+    const r = s.api._resolveResearchForHolding('AAPL');
+    check('invalid timestamp -> ts null, stale true', r.timestamp === null && r.ageMs === null && r.stale === true);
+  })();
+
+  // 8. future timestamp guard (>5min invalid; <=5min valid).
+  (function () {
+    const far = new Date(NOW + 10 * 60 * 1000).toISOString();
+    const sFar = build([rec('AAPL', { _timestamp: far })], []);
+    const rFar = sFar.api._resolveResearchForHolding('AAPL');
+    check('future >5min invalid', rFar.timestamp === null && rFar.ageMs === null && rFar.stale === true);
+    const near = new Date(NOW + 2 * 60 * 1000).toISOString();
+    const sNear = build([rec('AAPL', { _timestamp: near })], []);
+    const rNear = sNear.api._resolveResearchForHolding('AAPL');
+    check('future <=5min valid', rNear.timestamp === near && rNear.stale === false);
+  })();
+
+  // 9. duplicate same-symbol records within one source -> freshest valid wins; tie keeps first.
+  //    Saved-source records are re-parsed from storage JSON, so they are compared
+  //    by value/marker rather than by reference identity.
+  (function () {
+    const olderTs = iso(10 * HOUR);
+    const newerTs = iso(HOUR);
+    const s = build(null, [rec('AAPL', { _timestamp: olderTs }), rec('AAPL', { _timestamp: newerTs })]);
+    const r = s.api._resolveResearchForHolding('AAPL');
+    check('dup within source -> freshest wins', r.result !== null && r.result._timestamp === newerTs);
+    const tie = iso(HOUR);
+    const a = rec('AAPL', { _timestamp: tie });
+    a.tag = 'A';
+    const b = rec('AAPL', { _timestamp: tie });
+    b.tag = 'B';
+    const s2 = build(null, [a, b]);
+    const r2 = s2.api._resolveResearchForHolding('AAPL');
+    check('dup within source tie -> first kept', r2.result !== null && r2.result.tag === 'A');
+  })();
+
+  // 10. lowercase normalization (query + stored ticker).
+  (function () {
+    const s = build(null, [rec('AAPL', { _timestamp: iso(HOUR) })]);
+    check('query lowercase normalized', s.api._resolveResearchForHolding('aapl').result !== null);
+    const s2 = build(null, [rec('aapl', { _timestamp: iso(HOUR) })]);
+    check('stored ticker lowercase normalized', s2.api._resolveResearchForHolding('AAPL').result !== null);
+  })();
+
+  // 11. whitespace normalization (query + stored ticker).
+  (function () {
+    const s = build(null, [rec('AAPL', { _timestamp: iso(HOUR) })]);
+    check('query whitespace normalized', s.api._resolveResearchForHolding('  AAPL  ').result !== null);
+    const s2 = build(null, [rec(' AAPL ', { _timestamp: iso(HOUR) })]);
+    check('stored ticker whitespace normalized', s2.api._resolveResearchForHolding('AAPL').result !== null);
+  })();
+
+  // 12. invalid dot-suffix symbol stays out of scope.
+  (function () {
+    const s = build(null, [rec('BRK.B', { _timestamp: iso(HOUR) })]);
+    const r = s.api._resolveResearchForHolding('BRK.B');
+    check('dot-suffix symbol -> no match', r.result === null && r.source === 'none' && r.stale === true);
+  })();
+
+  // 13. empty / undefined / null symbol.
+  (function () {
+    const s = build([rec('AAPL', { _timestamp: iso(HOUR) })], []);
+    check('empty string symbol -> no match', s.api._resolveResearchForHolding('').result === null);
+    check('undefined symbol -> no match', s.api._resolveResearchForHolding(undefined).result === null);
+    check('null symbol -> no match', s.api._resolveResearchForHolding(null).result === null);
+    check('delegate invalid symbol -> null', s.api._getResearchForHolding('BRK.B') === null);
+  })();
+
+  // 14. fresh _aiUnavailable vs older usable research -> freshness dominates.
+  (function () {
+    const sess = [rec('AAPL', { _timestamp: iso(HOUR), _aiUnavailable: true })];
+    const s = build(sess, [rec('AAPL', { _timestamp: iso(10 * HOUR) })]);
+    const r = s.api._resolveResearchForHolding('AAPL');
+    check('fresh _aiUnavailable wins over older usable', r.result === sess[0] && r.result._aiUnavailable === true && r.source === 'session');
+  })();
+
+  // 15. stale > 48h.
+  (function () {
+    const s = build([rec('AAPL', { _timestamp: iso(50 * HOUR) })], []);
+    const r = s.api._resolveResearchForHolding('AAPL');
+    check('stale >48h', r.result !== null && r.ageMs > 48 * HOUR && r.stale === true);
+  })();
+
+  // 16. fresh < 48h.
+  (function () {
+    const s = build([rec('AAPL', { _timestamp: iso(HOUR) })], []);
+    const r = s.api._resolveResearchForHolding('AAPL');
+    check('fresh <48h', r.stale === false && r.ageMs < 48 * HOUR);
+  })();
+
+  // 17. empty session + empty saved.
+  (function () {
+    const s = build(null, []);
+    const r = s.api._resolveResearchForHolding('AAPL');
+    check('empty both -> no match', r.result === null && r.source === 'none' && r.stale === true);
+  })();
+
+  // 18. populated both with distinct symbols.
+  (function () {
+    const s = build([rec('AAPL', { _timestamp: iso(HOUR) })], [rec('MSFT', { _timestamp: iso(HOUR) })]);
+    check('distinct: AAPL from session', s.api._resolveResearchForHolding('AAPL').source === 'session');
+    check('distinct: MSFT from saved', s.api._resolveResearchForHolding('MSFT').source === 'saved');
+    check('distinct: absent symbol -> no match', s.api._resolveResearchForHolding('NVDA').result === null);
+  })();
+
+  // 19. zero mutation of source arrays, _cockpitResults, pt_results, localStorage.
+  (function () {
+    const sessionArr = [rec('AAPL', { _timestamp: iso(HOUR) }), rec('AAPL', { _timestamp: iso(2 * HOUR) })];
+    const savedArr = [rec('MSFT', { _timestamp: iso(HOUR) }), rec('MSFT', { _timestamp: iso(3 * HOUR) })];
+    const sessionSnap = JSON.stringify(sessionArr);
+    const savedSnap = JSON.stringify(savedArr);
+    const s = build(sessionArr, savedArr);
+    const rawBefore = s.ls._raw();
+    s.api._resolveResearchForHolding('AAPL');
+    s.api._resolveResearchForHolding('MSFT');
+    s.api._resolveResearchForHolding('aapl');
+    s.api._getResearchForHolding('MSFT');
+    s.api._resolveResearchForHolding('BRK.B');
+    check('zero-mutation: session array unchanged', JSON.stringify(sessionArr) === sessionSnap);
+    check('zero-mutation: saved array unchanged', JSON.stringify(savedArr) === savedSnap);
+    check('zero-mutation: pt_results storage unchanged', s.ls._raw() === rawBefore);
+    check('zero-mutation: no localStorage writes', s.ls._writes.length === 0);
+  })();
+
+  if (okCount === total) {
+    pass(total + ' resolver assertion(s) passed');
+  }
+}
+
 function main() {
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
@@ -480,6 +780,7 @@ function main() {
   phaseSyntax();
   phaseOfflineTests();
   phaseForbiddenSurface();
+  phaseResolverTests();
 
   console.log('\n=== Summary ===');
 
