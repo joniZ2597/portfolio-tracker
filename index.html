@@ -4957,11 +4957,7 @@ function switchMainView(view) {
   if (mainPanel) mainPanel.style.display = view === 'research'  ? '' : 'none';
   if (pfPanel)   pfPanel.style.display   = view === 'portfolio' ? '' : 'none';
   if (view !== 'portfolio' && _pfLiveRunCanceller) {
-    ++_pfLiveRunId;
-    var _vcCanceller = _pfLiveRunCanceller;
-    _pfLiveRunCanceller = null;
-    _pfLiveFetching = false;
-    _vcCanceller.abort('view-cancel');
+    _pfLiveAbortActiveRun('view-cancel');
   }
   if (view === 'portfolio') _renderPortfolioPanel();
 }
@@ -4986,9 +4982,13 @@ function _calcPortfolioAggregates(holdings) {
   }
   var livePrice = null;
   if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true) {
+    var _aggNow = Date.now();
     var liveCovered = syms.filter(function(s) {
+      if (_pfLiveTerminalReason) return false;
       var rt = _portfolioRuntime[s];
-      return rt && typeof rt.price === 'number' && isFinite(rt.price) && rt.price > 0;
+      if (!rt || typeof rt.price !== 'number' || !isFinite(rt.price) || rt.price <= 0) return false;
+      if (!_pfLiveFreshAt[s]) return false;
+      return (_aggNow - _pfLiveFreshAt[s]) < _PF_LIVE_SUCCESS_TTL;
     }).length;
     livePrice = { covered: liveCovered, total: total };
   }
@@ -5019,6 +5019,7 @@ function _renderPortfolioPanel() {
   if (!panel) return;
   var holdings = loadHoldings();
   var count    = Object.keys(holdings).length;
+  if (_pfLiveRunCanceller) _pfLiveAbortActiveRun('superseded');
   panel.innerHTML = '';
 
   var hdr = document.createElement('div');
@@ -5421,21 +5422,24 @@ function _renderPortfolioPanel() {
     _pfSyms.forEach(function(s) {
       if (_pfHasFreshLive(s)) _updatePortfolioCard(s, _portfolioRuntime[s]);
     });
-    var eligibleSyms = _pfSyms.filter(function(s) {
+    var _pfLiveRankOf = function(s) {
+      var sz = holdings[s] ? holdings[s].positionSize : undefined;
+      return (typeof sz === 'number' && isFinite(sz) && sz > 0) ? sz : 0;
+    };
+    var rankedSyms = _pfSyms.slice().sort(function(a, b) {
+      var diff = _pfLiveRankOf(b) - _pfLiveRankOf(a);
+      return diff !== 0 ? diff : a.localeCompare(b);
+    });
+    var topSyms         = rankedSyms.slice(0, _PF_LIVE_BATCH_MAX);
+    var capExcludedSyms = rankedSyms.slice(_PF_LIVE_BATCH_MAX);
+    var eligibleSyms = topSyms.filter(function(s) {
       var failedRecently = _pfLiveFailAt[s] && (_pfNow - _pfLiveFailAt[s]) < _PF_LIVE_FAIL_TTL;
       return !_pfHasFreshLive(s) && !failedRecently;
     });
-    eligibleSyms.sort(function(a, b) {
-      var pa = (holdings[a] && isFinite(Number(holdings[a].positionSize))) ? Number(holdings[a].positionSize) : 0;
-      var pb = (holdings[b] && isFinite(Number(holdings[b].positionSize))) ? Number(holdings[b].positionSize) : 0;
-      var diff = pb - pa;
-      return diff !== 0 ? diff : a.localeCompare(b);
-    });
-    var _pfFailTtlSyms = _pfSyms.filter(function(s) {
+    var _pfFailTtlSyms = topSyms.filter(function(s) {
       return !_pfHasFreshLive(s) && _pfLiveFailAt[s] && (_pfNow - _pfLiveFailAt[s]) < _PF_LIVE_FAIL_TTL;
     });
-    var _pfCapExcluded = eligibleSyms.slice(_PF_LIVE_BATCH_MAX);
-    _pfFailTtlSyms.concat(_pfCapExcluded).forEach(function(s) { _updatePortfolioCard(s, null); });
+    _pfFailTtlSyms.concat(capExcludedSyms).forEach(function(s) { _updatePortfolioCard(s, null); });
     if (eligibleSyms.length > 0 && !_pfLiveFetching) {
       _portfolioFetchPrices(eligibleSyms, _pfSyms);
     }
@@ -5481,6 +5485,14 @@ function _pfLiveIsTerminalEnvelope(body) {
   return (s === 'DISABLED' && r === 'SERVER_DISABLED')
       || (s === 'ERROR'    && r === 'INVALID_PURPOSE')
       || (s === 'ERROR'    && r === 'AMBIGUOUS_PURPOSE');
+}
+
+function _pfLiveAbortActiveRun(cause) {
+  ++_pfLiveRunId;
+  var c = _pfLiveRunCanceller;
+  _pfLiveRunCanceller = null;
+  _pfLiveFetching = false;
+  if (c) c.abort(cause);
 }
 
 function _pfLiveClearCardLiveCell(sym) {
