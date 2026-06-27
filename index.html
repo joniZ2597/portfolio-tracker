@@ -5218,42 +5218,40 @@ function _renderPortfolioPanel() {
         plEl.classList.add('pf-pos-pl--muted');
       }
       card.appendChild(plEl);
-      if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES !== true) {
-        var chgR = _getDailyChangeForHolding(sym);
-        if (chgR &&
-            typeof chgR._verifiedChangePct === 'number' && isFinite(chgR._verifiedChangePct) &&
-            typeof chgR._verifiedPrice === 'number' && isFinite(chgR._verifiedPrice) && chgR._verifiedPrice > 0) {
-          var chgTs = chgR._timestamp || chgR._orchestratedAt || null;
-          var chgTsMs = chgTs ? new Date(chgTs).getTime() : NaN;
-          var chgAgeMs = (chgTs && !isNaN(chgTsMs)) ? (Date.now() - chgTsMs) : null;
-          if (chgAgeMs !== null && !isNaN(chgAgeMs) && chgAgeMs >= 0 && chgAgeMs < 172800000) {
-            var chgEl = document.createElement('div');
-            chgEl.className = 'pf-pos-chg';
-            var chgPriceSpan = document.createElement('span');
-            chgPriceSpan.className = 'pf-pos-chg-price';
-            chgPriceSpan.textContent = '$' + chgR._verifiedPrice.toFixed(2) + ' · ';
-            chgEl.appendChild(chgPriceSpan);
-            var chgPctSpan = document.createElement('span');
-            var chgPct = chgR._verifiedChangePct;
-            if (chgPct > 0) {
-              chgPctSpan.className = 'pf-pos-chg-pct--pos';
-              chgPctSpan.textContent = '+' + chgPct.toFixed(2) + '%';
-            } else if (chgPct < 0) {
-              chgPctSpan.className = 'pf-pos-chg-pct--neg';
-              chgPctSpan.textContent = chgPct.toFixed(2) + '%';
-            } else {
-              chgPctSpan.className = 'pf-pos-chg-pct--zero';
-              chgPctSpan.textContent = '0.00%';
-            }
-            chgEl.appendChild(chgPctSpan);
-            if (chgAgeMs >= 72000000) {
-              var chgAgeSpan = document.createElement('span');
-              chgAgeSpan.className = 'pf-pos-chg-age';
-              chgAgeSpan.textContent = ' · ' + Math.round(chgAgeMs / 3600000) + 'h ago';
-              chgEl.appendChild(chgAgeSpan);
-            }
-            card.appendChild(chgEl);
+      var chgR = _getDailyChangeForHolding(sym);
+      if (chgR &&
+          typeof chgR._verifiedChangePct === 'number' && isFinite(chgR._verifiedChangePct) &&
+          typeof chgR._verifiedPrice === 'number' && isFinite(chgR._verifiedPrice) && chgR._verifiedPrice > 0) {
+        var chgTs = chgR._timestamp || chgR._orchestratedAt || null;
+        var chgTsMs = chgTs ? new Date(chgTs).getTime() : NaN;
+        var chgAgeMs = (chgTs && !isNaN(chgTsMs)) ? (Date.now() - chgTsMs) : null;
+        if (chgAgeMs !== null && !isNaN(chgAgeMs) && chgAgeMs >= 0 && chgAgeMs < 172800000) {
+          var chgEl = document.createElement('div');
+          chgEl.className = 'pf-pos-chg';
+          var chgPriceSpan = document.createElement('span');
+          chgPriceSpan.className = 'pf-pos-chg-price';
+          chgPriceSpan.textContent = '$' + chgR._verifiedPrice.toFixed(2) + ' · ';
+          chgEl.appendChild(chgPriceSpan);
+          var chgPctSpan = document.createElement('span');
+          var chgPct = chgR._verifiedChangePct;
+          if (chgPct > 0) {
+            chgPctSpan.className = 'pf-pos-chg-pct--pos';
+            chgPctSpan.textContent = '+' + chgPct.toFixed(2) + '%';
+          } else if (chgPct < 0) {
+            chgPctSpan.className = 'pf-pos-chg-pct--neg';
+            chgPctSpan.textContent = chgPct.toFixed(2) + '%';
+          } else {
+            chgPctSpan.className = 'pf-pos-chg-pct--zero';
+            chgPctSpan.textContent = '0.00%';
           }
+          chgEl.appendChild(chgPctSpan);
+          if (chgAgeMs >= 72000000) {
+            var chgAgeSpan = document.createElement('span');
+            chgAgeSpan.className = 'pf-pos-chg-age';
+            chgAgeSpan.textContent = ' · ' + Math.round(chgAgeMs / 3600000) + 'h ago';
+            chgEl.appendChild(chgAgeSpan);
+          }
+          card.appendChild(chgEl);
         }
       }
       if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true) {
@@ -5405,69 +5403,293 @@ function _renderPortfolioPanel() {
     panel.appendChild(list);
   }
   if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true && count > 0) {
-    var _pfSyms  = Object.keys(holdings);
-    var _pfFresh   = _portfolioFetchedAt !== null && (Date.now() - _portfolioFetchedAt) < PORTFOLIO_TTL_MS;
-    if (_pfFresh) {
-      _pfSyms.forEach(function(s) { _updatePortfolioCard(s, _portfolioRuntime[s] || null); });
-    } else if (!_portfolioFetching) {
-      _portfolioFetchPrices(_pfSyms);
+    var _pfSyms = Object.keys(holdings);
+    if (_pfLiveTerminalReason) { _pfLiveClearAllVisibleLiveCells(_pfSyms); return; }
+    var _pfNow = Date.now();
+    var _pfHasFreshLive = function(s) {
+      return !!_portfolioRuntime[s]
+        && !!_pfLiveFreshAt[s]
+        && (_pfNow - _pfLiveFreshAt[s]) < _PF_LIVE_SUCCESS_TTL;
+    };
+    _pfSyms.forEach(function(s) {
+      if (_pfHasFreshLive(s)) _updatePortfolioCard(s, _portfolioRuntime[s]);
+    });
+    var eligibleSyms = _pfSyms.filter(function(s) {
+      var failedRecently = _pfLiveFailAt[s] && (_pfNow - _pfLiveFailAt[s]) < _PF_LIVE_FAIL_TTL;
+      return !_pfHasFreshLive(s) && !failedRecently;
+    });
+    if (eligibleSyms.length > 0 && !_pfLiveFetching) {
+      _portfolioFetchPrices(eligibleSyms, _pfSyms);
     }
   }
+}
+
+// ── G-L Portfolio Live — V6.7 Slice A: dormant infrastructure ──────────────────
+// Session-only. Never persisted. Display-ineligible when _pfLiveTerminalReason is set.
+const _pfLiveFreshAt        = {};
+const _pfLiveFailAt         = {};
+const _pfLiveInflight       = {};
+let   _pfLiveRunId          = 0;
+let   _pfLiveRunCanceller   = null;
+let   _pfLiveFetching       = false;
+let   _pfLiveTerminalReason = null;
+let   _pfLiveServerDisabled = false;
+
+const _PF_LIVE_SUCCESS_TTL = 5 * 60 * 1000;
+const _PF_LIVE_FAIL_TTL    = 60 * 1000;
+const _PF_LIVE_BATCH_MAX   = 25;
+const _PF_LIVE_CONCURRENCY = 4;
+const _PF_LIVE_BUDGET_MS   = 10000;
+const _PF_LIVE_SYM_MS      = 8000;
+const _PF_LIVE_PROVIDERS   = ['yahoo', 'polygon'];
+
+function _pfLiveCanWrite(capturedRunId) {
+  return capturedRunId === _pfLiveRunId
+    && window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true
+    && !_pfLiveTerminalReason;
+}
+
+function _pfLiveCanAcceptTerminal(capturedRunId, batchCanceller, symCanceller) {
+  return capturedRunId === _pfLiveRunId
+    && window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true
+    && !_pfLiveTerminalReason
+    && (!batchCanceller || batchCanceller.signal.aborted !== true)
+    && (!symCanceller   || symCanceller.signal.aborted  !== true);
+}
+
+function _pfLiveIsTerminalEnvelope(body) {
+  if (!body || typeof body !== 'object') return false;
+  var s = body.status, r = body.reason;
+  return (s === 'DISABLED' && r === 'SERVER_DISABLED')
+      || (s === 'ERROR'    && r === 'INVALID_PURPOSE')
+      || (s === 'ERROR'    && r === 'AMBIGUOUS_PURPOSE');
+}
+
+function _pfLiveClearCardLiveCell(sym) {
+  var el = document.getElementById('pf-mkt-' + sym);
+  if (!el) return;
+  var card     = el.closest('.pf-pos-card');
+  var fallback = card ? card.querySelector('.pf-pos-chg') : null;
+  while (el.firstChild) el.removeChild(el.firstChild);
+  if (fallback) {
+    fallback.style.display = '';
+    if (window.getComputedStyle(fallback).display !== 'none') {
+      el.style.display = 'none';
+      return;
+    }
+  }
+  el.style.display = '';
+  var dash = document.createElement('span');
+  dash.className   = 'pf-pos-mkt-price';
+  dash.textContent = '—';
+  el.appendChild(dash);
+}
+
+function _pfLiveClearAllVisibleLiveCells(syms) {
+  if (!syms || !syms.length) return;
+  for (var i = 0; i < syms.length; i++) _pfLiveClearCardLiveCell(syms[i]);
+}
+
+function _pfLiveNormalize(body, sym) {
+  if (!body || !body.chart || !body.chart.result || !body.chart.result[0]) return null;
+  var result = body.chart.result[0];
+  var meta   = result.meta;
+  if (!meta) return null;
+  var source = meta._provider;
+  if (!source || _PF_LIVE_PROVIDERS.indexOf(source) === -1) return null;
+  var price = parseFloat(meta.regularMarketPrice);
+  if (!isFinite(price) || price <= 0) return null;
+  var closes = (result.indicators && result.indicators.quote &&
+                result.indicators.quote[0] && result.indicators.quote[0].close) || [];
+  var valid = [];
+  for (var i = 0; i < closes.length; i++) {
+    var c = closes[i];
+    if (typeof c === 'number' && isFinite(c) && c > 0) valid.push(c);
+  }
+  var change_percent = null;
+  if (valid.length >= 2) {
+    var prev = valid[valid.length - 2], last = valid[valid.length - 1];
+    change_percent = parseFloat(((last - prev) / prev * 100).toFixed(2));
+  } else {
+    var prevClose = parseFloat(meta.chartPreviousClose);
+    if (!isFinite(prevClose) || prevClose <= 0) prevClose = parseFloat(meta.previousClose);
+    if (isFinite(prevClose) && prevClose > 0)
+      change_percent = parseFloat(((price - prevClose) / prevClose * 100).toFixed(2));
+  }
+  if (change_percent === null || !isFinite(change_percent)) return null;
+  return { symbol: sym, price: price, change_percent: change_percent, source: source };
 }
 
 // ─── Portfolio / Holdings — Slice 1C-1A: Runtime Price Bridge ─────────────────
 // Memory-only. Never persisted. Never written to pt_holdings.
 // Only active when window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true (default off).
 
-async function _portfolioFetchPrices(syms) {
+function _pfLiveMakeCanceller() {
+  var ctrl = new AbortController();
+  var cause = { value: null };
+  return {
+    signal: ctrl.signal,
+    cause:  cause,
+    abort:  function(c) { if (!ctrl.signal.aborted) { cause.value = c; ctrl.abort(); } }
+  };
+}
+
+async function _pfLiveSingle(sym, allSyms, capturedRunId, batchCanceller) {
+  var existing = _pfLiveInflight[sym];
+  if (existing && existing.runId === capturedRunId && !existing.canceller.signal.aborted)
+    return existing.promise;
+
+  var symCanceller = _pfLiveMakeCanceller();
+  var entry = { promise: null, canceller: symCanceller, runId: capturedRunId };
+  _pfLiveInflight[sym] = entry;
+  var timeoutId = setTimeout(function() { symCanceller.abort('symbol-timeout'); }, _PF_LIVE_SYM_MS);
+
+  var p = (async function() {
+    try {
+      var url = '/.netlify/functions/market-data?symbol='
+              + encodeURIComponent(sym) + '&purpose=portfolio-live';
+      var res;
+      try {
+        res = await fetch(url, { signal: symCanceller.signal });
+      } catch (_fe) {
+        if (symCanceller.signal.aborted) {
+          if (symCanceller.cause.value === 'symbol-timeout' && _pfLiveCanWrite(capturedRunId))
+            _pfLiveFailAt[sym] = Date.now();
+          // batch-budget / superseded / view-cancel / terminal-stop → no fail TTL
+        } else {
+          if (_pfLiveCanWrite(capturedRunId)) _pfLiveFailAt[sym] = Date.now();
+        }
+        return null;
+      }
+      var body;
+      try { body = await res.json(); } catch (_) {
+        if (_pfLiveCanWrite(capturedRunId)) _pfLiveFailAt[sym] = Date.now();
+        return null;
+      }
+      if (_pfLiveIsTerminalEnvelope(body)) {
+        if (_pfLiveCanAcceptTerminal(capturedRunId, batchCanceller, symCanceller)) {
+          _pfLiveTerminalReason = body.reason;
+          if (body.reason === 'SERVER_DISABLED') _pfLiveServerDisabled = true;
+          batchCanceller.abort('terminal-stop');
+          _pfLiveClearAllVisibleLiveCells(allSyms);
+        }
+        return null;
+      }
+      if (!res.ok) {
+        if (_pfLiveCanWrite(capturedRunId)) _pfLiveFailAt[sym] = Date.now();
+        return null;
+      }
+      var norm = _pfLiveNormalize(body, sym);
+      if (!norm) {
+        if (_pfLiveCanWrite(capturedRunId)) _pfLiveFailAt[sym] = Date.now();
+        return null;
+      }
+      return norm;
+    } finally {
+      clearTimeout(timeoutId);
+      if (_pfLiveInflight[sym] === entry) delete _pfLiveInflight[sym];
+    }
+  })();
+
+  entry.promise = p;
+  return p;
+}
+
+async function _pfLiveBatch(syms, allSyms) {
   if (!syms || !syms.length) return;
-  _portfolioFetching = true;
-  try {
-    var timeout = new Promise(function(resolve) { setTimeout(function() { resolve({}); }, 8000); });
-    var map = await Promise.race([fetchBatchStockData(syms), timeout]);
-    syms.forEach(function(sym) {
-      if (map[sym]) _portfolioRuntime[sym] = map[sym];
-      _updatePortfolioCard(sym, map[sym] || null);
+  var capturedRunId   = ++_pfLiveRunId;
+  var batchCanceller  = _pfLiveMakeCanceller();
+  _pfLiveRunCanceller = batchCanceller;
+  _pfLiveFetching     = true;
+
+  batchCanceller.signal.addEventListener('abort', function() {
+    var c = batchCanceller.cause.value;
+    Object.keys(_pfLiveInflight).forEach(function(s) {
+      var inf = _pfLiveInflight[s];
+      if (inf && inf.runId === capturedRunId) inf.canceller.abort(c);
     });
-    if (syms.some(function(s) { return map[s]; })) _portfolioFetchedAt = Date.now();
-  } catch(e) {
-    console.warn('[Portfolio] price fetch error:', e && e.message);
-    syms.forEach(function(sym) { _updatePortfolioCard(sym, null); });
+  });
+
+  var budgetId = setTimeout(function() { batchCanceller.abort('batch-budget'); }, _PF_LIVE_BUDGET_MS);
+
+  try {
+    var limited = syms.slice(0, _PF_LIVE_BATCH_MAX);
+    var i = 0;
+    while (i < limited.length && !batchCanceller.signal.aborted) {
+      var chunk = limited.slice(i, i + _PF_LIVE_CONCURRENCY);
+      var results = await Promise.allSettled(
+        chunk.map(function(sym) { return _pfLiveSingle(sym, allSyms, capturedRunId, batchCanceller); })
+      );
+      if (batchCanceller.signal.aborted) break;
+      results.forEach(function(r) {
+        if (r.status === 'fulfilled' && r.value && _pfLiveCanWrite(capturedRunId)) {
+          var norm = r.value;
+          _portfolioRuntime[norm.symbol] = norm;
+          _pfLiveFreshAt[norm.symbol]    = Date.now();
+          _updatePortfolioCard(norm.symbol, norm);
+        }
+      });
+      i += _PF_LIVE_CONCURRENCY;
+    }
   } finally {
-    _portfolioFetching = false;
+    clearTimeout(budgetId);
+    if (_pfLiveRunId === capturedRunId && _pfLiveRunCanceller === batchCanceller) {
+      _pfLiveFetching     = false;
+      _pfLiveRunCanceller = null;
+    }
   }
+}
+
+async function _portfolioFetchPrices(eligibleSyms, allSyms) {
+  if (!eligibleSyms || !eligibleSyms.length) return;
+  allSyms = allSyms || eligibleSyms;
+  await _pfLiveBatch(eligibleSyms, allSyms);
 }
 
 function _updatePortfolioCard(sym, mkt) {
   var el = document.getElementById('pf-mkt-' + sym);
   if (!el) return;
+  var card     = el.closest('.pf-pos-card');
+  var fallback = card ? card.querySelector('.pf-pos-chg') : null;
   while (el.firstChild) el.removeChild(el.firstChild);
-  var priceSpan = document.createElement('span');
-  priceSpan.className = 'pf-pos-mkt-price';
-  if (!mkt || typeof mkt.price !== 'number' || !isFinite(mkt.price)) {
-    priceSpan.textContent = '—';
+  if (mkt && typeof mkt.price === 'number' && isFinite(mkt.price)) {
+    if (fallback) fallback.style.display = 'none';
+    el.style.display = '';
+    var priceSpan = document.createElement('span');
+    priceSpan.className = 'pf-pos-mkt-price';
+    priceSpan.textContent = '$' + mkt.price.toFixed(2);
     el.appendChild(priceSpan);
+    if (typeof mkt.change_percent === 'number' && isFinite(mkt.change_percent)) {
+      var sep = document.createElement('span');
+      sep.className   = 'pf-pos-mkt-price';
+      sep.textContent = '·';
+      el.appendChild(sep);
+      var dayLbl = document.createElement('span');
+      dayLbl.className = 'pf-pos-mkt-day-lbl';
+      dayLbl.textContent = 'Day';
+      el.appendChild(dayLbl);
+      var chgSpan = document.createElement('span');
+      var sign    = mkt.change_percent > 0 ? '+' : '';
+      chgSpan.textContent = sign + mkt.change_percent.toFixed(2) + '%';
+      chgSpan.className   = mkt.change_percent > 0 ? 'pf-pos-mkt-chg--pos'
+                          : mkt.change_percent < 0 ? 'pf-pos-mkt-chg--neg'
+                          : 'pf-pos-mkt-chg--zero';
+      el.appendChild(chgSpan);
+    }
     return;
   }
-  priceSpan.textContent = '$' + mkt.price.toFixed(2);
-  el.appendChild(priceSpan);
-  if (typeof mkt.change_percent === 'number' && isFinite(mkt.change_percent)) {
-    var sep = document.createElement('span');
-    sep.className   = 'pf-pos-mkt-price';
-    sep.textContent = '·';
-    el.appendChild(sep);
-    var dayLbl = document.createElement('span');
-    dayLbl.className = 'pf-pos-mkt-day-lbl';
-    dayLbl.textContent = 'Day';
-    el.appendChild(dayLbl);
-    var chgSpan = document.createElement('span');
-    var sign    = mkt.change_percent > 0 ? '+' : '';
-    chgSpan.textContent = sign + mkt.change_percent.toFixed(2) + '%';
-    chgSpan.className   = mkt.change_percent > 0 ? 'pf-pos-mkt-chg--pos'
-                        : mkt.change_percent < 0 ? 'pf-pos-mkt-chg--neg'
-                        : 'pf-pos-mkt-chg--zero';
-    el.appendChild(chgSpan);
+  if (fallback) {
+    fallback.style.display = '';
+    if (window.getComputedStyle(fallback).display !== 'none') {
+      el.style.display = 'none';
+      return;
+    }
   }
+  el.style.display = '';
+  var dash = document.createElement('span');
+  dash.className   = 'pf-pos-mkt-price';
+  dash.textContent = '—';
+  el.appendChild(dash);
 }
 
 // ─── EG-07 Slice 1: Portfolio Research Detail Panel ──────────────────────────
