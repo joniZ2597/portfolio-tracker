@@ -6218,6 +6218,8 @@ function deletePosition(sym) {
   var holdings = loadHoldings();
   delete holdings[sym];
   saveHoldings(holdings);
+  var _wlEnt17b = findTicker(sym);
+  if (_wlEnt17b) upsertTicker(sym, { position: _normalizePosition({ hasPosition: false }) });
   _renderPortfolioPanel();
 }
 
