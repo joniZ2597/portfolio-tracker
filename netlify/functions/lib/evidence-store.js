@@ -26,10 +26,10 @@ function budgetKey(ticker) { return KEY_NAMESPACE + ':budget:'  + ticker; } // S
 //   MISSING  — null/undefined returned (key absent)
 //   INVALID  — JSON.parse() fails or result is not a plain object (payload malformed)
 //   OK       — valid parsed plain object
-async function readRecord(store, key) {
+async function readRecord(store, key, options) {
   let raw;
   try {
-    raw = await store.get(key);
+    raw = await store.get(key, options || {});
   } catch (_) {
     return { state: 'DEGRADED' };
   }
@@ -172,4 +172,4 @@ function optionalSourceType(value) {
   return value;
 }
 
-module.exports = { STORE_NAME, cikKey, companyKey, budgetKey, lookupEvidence };
+module.exports = { STORE_NAME, cikKey, companyKey, budgetKey, lookupEvidence, readRecord };

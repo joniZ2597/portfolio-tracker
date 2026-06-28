@@ -5,7 +5,8 @@
   "scripts": {
     "test": "node qa/run-offline.js",
     "qa:offline": "node qa/run-offline.js",
-    "test:qa": "playwright test"
+    "test:qa": "playwright test",
+    "test:writer": "node qa/run-writer-offline.js"
   },
   "repository": {
     "type": "git",
