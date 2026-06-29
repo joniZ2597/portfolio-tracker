@@ -5843,16 +5843,44 @@ function _openResearchDetailPanel(sym, res, ageMs, triggerBtn) {
     return sec;
   }
 
+  function _mkAnalystActionsSection(actions) {
+    var sec = document.createElement('div');
+    sec.className = 'pf-rdp-section';
+    var lbl = document.createElement('div');
+    lbl.className = 'pf-rdp-lbl';
+    lbl.textContent = 'Analyst Actions';
+    sec.appendChild(lbl);
+
+    var rendered = 0;
+    for (var i = 0; i < actions.length && rendered < 5; i++) {
+      var entry = actions[i];
+      if (!entry || typeof entry.bank !== 'string' || typeof entry.target !== 'number' ||
+          !isFinite(entry.target) || entry.target <= 0) continue;
+      var bank = entry.bank.trim();
+      if (!bank) continue;
+      var action = typeof entry.action === 'string' ? entry.action.trim() : '';
+      var row = document.createElement('div');
+      row.className = 'pf-rdp-val';
+      row.textContent = bank + (action ? ' ' + action : '') + ' PT $' + entry.target;
+      sec.appendChild(row);
+      rendered++;
+    }
+
+    if (rendered === 0) {
+      var fallback = document.createElement('div');
+      fallback.className = 'pf-rdp-fallback';
+      fallback.textContent = FALLBACK;
+      sec.appendChild(fallback);
+    }
+    return sec;
+  }
+
   var actionVal = (res.action && _actionLabels[res.action]) ? _actionLabels[res.action] : null;
 
   var catDir = res._catalystDirection || null;
   var catVal = (catDir && catDir !== 'null') ? catDir.toUpperCase() : null;
 
-  var analystVal = null;
   var _catActs = (res._catalysts && Array.isArray(res._catalysts.analystActions)) ? res._catalysts.analystActions : [];
-  if (_catActs.length > 0 && typeof _catActs[0].bank === 'string' && _catActs[0].bank && typeof _catActs[0].target === 'number') {
-    analystVal = String(_catActs[0].bank).slice(0, 40) + ' — PT $' + _catActs[0].target;
-  }
 
   var keyRiskVal = (typeof res.key_risk === 'string' && res.key_risk.trim() && res.key_risk.trim().toLowerCase() !== 'null') ? res.key_risk.trim() : null;
 
@@ -5896,7 +5924,7 @@ function _openResearchDetailPanel(sym, res, ageMs, triggerBtn) {
   sections.className = 'pf-rdp-sections';
   sections.appendChild(_mkSection('Action',             actionVal));
   sections.appendChild(_mkSection('Catalyst Direction', catVal));
-  sections.appendChild(_mkSection('Analyst Action',     analystVal));
+  sections.appendChild(_mkAnalystActionsSection(_catActs));
   sections.appendChild(_mkSection('Key Risk',           keyRiskVal));
   sections.appendChild(_mkSection('Research Age',       ageVal));
   panel.appendChild(sections);
