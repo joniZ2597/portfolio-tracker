@@ -23,6 +23,7 @@
   --blue:    #2563EB;
   --blue2:   #60A5FA;
   --cyan2:   #22D3EE;
+  --accent:  #4B82F1;
   --text:    #F1F5F9;
   --text2:   #94A3B8;
   --text3:   #64748B;
@@ -278,7 +279,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .rs-val{font-family:var(--mono);font-size:12px;font-weight:700;width:90px}
 .rs-note{font-family:var(--mono);font-size:9px;color:var(--text3);padding:6px 0 2px;letter-spacing:.2px}
 .rs-bar-track{flex:1;height:6px;background:var(--border2);border-radius:3px;overflow:hidden}
-.rs-bar-fill{height:100%;border-radius:3px;transition:width .4s}
+.rs-bar-fill{height:100%;border-radius:3px;transition:width 240ms}
 .rs-rank-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0 2px;border-top:1px solid var(--border2);margin-top:4px}
 .rs-rank-lbl{font-size:12px;color:var(--text3)}
 .rs-rank-val{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--text)}
@@ -712,7 +713,7 @@ select.edit-inp{appearance:none;cursor:pointer}
 /* ─── PORTFOLIO PANEL (Slice 1B-3: Summary / Allocation) ─── */
 .pf-summary{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:12px 16px;margin-bottom:12px;display:flex;justify-content:space-between}
 .pf-summary-stat{display:flex;flex-direction:column;gap:4px}
-.pf-summary-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+.pf-summary-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px}
 .pf-summary-val{font-family:var(--mono);font-size:14px;font-weight:600;color:var(--text)}
 .pf-pos-pl{font-family:var(--mono);font-size:10px;letter-spacing:.4px;margin-top:3px}
 .pf-pos-pl--pos{color:var(--green2)}
@@ -772,7 +773,7 @@ select.edit-inp{appearance:none;cursor:pointer}
 /* ─── PORTFOLIO PANEL (Slice 1C-4A: Coverage Aggregates) ─── */
 .pf-coverage{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 16px;margin-bottom:12px;display:flex;gap:24px;flex-wrap:wrap}
 .pf-cov-stat{display:flex;flex-direction:column;gap:3px}
-.pf-cov-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+.pf-cov-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px}
 .pf-cov-val{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text2)}
 /* ─── PORTFOLIO PANEL (Slice 1D-1: Passive Data Guidance) ─── */
 .pf-guidance{font-size:11px;color:var(--text3);margin-top:6px;margin-bottom:4px}
@@ -790,14 +791,15 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-rdp-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:16px}
 .pf-rdp-hdr-left{flex:1;min-width:0}
 .pf-rdp-ticker{font-family:var(--mono);font-size:15px;font-weight:700;color:var(--text);letter-spacing:.5px}
-.pf-rdp-subtitle{font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:1.2px;margin-top:3px}
+.pf-rdp-subtitle{font-family:var(--mono);font-size:8px;color:var(--text2);text-transform:uppercase;letter-spacing:1.2px;margin-top:3px}
 .btn-pf-rdp-close{font-family:var(--mono);font-size:12px;color:var(--text3);background:none;border:1px solid var(--border2);border-radius:3px;padding:3px 8px;cursor:pointer;flex-shrink:0;transition:color 120ms,border-color 120ms}
 .btn-pf-rdp-close:hover{color:var(--text);border-color:var(--text3)}
 .pf-rdp-sections{display:flex;flex-direction:column}
 .pf-rdp-section{border-top:1px solid var(--border);padding:8px 0}
 .pf-rdp-section:first-child{border-top:none;padding-top:0}
-.pf-rdp-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px}
+.pf-rdp-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px}
 .pf-rdp-val{font-family:var(--mono);font-size:11px;color:var(--text2);line-height:1.5;overflow-wrap:anywhere}
+.pf-rdp-val + .pf-rdp-val{margin-top:4px}
 .pf-rdp-fallback{font-family:var(--mono);font-size:11px;color:var(--text3);font-style:italic;opacity:.55}
 </style>
 </head>
