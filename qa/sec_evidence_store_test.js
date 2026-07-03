@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { handler } = require('../netlify/functions/sec-evidence-store');
-const { cikKey, companyKey } = require('../netlify/functions/lib/evidence-store');
+const { cikKey, companyKey, readRecord, sanitizeReadError } = require('../netlify/functions/lib/evidence-store');
 
 const GATE = 'PT_ENABLE_SEC_EVIDENCE_STORE_SERVER';
 const ROOT = path.resolve(__dirname, '..');
@@ -189,6 +189,60 @@ async function runTests() {
     const j = JSON.parse(r.body);
     assert.strictEqual(r.statusCode, 200);
     assert.strictEqual(j.status, 'DEGRADED');
+  });
+
+  await test('EG-20C-3: reader DEGRADED response carries no diag fields (3-arg path unchanged)', async function () {
+    setEnv(GATE, 'true');
+    const store = { get: async function () { throw new Error('infra error'); } };
+    const r = await invoke('POST', { ticker: 'AAPL', categories: ['sec10q'] }, store);
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.status, 'DEGRADED');
+    assert.strictEqual(j.errorName, undefined);
+    assert.strictEqual(j.stage, undefined);
+    assert.strictEqual(j.writeAttempted, undefined);
+    assert.ok(r.body.indexOf('infra error') === -1, 'err.message leaked from reader');
+  });
+
+  await test('EG-20C-3: readRecord 3-arg DEGRADED is bare (no diag key)', async function () {
+    const store = { get: async function () { throw new Error('boom'); } };
+    const result = await readRecord(store, 'any-key', { consistency: 'strong' });
+    assert.deepStrictEqual(result, { state: 'DEGRADED' });
+  });
+
+  await test('EG-20C-3: readRecord wantDiag=true DEGRADED carries allowlisted diag only', async function () {
+    const err = new Error('secret message');
+    err.status = 502;
+    err.code = 'ERR_X'; // identifier-shaped but NOT allowlisted → must be omitted
+    const store = { get: async function () { throw err; } };
+    const result = await readRecord(store, 'any-key', { consistency: 'strong' }, true);
+    assert.strictEqual(result.state, 'DEGRADED');
+    assert.deepStrictEqual(result.diag, { errorName: 'Error', httpStatus: 502 });
+    assert.ok(JSON.stringify(result).indexOf('secret message') === -1, 'err.message leaked in diag');
+    assert.ok(JSON.stringify(result).indexOf('ERR_X') === -1, 'unlisted errorCode leaked in diag');
+  });
+
+  await test('EG-20C-3: sanitizeReadError hostile input → UnknownError only', async function () {
+    assert.deepStrictEqual(sanitizeReadError(null), { errorName: 'UnknownError' });
+    assert.deepStrictEqual(sanitizeReadError('free text'), { errorName: 'UnknownError' });
+    assert.deepStrictEqual(
+      sanitizeReadError({ name: 'not a safe: name', status: 42, code: 'bad code!' }),
+      { errorName: 'UnknownError' }
+    );
+    assert.deepStrictEqual(
+      sanitizeReadError({ get name() { throw new Error('x'); }, status: 503 }),
+      { errorName: 'UnknownError', httpStatus: 503 }
+    );
+  });
+
+  await test('EG-20C-3: sanitizeReadError fixed vocabulary — unlisted identifiers rejected, listed pass', async function () {
+    assert.deepStrictEqual(
+      sanitizeReadError({ name: 'MaliciousIdentifierName', code: 'ERR_FAKE_CUSTOM_CODE', status: 500 }),
+      { errorName: 'UnknownError', httpStatus: 500 }
+    );
+    assert.deepStrictEqual(
+      sanitizeReadError({ name: 'BlobsInternalError', code: 'ECONNRESET', status: 502 }),
+      { errorName: 'BlobsInternalError', httpStatus: 502, errorCode: 'ECONNRESET' }
+    );
   });
 
   await test('valid fixture: STORE_HIT with scoringImpact none', async function () {

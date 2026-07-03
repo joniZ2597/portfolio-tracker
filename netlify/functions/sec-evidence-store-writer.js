@@ -63,10 +63,18 @@ exports.handler = async function (event) {
   const canonicalMappingJSON = buildCanonicalMappingJSON(cik);
 
   // ── Step 10: read cikKey(ticker) with consistency:'strong' ─────────────────
-  const step10 = await readRecord(store, cikKey(ticker), STRONG);
+  // EG-20C-3: wantDiag=true — DEGRADED carries sanitized fixed-vocabulary
+  // diagnostics in the envelope only (no console logging, no retry, no write).
+  const step10 = await readRecord(store, cikKey(ticker), STRONG, true);
 
   if (step10.state === 'DEGRADED') {
-    return res(200, { status: 'DEGRADED', reason: 'READ_FAILURE' });
+    return res(200, {
+      status: 'DEGRADED',
+      reason: 'STRONG_PRE_READ_FAILURE',
+      stage: 'MAPPING_PRE_READ',
+      writeAttempted: false,
+      ...(step10.diag || { errorName: 'UnknownError' })
+    });
   }
   if (step10.state === 'INVALID') {
     return res(409, { status: 'CONFLICT', reason: 'STORE_INVALID_CONFLICT' });
@@ -88,10 +96,16 @@ exports.handler = async function (event) {
   }
 
   // ── Step 11: read companyKey(cik) with consistency:'strong' ────────────────
-  const step11 = await readRecord(store, companyKey(cik), STRONG);
+  const step11 = await readRecord(store, companyKey(cik), STRONG, true);
 
   if (step11.state === 'DEGRADED') {
-    return res(200, { status: 'DEGRADED', reason: 'READ_FAILURE' });
+    return res(200, {
+      status: 'DEGRADED',
+      reason: 'STRONG_PRE_READ_FAILURE',
+      stage: 'COMPANY_PRE_READ',
+      writeAttempted: false,
+      ...(step11.diag || { errorName: 'UnknownError' })
+    });
   }
   if (step11.state === 'INVALID') {
     return res(409, { status: 'CONFLICT', reason: 'STORE_INVALID_CONFLICT' });

@@ -21,16 +21,53 @@ function cikKey(ticker)    { return KEY_NAMESPACE + ':cik:'     + ticker; }
 function companyKey(cik)   { return KEY_NAMESPACE + ':company:' + cik;    }
 function budgetKey(ticker) { return KEY_NAMESPACE + ':budget:'  + ticker; } // Slice 2+
 
+// EG-20C-3: fixed-vocabulary sanitizer for store.get() throw diagnostics.
+// Emits ONLY { errorName, httpStatus?, errorCode? }, and only values that are
+// members of the explicit allowlists below — arbitrary identifier-shaped
+// names/codes are NOT passed through. Unlisted names default to
+// errorName:'UnknownError'; unlisted codes are omitted; httpStatus is kept
+// only as an integer 100-599. Never touches err.message / err.stack /
+// err.toString(); property reads are individually guarded so hostile getters
+// cannot throw out of the sanitizer.
+const DIAG_ERROR_NAMES = [
+  'Error', 'TypeError', 'RangeError', 'AbortError', 'TimeoutError',
+  'FetchError', 'SystemError', 'BlobsInternalError'
+];
+const DIAG_ERROR_CODES = [
+  'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN',
+  'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE', 'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_SOCKET', 'ABORT_ERR'
+];
+function sanitizeReadError(err) {
+  const diag = { errorName: 'UnknownError' };
+  let name, status, code;
+  try { name = err && err.name; } catch (_) { name = undefined; }
+  try { status = err && err.status; } catch (_) { status = undefined; }
+  try { code = err && err.code; } catch (_) { code = undefined; }
+  if (typeof name === 'string' && DIAG_ERROR_NAMES.indexOf(name) !== -1) { diag.errorName = name; }
+  if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599) {
+    diag.httpStatus = status;
+  }
+  if (typeof code === 'string' && DIAG_ERROR_CODES.indexOf(code) !== -1) { diag.errorCode = code; }
+  return diag;
+}
+
 // readRecord separates three outcomes that store.getJSON() cannot distinguish:
 //   DEGRADED — store.get() throws (infrastructure failure)
 //   MISSING  — null/undefined returned (key absent)
 //   INVALID  — JSON.parse() fails or result is not a plain object (payload malformed)
 //   OK       — valid parsed plain object
-async function readRecord(store, key, options) {
+// EG-20C-3: optional 4th param wantDiag — when strictly true, a DEGRADED result
+// carries diag: sanitizeReadError(err). wantDiag is never forwarded into the
+// store.get options; 3-arg calls return the historical bare { state: 'DEGRADED' }.
+async function readRecord(store, key, options, wantDiag) {
   let raw;
   try {
     raw = await store.get(key, options || {});
-  } catch (_) {
+  } catch (err) {
+    if (wantDiag === true) {
+      return { state: 'DEGRADED', diag: sanitizeReadError(err) };
+    }
     return { state: 'DEGRADED' };
   }
 
@@ -172,4 +209,4 @@ function optionalSourceType(value) {
   return value;
 }
 
-module.exports = { STORE_NAME, cikKey, companyKey, budgetKey, lookupEvidence, readRecord };
+module.exports = { STORE_NAME, cikKey, companyKey, budgetKey, lookupEvidence, readRecord, sanitizeReadError };

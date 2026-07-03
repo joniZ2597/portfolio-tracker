@@ -414,13 +414,16 @@ async function runTests() {
   });
 
   // ── Section 7: Step 10 — mapping pre-read ────────────────────────────────
-  await test('W70: Step10 DEGRADED → 200 DEGRADED/READ_FAILURE', async function () {
+  await test('W70: Step10 DEGRADED → 200 DEGRADED/STRONG_PRE_READ_FAILURE (MAPPING_PRE_READ)', async function () {
     const store = degradedGetStore(cikKey(TICKER));
     const r = await invoke('POST', VALID_BODY, store, authHdr());
     const j = JSON.parse(r.body);
     assert.strictEqual(r.statusCode, 200);
     assert.strictEqual(j.status, 'DEGRADED');
-    assert.strictEqual(j.reason, 'READ_FAILURE');
+    assert.strictEqual(j.reason, 'STRONG_PRE_READ_FAILURE');
+    assert.strictEqual(j.stage, 'MAPPING_PRE_READ');
+    assert.strictEqual(j.writeAttempted, false);
+    assert.strictEqual(j.errorName, 'Error');
   });
 
   await test('W71: Step10 INVALID → 409 CONFLICT/STORE_INVALID_CONFLICT', async function () {
@@ -460,7 +463,7 @@ async function runTests() {
   });
 
   // ── Section 8: Step 11 — company pre-read ───────────────────────────────
-  await test('W75: Step11 DEGRADED → 200 DEGRADED/READ_FAILURE', async function () {
+  await test('W75: Step11 DEGRADED → 200 DEGRADED/STRONG_PRE_READ_FAILURE (COMPANY_PRE_READ)', async function () {
     const store = {
       get: async function (key) {
         if (key === cikKey(TICKER)) return null;   // Step10 MISSING
@@ -472,7 +475,10 @@ async function runTests() {
     const j = JSON.parse(r.body);
     assert.strictEqual(r.statusCode, 200);
     assert.strictEqual(j.status, 'DEGRADED');
-    assert.strictEqual(j.reason, 'READ_FAILURE');
+    assert.strictEqual(j.reason, 'STRONG_PRE_READ_FAILURE');
+    assert.strictEqual(j.stage, 'COMPANY_PRE_READ');
+    assert.strictEqual(j.writeAttempted, false);
+    assert.strictEqual(j.errorName, 'Error');
   });
 
   await test('W76: Step11 INVALID → 409 CONFLICT/STORE_INVALID_CONFLICT', async function () {
@@ -840,16 +846,297 @@ async function runTests() {
     assert.ok(!/\bstore\.(set|setJSON|delete|deleteJSON)\s*\(/.test(src), 'Blob write in sec-evidence-store.js');
   });
 
-  await test('W128: readRecord in evidence-store.js accepts options param', async function () {
+  await test('W128: readRecord accepts options + wantDiag params; wantDiag not forwarded to store.get', async function () {
     const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/lib/evidence-store.js'), 'utf8');
-    assert.ok(/async function readRecord\(store, key, options\)/.test(src), 'readRecord options param not found');
+    assert.ok(/async function readRecord\(store, key, options, wantDiag\)/.test(src), 'readRecord options+wantDiag params not found');
     assert.ok(/store\.get\(key,\s*options\s*\|\|\s*\{\}\)/.test(src), 'store.get options forwarding not found');
+    assert.ok(!/store\.get\([^)]*wantDiag/.test(src), 'wantDiag must not be passed into store.get');
   });
 
   await test('W129: writer calls readRecord with STRONG option', async function () {
     const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'), 'utf8');
     assert.ok(/readRecord\(store,.*STRONG\)/.test(src), 'readRecord STRONG call not found');
     assert.ok(/consistency.*strong/.test(src), 'consistency:strong not found in writer');
+  });
+
+  // ── Section 16: EG-20C-3 strong pre-read diagnostics ────────────────────
+  await test('W130: Step10 throw → full sanitized envelope, zero writes', async function () {
+    const sets = [];
+    const store = {
+      get: async function (key) {
+        if (key === cikKey(TICKER)) throw new Error('infra');
+        return null;
+      },
+      set: async function (key) { sets.push(key); return { modified: true }; }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(r.statusCode, 200);
+    assert.strictEqual(j.status, 'DEGRADED');
+    assert.strictEqual(j.reason, 'STRONG_PRE_READ_FAILURE');
+    assert.strictEqual(j.stage, 'MAPPING_PRE_READ');
+    assert.strictEqual(j.writeAttempted, false);
+    assert.strictEqual(j.errorName, 'Error');
+    assert.ok(!('message' in j), 'message leaked');
+    assert.ok(!('stack' in j), 'stack leaked');
+    assert.strictEqual(sets.length, 0, 'write attempted after pre-read failure');
+  });
+
+  await test('W131: Step11 throw → COMPANY_PRE_READ envelope, zero writes', async function () {
+    const sets = [];
+    const store = {
+      get: async function (key) {
+        if (key === companyKey(CIK)) throw new Error('infra');
+        return null;
+      },
+      set: async function (key) { sets.push(key); return { modified: true }; }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.status, 'DEGRADED');
+    assert.strictEqual(j.reason, 'STRONG_PRE_READ_FAILURE');
+    assert.strictEqual(j.stage, 'COMPANY_PRE_READ');
+    assert.strictEqual(j.writeAttempted, false);
+    assert.strictEqual(j.errorName, 'Error');
+    assert.strictEqual(sets.length, 0, 'write attempted after pre-read failure');
+  });
+
+  await test('W132: allowlisted err name/status/code pass through sanitized', async function () {
+    const err = new Error('secret infra detail');
+    err.name = 'BlobsInternalError';
+    err.status = 502;
+    err.code = 'ETIMEDOUT';
+    const store = {
+      get: async function () { throw err; },
+      set: async function () { return { modified: true }; }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.errorName, 'BlobsInternalError');
+    assert.strictEqual(j.httpStatus, 502);
+    assert.strictEqual(j.errorCode, 'ETIMEDOUT');
+    assert.ok(r.body.indexOf('secret infra detail') === -1, 'err.message leaked into body');
+  });
+
+  await test('W133: hostile err values sanitized to UnknownError, no leakage', async function () {
+    const err = new Error('SECRET ' + cikKey(TICKER));
+    err.name = 'free text with spaces: not an identifier';
+    err.status = 9999;
+    err.code = 'has spaces and: punctuation';
+    const store = {
+      get: async function () { throw err; },
+      set: async function () { return { modified: true }; }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.errorName, 'UnknownError');
+    assert.ok(!('httpStatus' in j), 'invalid httpStatus leaked');
+    assert.ok(!('errorCode' in j), 'invalid errorCode leaked');
+    assert.ok(r.body.indexOf('SECRET') === -1, 'err.message leaked');
+    assert.ok(r.body.indexOf('secstore:v1') === -1, 'raw Blob key namespace leaked');
+    assert.ok(r.body.indexOf('free text') === -1, 'unsafe errorName leaked');
+  });
+
+  await test('W134: thrown string → UnknownError, no free text', async function () {
+    const store = {
+      get: async function () { throw 'string failure with details'; },
+      set: async function () { return { modified: true }; }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.status, 'DEGRADED');
+    assert.strictEqual(j.errorName, 'UnknownError');
+    assert.ok(r.body.indexOf('string failure') === -1, 'thrown string leaked');
+  });
+
+  await test('W135: thrown null → UnknownError', async function () {
+    const store = {
+      get: async function () { throw null; },
+      set: async function () { return { modified: true }; }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.status, 'DEGRADED');
+    assert.strictEqual(j.reason, 'STRONG_PRE_READ_FAILURE');
+    assert.strictEqual(j.errorName, 'UnknownError');
+  });
+
+  await test('W136: throwing .name getter → UnknownError, valid status kept', async function () {
+    const err = { get name() { throw new Error('hostile getter'); }, status: 503 };
+    const store = {
+      get: async function () { throw err; },
+      set: async function () { return { modified: true }; }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.status, 'DEGRADED');
+    assert.strictEqual(j.errorName, 'UnknownError');
+    assert.strictEqual(j.httpStatus, 503);
+    assert.ok(r.body.indexOf('hostile getter') === -1, 'getter error leaked');
+  });
+
+  await test('W137: no retry — throwing pre-read get called exactly once', async function () {
+    let calls = 0;
+    const store = {
+      get: async function () { calls += 1; throw new Error('infra'); },
+      set: async function () { return { modified: true }; }
+    };
+    await invoke('POST', VALID_BODY, store, authHdr());
+    assert.strictEqual(calls, 1, 'store.get retried after throw');
+  });
+
+  await test('W138: Step13b failure unchanged — no stage/diag fields', async function () {
+    const r = await invoke('POST', VALID_BODY, step13bStore({ mappingGet: null, companyGet: null }), authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.reason, 'MAPPING_VERIFY_FAILURE');
+    assert.strictEqual(j.stage, undefined);
+    assert.strictEqual(j.errorName, undefined);
+    assert.strictEqual(j.writeAttempted, undefined);
+  });
+
+  await test('W139: gate off + bad token → zero store get/set calls', async function () {
+    let touched = 0;
+    const spy = {
+      get: async function () { touched += 1; return null; },
+      set: async function () { touched += 1; return { modified: true }; }
+    };
+    setEnv(WRITE_GATE, undefined);
+    await invoke('POST', VALID_BODY, spy, authHdr());
+    setEnv(WRITE_GATE, 'true');
+    await invoke('POST', VALID_BODY, spy, { authorization: 'Bearer wrong' });
+    assert.strictEqual(touched, 0, 'store touched while gated/unauthorized');
+  });
+
+  await test('W140: clean write still passes onlyIfNew:true on both sets', async function () {
+    const opts = {};
+    const store = {
+      get: async function () { return null; },
+      set: async function (key, value, o) { opts[key] = o; return { modified: true }; }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    assert.strictEqual(JSON.parse(r.body).status, 'STORE_WRITE');
+    assert.deepStrictEqual(opts[companyKey(CIK)], { onlyIfNew: true });
+    assert.deepStrictEqual(opts[cikKey(TICKER)], { onlyIfNew: true });
+  });
+
+  await test('W141: no console logging in writer or evidence-store lib', async function () {
+    const files = [
+      path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'),
+      path.join(ROOT, 'netlify/functions/lib/evidence-store.js')
+    ];
+    for (const f of files) {
+      const src = fs.readFileSync(f, 'utf8');
+      assert.ok(!/\bconsole\s*\./.test(src), 'console usage in ' + path.basename(f));
+    }
+  });
+
+  await test('W142: forbidden diagnostic sources absent from sanitizer output path', async function () {
+    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/lib/evidence-store.js'), 'utf8');
+    const fnStart = src.indexOf('function sanitizeReadError');
+    assert.ok(fnStart !== -1, 'sanitizeReadError not found');
+    const fnEnd = src.indexOf('\n}', fnStart);
+    const body = src.slice(fnStart, fnEnd);
+    assert.ok(!/\.message\b/.test(body), 'sanitizer reads err.message');
+    assert.ok(!/\.stack\b/.test(body), 'sanitizer reads err.stack');
+    assert.ok(!/toString/.test(body), 'sanitizer calls toString');
+  });
+
+  await test('W143: identifier-shaped but unlisted name/code are NOT surfaced', async function () {
+    const err = new Error('secret');
+    err.name = 'MaliciousIdentifierName';
+    err.code = 'ERR_FAKE_CUSTOM_CODE';
+    err.status = 502;
+    const store = {
+      get: async function () { throw err; },
+      set: async function () { return { modified: true }; }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.errorName, 'UnknownError');
+    assert.ok(!('errorCode' in j), 'unlisted errorCode surfaced');
+    assert.strictEqual(j.httpStatus, 502);
+    assert.ok(r.body.indexOf('MaliciousIdentifierName') === -1, 'unlisted errorName leaked');
+    assert.ok(r.body.indexOf('ERR_FAKE_CUSTOM_CODE') === -1, 'unlisted errorCode leaked');
+  });
+
+  await test('W144: clean write — Steps 10+11 read strong-only, no default-consistency read', async function () {
+    const reads = [];
+    const store = {
+      get: async function (key, options) { reads.push({ key, options }); return null; },
+      set: async function () { return { modified: true }; }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    assert.strictEqual(JSON.parse(r.body).status, 'STORE_WRITE');
+    assert.strictEqual(reads.length, 2, 'expected exactly 2 pre-reads');
+    assert.strictEqual(reads[0].key, cikKey(TICKER), 'Step 10 must read mapping key first');
+    assert.deepStrictEqual(reads[0].options, { consistency: 'strong' }, 'Step 10 not strong');
+    assert.strictEqual(reads[1].key, companyKey(CIK), 'Step 11 must read company key second');
+    assert.deepStrictEqual(reads[1].options, { consistency: 'strong' }, 'Step 11 not strong');
+    for (const rd of reads) {
+      assert.deepStrictEqual(rd.options, { consistency: 'strong' }, 'default-consistency read detected');
+    }
+  });
+
+  await test('W145: Step 10 failure — strong read, exactly once, zero writes', async function () {
+    const reads = [];
+    const sets = [];
+    const store = {
+      get: async function (key, options) { reads.push({ key, options }); throw new Error('infra'); },
+      set: async function (key) { sets.push(key); return { modified: true }; }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    assert.strictEqual(JSON.parse(r.body).stage, 'MAPPING_PRE_READ');
+    assert.strictEqual(reads.length, 1, 'failing pre-read must be read exactly once (no retry)');
+    assert.strictEqual(reads[0].key, cikKey(TICKER));
+    assert.deepStrictEqual(reads[0].options, { consistency: 'strong' }, 'Step 10 not strong');
+    assert.strictEqual(sets.length, 0, 'failure must perform zero writes');
+  });
+
+  await test('W146: Step 11 failure — both reads strong, once each, zero writes', async function () {
+    const reads = [];
+    const sets = [];
+    const store = {
+      get: async function (key, options) {
+        reads.push({ key, options });
+        if (key === companyKey(CIK)) throw new Error('infra');
+        return null;
+      },
+      set: async function (key) { sets.push(key); return { modified: true }; }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    assert.strictEqual(JSON.parse(r.body).stage, 'COMPANY_PRE_READ');
+    assert.strictEqual(reads.length, 2, 'expected exactly 2 reads (no retry)');
+    assert.strictEqual(reads.filter(function (x) { return x.key === cikKey(TICKER); }).length, 1);
+    assert.strictEqual(reads.filter(function (x) { return x.key === companyKey(CIK); }).length, 1);
+    for (const rd of reads) {
+      assert.deepStrictEqual(rd.options, { consistency: 'strong' }, 'non-strong read detected');
+    }
+    assert.strictEqual(sets.length, 0, 'failure must perform zero writes');
+  });
+
+  await test('W147: Step 13b path — all reads strong, historical response unchanged', async function () {
+    const reads = [];
+    const counts = {};
+    const store = {
+      get: async function (key, options) {
+        reads.push({ key, options });
+        counts[key] = (counts[key] || 0) + 1;
+        return null; // pre-reads MISSING; 13b mapping re-read MISSING
+      },
+      set: async function (key) {
+        if (key === companyKey(CIK)) return { modified: true };
+        return { modified: false }; // mapping set unmodified → Step 13b
+      }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.reason, 'MAPPING_VERIFY_FAILURE', 'Step 13b behavior changed');
+    assert.strictEqual(j.stage, undefined, 'Step 13b must not carry stage');
+    assert.strictEqual(j.errorName, undefined, 'Step 13b must not carry diag');
+    for (const rd of reads) {
+      assert.deepStrictEqual(rd.options, { consistency: 'strong' }, 'non-strong read in writer');
+    }
+    assert.strictEqual(reads.length, 3, 'expected 2 pre-reads + 1 Step 13b mapping re-read');
   });
 
   // ── cleanup ───────────────────────────────────────────────────────────────
