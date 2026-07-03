@@ -31,7 +31,7 @@ function budgetKey(ticker) { return KEY_NAMESPACE + ':budget:'  + ticker; } // S
 // cannot throw out of the sanitizer.
 const DIAG_ERROR_NAMES = [
   'Error', 'TypeError', 'RangeError', 'AbortError', 'TimeoutError',
-  'FetchError', 'SystemError', 'BlobsInternalError'
+  'FetchError', 'SystemError', 'BlobsInternalError', 'BlobsConsistencyError'
 ];
 const DIAG_ERROR_CODES = [
   'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN',

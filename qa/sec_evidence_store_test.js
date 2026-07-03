@@ -245,6 +245,21 @@ async function runTests() {
     );
   });
 
+  await test('EG-20C-3b: BlobsConsistencyError allowlisted — surfaced exactly; near-miss still rejected', async function () {
+    assert.deepStrictEqual(
+      sanitizeReadError({ name: 'BlobsConsistencyError' }),
+      { errorName: 'BlobsConsistencyError' }
+    );
+    assert.deepStrictEqual(
+      sanitizeReadError({ name: 'BlobsConsistencyError', code: 'ECONNRESET', status: 502 }),
+      { errorName: 'BlobsConsistencyError', httpStatus: 502, errorCode: 'ECONNRESET' }
+    );
+    assert.deepStrictEqual(
+      sanitizeReadError({ name: 'BlobsConsistencyErrorX', code: 'ERR_FAKE_CUSTOM_CODE', status: 500 }),
+      { errorName: 'UnknownError', httpStatus: 500 }
+    );
+  });
+
   await test('valid fixture: STORE_HIT with scoringImpact none', async function () {
     setEnv(GATE, 'true');
     const item = {
