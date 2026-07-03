@@ -779,6 +779,305 @@ function phaseResolverTests() {
   }
 }
 
+function phaseResearchViewTests() {
+  header('Phase 5 - G-R ResearchView adapter + coverage honesty (Slice B)');
+
+  const content = read('index.html');
+  if (content === null) {
+    fail('researchview', 'index.html is missing');
+    return;
+  }
+
+  let factory;
+  try {
+    const srSrc = extractFunctionSource(content, '_srSafeParseResults');
+    const resolveSrc = extractFunctionSource(content, '_resolveResearchForHolding');
+    const viewSrc = extractFunctionSource(content, '_researchViewForHolding');
+    const countsSrc = extractFunctionSource(content, '_calcResearchCoverageCounts');
+    const aggSrc = extractFunctionSource(content, '_calcPortfolioAggregates');
+    if (!srSrc || !resolveSrc || !viewSrc || !countsSrc || !aggSrc) {
+      fail('researchview', 'could not extract Slice B functions from index.html');
+      return;
+    }
+    // eslint-disable-next-line no-new-func
+    factory = new Function(
+      '_cockpitResults',
+      '_cockpitResultsSource',
+      'localStorage',
+      'window',
+      'fetch',
+      'XMLHttpRequest',
+      srSrc + '\n' + resolveSrc + '\n' + viewSrc + '\n' + countsSrc + '\n' + aggSrc +
+        '\nreturn { view: _researchViewForHolding, counts: _calcResearchCoverageCounts, agg: _calcPortfolioAggregates };'
+    );
+  } catch (e) {
+    fail('researchview', 'factory build error: ' + e.message);
+    return;
+  }
+
+  const NOW = Date.now();
+  const HOUR = 3600 * 1000;
+
+  function iso(msAgo) {
+    return new Date(NOW - msAgo).toISOString();
+  }
+
+  function rec(ticker, opts) {
+    opts = opts || {};
+    const r = { ticker: ticker, sentiment_score: 70, summary: 'stub summary for researchview test' };
+    if ('_timestamp' in opts) {
+      r._timestamp = opts._timestamp;
+    }
+    if ('_orchestratedAt' in opts) {
+      r._orchestratedAt = opts._orchestratedAt;
+    }
+    if ('_aiUnavailable' in opts) {
+      r._aiUnavailable = opts._aiUnavailable;
+    }
+    return r;
+  }
+
+  function makeMockLocalStorage(savedArr) {
+    const store = { pt_results: JSON.stringify(savedArr || []) };
+    const writes = [];
+    return {
+      getItem: function (k) {
+        return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null;
+      },
+      setItem: function (k, v) {
+        writes.push(['set', k]);
+        store[k] = v;
+      },
+      removeItem: function (k) {
+        writes.push(['remove', k]);
+        delete store[k];
+      },
+      _writes: writes,
+      _raw: function () {
+        return store.pt_results;
+      }
+    };
+  }
+
+  function build(sessionArr, savedArr, opts) {
+    opts = opts || {};
+    const ls = makeMockLocalStorage(savedArr);
+    const win = opts.window || {};
+    let netCalls = 0;
+    const fetchSpy = function () {
+      netCalls += 1;
+      throw new Error('fetch is forbidden in Slice B');
+    };
+    const XhrSpy = function () {
+      netCalls += 1;
+      throw new Error('XMLHttpRequest is forbidden in Slice B');
+    };
+    const api = factory(sessionArr, opts.sessionSource || 'session', ls, win, fetchSpy, XhrSpy);
+    return { api: api, ls: ls, win: win, netCalls: function () { return netCalls; } };
+  }
+
+  function holdingsOf(syms) {
+    const h = {};
+    for (const s of syms) {
+      h[s] = { symbol: s, positionSize: 1000 };
+    }
+    return h;
+  }
+
+  const GATE_ON = { PT_ENABLE_PORTFOLIO_RESEARCH: true };
+
+  let total = 0;
+  let okCount = 0;
+  function check(name, cond) {
+    total += 1;
+    if (cond) {
+      okCount += 1;
+    } else {
+      fail('researchview', 'assertion failed: ' + name);
+    }
+  }
+
+  // 1. envelope shape + covered status for a fresh session record.
+  (function () {
+    const s = build([rec('AAPL', { _timestamp: iso(HOUR) })], []);
+    const v = s.api.view('AAPL');
+    const keys = Object.keys(v).sort().join(',');
+    check('envelope: exact key set', keys === 'ageMs,asOf,provenance,result,stale,status,symbol');
+    check('envelope: fresh record covered', v.status === 'covered' && v.stale === false && v.result !== null);
+    check('envelope: provenance session', v.provenance === 'session');
+    check('envelope: symbol normalized', s.api.view(' aapl ').symbol === 'AAPL');
+    check('envelope: asOf + ageMs populated', v.asOf !== null && typeof v.ageMs === 'number');
+  })();
+
+  // 2. gate OFF dormant: aggregate research is null (strict === true check).
+  (function () {
+    const h = holdingsOf(['AAPL', 'MSFT']);
+    const sOff = build([rec('AAPL', { _timestamp: iso(HOUR) })], [], { window: {} });
+    check('gate off: research aggregate null', sOff.api.agg(h).research === null);
+    const sStr = build([rec('AAPL', { _timestamp: iso(HOUR) })], [], { window: { PT_ENABLE_PORTFOLIO_RESEARCH: 'true' } });
+    check('gate off: string "true" stays dormant', sStr.api.agg(h).research === null);
+  })();
+
+  // 3. gate ON with no scan data: Research 0 / n, all missing.
+  (function () {
+    const h = holdingsOf(['AAPL', 'MSFT', 'NVDA']);
+    const s = build(null, [], { window: GATE_ON });
+    const r = s.api.agg(h).research;
+    check('gate on, no data: covered 0 of n', r !== null && r.covered === 0 && r.total === 3);
+    check('gate on, no data: all missing', r.missing === 3 && r.stale === 0 && r.unavailable === 0 && r.unsupported === 0);
+  })();
+
+  // 4. stale record excluded from covered, counted stale.
+  (function () {
+    const s = build([rec('AAPL', { _timestamp: iso(50 * HOUR) })], [], { window: GATE_ON });
+    check('stale: view status stale', s.api.view('AAPL').status === 'stale');
+    const r = s.api.agg(holdingsOf(['AAPL'])).research;
+    check('stale: excluded from covered', r.covered === 0 && r.stale === 1);
+  })();
+
+  // 5. invalid + future timestamps classify stale.
+  (function () {
+    const sBad = build([rec('AAPL', { _timestamp: 'not-a-date' })], []);
+    check('invalid timestamp -> stale', sBad.api.view('AAPL').status === 'stale' && sBad.api.view('AAPL').asOf === null);
+    const far = new Date(NOW + 10 * 60 * 1000).toISOString();
+    const sFut = build([rec('AAPL', { _timestamp: far })], []);
+    check('future >5min timestamp -> stale', sFut.api.view('AAPL').status === 'stale');
+  })();
+
+  // 6. _aiUnavailable = unavailable; precedence beats stale.
+  (function () {
+    const sFresh = build([rec('AAPL', { _timestamp: iso(HOUR), _aiUnavailable: true })], []);
+    check('_aiUnavailable fresh -> unavailable', sFresh.api.view('AAPL').status === 'unavailable');
+    const sStale = build([rec('AAPL', { _timestamp: iso(50 * HOUR), _aiUnavailable: true })], []);
+    check('_aiUnavailable stale -> unavailable (precedence)', sStale.api.view('AAPL').status === 'unavailable');
+  })();
+
+  // 7. missing = missing.
+  (function () {
+    const s = build([rec('AAPL', { _timestamp: iso(HOUR) })], []);
+    check('absent symbol -> missing', s.api.view('MSFT').status === 'missing' && s.api.view('MSFT').provenance === 'none');
+  })();
+
+  // 8. dotted ticker = unsupported, not missing — even with a matching record.
+  (function () {
+    const s = build(null, [rec('BRK.B', { _timestamp: iso(HOUR) })]);
+    const v = s.api.view('BRK.B');
+    check('dotted ticker -> unsupported', v.status === 'unsupported' && v.status !== 'missing');
+    check('non-string symbol -> unsupported', s.api.view(undefined).status === 'unsupported');
+  })();
+
+  // 9. mixed portfolio: one of each status; denominator = all unique holdings.
+  (function () {
+    const session = [
+      rec('AAPL', { _timestamp: iso(HOUR) }),
+      rec('MSFT', { _timestamp: iso(50 * HOUR) }),
+      rec('NVDA', { _timestamp: iso(HOUR), _aiUnavailable: true })
+    ];
+    const s = build(session, [], { window: GATE_ON });
+    const r = s.api.agg(holdingsOf(['AAPL', 'MSFT', 'NVDA', 'TSLA', 'BRK.B'])).research;
+    check('mixed: covered 1', r.covered === 1);
+    check('mixed: stale 1', r.stale === 1);
+    check('mixed: unavailable 1', r.unavailable === 1);
+    check('mixed: missing 1', r.missing === 1);
+    check('mixed: unsupported 1', r.unsupported === 1);
+    check('mixed: denominator all unique holdings', r.total === 5);
+  })();
+
+  // 10. session vs saved conflict provenance + canonicalization of other tags.
+  (function () {
+    const sNew = build([rec('AAPL', { _timestamp: iso(HOUR) })], [rec('AAPL', { _timestamp: iso(10 * HOUR) })]);
+    check('conflict: session newer -> provenance session', sNew.api.view('AAPL').provenance === 'session');
+    const sOld = build([rec('AAPL', { _timestamp: iso(10 * HOUR) })], [rec('AAPL', { _timestamp: iso(HOUR) })]);
+    check('conflict: saved newer -> provenance saved', sOld.api.view('AAPL').provenance === 'saved');
+    const sTag = build([rec('AAPL', { _timestamp: iso(HOUR) })], [], { sessionSource: 'cloud' });
+    const vTag = sTag.api.view('AAPL');
+    check('canonicalization: non-session tag -> other, never saved', vTag.provenance === 'other' && vTag.provenance !== 'saved');
+    check('canonicalization: other tag still covered when fresh', vTag.status === 'covered');
+    const sSavedTag = build([rec('AAPL', { _timestamp: iso(HOUR) })], [], { sessionSource: 'saved' });
+    check('canonicalization: init-restore saved tag -> saved', sSavedTag.api.view('AAPL').provenance === 'saved');
+  })();
+
+  // 11. zero fetch / zero XHR and zero storage or input mutation across all paths.
+  (function () {
+    const sessionArr = [rec('AAPL', { _timestamp: iso(HOUR) }), rec('MSFT', { _timestamp: iso(50 * HOUR) })];
+    const savedArr = [rec('NVDA', { _timestamp: iso(HOUR), _aiUnavailable: true })];
+    const sessionSnap = JSON.stringify(sessionArr);
+    const savedSnap = JSON.stringify(savedArr);
+    const s = build(sessionArr, savedArr, { window: GATE_ON });
+    const winKeysBefore = JSON.stringify(Object.keys(s.win));
+    s.api.view('AAPL');
+    s.api.view('MSFT');
+    s.api.view('NVDA');
+    s.api.view('TSLA');
+    s.api.view('BRK.B');
+    s.api.counts(['AAPL', 'MSFT', 'NVDA', 'TSLA', 'BRK.B']);
+    s.api.agg(holdingsOf(['AAPL', 'MSFT', 'NVDA', 'TSLA', 'BRK.B']));
+    check('zero network: no fetch/XHR calls', s.netCalls() === 0);
+    check('zero writes: localStorage untouched', s.ls._writes.length === 0);
+    check('zero writes: pt_results raw unchanged', s.ls._raw() === savedSnap);
+    check('zero mutation: session array unchanged', JSON.stringify(sessionArr) === sessionSnap);
+    check('zero mutation: saved array unchanged', JSON.stringify(savedArr) === savedSnap);
+    check('zero mutation: window keys unchanged', JSON.stringify(Object.keys(s.win)) === winKeysBefore);
+  })();
+
+  // 12. static: gate init reads key with strict === 'true' and falls back to false,
+  //     so a reload with the key absent is dormant.
+  (function () {
+    const initRead = /window\.PT_ENABLE_PORTFOLIO_RESEARCH\s*=\s*\(localStorage\.getItem\('pt_enable_portfolio_research'\)\s*===\s*'true'\)/;
+    check('static: init gate strict string read', initRead.test(content.replace(/\s+/g, ' ')));
+    check('static: init gate catch fallback false', /window\.PT_ENABLE_PORTFOLIO_RESEARCH = false/.test(content));
+  })();
+
+  // 13. static: the pf-pos-research DOM creation assignment (not CSS selectors or
+  //     comments) sits inside a strict G-R gate block.
+  (function () {
+    const gateStr = 'if (window.PT_ENABLE_PORTFOLIO_RESEARCH === true) {';
+    const ranges = [];
+    let from = 0;
+    for (;;) {
+      const at = content.indexOf(gateStr, from);
+      if (at === -1) {
+        break;
+      }
+      const braceStart = at + gateStr.length - 1;
+      let depth = 0;
+      for (let i = braceStart; i < content.length; i += 1) {
+        if (content[i] === '{') {
+          depth += 1;
+        } else if (content[i] === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            ranges.push([at, i]);
+            break;
+          }
+        }
+      }
+      from = at + gateStr.length;
+    }
+    check('static: strict gate blocks found', ranges.length >= 2);
+    const creationStr = "resRow.className = 'pf-pos-research'";
+    let allInside = true;
+    let occurrences = 0;
+    let seek = 0;
+    for (;;) {
+      const at = content.indexOf(creationStr, seek);
+      if (at === -1) {
+        break;
+      }
+      occurrences += 1;
+      if (!ranges.some(function (rg) { return at > rg[0] && at < rg[1]; })) {
+        allInside = false;
+      }
+      seek = at + 1;
+    }
+    check('static: pf-pos-research creation only inside gate blocks', occurrences > 0 && allInside);
+  })();
+
+  if (okCount === total) {
+    pass(total + ' researchview assertion(s) passed');
+  }
+}
+
 function main() {
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
@@ -787,6 +1086,7 @@ function main() {
   phaseOfflineTests();
   phaseForbiddenSurface();
   phaseResolverTests();
+  phaseResearchViewTests();
 
   console.log('\n=== Summary ===');
 

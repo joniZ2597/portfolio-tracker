@@ -740,6 +740,7 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-res-state.missing{font-style:italic}
 .pf-res-state.stale{color:var(--yellow2);border-color:rgba(244,184,96,.3)}
 .pf-res-state.unavail{color:var(--red2);border-color:rgba(248,113,113,.3)}
+.pf-res-state.unsupported{font-style:italic;opacity:.7}
 .pf-res-score{font-family:var(--mono);font-size:9px;color:var(--text2);padding:2px 5px;border:1px solid var(--border2);border-radius:2px}
 .pf-res-score.pos{color:var(--green2)}
 .pf-res-score.warn{color:var(--yellow2)}
@@ -775,6 +776,7 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-cov-stat{display:flex;flex-direction:column;gap:3px}
 .pf-cov-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px}
 .pf-cov-val{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text2)}
+.pf-cov-detail{font-family:var(--mono);font-size:9px;font-weight:500;color:var(--text3)}
 /* ─── PORTFOLIO PANEL (Slice 1D-1: Passive Data Guidance) ─── */
 .pf-guidance{font-size:11px;color:var(--text3);margin-top:6px;margin-bottom:4px}
 /* ─── PORTFOLIO PANEL (Slice 1D-2: Session Sort Control) ─── */
@@ -3554,6 +3556,42 @@ function _resolveResearchForHolding(symbol) {
   return { result: winner.result, source: winner.label, timestamp: timestamp, ageMs: ageMs, stale: stale };
 }
 
+function _researchViewForHolding(symbol) {
+  // Slice B: pure ResearchView adapter over _resolveResearchForHolding (the
+  // source-selection authority — not duplicated here). Classifies one holding
+  // into a fixed envelope with status precedence
+  // unsupported -> missing -> unavailable -> stale -> covered.
+  // Provenance canonicalization: the resolver passes _cockpitResultsSource
+  // through verbatim as its source label, so only the literal labels
+  // 'session' / 'saved' / 'none' pass through here; any other tag maps to
+  // 'other'. This adapter does not render; the provenance chip fix depends on
+  // the render layer showing a chip only for canonical 'session' / 'saved'.
+  // Read-only; no storage writes, no fetch.
+  var raw = (typeof symbol === 'string') ? symbol.trim().toUpperCase() : '';
+  var supported = /^[A-Z]{1,10}$/.test(raw);
+  var resolved = _resolveResearchForHolding(symbol);
+  var provenance;
+  if (resolved.source === 'session')     provenance = 'session';
+  else if (resolved.source === 'saved')  provenance = 'saved';
+  else if (resolved.source === 'none')   provenance = 'none';
+  else                                   provenance = 'other';
+  var status;
+  if (!supported)                                     status = 'unsupported';
+  else if (!resolved.result)                          status = 'missing';
+  else if (resolved.result._aiUnavailable === true)   status = 'unavailable';
+  else if (resolved.stale === true)                   status = 'stale';
+  else                                                status = 'covered';
+  return {
+    symbol: raw,
+    result: resolved.result,
+    status: status,
+    provenance: provenance,
+    asOf: resolved.timestamp,
+    ageMs: resolved.ageMs,
+    stale: resolved.stale
+  };
+}
+
 function _updateViewResultsBtn() {
   const btn = document.getElementById('viewResultsBtn');
   if (!btn) return;
@@ -5030,6 +5068,21 @@ window.switchMainView = switchMainView;
 
 // ─── Portfolio / Holdings — Slice 1C-4A: Coverage Aggregates ─────────────────
 // Pure read-only. No localStorage writes. No API calls. No mutations.
+
+// Slice B: per-status research coverage counts over the ResearchView adapter.
+// Denominator = all unique holdings (object keys); covered = fresh usable
+// research only. Pure read-only.
+function _calcResearchCoverageCounts(syms) {
+  var counts = { covered: 0, stale: 0, unavailable: 0, missing: 0, unsupported: 0, total: syms.length };
+  syms.forEach(function(s) {
+    var st = _researchViewForHolding(s).status;
+    if (st === 'covered' || st === 'stale' || st === 'unavailable' || st === 'missing' || st === 'unsupported') {
+      counts[st] += 1;
+    }
+  });
+  return counts;
+}
+
 function _calcPortfolioAggregates(holdings) {
   var syms  = Object.keys(holdings);
   var total = syms.length;
@@ -5039,11 +5092,8 @@ function _calcPortfolioAggregates(holdings) {
   }).length;
   var research = null;
   if (window.PT_ENABLE_PORTFOLIO_RESEARCH === true) {
-    var resCovered = syms.filter(function(s) {
-      var r = _getResearchForHolding(s);
-      return r !== null && r._aiUnavailable !== true;
-    }).length;
-    research = { covered: resCovered, total: total };
+    // Slice B: covered now excludes stale records; separate per-status counts.
+    research = _calcResearchCoverageCounts(syms);
   }
   var livePrice = null;
   if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true) {
@@ -5208,7 +5258,20 @@ function _renderPortfolioPanel() {
     }
     covRow.appendChild(_mkCovStat('Manual P/L Coverage', agg.manualPl.covered, agg.manualPl.total));
     if (agg.research !== null) {
-      covRow.appendChild(_mkCovStat('Research Coverage', agg.research.covered, agg.research.total));
+      var resStat = _mkCovStat('Research Coverage', agg.research.covered, agg.research.total);
+      // Slice B: honest breakdown of non-covered statuses (zero counts omitted).
+      var _covParts = [];
+      [['stale', agg.research.stale], ['unavailable', agg.research.unavailable],
+       ['missing', agg.research.missing], ['unsupported', agg.research.unsupported]].forEach(function(p) {
+        if (p[1] > 0) _covParts.push(p[1] + ' ' + p[0]);
+      });
+      if (_covParts.length > 0) {
+        var resDetail = document.createElement('div');
+        resDetail.className = 'pf-cov-detail';
+        resDetail.textContent = _covParts.join(' · ');
+        resStat.appendChild(resDetail);
+      }
+      covRow.appendChild(resStat);
     }
     if (agg.livePrice !== null) {
       covRow.appendChild(_mkCovStat('Live Price Coverage', agg.livePrice.covered, agg.livePrice.total));
@@ -5338,11 +5401,18 @@ function _renderPortfolioPanel() {
         card.appendChild(mktEl);
       }
       if (window.PT_ENABLE_PORTFOLIO_RESEARCH === true) {
-        var _resolved = _resolveResearchForHolding(sym);
-        var res = _resolved.result;
+        // Slice B: classification + provenance via the ResearchView adapter;
+        // source selection stays in _resolveResearchForHolding underneath.
+        var _view = _researchViewForHolding(sym);
+        var res = _view.result;
         var resRow = document.createElement('div');
         resRow.className = 'pf-pos-research';
-        if (!res) {
+        if (_view.status === 'unsupported') {
+          var resStEl = document.createElement('span');
+          resStEl.className = 'pf-res-state unsupported';
+          resStEl.textContent = 'Unsupported symbol';
+          resRow.appendChild(resStEl);
+        } else if (!res) {
           var resStEl = document.createElement('span');
           resStEl.className = 'pf-res-state missing';
           resStEl.textContent = 'No research';
@@ -5353,8 +5423,8 @@ function _renderPortfolioPanel() {
           resStEl.textContent = 'AI unavailable';
           resRow.appendChild(resStEl);
         } else {
-          var isStale = _resolved.stale;
-          var ageMs = _resolved.ageMs;
+          var isStale = _view.stale;
+          var ageMs = _view.ageMs;
           var resStEl = document.createElement('span');
           resStEl.className = 'pf-res-state ' + (isStale ? 'stale' : 'found');
           resStEl.textContent = isStale ? 'Stale' : 'Research';
@@ -5426,10 +5496,10 @@ function _renderPortfolioPanel() {
             ageEl.textContent = _ageH < 1 ? '< 1h ago' : _ageH < 48 ? _ageH + 'h ago' : Math.round(ageMs / 86400000) + 'd ago';
             resRow.appendChild(ageEl);
           }
-          if (_resolved.source !== 'none') {
+          if (_view.provenance === 'session' || _view.provenance === 'saved') {
             var provEl = document.createElement('span');
             provEl.className = 'pf-res-provenance';
-            provEl.textContent = _resolved.source === "session" ? "· This session’s scan" : "· Saved scan";
+            provEl.textContent = _view.provenance === "session" ? "· This session’s scan" : "· Saved scan";
             resRow.appendChild(provEl);
           }
         }
