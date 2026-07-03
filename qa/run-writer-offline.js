@@ -4,7 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const { handler } = require('../netlify/functions/sec-evidence-store-writer');
+const { handler, shouldConnectLambda } = require('../netlify/functions/sec-evidence-store-writer');
 const { cikKey, companyKey, budgetKey } = require('../netlify/functions/lib/evidence-store');
 const {
   buildCanonicalCompanyJSON,
@@ -1137,6 +1137,54 @@ async function runTests() {
       assert.deepStrictEqual(rd.options, { consistency: 'strong' }, 'non-strong read in writer');
     }
     assert.strictEqual(reads.length, 3, 'expected 2 pre-reads + 1 Step 13b mapping re-read');
+  });
+
+  // ── Section 17: EG-20C-5 ambient-context guard ────────────────────────────
+  await test('W148: shouldConnectLambda false when NETLIFY_BLOBS_CONTEXT is a non-empty string', async function () {
+    assert.strictEqual(shouldConnectLambda({ NETLIFY_BLOBS_CONTEXT: 'eyJlZGdlVVJMIjoieCJ9' }), false);
+  });
+
+  await test('W149: shouldConnectLambda true when context absent, empty, or non-string', async function () {
+    assert.strictEqual(shouldConnectLambda({}), true, 'absent key');
+    assert.strictEqual(shouldConnectLambda({ NETLIFY_BLOBS_CONTEXT: '' }), true, 'empty string');
+    assert.strictEqual(shouldConnectLambda({ NETLIFY_BLOBS_CONTEXT: 42 }), true, 'non-string');
+    assert.strictEqual(shouldConnectLambda(undefined), true, 'no env object');
+  });
+
+  await test('W150: acquireStore order — _testStore, then guard, then connectLambda, then getStore', async function () {
+    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'), 'utf8');
+    const fnStart = src.indexOf('function acquireStore');
+    assert.ok(fnStart !== -1, 'acquireStore not found');
+    const body = src.slice(fnStart, src.indexOf('\n}', fnStart));
+    const iTest = body.indexOf('_testStore');
+    const iGuard = body.indexOf('shouldConnectLambda(process.env)');
+    const iConnect = body.indexOf('connectLambda(event)');
+    const iGet = body.indexOf('return getStore(STORE_NAME)');
+    assert.ok(iTest !== -1 && iGuard !== -1 && iConnect !== -1 && iGet !== -1, 'acquireStore pieces missing');
+    assert.ok(iTest < iGuard, '_testStore short-circuit must come first');
+    assert.ok(iGuard < iConnect, 'guard must precede connectLambda');
+    assert.ok(iConnect < iGet, 'getStore must come last');
+  });
+
+  await test('W151: connectLambda fallback reachable — guarded call, unconditional getStore', async function () {
+    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'), 'utf8');
+    assert.ok(
+      /if\s*\(shouldConnectLambda\(process\.env\)\)\s*\{\s*\r?\n\s*connectLambda\(event\);/.test(src),
+      'guarded connectLambda(event) call not found'
+    );
+    const fnStart = src.indexOf('function acquireStore');
+    const body = src.slice(fnStart, src.indexOf('\n}', fnStart));
+    assert.ok(/\n  return getStore\(STORE_NAME\);/.test(body), 'getStore must be unconditional at function level');
+  });
+
+  await test('W152: _testStore still wins when ambient context env is set (flow unchanged)', async function () {
+    setEnv('NETLIFY_BLOBS_CONTEXT', 'eyJlZGdlVVJMIjoieCJ9');
+    try {
+      const r = await invoke('POST', VALID_BODY, cleanStore(), authHdr());
+      assert.strictEqual(JSON.parse(r.body).status, 'STORE_WRITE');
+    } finally {
+      setEnv('NETLIFY_BLOBS_CONTEXT', undefined);
+    }
   });
 
   // ── cleanup ───────────────────────────────────────────────────────────────

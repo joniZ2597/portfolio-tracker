@@ -251,9 +251,27 @@ function parseBody(rawBody) {
   return { ok: true, value: parsed };
 }
 
+// EG-20C-5: true → acquireStore must call connectLambda (no usable ambient
+// context). Mirrors the library's own falsy-context check: only a non-empty
+// string NETLIFY_BLOBS_CONTEXT counts as present.
+function shouldConnectLambda(env) {
+  const ctx = env && env.NETLIFY_BLOBS_CONTEXT;
+  return !(typeof ctx === 'string' && ctx.length > 0);
+}
+
 function acquireStore(event) {
   if (event && event._testStore) { return event._testStore; }
   const { connectLambda, getStore } = require('@netlify/blobs');
-  connectLambda(event);
+  // EG-20C-5: an ambient NETLIFY_BLOBS_CONTEXT (when the runtime injects one)
+  // carries uncachedEdgeURL, which consistency:'strong' reads require.
+  // connectLambda's legacy event.blobs payload has no uncachedEdgeURL and
+  // would overwrite the richer ambient context, making every strong read
+  // throw BlobsConsistencyError — so only connect when no ambient context
+  // exists (same guarded-connect shape as portfolio-sync.js).
+  if (shouldConnectLambda(process.env)) {
+    connectLambda(event);
+  }
   return getStore(STORE_NAME);
 }
+
+exports.shouldConnectLambda = shouldConnectLambda;
