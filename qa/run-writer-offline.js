@@ -1222,7 +1222,7 @@ async function runTests() {
     assert.strictEqual((await resp.json()).reason, 'INVALID_JSON');
   });
 
-  await test('W155: wrapper valid write offline → DEGRADED/STORE_UNAVAILABLE (ambient-only, fail-closed)', async function () {
+  await test('W155: wrapper valid write offline → DEGRADED/STORE_UNAVAILABLE sanitized envelope (ambient-only, fail-closed)', async function () {
     enableGate();
     setEnv('NETLIFY_BLOBS_CONTEXT', undefined);
     const resp = await wrapped(jsonPost(JSON.stringify(VALID_BODY), { Authorization: 'Bearer ' + TEST_TOKEN }), {});
@@ -1230,6 +1230,94 @@ async function runTests() {
     const j = await resp.json();
     assert.strictEqual(j.status, 'DEGRADED');
     assert.strictEqual(j.reason, 'STORE_UNAVAILABLE');
+    assert.strictEqual(j.stage, 'STORE_ACQUISITION');
+    assert.strictEqual(j.writeAttempted, false);
+    assert.strictEqual(j.errorName, 'MissingBlobsEnvironmentError');
+    assert.deepStrictEqual(
+      Object.keys(j).sort(),
+      ['errorName', 'reason', 'stage', 'status', 'writeAttempted']
+    );
+  });
+
+  // ── Section 18: EG-20C-6C acquisition diagnostics ─────────────────────────
+  // Core-level events whose _testStore getter throws: the property read happens
+  // inside the handler's acquisition try, so arbitrary error shapes reach the
+  // STORE_UNAVAILABLE catch without acquireStore itself being modified.
+  function acquisitionThrowEvent(errValue) {
+    const event = {
+      httpMethod: 'POST',
+      headers: authHdr(),
+      body: JSON.stringify(VALID_BODY)
+    };
+    Object.defineProperty(event, '_testStore', { get() { throw errValue; } });
+    return event;
+  }
+  const ACQ_ENVELOPE_KEYS = ['errorName', 'reason', 'stage', 'status', 'writeAttempted'];
+
+  await test('W156: unlisted acquisition error name → UnknownError, nothing else surfaced', async function () {
+    enableGate();
+    const r = await handler(acquisitionThrowEvent({ name: 'TotallyNovelBlobsError', code: 'ERR_FAKE_CUSTOM_CODE', status: 999 }));
+    assert.strictEqual(r.statusCode, 200);
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.status, 'DEGRADED');
+    assert.strictEqual(j.reason, 'STORE_UNAVAILABLE');
+    assert.strictEqual(j.stage, 'STORE_ACQUISITION');
+    assert.strictEqual(j.writeAttempted, false);
+    assert.strictEqual(j.errorName, 'UnknownError');
+    assert.deepStrictEqual(Object.keys(j).sort(), ACQ_ENVELOPE_KEYS);
+  });
+
+  await test('W157: BlobsConsistencyError-shaped acquisition error surfaces via shared vocabulary', async function () {
+    enableGate();
+    const err = new Error('SECRET-ACQ-MESSAGE-DO-NOT-LEAK');
+    err.name = 'BlobsConsistencyError';
+    const r = await handler(acquisitionThrowEvent(err));
+    assert.strictEqual(r.statusCode, 200);
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.status, 'DEGRADED');
+    assert.strictEqual(j.reason, 'STORE_UNAVAILABLE');
+    assert.strictEqual(j.stage, 'STORE_ACQUISITION');
+    assert.strictEqual(j.writeAttempted, false);
+    assert.strictEqual(j.errorName, 'BlobsConsistencyError');
+    assert.ok(r.body.indexOf('SECRET-ACQ-MESSAGE-DO-NOT-LEAK') === -1, 'error message leaked into envelope');
+    assert.deepStrictEqual(Object.keys(j).sort(), ACQ_ENVELOPE_KEYS);
+  });
+
+  await test('W158: hostile getters at acquisition → UnknownError only, no leakage', async function () {
+    enableGate();
+    const hostile = {};
+    Object.defineProperty(hostile, 'name',   { get() { throw new Error('boom-name'); } });
+    Object.defineProperty(hostile, 'status', { get() { throw new Error('boom-status'); } });
+    Object.defineProperty(hostile, 'code',   { get() { throw new Error('boom-code'); } });
+    const r = await handler(acquisitionThrowEvent(hostile));
+    assert.strictEqual(r.statusCode, 200);
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.status, 'DEGRADED');
+    assert.strictEqual(j.reason, 'STORE_UNAVAILABLE');
+    assert.strictEqual(j.errorName, 'UnknownError');
+    assert.ok(r.body.indexOf('boom-') === -1, 'hostile getter text leaked into envelope');
+    assert.deepStrictEqual(Object.keys(j).sort(), ACQ_ENVELOPE_KEYS);
+  });
+
+  await test('W159: acquisition failure returns before any store use; acquireStore byte-identical', async function () {
+    // Behavioral proof: W155-W158 all returned STORE_UNAVAILABLE (never
+    // STRONG_PRE_READ_FAILURE), so the catch returned before Step 10 and no
+    // store handle ever existed. Structural proof below.
+    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/lib/sec-evidence-store-writer-core.js'), 'utf8').replace(/\r\n/g, '\n');
+    const iUnavail = src.indexOf("reason: 'STORE_UNAVAILABLE'");
+    const iStep10 = src.indexOf('const step10');
+    assert.ok(iUnavail !== -1 && iStep10 !== -1 && iUnavail < iStep10, 'STORE_UNAVAILABLE return must precede Step 10');
+    const iCatch = src.indexOf('} catch (err) {', src.indexOf('acquireStore(event)'));
+    assert.ok(iCatch !== -1 && iCatch < iUnavail, 'acquisition catch missing');
+    const catchBlock = src.slice(iCatch, iStep10);
+    assert.ok(!/store\./.test(catchBlock), 'acquisition catch region must not touch a store handle');
+    assert.ok(!/readRecord/.test(catchBlock), 'acquisition catch region must not read');
+    const expected = 'function acquireStore(event) {\n' +
+      '  if (event && event._testStore) { return event._testStore; }\n' +
+      "  const { getStore } = require('@netlify/blobs');\n" +
+      '  return getStore(STORE_NAME);\n' +
+      '}\n';
+    assert.ok(src.indexOf(expected) !== -1, 'acquireStore body changed');
   });
 
   // ── cleanup ───────────────────────────────────────────────────────────────

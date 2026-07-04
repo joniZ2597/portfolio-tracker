@@ -1,6 +1,6 @@
 'use strict';
 
-const { cikKey, companyKey, STORE_NAME, readRecord } = require('./evidence-store');
+const { cikKey, companyKey, STORE_NAME, readRecord, sanitizeReadError } = require('./evidence-store');
 const {
   validateWritePayload,
   buildCanonicalCompanyJSON,
@@ -54,11 +54,19 @@ exports.handler = async function (event) {
   const { ticker, cik, projectedItems } = payload;
 
   // Store acquisition (after validation)
+  // EG-20C-6C: sanitized fixed-vocabulary diagnostics in the envelope only — no
+  // store handle exists here, so no read or write has occurred (fail-closed).
   let store;
   try {
     store = acquireStore(event);
-  } catch (_) {
-    return res(200, { status: 'DEGRADED', reason: 'STORE_UNAVAILABLE' });
+  } catch (err) {
+    return res(200, {
+      status: 'DEGRADED',
+      reason: 'STORE_UNAVAILABLE',
+      stage: 'STORE_ACQUISITION',
+      writeAttempted: false,
+      ...sanitizeReadError(err)
+    });
   }
 
   const canonicalCompanyJSON = buildCanonicalCompanyJSON(projectedItems);

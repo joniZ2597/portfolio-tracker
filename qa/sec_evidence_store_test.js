@@ -260,6 +260,17 @@ async function runTests() {
     );
   });
 
+  await test('EG-20C-6C: MissingBlobsEnvironmentError allowlisted — surfaced exactly; near-miss still rejected', async function () {
+    assert.deepStrictEqual(
+      sanitizeReadError({ name: 'MissingBlobsEnvironmentError' }),
+      { errorName: 'MissingBlobsEnvironmentError' }
+    );
+    assert.deepStrictEqual(
+      sanitizeReadError({ name: 'MissingBlobsEnvironmentErrorX', code: 'ERR_FAKE_CUSTOM_CODE', status: 500 }),
+      { errorName: 'UnknownError', httpStatus: 500 }
+    );
+  });
+
   await test('valid fixture: STORE_HIT with scoringImpact none', async function () {
     setEnv(GATE, 'true');
     const item = {
