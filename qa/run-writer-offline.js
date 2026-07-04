@@ -4,7 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const { handler, shouldConnectLambda } = require('../netlify/functions/sec-evidence-store-writer');
+const { handler } = require('../netlify/functions/lib/sec-evidence-store-writer-core');
 const { cikKey, companyKey, budgetKey } = require('../netlify/functions/lib/evidence-store');
 const {
   buildCanonicalCompanyJSON,
@@ -786,8 +786,8 @@ async function runTests() {
   });
 
   // ── Section 15: Static source checks ────────────────────────────────────
-  await test('W120: no fetch() in sec-evidence-store-writer.js', async function () {
-    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'), 'utf8');
+  await test('W120: no fetch() in writer core', async function () {
+    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/lib/sec-evidence-store-writer-core.js'), 'utf8');
     assert.ok(!/\bfetch\s*\(/.test(src), 'fetch() found in writer');
   });
 
@@ -798,7 +798,7 @@ async function runTests() {
 
   await test('W122: no pt_ refs in writer files', async function () {
     const files = [
-      path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'),
+      path.join(ROOT, 'netlify/functions/lib/sec-evidence-store-writer-core.js'),
       path.join(ROOT, 'netlify/functions/lib/evidence-writer.js')
     ];
     for (const f of files) {
@@ -810,7 +810,7 @@ async function runTests() {
   await test('W123: no scoring/scan refs in writer files', async function () {
     const re = /\b(orchestrate|analyzeChunk|enforceScoreConsistency|runScan|scanResults|_techCache)\b/;
     const files = [
-      path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'),
+      path.join(ROOT, 'netlify/functions/lib/sec-evidence-store-writer-core.js'),
       path.join(ROOT, 'netlify/functions/lib/evidence-writer.js')
     ];
     for (const f of files) {
@@ -820,7 +820,7 @@ async function runTests() {
   });
 
   await test('W124: gate check uses !== "true" (strict string equality)', async function () {
-    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'), 'utf8');
+    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/lib/sec-evidence-store-writer-core.js'), 'utf8');
     assert.ok(
       /PT_ENABLE_SEC_EVIDENCE_STORE_WRITER_SERVER\s*!==\s*['"]true['"]/.test(src),
       'gate strict check not found'
@@ -828,7 +828,7 @@ async function runTests() {
   });
 
   await test('W125: acquireStore checks _testStore before @netlify/blobs', async function () {
-    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'), 'utf8');
+    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/lib/sec-evidence-store-writer-core.js'), 'utf8');
     const ti = src.indexOf('_testStore');
     const bi = src.indexOf('@netlify/blobs');
     assert.ok(ti !== -1, '_testStore not found');
@@ -854,7 +854,7 @@ async function runTests() {
   });
 
   await test('W129: writer calls readRecord with STRONG option', async function () {
-    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'), 'utf8');
+    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/lib/sec-evidence-store-writer-core.js'), 'utf8');
     assert.ok(/readRecord\(store,.*STRONG\)/.test(src), 'readRecord STRONG call not found');
     assert.ok(/consistency.*strong/.test(src), 'consistency:strong not found in writer');
   });
@@ -1019,9 +1019,10 @@ async function runTests() {
     assert.deepStrictEqual(opts[cikKey(TICKER)], { onlyIfNew: true });
   });
 
-  await test('W141: no console logging in writer or evidence-store lib', async function () {
+  await test('W141: no console logging in writer entry, core, or evidence-store lib', async function () {
     const files = [
-      path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'),
+      path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.mjs'),
+      path.join(ROOT, 'netlify/functions/lib/sec-evidence-store-writer-core.js'),
       path.join(ROOT, 'netlify/functions/lib/evidence-store.js')
     ];
     for (const f of files) {
@@ -1139,52 +1140,96 @@ async function runTests() {
     assert.strictEqual(reads.length, 3, 'expected 2 pre-reads + 1 Step 13b mapping re-read');
   });
 
-  // ── Section 17: EG-20C-5 ambient-context guard ────────────────────────────
-  await test('W148: shouldConnectLambda false when NETLIFY_BLOBS_CONTEXT is a non-empty string', async function () {
-    assert.strictEqual(shouldConnectLambda({ NETLIFY_BLOBS_CONTEXT: 'eyJlZGdlVVJMIjoieCJ9' }), false);
-  });
-
-  await test('W149: shouldConnectLambda true when context absent, empty, or non-string', async function () {
-    assert.strictEqual(shouldConnectLambda({}), true, 'absent key');
-    assert.strictEqual(shouldConnectLambda({ NETLIFY_BLOBS_CONTEXT: '' }), true, 'empty string');
-    assert.strictEqual(shouldConnectLambda({ NETLIFY_BLOBS_CONTEXT: 42 }), true, 'non-string');
-    assert.strictEqual(shouldConnectLambda(undefined), true, 'no env object');
-  });
-
-  await test('W150: acquireStore order — _testStore, then guard, then connectLambda, then getStore', async function () {
-    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'), 'utf8');
+  // ── Section 17: EG-20C-6B modern-runtime store acquisition ────────────────
+  await test('W148: core store acquisition is ambient-only — getStore(STORE_NAME), no manual wiring', async function () {
+    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/lib/sec-evidence-store-writer-core.js'), 'utf8');
+    assert.ok(!/connectLambda/.test(src), 'connectLambda found in core');
+    assert.ok(!/NETLIFY_BLOBS_CONTEXT/.test(src), 'NETLIFY_BLOBS_CONTEXT found in core');
+    assert.ok(!/siteID/.test(src), 'siteID found in core');
+    assert.ok(!/apiURL/.test(src), 'apiURL found in core');
+    assert.ok(!/edgeURL/i.test(src), 'edgeURL config found in core');
+    assert.ok(!/getStore\(\s*\{/.test(src), 'getStore must not receive a config object');
     const fnStart = src.indexOf('function acquireStore');
     assert.ok(fnStart !== -1, 'acquireStore not found');
     const body = src.slice(fnStart, src.indexOf('\n}', fnStart));
     const iTest = body.indexOf('_testStore');
-    const iGuard = body.indexOf('shouldConnectLambda(process.env)');
-    const iConnect = body.indexOf('connectLambda(event)');
-    const iGet = body.indexOf('return getStore(STORE_NAME)');
-    assert.ok(iTest !== -1 && iGuard !== -1 && iConnect !== -1 && iGet !== -1, 'acquireStore pieces missing');
-    assert.ok(iTest < iGuard, '_testStore short-circuit must come first');
-    assert.ok(iGuard < iConnect, 'guard must precede connectLambda');
-    assert.ok(iConnect < iGet, 'getStore must come last');
+    const iGet = body.indexOf('return getStore(STORE_NAME);');
+    assert.ok(iTest !== -1 && iGet !== -1, 'acquireStore pieces missing');
+    assert.ok(iTest < iGet, '_testStore short-circuit must come first');
   });
 
-  await test('W151: connectLambda fallback reachable — guarded call, unconditional getStore', async function () {
-    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js'), 'utf8');
+  await test('W149: modern entry — withLambda around core, stable route, no config export, no legacy duplicate', async function () {
+    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.mjs'), 'utf8');
+    assert.ok(/@netlify\/aws-lambda-compat/.test(src), 'compat import missing');
+    assert.ok(/\.\/lib\/sec-evidence-store-writer-core\.js/.test(src), 'core import missing');
+    assert.ok(/export default withLambda\(/.test(src), 'export default withLambda missing');
+    assert.ok(!/export const config/.test(src), 'config export would change routing');
     assert.ok(
-      /if\s*\(shouldConnectLambda\(process\.env\)\)\s*\{\s*\r?\n\s*connectLambda\(event\);/.test(src),
-      'guarded connectLambda(event) call not found'
+      !fs.existsSync(path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.js')),
+      'legacy .js entry still present — duplicate endpoint risk'
     );
-    const fnStart = src.indexOf('function acquireStore');
-    const body = src.slice(fnStart, src.indexOf('\n}', fnStart));
-    assert.ok(/\n  return getStore\(STORE_NAME\);/.test(body), 'getStore must be unconditional at function level');
   });
 
-  await test('W152: _testStore still wins when ambient context env is set (flow unchanged)', async function () {
-    setEnv('NETLIFY_BLOBS_CONTEXT', 'eyJlZGdlVVJMIjoieCJ9');
-    try {
-      const r = await invoke('POST', VALID_BODY, cleanStore(), authHdr());
-      assert.strictEqual(JSON.parse(r.body).status, 'STORE_WRITE');
-    } finally {
-      setEnv('NETLIFY_BLOBS_CONTEXT', undefined);
-    }
+  // Wrapper-chain tests: the real compat wrapper around the real core handler,
+  // invoked with real Request objects (Node >= 20 fetch globals). Store-free
+  // stages only — store-dependent stages stay covered via _testStore above.
+  const { withLambda } = require('@netlify/aws-lambda-compat');
+  const wrapped = withLambda(handler);
+  const ROUTE = 'https://qa.local/.netlify/functions/sec-evidence-store-writer';
+  function jsonPost(body, extraHeaders) {
+    return new Request(ROUTE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(extraHeaders || {}) },
+      body
+    });
+  }
+
+  await test('W150: wrapper OPTIONS → 204, empty body, CORS preserved', async function () {
+    const resp = await wrapped(new Request(ROUTE, { method: 'OPTIONS' }), {});
+    assert.strictEqual(resp.status, 204);
+    assert.strictEqual(await resp.text(), '');
+    assert.strictEqual(resp.headers.get('access-control-allow-origin'), '*');
+    assert.strictEqual(resp.headers.get('access-control-allow-methods'), 'POST, OPTIONS');
+  });
+
+  await test('W151: wrapper gate-off POST → 200 DISABLED/SERVER_DISABLED', async function () {
+    disableGate();
+    const resp = await wrapped(jsonPost(JSON.stringify(VALID_BODY)), {});
+    assert.strictEqual(resp.status, 200);
+    const j = await resp.json();
+    assert.strictEqual(j.status, 'DISABLED');
+    assert.strictEqual(j.reason, 'SERVER_DISABLED');
+  });
+
+  await test('W152: wrapper gate-on GET → 405 METHOD_NOT_ALLOWED', async function () {
+    enableGate();
+    const resp = await wrapped(new Request(ROUTE, { method: 'GET' }), {});
+    assert.strictEqual(resp.status, 405);
+    assert.strictEqual((await resp.json()).reason, 'METHOD_NOT_ALLOWED');
+  });
+
+  await test('W153: wrapper gate-on POST without token → 401 UNAUTHORIZED', async function () {
+    enableGate();
+    const resp = await wrapped(jsonPost(JSON.stringify(VALID_BODY)), {});
+    assert.strictEqual(resp.status, 401);
+    assert.strictEqual((await resp.json()).reason, 'UNAUTHORIZED');
+  });
+
+  await test('W154: wrapper lowercases Authorization header — token accepted, body stage reached', async function () {
+    enableGate();
+    const resp = await wrapped(jsonPost('not-json', { Authorization: 'Bearer ' + TEST_TOKEN }), {});
+    assert.strictEqual(resp.status, 400);
+    assert.strictEqual((await resp.json()).reason, 'INVALID_JSON');
+  });
+
+  await test('W155: wrapper valid write offline → DEGRADED/STORE_UNAVAILABLE (ambient-only, fail-closed)', async function () {
+    enableGate();
+    setEnv('NETLIFY_BLOBS_CONTEXT', undefined);
+    const resp = await wrapped(jsonPost(JSON.stringify(VALID_BODY), { Authorization: 'Bearer ' + TEST_TOKEN }), {});
+    assert.strictEqual(resp.status, 200);
+    const j = await resp.json();
+    assert.strictEqual(j.status, 'DEGRADED');
+    assert.strictEqual(j.reason, 'STORE_UNAVAILABLE');
   });
 
   // ── cleanup ───────────────────────────────────────────────────────────────
