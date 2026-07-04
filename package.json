@@ -6,7 +6,8 @@
     "test": "node qa/run-offline.js",
     "qa:offline": "node qa/run-offline.js",
     "test:qa": "playwright test",
-    "test:writer": "node qa/run-writer-offline.js"
+    "test:writer": "node qa/run-writer-offline.js",
+    "test:secstore-client": "node qa/sec_evidence_store_client_adapter_test.js"
   },
   "repository": {
     "type": "git",
