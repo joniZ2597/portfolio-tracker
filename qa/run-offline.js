@@ -133,7 +133,8 @@ const OFFLINE_TESTS = [
   'qa/research_evidence_sec10q_fixture_provider_test.js',
   'qa/research_evidence_sec10q_live_provider_test.js',
   'qa/sec_evidence_store_test.js',
-  'qa/sec_evidence_store_client_adapter_test.js'
+  'qa/sec_evidence_store_client_adapter_test.js',
+  'qa/sec_evidence_store_view_test.js'
 ];
 
 const CLIENT_GATES = [
@@ -144,7 +145,8 @@ const CLIENT_GATES = [
   'PT_ENABLE_EDGAR_FORM4',
   'PT_ENABLE_PORTFOLIO_RESEARCH',
   'PT_ENABLE_PORTFOLIO_LIVE_PRICES',
-  'PT_ENABLE_QUERY_SPLIT_DEEPDIVE'
+  'PT_ENABLE_QUERY_SPLIT_DEEPDIVE',
+  'PT_ENABLE_SEC_EVIDENCE_STORE_CLIENT'
 ];
 
 const SERVER_GATES_DIRECT = [
