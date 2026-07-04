@@ -271,6 +271,21 @@ async function runTests() {
     );
   });
 
+  await test('EG-20C-6D: MODULE_NOT_FOUND codes allowlisted — surfaced exactly; near-miss still rejected', async function () {
+    assert.deepStrictEqual(
+      sanitizeReadError({ name: 'Error', code: 'MODULE_NOT_FOUND' }),
+      { errorName: 'Error', errorCode: 'MODULE_NOT_FOUND' }
+    );
+    assert.deepStrictEqual(
+      sanitizeReadError({ name: 'Error', code: 'ERR_MODULE_NOT_FOUND' }),
+      { errorName: 'Error', errorCode: 'ERR_MODULE_NOT_FOUND' }
+    );
+    assert.deepStrictEqual(
+      sanitizeReadError({ name: 'Error', code: 'MODULE_NOT_FOUNDX', status: 500 }),
+      { errorName: 'Error', httpStatus: 500 }
+    );
+  });
+
   await test('valid fixture: STORE_HIT with scoringImpact none', async function () {
     setEnv(GATE, 'true');
     const item = {

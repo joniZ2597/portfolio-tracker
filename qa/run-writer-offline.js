@@ -1320,6 +1320,41 @@ async function runTests() {
     assert.ok(src.indexOf(expected) !== -1, 'acquireStore body changed');
   });
 
+  // ── Section 19: EG-20C-6D static import fix ────────────────────────────────
+  await test('W160: entry has exactly one static side-effect import of @netlify/blobs; acquireStore unchanged', async function () {
+    const entry = fs.readFileSync(path.join(ROOT, 'netlify/functions/sec-evidence-store-writer.mjs'), 'utf8').replace(/\r\n/g, '\n');
+    const matches = entry.match(/^import '@netlify\/blobs';$/gm) || [];
+    assert.strictEqual(matches.length, 1, 'expected exactly one side-effect import of @netlify/blobs');
+    assert.ok(!/import\s*\{[^}]*\}\s*from\s*['"]@netlify\/blobs['"]/.test(entry), 'blobs import must be side-effect only (no bindings)');
+    const src = fs.readFileSync(path.join(ROOT, 'netlify/functions/lib/sec-evidence-store-writer-core.js'), 'utf8').replace(/\r\n/g, '\n');
+    const expectedAcquire = 'function acquireStore(event) {\n' +
+      '  if (event && event._testStore) { return event._testStore; }\n' +
+      "  const { getStore } = require('@netlify/blobs');\n" +
+      '  return getStore(STORE_NAME);\n' +
+      '}\n';
+    assert.ok(src.indexOf(expectedAcquire) !== -1, 'acquireStore body changed');
+  });
+
+  await test('W161: MODULE_NOT_FOUND-shaped acquisition throw → errorName Error + errorCode surfaced, exact key set', async function () {
+    enableGate();
+    const err = new Error('SECRET-MODULE-PATH-DO-NOT-LEAK');
+    err.code = 'MODULE_NOT_FOUND';
+    const r = await handler(acquisitionThrowEvent(err));
+    assert.strictEqual(r.statusCode, 200);
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.status, 'DEGRADED');
+    assert.strictEqual(j.reason, 'STORE_UNAVAILABLE');
+    assert.strictEqual(j.stage, 'STORE_ACQUISITION');
+    assert.strictEqual(j.writeAttempted, false);
+    assert.strictEqual(j.errorName, 'Error');
+    assert.strictEqual(j.errorCode, 'MODULE_NOT_FOUND');
+    assert.ok(r.body.indexOf('SECRET-MODULE-PATH-DO-NOT-LEAK') === -1, 'error message leaked into envelope');
+    assert.deepStrictEqual(
+      Object.keys(j).sort(),
+      ['errorCode', 'errorName', 'reason', 'stage', 'status', 'writeAttempted']
+    );
+  });
+
   // ── cleanup ───────────────────────────────────────────────────────────────
   disableGate();
 
