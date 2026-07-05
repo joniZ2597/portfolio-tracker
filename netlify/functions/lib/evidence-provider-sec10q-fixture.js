@@ -106,4 +106,25 @@ function getEvidence(request) {
   return buildFixtures(ticker);
 }
 
-module.exports = { getEvidence };
+// Pull-path CIK seam (Real Portfolio Evidence Pull — Phase 1).
+// Surfaces a CIK EXPLICITLY from the fixture pull path so an orchestrator can
+// build a writer payload without parsing sourceUrl and without a live SEC
+// lookup. This is a deterministic, SYNTHETIC 10-digit CIK for the fixture
+// ticker — NOT a real EDGAR CIK. It is network-, env-, fs- and Blob-inert
+// (pure string arithmetic), mirroring the rest of this fixture provider.
+// The live provider (evidence-provider-sec10q-live.js) resolves the REAL CIK
+// from SEC structured data; that provider's explicit-CIK seam is a later,
+// separately-approved phase.
+function resolveCik(ticker) {
+  var t = (typeof ticker === 'string') ? ticker.trim().toUpperCase() : '';
+  if (!/^[A-Z]{1,10}$/.test(t)) {
+    return null;
+  }
+  var h = 5381; // djb2, deterministic; masked to uint32 each step
+  for (var i = 0; i < t.length; i++) {
+    h = ((h * 33) + t.charCodeAt(i)) >>> 0;
+  }
+  return String(h).padStart(10, '0').slice(-10);
+}
+
+module.exports = { getEvidence, resolveCik };
