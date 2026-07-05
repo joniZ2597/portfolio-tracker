@@ -76,20 +76,34 @@ var ACCESSION_RE = /^\d{10}-\d{2}-\d{6}$/;
 var MAX_CLAIM = 1000;
 
 function getEvidence(request, options) {
-  // Synchronous gate returns are wrapped in a Promise by the async function.
-  return runGetEvidence(request, options);
+  // Legacy contract: resolve to the raw evidence item array. Delegates to the
+  // shared core (which resolves the CIK exactly once) and projects to .items, so
+  // existing callers observe the identical Promise<Array> behavior. Pre-fetch
+  // throws (e.g. SEC_USER_AGENT_MISSING) propagate as before.
+  return runGetEvidenceCore(request, options).then(function (r) { return r.items; });
 }
 
-async function runGetEvidence(request, options) {
+// Slice 2A additive seam: surface the padded real CIK resolved during the normal
+// live provider flow — WITHOUT a second SEC lookup and WITHOUT parsing sourceUrl.
+// Returns { cik, items } from the SAME single invocation as getEvidence.
+// cik is null when no ticker->CIK mapping was resolved (invalid input / unknown
+// ticker); it is the 10-digit padded CIK once resolved (even if no 10-Q exists).
+function getEvidenceWithCik(request, options) {
+  return runGetEvidenceCore(request, options);
+}
+
+// Shared core. Resolves the CIK exactly once and returns { cik, items }.
+// getEvidence projects .items (legacy); getEvidenceWithCik returns the object.
+async function runGetEvidenceCore(request, options) {
   var src = isObject(request) ? request : {};
   var ticker = typeof src.ticker === 'string' ? src.ticker.trim().toUpperCase() : '';
   var categories = src.categories;
 
   if (!Array.isArray(categories) || categories.indexOf(CATEGORY) === -1) {
-    return [];
+    return { cik: null, items: [] };
   }
   if (!/^[A-Z]{1,10}$/.test(ticker)) {
-    return [];
+    return { cik: null, items: [] };
   }
 
   var cfg = buildConfig(options);
@@ -116,16 +130,17 @@ async function runGetEvidence(request, options) {
 
   // 1) ticker -> CIK. A successful response that simply lacks the ticker is
   //    "no evidence" (graceful []); a fetch/hardening failure throws (502).
+  //    The resolved CIK is surfaced verbatim via getEvidenceWithCik — no re-lookup.
   var cik = await resolveCik(ticker, ctx);
   if (!cik) {
-    return [];
+    return { cik: null, items: [] };
   }
 
   // 2) latest 10-Q filing metadata (backbone). Fetch failure here is fail-closed
   //    (throws -> PROVIDER_FAILURE); a clean response with no 10-Q is [].
   var filing = await latestTenQ(cik, ctx);
   if (!filing) {
-    return [];
+    return { cik: cik, items: [] };
   }
 
   var items = [];
@@ -143,7 +158,7 @@ async function runGetEvidence(request, options) {
 
   var revenue = await conceptComparison(cik, REVENUE_CONCEPTS, ctx);
   if (revenue.status === 'ratelimited') {
-    return items;
+    return { cik: cik, items: items };
   }
   if (revenue.status === 'ok') {
     var revItem = numericItem(ticker, cik, 'revenue', 'quarterly revenue', 'Quarterly Revenue', revenue.cmp);
@@ -154,7 +169,7 @@ async function runGetEvidence(request, options) {
 
   var netIncome = await conceptComparison(cik, NETINCOME_CONCEPTS, ctx);
   if (netIncome.status === 'ratelimited') {
-    return items;
+    return { cik: cik, items: items };
   }
   if (netIncome.status === 'ok') {
     var niItem = numericItem(ticker, cik, 'netincome', 'quarterly net income', 'Quarterly Net Income', netIncome.cmp);
@@ -168,7 +183,7 @@ async function runGetEvidence(request, options) {
     items.push(enrichmentItems[ei]);
   }
 
-  return items;
+  return { cik: cik, items: items };
 }
 
 // ── config / injection ───────────────────────────────────────────────────────
@@ -552,4 +567,4 @@ function sleep(ms) {
   return new Promise(function (r) { setTimeout(r, ms); });
 }
 
-module.exports = { getEvidence };
+module.exports = { getEvidence, getEvidenceWithCik };
