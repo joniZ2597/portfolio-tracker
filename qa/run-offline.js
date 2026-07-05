@@ -136,7 +136,8 @@ const OFFLINE_TESTS = [
   'qa/sec_evidence_store_client_adapter_test.js',
   'qa/sec_evidence_store_view_test.js',
   'qa/portfolio_evidence_pull_offline.js',
-  'qa/sec10q_live_cik_seam_offline.js'
+  'qa/sec10q_live_cik_seam_offline.js',
+  'qa/portfolio_evidence_pull_live_offline.js'
 ];
 
 const CLIENT_GATES = [
