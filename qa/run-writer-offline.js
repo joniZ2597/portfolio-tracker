@@ -664,6 +664,9 @@ async function runTests() {
     assert.strictEqual(j.reason, 'MAPPING_CONCURRENT_CREATE');
     assert.strictEqual(j.storedCik, '9999999999');
     assert.strictEqual(j.inboundCik, CIK);
+    // Slice 2D: this invocation created the company record before hitting the
+    // mapping conflict — the orphaned key MUST be reported for authoritative teardown.
+    assert.deepStrictEqual(j.writtenKeys, [companyKey(CIK)], 'orphaned company key must be reported for teardown');
   });
 
   await test('W95: Step13b company DEGRADED → 200 DEGRADED/MAPPING_VERIFY_FAILURE', async function () {
@@ -1353,6 +1356,65 @@ async function runTests() {
       Object.keys(j).sort(),
       ['errorCode', 'errorName', 'reason', 'stage', 'status', 'writeAttempted']
     );
+  });
+
+  // ── Section 20: Slice 2D authoritative writtenKeys ────────────────────────
+  // writtenKeys is accumulated ONLY from store.set(...) results that returned
+  // modified:true, and echoed on every write-outcome envelope (success or
+  // post-mutation degraded) plus the idempotent NOOP. Pre-mutation envelopes are
+  // byte-identical and carry no writtenKeys.
+  enableGate();
+
+  await test('W170: STORE_WRITE → writtenKeys is authoritative [companyKey, cikKey]', async function () {
+    const r = await invoke('POST', VALID_BODY, cleanStore(), authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.status, 'STORE_WRITE');
+    assert.deepStrictEqual(j.writtenKeys, [companyKey(CIK), cikKey(TICKER)]);
+  });
+
+  await test('W171: STORE_WRITE_NOOP → writtenKeys is [] (idempotent, no mutation)', async function () {
+    const store = preReadStore({ mapping: CANONICAL_MAPPING, company: CANONICAL_COMPANY });
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.status, 'STORE_WRITE_NOOP');
+    assert.deepStrictEqual(j.writtenKeys, []);
+  });
+
+  await test('W172: STORE_WRITE_PARTIAL_VERIFIED → writtenKeys is [companyKey] only', async function () {
+    const r = await invoke('POST', VALID_BODY, step13bStore({ mappingGet: CANONICAL_MAPPING, companyGet: CANONICAL_COMPANY }), authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(j.status, 'STORE_WRITE_PARTIAL_VERIFIED');
+    assert.deepStrictEqual(j.writtenKeys, [companyKey(CIK)]);
+  });
+
+  await test('W173: company written then mapping set throws → DEGRADED/MAPPING_WRITE_FAILURE, writtenKeys [companyKey]', async function () {
+    const store = {
+      get: async function () { return null; },
+      set: async function (key) {
+        if (key === companyKey(CIK)) return { modified: true };
+        throw new Error('mapping fail');
+      }
+    };
+    const r = await invoke('POST', VALID_BODY, store, authHdr());
+    const j = JSON.parse(r.body);
+    assert.strictEqual(r.statusCode, 200);
+    assert.strictEqual(j.status, 'DEGRADED');
+    assert.strictEqual(j.reason, 'MAPPING_WRITE_FAILURE');
+    assert.deepStrictEqual(j.writtenKeys, [companyKey(CIK)], 'orphaned company key must be reported for teardown');
+  });
+
+  await test('W174: pre-write returns carry no writtenKeys (gate-off DISABLED + pre-read CIK_MISMATCH)', async function () {
+    // gate-off DISABLED — byte-identical, no writtenKeys field
+    setEnv(WRITE_GATE, undefined);
+    const disabled = JSON.parse((await invoke('POST', VALID_BODY, cleanStore(), authHdr())).body);
+    assert.strictEqual(disabled.status, 'DISABLED');
+    assert.ok(!('writtenKeys' in disabled), 'gate-off envelope must not gain a writtenKeys field');
+    enableGate();
+    // Step 10 pre-read CIK_MISMATCH — 409 before any mutation, no writtenKeys
+    const store = preReadStore({ mapping: JSON.stringify({ cik: '9999999999' }), company: null });
+    const mismatch = JSON.parse((await invoke('POST', VALID_BODY, store, authHdr())).body);
+    assert.strictEqual(mismatch.reason, 'CIK_MISMATCH');
+    assert.ok(!('writtenKeys' in mismatch), 'pre-mutation conflict must not carry writtenKeys');
   });
 
   // ── cleanup ───────────────────────────────────────────────────────────────

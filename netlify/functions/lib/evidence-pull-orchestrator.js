@@ -57,10 +57,12 @@ const STRONG = { consistency: 'strong' };
 //                       injected fetch impl + env{ SEC_USER_AGENT } + spacing).
 //
 // Returns one of:
-//   { ticker, action: 'SKIPPED_ALREADY_SEEDED' }
+//   { ticker, action: 'SKIPPED_ALREADY_SEEDED' }         // pre-read OK (seeded)
+//   { ticker, action: 'STOPPED_PRE_READ_DEGRADED' }      // pre-read infra failure — no SEC
+//   { ticker, action: 'STOPPED_PRE_READ_INVALID' }       // pre-read malformed  — no SEC
 //   { ticker, action: 'NO_CIK' }
 //   { ticker, action: 'NO_EVIDENCE' }
-//   { ticker, action: 'WRITE', cik, itemCount, statusCode, body }
+//   { ticker, action: 'WRITE', cik, itemCount, statusCode, writtenKeys, body }
 async function pullAndPersistTicker(ticker, deps) {
   const d = isObject(deps) ? deps : {};
   const store = d.store;
@@ -68,10 +70,20 @@ async function pullAndPersistTicker(ticker, deps) {
   const providerOptions = isObject(d.providerOptions) ? d.providerOptions : {};
 
   // 1) Create-only / un-seeded-only: strong pre-read BEFORE any provider request.
-  //    An already-seeded CIK mapping is a no-op skip (no pull, no write).
+  //    Only a genuinely MISSING mapping may proceed to a live SEC pull:
+  //      OK       -> already seeded: no-op skip (no pull, no write)
+  //      DEGRADED -> store infrastructure failure: STOP before SEC (no pull, no write)
+  //      INVALID  -> malformed stored mapping: STOP before SEC (no pull, no write)
+  //    A flaky or corrupt store can therefore never trigger a live SEC request.
   const pre = await readRecord(store, cikKey(ticker), STRONG);
   if (pre.state === 'OK') {
     return { ticker, action: 'SKIPPED_ALREADY_SEEDED' };
+  }
+  if (pre.state === 'DEGRADED') {
+    return { ticker, action: 'STOPPED_PRE_READ_DEGRADED' };
+  }
+  if (pre.state === 'INVALID') {
+    return { ticker, action: 'STOPPED_PRE_READ_INVALID' };
   }
 
   // 2) Pull live sec10q evidence + the explicit CIK from the same invocation
@@ -95,13 +107,18 @@ async function pullAndPersistTicker(ticker, deps) {
     _testStore: store
   };
   const r = await writerHandler(event);
+  const body = JSON.parse(r.body);
   return {
     ticker,
     action: 'WRITE',
     cik,
     itemCount: items.length,
     statusCode: r.statusCode,
-    body: JSON.parse(r.body)
+    // Surfaced verbatim from the writer's authoritative mutation metadata (Slice
+    // 2D). Present on write-outcome envelopes; undefined when the writer refused
+    // before any mutation (e.g. gate-off DISABLED).
+    writtenKeys: body.writtenKeys,
+    body
   };
 }
 

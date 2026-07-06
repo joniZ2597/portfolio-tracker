@@ -72,6 +72,15 @@ exports.handler = async function (event) {
   const canonicalCompanyJSON = buildCanonicalCompanyJSON(projectedItems);
   const canonicalMappingJSON = buildCanonicalMappingJSON(cik);
 
+  // Slice 2D: authoritative write-mutation metadata. Accumulated ONLY from the
+  // set() results that returned modified:true — never reconstructed from
+  // ticker/cik by a caller — and echoed on every write-outcome envelope from
+  // Step 12 onward (STORE_WRITE / *_PARTIAL_VERIFIED / post-write DEGRADED /
+  // post-write CONFLICT) plus the idempotent NOOP. Pre-write returns (gate, token,
+  // body, validation, acquisition, Step 10/11 pre-read conflicts) are
+  // unchanged and carry no writtenKeys.
+  const writtenKeys = [];
+
   // ── Step 10: read cikKey(ticker) with consistency:'strong' ─────────────────
   // EG-20C-3: wantDiag=true — DEGRADED carries sanitized fixed-vocabulary
   // diagnostics in the envelope only (no console logging, no retry, no write).
@@ -141,12 +150,13 @@ exports.handler = async function (event) {
       return res(409, { status: 'CONFLICT', reason: 'STORE_INVALID_CONFLICT' });
     }
     if (isIdentical(step11, canonicalCompanyJSON, 'company')) {
-      // Already stored — idempotent success
+      // Already stored — idempotent success; this invocation mutated nothing.
       return res(200, {
         status: 'STORE_WRITE_NOOP',
         ticker,
         cik,
-        evidenceItemCount: projectedItems.length
+        evidenceItemCount: projectedItems.length,
+        writtenKeys
       });
     }
     // Company exists but differs from what we would write
@@ -159,56 +169,63 @@ exports.handler = async function (event) {
   try {
     companySet = await store.set(companyKey(cik), canonicalCompanyJSON, { onlyIfNew: true });
   } catch (_) {
-    return res(200, { status: 'DEGRADED', reason: 'COMPANY_WRITE_FAILURE' });
+    return res(200, { status: 'DEGRADED', reason: 'COMPANY_WRITE_FAILURE', writtenKeys });
   }
   if (!companySet || typeof companySet !== 'object') {
-    return res(200, { status: 'DEGRADED', reason: 'COMPANY_WRITE_FAILURE' });
+    return res(200, { status: 'DEGRADED', reason: 'COMPANY_WRITE_FAILURE', writtenKeys });
   }
   if (companySet.modified === false) {
     // Concurrent create raced us; no mapping write
-    return res(409, { status: 'CONFLICT', reason: 'CONCURRENT_CREATE' });
+    return res(409, { status: 'CONFLICT', reason: 'CONCURRENT_CREATE', writtenKeys });
   }
   if (companySet.modified !== true) {
-    return res(200, { status: 'DEGRADED', reason: 'COMPANY_WRITE_FAILURE' });
+    return res(200, { status: 'DEGRADED', reason: 'COMPANY_WRITE_FAILURE', writtenKeys });
   }
+  // Company record created by THIS invocation — record the authoritative key.
+  writtenKeys.push(companyKey(cik));
 
   // ── Step 13: set(cikKey, canonicalMappingJSON, { onlyIfNew: true }) ────────
   let mappingSet;
   try {
     mappingSet = await store.set(cikKey(ticker), canonicalMappingJSON, { onlyIfNew: true });
   } catch (_) {
-    return res(200, { status: 'DEGRADED', reason: 'MAPPING_WRITE_FAILURE' });
+    return res(200, { status: 'DEGRADED', reason: 'MAPPING_WRITE_FAILURE', writtenKeys });
   }
   if (!mappingSet || typeof mappingSet !== 'object') {
-    return res(200, { status: 'DEGRADED', reason: 'MAPPING_WRITE_FAILURE' });
+    return res(200, { status: 'DEGRADED', reason: 'MAPPING_WRITE_FAILURE', writtenKeys });
   }
   if (mappingSet.modified === true) {
-    return res(200, { status: 'STORE_WRITE', ticker, cik, evidenceItemCount: projectedItems.length });
+    // Mapping record created by THIS invocation — record the authoritative key.
+    writtenKeys.push(cikKey(ticker));
+    return res(200, { status: 'STORE_WRITE', ticker, cik, evidenceItemCount: projectedItems.length, writtenKeys });
   }
   if (mappingSet.modified !== false) {
-    return res(200, { status: 'DEGRADED', reason: 'MAPPING_WRITE_FAILURE' });
+    return res(200, { status: 'DEGRADED', reason: 'MAPPING_WRITE_FAILURE', writtenKeys });
   }
 
   // ── Step 13b: mapping set returned unmodified — verify existing records ────
+  // Company was created by THIS invocation above, so writtenKeys already carries
+  // companyKey(cik); every exit below reports it for authoritative teardown.
   const mappingR = await readRecord(store, cikKey(ticker), STRONG);
 
   if (mappingR.state === 'INVALID') {
-    return res(409, { status: 'CONFLICT', reason: 'STORE_INVALID_CONFLICT' });
+    return res(409, { status: 'CONFLICT', reason: 'STORE_INVALID_CONFLICT', writtenKeys });
   }
   if (mappingR.state === 'MISSING' || mappingR.state === 'DEGRADED') {
-    return res(200, { status: 'DEGRADED', reason: 'MAPPING_VERIFY_FAILURE' });
+    return res(200, { status: 'DEGRADED', reason: 'MAPPING_VERIFY_FAILURE', writtenKeys });
   }
   // OK — field-level schema guard
   const storedCik13b = mappingR.value && mappingR.value.cik;
   if (typeof storedCik13b !== 'string' || !/^\d{10}$/.test(storedCik13b)) {
-    return res(409, { status: 'CONFLICT', reason: 'STORE_INVALID_CONFLICT' });
+    return res(409, { status: 'CONFLICT', reason: 'STORE_INVALID_CONFLICT', writtenKeys });
   }
   if (storedCik13b !== cik) {
     return res(409, {
       status: 'CONFLICT',
       reason: 'MAPPING_CONCURRENT_CREATE',
       storedCik: storedCik13b,
-      inboundCik: cik
+      inboundCik: cik,
+      writtenKeys
     });
   }
 
@@ -216,24 +233,25 @@ exports.handler = async function (event) {
   const companyR = await readRecord(store, companyKey(cik), STRONG);
 
   if (companyR.state === 'DEGRADED') {
-    return res(200, { status: 'DEGRADED', reason: 'MAPPING_VERIFY_FAILURE' });
+    return res(200, { status: 'DEGRADED', reason: 'MAPPING_VERIFY_FAILURE', writtenKeys });
   }
   if (companyR.state === 'MISSING' || companyR.state === 'INVALID') {
-    return res(409, { status: 'CONFLICT', reason: 'MAPPING_VERIFY_CONFLICT' });
+    return res(409, { status: 'CONFLICT', reason: 'MAPPING_VERIFY_CONFLICT', writtenKeys });
   }
   // OK — schema guard before identity comparison
   if (!companyR.value || !Array.isArray(companyR.value.evidenceItems)) {
-    return res(409, { status: 'CONFLICT', reason: 'STORE_INVALID_CONFLICT' });
+    return res(409, { status: 'CONFLICT', reason: 'STORE_INVALID_CONFLICT', writtenKeys });
   }
   if (!isIdentical(companyR, canonicalCompanyJSON, 'company')) {
-    return res(409, { status: 'CONFLICT', reason: 'MAPPING_VERIFY_CONFLICT' });
+    return res(409, { status: 'CONFLICT', reason: 'MAPPING_VERIFY_CONFLICT', writtenKeys });
   }
 
   return res(200, {
     status: 'STORE_WRITE_PARTIAL_VERIFIED',
     ticker,
     cik,
-    evidenceItemCount: projectedItems.length
+    evidenceItemCount: projectedItems.length,
+    writtenKeys
   });
 };
 

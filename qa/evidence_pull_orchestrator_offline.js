@@ -219,6 +219,10 @@ async function runTests() {
       const company = JSON.parse(store._map.get(companyKey(out.cik)));
       assert.deepStrictEqual(Object.keys(company), ['evidenceItems']);
       assert.strictEqual(company.evidenceItems.length, out.itemCount);
+      // Slice 2D: writtenKeys is surfaced verbatim from the writer's authoritative
+      // mutation metadata — company key first, then mapping key.
+      assert.deepStrictEqual(out.writtenKeys, [companyKey(out.cik), cikKey('ZORCH')],
+        'writtenKeys must be the authoritative [companyKey, cikKey] from the writer');
     });
 
     // ── O03: seeded ticker -> SKIPPED before any provider fetch / store.set ────
@@ -346,6 +350,38 @@ async function runTests() {
       assert.strictEqual(out.body.status, 'STORE_WRITE');
       assert.ok(store._ops.get >= 1, 'writer/pre-read must read via the injected store');
       assert.ok(store._ops.set >= 1, 'writer must write via the injected store');
+    });
+
+    // ── O10: pre-read DEGRADED (store.get throws) -> STOP before any SEC/write ──
+    // Slice 2D: a store infrastructure failure must never trigger a live SEC pull.
+    await test('O10: pre-read DEGRADED -> STOPPED_PRE_READ_DEGRADED, no provider fetch, no store.set', async function () {
+      const ops = { get: 0, set: 0 };
+      const store = {
+        _ops: ops,
+        get: async function () { ops.get += 1; throw new Error('infra'); },
+        set: async function () { ops.set += 1; return { modified: true }; }
+      };
+      const spy = makeFetch(routesForUniverse(UNIVERSE_SINGLE));
+      const out = await orchestrator.pullAndPersistTicker('ZORCH', {
+        store: store, token: TEST_TOKEN, providerOptions: providerOpts(spy, { SEC_USER_AGENT: UA })
+      });
+      assert.strictEqual(out.action, 'STOPPED_PRE_READ_DEGRADED');
+      assert.strictEqual(spy.calls.length, 0, 'DEGRADED pre-read must stop before any SEC fetch');
+      assert.strictEqual(ops.set, 0, 'DEGRADED pre-read must not write to the store');
+    });
+
+    // ── O11: pre-read INVALID (malformed stored mapping) -> STOP before any SEC ──
+    await test('O11: pre-read INVALID -> STOPPED_PRE_READ_INVALID, no provider fetch, no store.set', async function () {
+      const store = makeMemStore();
+      // A malformed (array) mapping payload at the CIK key -> readRecord INVALID.
+      store._map.set(cikKey('ZORCH'), JSON.stringify(['not', 'an', 'object']));
+      const spy = makeFetch(routesForUniverse(UNIVERSE_SINGLE));
+      const out = await orchestrator.pullAndPersistTicker('ZORCH', {
+        store: store, token: TEST_TOKEN, providerOptions: providerOpts(spy, { SEC_USER_AGENT: UA })
+      });
+      assert.strictEqual(out.action, 'STOPPED_PRE_READ_INVALID');
+      assert.strictEqual(spy.calls.length, 0, 'INVALID pre-read must stop before any SEC fetch');
+      assert.strictEqual(store._ops.set, 0, 'INVALID pre-read must not write to the store');
     });
   } finally {
     disableGate();
