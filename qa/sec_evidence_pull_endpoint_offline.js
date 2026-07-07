@@ -8,6 +8,11 @@
  * (netlify/functions/lib/sec-evidence-pull-core.js) with ZERO real
  * network / Blob / Netlify env / production.
  *
+ * Slice 2G (EP33–EP42) additionally covers the top-level route wrapper
+ * netlify/functions/sec-evidence-pull.mjs — static scans of the wrapper plus the
+ * real withLambda(core.handler) chain driven by Request objects — still ZERO real
+ * network / Blob / Netlify env / production.
+ *
  * Isolation:
  *   - a throwing global.fetch guard makes any real network a hard error; the
  *     provider only ever sees the INJECTED fetch (event._testProviderOptions).
@@ -579,6 +584,151 @@ async function runTests() {
     // ── EP32: behavioral — zero real network across the whole suite ───────────
     await test('EP32: zero real global.fetch across the suite', async function () {
       assert.strictEqual(realFetchCalls, 0, 'the real global.fetch must never be called');
+    });
+
+    // ══ Slice 2G: route-wrapper (.mjs) tests (EP33–EP42) ══════════════════════
+    // The .mjs adapter cannot be require()'d from this CommonJS harness, so —
+    // exactly as qa/run-writer-offline.js proves its writer entry — it is proven
+    // two ways: (1) static source scans of the .mjs; (2) reconstruct the real
+    // withLambda(core.handler) chain and drive it with real Request objects.
+    const MJS_REL = 'netlify/functions/sec-evidence-pull.mjs';
+    const ALLOWED_IMPORTS = ['@netlify/blobs', '@netlify/aws-lambda-compat', './lib/sec-evidence-pull-core.js'];
+    function readMjs() { return fs.readFileSync(path.join(ROOT, MJS_REL), 'utf8').replace(/\r\n/g, '\n'); }
+    // Strip block + line comments so the EP36 "no-duplicated-logic" scan can never
+    // false-match a forbidden identifier that appears only inside a comment.
+    function stripComments(src) { return src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' '); }
+
+    // ── EP33: .mjs mirrors the writer entry — withLambda default export, no config, no .js twin ─
+    await test('EP33: .mjs is the writer pattern (withLambda default export, core import, no config, no .js twin)', async function () {
+      const src = readMjs();
+      assert.ok(/@netlify\/aws-lambda-compat/.test(src), 'compat import missing');
+      assert.ok(/\.\/lib\/sec-evidence-pull-core\.js/.test(src), 'core import missing');
+      assert.ok(/export default withLambda\(/.test(src), 'export default withLambda missing');
+      assert.ok(!/export\s+const\s+config/.test(src), 'config export would change routing');
+      assert.ok(!fs.existsSync(path.join(ROOT, 'netlify/functions/sec-evidence-pull.js')),
+        'legacy .js entry present — duplicate endpoint risk');
+    });
+
+    // ── EP34: exactly one side-effect "@netlify/blobs" import (bundler trap), no bindings ─
+    await test('EP34: exactly one side-effect import "@netlify/blobs" with no bindings', async function () {
+      const src = readMjs();
+      const matches = src.match(/^import '@netlify\/blobs';$/gm) || [];
+      assert.strictEqual(matches.length, 1, 'expected exactly one side-effect import of @netlify/blobs');
+      assert.ok(!/import\s*\{[^}]*\}\s*from\s*['"]@netlify\/blobs['"]/.test(src), 'blobs import must be side-effect only (no named bindings)');
+      assert.ok(!/import\s+[\w*]+\s+from\s+['"]@netlify\/blobs['"]/.test(src), 'blobs import must be side-effect only (no default/namespace binding)');
+    });
+
+    // ── EP35: .mjs emits nothing (no console.*) ───────────────────────────────
+    await test('EP35: .mjs has no console.* output', async function () {
+      assert.ok(!/console\./.test(readMjs()), 'console.* in the route wrapper');
+    });
+
+    // ── EP36: wrapper carries no auth/preflight/store/provider logic (comment-stripped) ─
+    await test('EP36: wrapper has no duplicated auth/preflight/store logic (comment-stripped source)', async function () {
+      const code = stripComments(readMjs());
+      ['PT_ENABLE', 'PT_SEC_EVIDENCE_PULL_TOKEN', 'evaluatePullPreflight', 'Bearer', 'JSON.parse', 'process.env', 'getStore', 'pullAndPersistTicker']
+        .forEach(function (tok) { assert.ok(code.indexOf(tok) === -1, 'wrapper must not contain logic token: ' + tok); });
+    });
+
+    // ── EP36b: .mjs imports ONLY the three allowed modules (no fourth import, no dynamic import/require) ─
+    await test('EP36b: .mjs imports exactly the three allowed modules; no dynamic import() / require()', async function () {
+      const code = stripComments(readMjs());
+      const specs = [];
+      var m;
+      var reFrom = /import\s+[^'";]*?\s+from\s+['"]([^'"]+)['"]/g;
+      while ((m = reFrom.exec(code)) !== null) { specs.push(m[1]); }
+      var reBare = /import\s+['"]([^'"]+)['"]/g;
+      while ((m = reBare.exec(code)) !== null) { specs.push(m[1]); }
+      assert.ok(!/\bimport\s*\(/.test(code), 'no dynamic import() allowed in the wrapper');
+      assert.ok(!/\brequire\s*\(/.test(code), 'no require() allowed in the ESM wrapper');
+      const set = new Set(specs);
+      assert.strictEqual(set.size, ALLOWED_IMPORTS.length, 'unexpected import set: ' + JSON.stringify(specs));
+      ALLOWED_IMPORTS.forEach(function (s) { assert.ok(set.has(s), 'missing allowed import: ' + s); });
+    });
+
+    // ── behavioral: reconstruct the REAL withLambda(core.handler) chain ───────
+    const { withLambda } = require('@netlify/aws-lambda-compat');
+    const wrapped = withLambda(EP.handler);
+    const ROUTE = 'https://qa.local/.netlify/functions/sec-evidence-pull';
+    function jsonPost(body, extraHeaders) {
+      return new Request(ROUTE, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(extraHeaders || {}) }, body: body });
+    }
+
+    // ── EP37: wrapper OPTIONS -> 204, empty body, CORS preserved ──────────────
+    await test('EP37: wrapper OPTIONS -> 204, empty body, CORS preserved', async function () {
+      const resp = await wrapped(new Request(ROUTE, { method: 'OPTIONS' }), {});
+      assert.strictEqual(resp.status, 204);
+      assert.strictEqual(await resp.text(), '', 'no body on a 204');
+      assert.strictEqual(resp.headers.get('access-control-allow-methods'), 'POST, OPTIONS');
+      assert.strictEqual(resp.headers.get('access-control-allow-origin'), '*');
+    });
+
+    // ── EP38: wrapper gate-OFF POST -> 200 DISABLED (dormant through the wrapper) ─
+    await test('EP38: wrapper gate-OFF POST -> 200 DISABLED/SERVER_DISABLED; no fetch', async function () {
+      clearAllEnv();
+      const before = realFetchCalls;
+      const resp = await wrapped(jsonPost(JSON.stringify({ ticker: 'ZORCH' }), authHdr()), {});
+      assert.strictEqual(resp.status, 200);
+      assert.deepStrictEqual(await resp.json(), { status: 'DISABLED', reason: 'SERVER_DISABLED' });
+      assert.strictEqual(realFetchCalls, before, 'gate-off wrapper must not fetch');
+    });
+
+    // ── EP39: wrapper gate-ON, missing/wrong auth -> 401 ──────────────────────
+    await test('EP39: wrapper gate-ON missing/wrong auth -> 401 UNAUTHORIZED', async function () {
+      fullValidEnv();
+      const noAuth = await wrapped(jsonPost(JSON.stringify({ ticker: 'AAPL' })), {});
+      assert.strictEqual(noAuth.status, 401);
+      assert.strictEqual((await noAuth.json()).reason, 'UNAUTHORIZED');
+      const wrong = await wrapped(jsonPost(JSON.stringify({ ticker: 'AAPL' }), { authorization: 'Bearer nope' }), {});
+      assert.strictEqual(wrong.status, 401);
+      assert.strictEqual((await wrong.json()).reason, 'UNAUTHORIZED');
+    });
+
+    // ── EP40: wrapper auth-first — malformed body + bad auth -> 401, NOT 400 ──
+    await test('EP40: wrapper malformed body + missing/wrong auth -> 401 (no body oracle before auth), not 400', async function () {
+      fullValidEnv();
+      const before = realFetchCalls;
+      const wrong = await wrapped(jsonPost('{not valid json', { authorization: 'Bearer nope' }), {});
+      assert.strictEqual(wrong.status, 401, 'malformed body + wrong auth must be 401, not 400 INVALID_JSON');
+      assert.strictEqual((await wrong.json()).reason, 'UNAUTHORIZED');
+      const missing = await wrapped(jsonPost('{not valid json'), {});
+      assert.strictEqual(missing.status, 401, 'malformed body + missing auth must be 401, not 400 INVALID_JSON');
+      assert.strictEqual((await missing.json()).reason, 'UNAUTHORIZED');
+      assert.strictEqual(realFetchCalls, before, 'auth-first rejection must not fetch');
+    });
+
+    // ── EP41: wrapper gate-ON valid path, NO blobs context -> fixed fail-closed
+    //         envelope BEFORE any provider fetch (Codex rec #3). Drives the REAL
+    //         store acquisition / @netlify/blobs require: the _testStore seam does
+    //         not survive the Request->event rebuild, so this exercises the true
+    //         offline fail-closed path. ─────────────────────────────────────────
+    await test('EP41: wrapper gate-ON valid path, no blobs context -> fixed fail-closed envelope before any provider fetch', async function () {
+      fullValidEnv('ZORCH, AAPL');
+      const before = realFetchCalls;
+      const savedCtx = process.env.NETLIFY_BLOBS_CONTEXT;
+      delete process.env.NETLIFY_BLOBS_CONTEXT; // force store acquisition to fail closed
+      let resp;
+      try {
+        resp = await wrapped(jsonPost(JSON.stringify({ ticker: 'ZORCH' }), authHdr()), {});
+      } finally {
+        if (savedCtx === undefined) { delete process.env.NETLIFY_BLOBS_CONTEXT; } else { process.env.NETLIFY_BLOBS_CONTEXT = savedCtx; }
+      }
+      const j = await resp.json();
+      // (a) fail-closed BEFORE any provider (SEC) fetch — zero real network
+      assert.strictEqual(realFetchCalls, before, 'must fail closed before any provider fetch');
+      // (b) ONLY the fixed degraded/error envelope — no leaked keys, never a WRITE
+      const isDegraded = resp.status === 200 && j.status === 'DEGRADED' && j.reason === 'STORE_UNAVAILABLE' &&
+        j.writeAttempted === false && Object.keys(j).length === 3;
+      const isProviderErr = resp.status === 502 && j.status === 'ERROR' && j.reason === 'PROVIDER_FAILURE' &&
+        Object.keys(j).length === 2;
+      assert.ok(isDegraded || isProviderErr,
+        'expected only the fixed degraded/error envelope, got ' + resp.status + ' ' + JSON.stringify(j));
+      assert.notStrictEqual(j.status, 'WRITE', 'must never reach WRITE offline');
+    });
+
+    // ── EP42: zero real global.fetch across the GROWN suite (incl. wrapper tests) ─
+    await test('EP42: zero real global.fetch across the grown suite', async function () {
+      assert.strictEqual(realFetchCalls, 0, 'the real global.fetch must never be called across the grown suite');
     });
   } finally {
     // restore process.env snapshot + the network guard before reporting/exit

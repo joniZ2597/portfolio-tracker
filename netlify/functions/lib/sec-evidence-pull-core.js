@@ -7,10 +7,10 @@
  *
  * The boundary that reads the runtime environment once, runs the pure Slice 2E
  * preflight, and — only on { ok: true } — acquires the live store and drives the
- * Slice 2C orchestrator. CORE-ONLY: this handler lives in lib/ and has NO
- * top-level .mjs entry, so Netlify wires NO route. It is therefore not invocable
- * in production; dormancy is structural, exactly like the 2C/2E lib modules. The
- * deployed .mjs route is a separately-approved later slice.
+ * Slice 2C orchestrator. Slice 2G adds the top-level sec-evidence-pull.mjs
+ * route that wraps this handler. The handler is therefore now route-wired and
+ * invocable, while default dormancy is enforced by the server-side gate: with the
+ * gate off, requests return 200 DISABLED before downstream work begins.
  *
  * Auth-first response policy (Codex 2F re-review): no body- or ticker-derived
  * response is ever surfaced before the inbound pull authorization succeeds. Full
