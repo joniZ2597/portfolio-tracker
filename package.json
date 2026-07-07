@@ -12,7 +12,8 @@
     "test:sec10q-live-cik-seam": "node qa/sec10q_live_cik_seam_offline.js",
     "test:portfolio-evidence-pull-live": "node qa/portfolio_evidence_pull_live_offline.js",
     "test:evidence-pull-orchestrator": "node qa/evidence_pull_orchestrator_offline.js",
-    "test:evidence-pull-preflight": "node qa/evidence_pull_preflight_offline.js"
+    "test:evidence-pull-preflight": "node qa/evidence_pull_preflight_offline.js",
+    "test:sec-evidence-pull-endpoint": "node qa/sec_evidence_pull_endpoint_offline.js"
   },
   "repository": {
     "type": "git",

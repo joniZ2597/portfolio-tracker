@@ -139,7 +139,8 @@ const OFFLINE_TESTS = [
   'qa/sec10q_live_cik_seam_offline.js',
   'qa/portfolio_evidence_pull_live_offline.js',
   'qa/evidence_pull_orchestrator_offline.js',
-  'qa/evidence_pull_preflight_offline.js'
+  'qa/evidence_pull_preflight_offline.js',
+  'qa/sec_evidence_pull_endpoint_offline.js'
 ];
 
 const CLIENT_GATES = [
