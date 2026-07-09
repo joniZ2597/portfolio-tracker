@@ -143,7 +143,8 @@ const OFFLINE_TESTS = [
   'qa/sec_evidence_pull_endpoint_offline.js',
   'qa/evidence_teardown_offline.js',
   'qa/sec_evidence_pull_batch_driver_offline.js',
-  'qa/portfolio_ticker_source_offline.js'
+  'qa/portfolio_ticker_source_offline.js',
+  'qa/batch_pull_wiring_offline.js'
 ];
 
 const CLIENT_GATES = [

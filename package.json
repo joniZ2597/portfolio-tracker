@@ -16,7 +16,8 @@
     "test:sec-evidence-pull-endpoint": "node qa/sec_evidence_pull_endpoint_offline.js",
     "test:evidence-teardown": "node qa/evidence_teardown_offline.js",
     "test:batch-driver": "node qa/sec_evidence_pull_batch_driver_offline.js",
-    "test:ticker-source": "node qa/portfolio_ticker_source_offline.js"
+    "test:ticker-source": "node qa/portfolio_ticker_source_offline.js",
+    "test:batch-wiring": "node qa/batch_pull_wiring_offline.js"
   },
   "repository": {
     "type": "git",

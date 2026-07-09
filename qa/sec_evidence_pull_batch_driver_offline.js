@@ -8,8 +8,10 @@
  * Proves the owner-ratified batch policy (D1–D6): a batch portfolio evidence
  * pull is a CLIENT/OWNER-side sequential loop of single-ticker POSTs against the
  * EXISTING sec-evidence-pull endpoint — no server-side batch surface exists or
- * is added. runBatchPull() below is the reference implementation of the loop
- * policy the live runbook mirrors:
+ * is added. runBatchPull() — promoted VERBATIM in EG-21C-1 (owner decision
+ * D-C1: repoint) to netlify/functions/lib/batch-pull-driver.js and imported
+ * below — is the reference implementation of the loop policy the live runbook
+ * mirrors:
  *
  *   validate the WHOLE list first (strict /^[A-Z]{1,10}$/, fail-closed-loud)
  *     -> dedupe (default on) -> cap (<= 25, the server allowlist ceiling)
@@ -19,9 +21,11 @@
  *        200 NO_EVIDENCE/NO_EVIDENCE · 200 NO_EVIDENCE/NO_CIK — never on a
  *        status family alone (D3, Codex re-review: reason-aware).
  *
- * The driver lives in this harness ONLY. It never ships to production, wires no
- * route, and never touches pullAndPersistPortfolio (BD11 pins both facts by
- * scanning the TARGET production files — never this harness itself).
+ * The driver was harness-local through EG-20D-1 and now lives in the pure
+ * dormant lib (EG-21C-1). It still wires no route and never touches
+ * pullAndPersistPortfolio (BD11 pins both facts by scanning the TARGET
+ * production files — never this harness itself — and additionally pins the
+ * promoted lib's rule literals against the harness drift pins).
  *
  * Isolation (EP-series house pattern):
  *   - throwing global.fetch guard: any real network is a hard error; the
@@ -72,78 +76,21 @@ function fullValidEnv(allow) {
 }
 function authHdr() { return { authorization: GOOD_AUTH }; }
 
-// ── batch driver under test (reference implementation of the D2/D3 policy) ────
-// Harness-local ONLY. callFn(ticker) -> Promise<{ statusCode, body }>.
+// ── batch driver under test (PROMOTED — EG-21C-1, owner decision D-C1) ────────
+// The reference implementation of the D2/D3 policy now lives in the pure
+// dormant lib netlify/functions/lib/batch-pull-driver.js; this harness imports
+// it UNCHANGED. callFn(ticker) -> Promise<{ statusCode, body }>.
 // Result: { ok:false, reason, ledger:[] }                       — rejected pre-call
 //       | { ok:true, complete:true, ledger }                    — every ticker ran
 //       | { ok:true, complete:false, stoppedAt, stopStatus, stopReason, ledger }
+const { runBatchPull } = require('../netlify/functions/lib/batch-pull-driver');
+const LIB_REL = 'netlify/functions/lib/batch-pull-driver.js';
+
+// Harness drift pins (asserted against the lib source + values in BD11): the
+// promoted lib must keep the ratified rule constants verbatim —
+// BATCH_TICKER_RE = /^[A-Z]{1,10}$/ and MAX_BATCH_TICKERS = 25.
 const BATCH_TICKER_RE = /^[A-Z]{1,10}$/;
 const MAX_BATCH_TICKERS = 25; // == the server allowlist distinct-ticker ceiling
-
-// The D3 continue set as exact (status, reason) pairs. WRITE is the only
-// reason-less continue; SKIPPED and NO_EVIDENCE continue ONLY with their
-// approved reasons — an unrecognized reason on a familiar status STOPS.
-function isContinueOutcome(entry) {
-  if (entry.statusCode !== 200) { return false; }
-  if (entry.status === 'WRITE') { return true; }
-  if (entry.status === 'SKIPPED') { return entry.reason === 'ALREADY_SEEDED'; }
-  if (entry.status === 'NO_EVIDENCE') {
-    return entry.reason === 'NO_EVIDENCE' || entry.reason === 'NO_CIK';
-  }
-  return false;
-}
-
-async function runBatchPull(tickers, callFn, opts) {
-  const o = (opts && typeof opts === 'object' && !Array.isArray(opts)) ? opts : {};
-  const dedupe = o.dedupe !== false; // default on; disable only to test server-side dup handling
-
-  // 1) Fail-closed-loud whole-list validation BEFORE any call (mirrors
-  //    parseAllowedTickers: one bad member rejects the entire batch).
-  if (!Array.isArray(tickers) || tickers.length === 0) {
-    return { ok: false, reason: 'LIST_INVALID', ledger: [] };
-  }
-  for (let i = 0; i < tickers.length; i++) {
-    if (typeof tickers[i] !== 'string' || !BATCH_TICKER_RE.test(tickers[i])) {
-      return { ok: false, reason: 'LIST_INVALID', ledger: [] };
-    }
-  }
-
-  // 2) Dedupe (order-preserving), then cap at the allowlist ceiling.
-  let list = tickers.slice();
-  if (dedupe) {
-    const seen = new Set();
-    list = list.filter(function (t) {
-      if (seen.has(t)) { return false; }
-      seen.add(t);
-      return true;
-    });
-  }
-  if (list.length > MAX_BATCH_TICKERS) {
-    return { ok: false, reason: 'LIST_TOO_LARGE', ledger: [] };
-  }
-
-  // 3) Sequential single-ticker calls. Every response lands independently, so a
-  //    completed WRITE's writtenKeys can never be lost to a later failure.
-  const ledger = [];
-  for (let i = 0; i < list.length; i++) {
-    const r = await callFn(list[i]);
-    const body = r && r.body;
-    const entry = { ticker: list[i], statusCode: r ? r.statusCode : null, status: body ? body.status : undefined };
-    if (body && body.reason !== undefined) { entry.reason = body.reason; }
-    if (body && body.cik !== undefined) { entry.cik = body.cik; }
-    if (body && body.writtenKeys !== undefined) { entry.writtenKeys = body.writtenKeys; } // verbatim
-    ledger.push(entry);
-
-    // 4) D3 stop policy: continue ONLY on an exact approved (status, reason)
-    //    pair. Everything else (DISABLED / DEGRADED / unrecognized reason /
-    //    4xx / 5xx / WRITE-conflict on a non-200) stops the batch with the
-    //    ledger intact.
-    if (!isContinueOutcome(entry)) {
-      return { ok: true, complete: false, stoppedAt: list[i], stopStatus: entry.status, stopReason: entry.reason, ledger: ledger };
-    }
-  }
-  return { ok: true, complete: true, ledger: ledger };
-}
 
 // ── endpoint invocation helpers (mirrors the EP suite) ────────────────────────
 async function invoke(method, opts) {
@@ -570,7 +517,7 @@ async function runTests() {
     });
 
     // ── BD11: zero real network + no production batch surface (TARGET-file scan) ─
-    await test('BD11: zero real global.fetch across the suite; no server-side batch surface in the pull tree', async function () {
+    await test('BD11: zero real global.fetch across the suite; no server-side batch surface in the pull tree; promoted-lib drift pins', async function () {
       assert.strictEqual(realFetchCalls, 0, 'the real global.fetch must never be called');
       // Comment-stripped scans of the TARGET production files (never this harness):
       const strip = function (src) { return src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' '); };
@@ -584,6 +531,17 @@ async function runTests() {
       });
       assert.ok(orch.indexOf('pullAndPersistPortfolio') !== -1, 'orchestrator batch loop still present (dormant, untouched)');
       assert.ok(orch.indexOf('runBatchPull') === -1, 'orchestrator must not contain the harness driver');
+      // Promoted-lib drift pins (EG-21C-1): the lib now owns the rule constants;
+      // pin the exact literals + values so any drift is loud, and keep the lib
+      // env-free / zero-require so promotion never weakened dormancy.
+      const libRaw = fs.readFileSync(path.join(ROOT, LIB_REL), 'utf8');
+      const libCode = strip(libRaw);
+      assert.ok(libRaw.indexOf('BATCH_TICKER_RE = /^[A-Z]{1,10}$/') !== -1, 'lib keeps the ratified regex literal');
+      assert.ok(libRaw.indexOf('MAX_BATCH_TICKERS = 25') !== -1, 'lib keeps the ratified cap literal');
+      assert.ok(libCode.indexOf('process.env') === -1, 'promoted lib reads no env');
+      assert.ok(!/\brequire\s*\(/.test(libCode), 'promoted lib is zero-require');
+      assert.strictEqual(BATCH_TICKER_RE.source, '^[A-Z]{1,10}$', 'harness pin matches the ratified regex');
+      assert.strictEqual(MAX_BATCH_TICKERS, 25, 'harness pin matches the ratified cap');
     });
   } finally {
     ENV_KEYS.forEach(function (k) { if (snapshot[k] === undefined) { delete process.env[k]; } else { process.env[k] = snapshot[k]; } });
