@@ -144,7 +144,8 @@ const OFFLINE_TESTS = [
   'qa/evidence_teardown_offline.js',
   'qa/sec_evidence_pull_batch_driver_offline.js',
   'qa/portfolio_ticker_source_offline.js',
-  'qa/batch_pull_wiring_offline.js'
+  'qa/batch_pull_wiring_offline.js',
+  'qa/batch_owner_script_offline.js'
 ];
 
 const CLIENT_GATES = [
@@ -190,6 +191,7 @@ function phaseSyntax() {
       .concat(walkJs('netlify/functions'))
       .concat(walkJs('services'))
       .concat(walkJs('qa'))
+      .concat(walkJs('tools'))
       .concat(exists('playwright.config.js') ? ['playwright.config.js'] : [])
   );
 
