@@ -148,7 +148,8 @@ const OFFLINE_TESTS = [
   'qa/batch_owner_script_offline.js',
   'qa/fund_facts_provider_offline.js',
   'qa/fund_facts_preflight_offline.js',
-  'qa/fund_facts_core_offline.js'
+  'qa/fund_facts_core_offline.js',
+  'qa/fund_facts_route_offline.js'
 ];
 
 const CLIENT_GATES = [
