@@ -18,7 +18,13 @@
     "test:batch-driver": "node qa/sec_evidence_pull_batch_driver_offline.js",
     "test:ticker-source": "node qa/portfolio_ticker_source_offline.js",
     "test:batch-wiring": "node qa/batch_pull_wiring_offline.js",
-    "test:batch-owner-script": "node qa/batch_owner_script_offline.js"
+    "test:batch-owner-script": "node qa/batch_owner_script_offline.js",
+    "test:fund-facts-provider": "node qa/fund_facts_provider_offline.js",
+    "test:fund-facts-preflight": "node qa/fund_facts_preflight_offline.js",
+    "test:fund-facts-core": "node qa/fund_facts_core_offline.js",
+    "test:fund-facts-route": "node qa/fund_facts_route_offline.js",
+    "test:evidence-freshness": "node qa/evidence_freshness_offline.js",
+    "test:fund-facts-teardown": "node qa/fund_facts_teardown_offline.js"
   },
   "repository": {
     "type": "git",
