@@ -215,5 +215,8 @@ module.exports = {
   MAX_RESULTS,
   normalizeCategories,
   validateAndProject,
-  resolveProviderOutput
+  resolveProviderOutput,
+  optionalHttpsUrl,
+  optionalDate,
+  INVALID
 };

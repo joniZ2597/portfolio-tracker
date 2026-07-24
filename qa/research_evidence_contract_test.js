@@ -178,6 +178,35 @@ async function runValidatorTests() {
 
   outcome = await contract.resolveProviderOutput(() => ({}), ['earnings']);
   assert.deepStrictEqual(outcome, { ok: false, reason: 'PROVIDER_INVALID_RESPONSE' });
+
+  // Enabling Slice (EG-25C-3 §2): optionalHttpsUrl/optionalDate/INVALID are now
+  // additively exported, unchanged in behavior. A caller must be able to
+  // distinguish missing (null) / invalid (=== INVALID by reference) / valid
+  // (original string, unchanged) using only the exported members.
+  assert.strictEqual(contract.optionalHttpsUrl(null), null);
+  assert.strictEqual(contract.optionalHttpsUrl(undefined), null);
+  assert.strictEqual(contract.optionalHttpsUrl('http://a.com'), contract.INVALID);
+  assert.strictEqual(contract.optionalHttpsUrl('https://user:pass@a.com'), contract.INVALID);
+  assert.strictEqual(contract.optionalHttpsUrl('not a url'), contract.INVALID);
+  assert.strictEqual(contract.optionalHttpsUrl('https://a.com/x'), 'https://a.com/x');
+
+  assert.strictEqual(contract.optionalDate(null), null);
+  assert.strictEqual(contract.optionalDate(undefined), null);
+  assert.strictEqual(contract.optionalDate('2026-13-01'), contract.INVALID);
+  assert.strictEqual(contract.optionalDate('abcd-ef-gh'), contract.INVALID);
+  assert.strictEqual(contract.optionalDate('2026-01-15'), '2026-01-15');
+
+  // The exported INVALID must be the actual module-internal sentinel, not a
+  // caller-recreated lookalike — a fresh Symbol('invalid') never matches it.
+  assert.notStrictEqual(contract.INVALID, Symbol('invalid'));
+  assert.strictEqual(typeof contract.INVALID, 'symbol');
+
+  // All three new exports present alongside the pre-existing seven.
+  assert.deepStrictEqual(Object.keys(contract).sort(), [
+    'ALLOWED_CATEGORIES', 'DIRECTIONS', 'INVALID', 'MAX_RESULTS',
+    'SOURCE_TYPES', 'normalizeCategories', 'optionalDate',
+    'optionalHttpsUrl', 'resolveProviderOutput', 'validateAndProject'
+  ]);
 }
 
 async function run() {
