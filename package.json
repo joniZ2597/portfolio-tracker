@@ -25,7 +25,8 @@
     "test:fund-facts-route": "node qa/fund_facts_route_offline.js",
     "test:evidence-freshness": "node qa/evidence_freshness_offline.js",
     "test:fund-facts-teardown": "node qa/fund_facts_teardown_offline.js",
-    "test:news-catalysts-provider": "node qa/news_catalysts_provider_offline.js"
+    "test:news-catalysts-provider": "node qa/news_catalysts_provider_offline.js",
+    "test:fund-facts-read": "node qa/fund_facts_read_offline.js"
   },
   "repository": {
     "type": "git",

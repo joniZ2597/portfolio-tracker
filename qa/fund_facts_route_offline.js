@@ -72,6 +72,7 @@ const EXPECTED_FUNCTIONS = [
   'capital-returns.js',
   'edgar-form4.js',
   'finance-search.js',
+  'fund-facts-read.mjs',
   'fund-facts.mjs',
   'market-data.js',
   'perplexity-proxy.js',
