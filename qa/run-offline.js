@@ -11,7 +11,7 @@
  *   2. Run the 7 offline Research Evidence tests as isolated child processes.
  *   3. Static forbidden-surface checks for Research Evidence + Portfolio Sync paths.
  *   4. Server gate strict-string checks.
- *   5. Client gate strict-boolean checks for all 8 known client gates
+ *   5. Client gate strict-boolean checks for all 10 known client gates
  *      (direct dot access, bracket access, and FLAG-const indirection).
  *   6. No token persistence patterns.
  *
@@ -151,7 +151,8 @@ const OFFLINE_TESTS = [
   'qa/fund_facts_core_offline.js',
   'qa/fund_facts_route_offline.js',
   'qa/evidence_freshness_offline.js',
-  'qa/fund_facts_teardown_offline.js'
+  'qa/fund_facts_teardown_offline.js',
+  'qa/fund_facts_read_client_test.js'
 ];
 
 const CLIENT_GATES = [
@@ -163,7 +164,8 @@ const CLIENT_GATES = [
   'PT_ENABLE_PORTFOLIO_RESEARCH',
   'PT_ENABLE_PORTFOLIO_LIVE_PRICES',
   'PT_ENABLE_QUERY_SPLIT_DEEPDIVE',
-  'PT_ENABLE_SEC_EVIDENCE_STORE_CLIENT'
+  'PT_ENABLE_SEC_EVIDENCE_STORE_CLIENT',
+  'PT_ENABLE_FUND_FACTS_READ_CLIENT'
 ];
 
 const SERVER_GATES_DIRECT = [
