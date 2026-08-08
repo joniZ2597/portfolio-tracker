@@ -734,6 +734,7 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-pos-mkt-chg--neg{color:var(--red2)}
 .pf-pos-mkt-chg--zero{color:var(--text3)}
 .pf-pos-mkt-day-lbl{color:var(--text3);opacity:.65}
+.pf-pos-mkt-est{color:var(--text3);opacity:.65}
 .pf-pos-research{display:flex;align-items:center;gap:5px;margin-top:4px;flex-wrap:wrap}
 .pf-res-state{font-family:var(--mono);font-size:9px;letter-spacing:.4px;padding:2px 5px;border-radius:2px;border:1px solid var(--border2);color:var(--text3)}
 .pf-res-state.found{color:var(--text2)}
@@ -6019,7 +6020,10 @@ function _pfNormalizeHoldingEntry(key, raw) {
   var looksLikeOwnWrapper = rawIsObj && raw[PF_HOLDING_WRAPPER_MARKER] === true && raw._raw !== undefined;
   var src      = looksLikeOwnWrapper ? raw._raw : raw;
   var srcIsObj = src !== null && typeof src === 'object' && !Array.isArray(src);
-  var symOk    = /^[A-Z]{1,10}$/.test(key);
+  // P-2A: TASE symbols carry a literal .TA suffix (e.g. TEVA.TA) — this
+  // exact pattern must stay identical to saveAddPosition()'s validation, or
+  // a just-saved .TA holding would look corrupt on the very next load.
+  var symOk    = /^[A-Z]{1,10}(\.TA)?$/.test(key);
   var posOk    = srcIsObj && _pfIsFiniteNum(src.positionSize) && src.positionSize > 0;
   if (!symOk || !srcIsObj || !posOk) {
     var corruptEntry = Object.create(null);
@@ -6221,7 +6225,15 @@ function switchMainView(view) {
   if (view !== 'portfolio' && _pfLiveRunCanceller) {
     _pfLiveAbortActiveRun('view-cancel');
   }
-  if (view === 'portfolio') _renderPortfolioPanel();
+  if (view === 'portfolio') {
+    _renderPortfolioPanel();
+    // P-2A: open-trigger — cooldown-gated, async, re-renders itself on
+    // completion. Render above is already network-free.
+    if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true) {
+      var _pfOpenSyms = Object.keys(loadHoldings());
+      if (_pfOpenSyms.length) _pfEodAutoFetchIfDue(_pfOpenSyms);
+    }
+  }
 }
 window.switchMainView = switchMainView;
 
@@ -6256,13 +6268,16 @@ function _calcPortfolioAggregates(holdings) {
   }
   var livePrice = null;
   if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true) {
-    var _aggNow = Date.now();
+    // P-2A: coverage now reflects the persisted EOD cache, not the
+    // session-only 5-minute TTL — "covered" means we have a completed-
+    // session price at all (current or stale), consistent with the
+    // cache-first render path. A terminal condition no longer zeroes this
+    // out either, for the same "don't hide persisted data" reason as the
+    // render path.
+    var _pfAggEodCache = _pfEodLoadCache();
     var liveCovered = syms.filter(function(s) {
-      if (_pfLiveTerminalReason) return false;
-      var rt = _portfolioRuntime[s];
-      if (!rt || typeof rt.price !== 'number' || !isFinite(rt.price) || rt.price <= 0) return false;
-      if (!_pfLiveFreshAt[s]) return false;
-      return (_aggNow - _pfLiveFreshAt[s]) < _PF_LIVE_SUCCESS_TTL;
+      var c = _pfAggEodCache[s];
+      return !!c && typeof c.price === 'number' && isFinite(c.price) && c.price > 0;
     }).length;
     livePrice = { covered: liveCovered, total: total };
   }
@@ -6363,6 +6378,17 @@ function _renderPortfolioPanel() {
     cloudBtn.title       = 'Fetch cloud holdings + watchlist for preview; applying overwrites local data after backup';
     cloudBtn.onclick     = openLoadFromCloudModal;
     hdrRight.appendChild(cloudBtn);
+  }
+
+  // P-2A: manual refresh — always fetches (bypasses the automatic
+  // cooldown), same client gate as the rest of the live-price feature.
+  if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true && count > 0) {
+    var refreshBtn = document.createElement('button');
+    refreshBtn.className   = 'btn-export';
+    refreshBtn.textContent = 'REFRESH ⟳';
+    refreshBtn.title       = 'Fetch latest completed-session prices now';
+    refreshBtn.onclick     = function() { _pfEodManualRefresh(Object.keys(loadHoldings())); };
+    hdrRight.appendChild(refreshBtn);
   }
 
   hdrRight.appendChild(backupBtn);
@@ -6893,37 +6919,20 @@ function _renderPortfolioPanel() {
   }
   if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true && count > 0) {
     var _pfSyms = Object.keys(holdings);
-    if (_pfLiveTerminalReason) { _pfLiveClearAllVisibleLiveCells(_pfSyms); return; }
-    var _pfNow = Date.now();
-    var _pfHasFreshLive = function(s) {
-      return !!_portfolioRuntime[s]
-        && !!_pfLiveFreshAt[s]
-        && (_pfNow - _pfLiveFreshAt[s]) < _PF_LIVE_SUCCESS_TTL;
-    };
+    // P-2A: pure display from the persisted EOD cache — rendering never
+    // triggers a fetch, and a terminal condition (e.g. server disabled)
+    // never hides previously persisted completed-session data. Terminal
+    // state only prevents further fetch attempts (enforced inside
+    // _pfEodAutoFetchIfDue/_pfLiveBatch, not here) — it is not surfaced as
+    // a banner in this pass.
+    var _pfEodCache = _pfEodLoadCache();
     _pfSyms.forEach(function(s) {
-      if (_pfHasFreshLive(s)) _updatePortfolioCard(s, _portfolioRuntime[s]);
+      var c = _pfEodCache[s];
+      _updatePortfolioCard(s, c ? {
+        price: c.price, change_percent: c.changePercent, currency: c.currency,
+        sessionEpoch: c.sessionEpoch, stale: _pfEodIsStale(c)
+      } : null);
     });
-    var _pfLiveRankOf = function(s) {
-      var sz = holdings[s] ? holdings[s].positionSize : undefined;
-      return (typeof sz === 'number' && isFinite(sz) && sz > 0) ? sz : 0;
-    };
-    var rankedSyms = _pfSyms.slice().sort(function(a, b) {
-      var diff = _pfLiveRankOf(b) - _pfLiveRankOf(a);
-      return diff !== 0 ? diff : a.localeCompare(b);
-    });
-    var topSyms         = rankedSyms.slice(0, _PF_LIVE_BATCH_MAX);
-    var capExcludedSyms = rankedSyms.slice(_PF_LIVE_BATCH_MAX);
-    var eligibleSyms = topSyms.filter(function(s) {
-      var failedRecently = _pfLiveFailAt[s] && (_pfNow - _pfLiveFailAt[s]) < _PF_LIVE_FAIL_TTL;
-      return !_pfHasFreshLive(s) && !failedRecently;
-    });
-    var _pfFailTtlSyms = topSyms.filter(function(s) {
-      return !_pfHasFreshLive(s) && _pfLiveFailAt[s] && (_pfNow - _pfLiveFailAt[s]) < _PF_LIVE_FAIL_TTL;
-    });
-    _pfFailTtlSyms.concat(capExcludedSyms).forEach(function(s) { _updatePortfolioCard(s, null); });
-    if (eligibleSyms.length > 0 && !_pfLiveFetching) {
-      _portfolioFetchPrices(eligibleSyms, _pfSyms);
-    }
   }
 }
 
@@ -6945,6 +6954,147 @@ const _PF_LIVE_CONCURRENCY = 4;
 const _PF_LIVE_BUDGET_MS   = 10000;
 const _PF_LIVE_SYM_MS      = 8000;
 const _PF_LIVE_PROVIDERS   = ['yahoo', 'polygon'];
+
+// ── P-2A: Persistent EOD Portfolio Price cache ──────────────────────────────
+// Replaces the 5-minute continuous-refresh cadence above with a coarser,
+// completed-session-appropriate cadence: check on Portfolio open/focus or
+// manual refresh, not on every render. price/change_percent/currency/
+// sessionEpoch still come from the exact same purpose=portfolio-live
+// endpoint and _pfLive* fetch machinery above (concurrency, budget,
+// terminal-envelope handling all reused unchanged) — only the freshness/
+// persistence/trigger layer differs. Same client+server gates as G-L above;
+// no new gate.
+var PF_CURRENCY_SYMBOLS      = { USD: '$', ILS: '₪' };
+var PF_EOD_CACHE_KEY         = 'pt_eod_cache';
+var PF_EOD_LAST_FETCH_KEY    = 'pt_eod_last_fetch';
+var PF_EOD_AUTO_COOLDOWN_MS  = 4 * 60 * 60 * 1000;   // 4h — automatic open/focus fetch cooldown
+var PF_EOD_FAIL_COOLDOWN_MS  = 30 * 60 * 1000;       // 30min — after a failed automatic attempt
+
+// pt_eod_cache is a disposable, re-derivable-from-network cache — not real
+// user data like pt_holdings. Corruption or a write failure here just means
+// "re-fetch next time"; it does not warrant pt_holdings-grade root-
+// corruption/save-blocking machinery, only a tolerant, non-throwing read
+// and a logged (not user-facing) write failure.
+function _pfEodLoadCache() {
+  try {
+    var raw = localStorage.getItem(PF_EOD_CACHE_KEY);
+    if (raw === null) return {};
+    var parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch (e) {
+    console.warn('[PT] pt_eod_cache: unreadable, starting empty (disposable cache)', e);
+    return {};
+  }
+}
+function _pfEodSaveCache(cache) {
+  try { localStorage.setItem(PF_EOD_CACHE_KEY, JSON.stringify(cache)); }
+  catch (e) { console.warn('[PT] pt_eod_cache: write failed (disposable cache)', e); }
+}
+// Called only on a SUCCESSFUL fetch — replaces the whole entry, so any
+// prior lastFailAt is dropped by construction the moment a symbol recovers.
+function _pfEodCacheSet(sym, norm) {
+  var cache = _pfEodLoadCache();
+  cache[sym] = {
+    price:          norm.price,
+    changePercent:  norm.change_percent,
+    currency:       norm.currency || null,
+    sessionEpoch:   norm.sessionEpoch || null,
+    fetchedAt:      new Date().toISOString()
+  };
+  _pfEodSaveCache(cache);
+}
+
+// { at: epoch ms of last fetch ATTEMPT (manual or automatic), ok: whether
+// every symbol attempted that time succeeded }. Drives ONLY the automatic-
+// trigger cooldown duration (4h vs 30min) — never per-symbol staleness.
+function _pfEodLoadLastFetch() {
+  try {
+    var raw = localStorage.getItem(PF_EOD_LAST_FETCH_KEY);
+    if (raw === null) return { at: 0, ok: false };
+    var parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return { at: 0, ok: false };
+    var at = typeof parsed.at === 'number' && isFinite(parsed.at) ? parsed.at : 0;
+    return { at: at, ok: parsed.ok === true };
+  } catch (e) { return { at: 0, ok: false }; }
+}
+function _pfEodSaveLastFetch(meta) {
+  try { localStorage.setItem(PF_EOD_LAST_FETCH_KEY, JSON.stringify(meta)); }
+  catch (e) { console.warn('[PT] pt_eod_last_fetch: write failed', e); }
+}
+
+// Per-symbol, evidence-based only: stale means a refresh attempt for THIS
+// symbol failed while older cached data exists. Never derived from session
+// age, never contaminated by a different symbol's failure in the same batch.
+function _pfEodIsStale(cacheEntry) {
+  return !!(cacheEntry && cacheEntry.lastFailAt);
+}
+
+// Stamps lastFailAt only onto symbols that (a) already have a cached value
+// and (b) failed during THIS attempt (per-symbol, via the existing
+// _pfLiveFailAt bookkeeping _pfLiveSingle already maintains). A symbol with
+// no prior cache entry that fails is left alone — it stays missing, not
+// stale. Returns whether ANY symbol in this attempt failed, for the
+// cooldown-duration decision.
+function _pfEodApplyAttemptOutcome(targets, attemptStart) {
+  var cache = _pfEodLoadCache();
+  var cacheChanged = false;
+  var anyFailed = false;
+  targets.forEach(function(s) {
+    if (_pfLiveFailAt[s] && _pfLiveFailAt[s] >= attemptStart) {
+      anyFailed = true;
+      if (cache[s]) { cache[s].lastFailAt = new Date().toISOString(); cacheChanged = true; }
+    }
+  });
+  if (cacheChanged) _pfEodSaveCache(cache);
+  return anyFailed;
+}
+
+function _pfIsPortfolioViewActive() {
+  var pfPanel = document.getElementById('portfolioPanel');
+  return !!pfPanel && pfPanel.style.display !== 'none';
+}
+
+// Automatic (open/focus) trigger: cooldown-gated. A symbol with no cache
+// entry at all is always fetched regardless of the cooldown — that isn't a
+// repeat call, it's the first one for that symbol (e.g. a newly-added
+// holding). Manual refresh never calls this — it always fetches everything.
+async function _pfEodAutoFetchIfDue(syms) {
+  if (!syms || !syms.length || _pfLiveFetching || _pfLiveTerminalReason) return;
+  var last = _pfEodLoadLastFetch();
+  var cooldownMs = last.ok ? PF_EOD_AUTO_COOLDOWN_MS : PF_EOD_FAIL_COOLDOWN_MS;
+  var targets = syms;
+  if ((Date.now() - last.at) < cooldownMs) {
+    var cache = _pfEodLoadCache();
+    targets = syms.filter(function(s) { return !cache[s]; });
+    if (!targets.length) return;
+  }
+  var attemptStart = Date.now();
+  await _pfLiveBatch(targets, syms);
+  var anyFailed = _pfEodApplyAttemptOutcome(targets, attemptStart);
+  _pfEodSaveLastFetch({ at: Date.now(), ok: !_pfLiveTerminalReason && !anyFailed });
+  if (_pfIsPortfolioViewActive()) _renderPortfolioPanel();
+}
+
+async function _pfEodManualRefresh(syms) {
+  if (!syms || !syms.length || _pfLiveFetching) return;
+  var attemptStart = Date.now();
+  await _pfLiveBatch(syms, syms);
+  var anyFailed = _pfEodApplyAttemptOutcome(syms, attemptStart);
+  _pfEodSaveLastFetch({ at: Date.now(), ok: !_pfLiveTerminalReason && !anyFailed });
+  if (_pfIsPortfolioViewActive()) _renderPortfolioPanel();
+}
+
+// First focus listener in this app — scoped tightly to the Portfolio view
+// (no-op otherwise) and itself cooldown-gated by _pfEodAutoFetchIfDue, so
+// it cannot cause continuous/frequent fetching. No visibilitychange
+// listener (in-window tab switching) by design — approved scope is window
+// focus only.
+window.addEventListener('focus', function() {
+  if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES !== true || !_pfIsPortfolioViewActive()) return;
+  var syms = Object.keys(loadHoldings());
+  if (syms.length) _pfEodAutoFetchIfDue(syms);
+});
 
 function _pfLiveCanWrite(capturedRunId) {
   return capturedRunId === _pfLiveRunId
@@ -7008,8 +7158,12 @@ function _pfLiveNormalize(body, sym) {
   if (!meta) return null;
   var source = meta._provider;
   if (!source || _PF_LIVE_PROVIDERS.indexOf(source) === -1) return null;
-  var price = parseFloat(meta.regularMarketPrice);
-  if (!isFinite(price) || price <= 0) return null;
+  // rawPrice stays in the provider's own unit (agorot for TASE) through the
+  // whole change_percent calculation below, so a ratio is always computed
+  // from two values in the same unit. Only the final returned price is
+  // converted — see the P-2A block after change_percent is resolved.
+  var rawPrice = parseFloat(meta.regularMarketPrice);
+  if (!isFinite(rawPrice) || rawPrice <= 0) return null;
   var closes = (result.indicators && result.indicators.quote &&
                 result.indicators.quote[0] && result.indicators.quote[0].close) || [];
   var valid = [];
@@ -7025,10 +7179,26 @@ function _pfLiveNormalize(body, sym) {
     var prevClose = parseFloat(meta.chartPreviousClose);
     if (!isFinite(prevClose) || prevClose <= 0) prevClose = parseFloat(meta.previousClose);
     if (isFinite(prevClose) && prevClose > 0)
-      change_percent = parseFloat(((price - prevClose) / prevClose * 100).toFixed(2));
+      change_percent = parseFloat(((rawPrice - prevClose) / prevClose * 100).toFixed(2));
   }
   if (change_percent === null || !isFinite(change_percent)) return null;
-  return { symbol: sym, price: price, change_percent: change_percent, source: source };
+
+  // P-2A: TASE (.TA) quotes come back from Yahoo priced in agorot
+  // (currency: 'ILA'), 1/100 of a shekel. Convert to ILS for display/
+  // storage only, after change_percent (a currency-agnostic ratio) is
+  // already resolved above. sessionEpoch is Yahoo's own regularMarketTime —
+  // the provider's statement of which completed session this data belongs
+  // to; used only as a change-detector and for display, never for calendar
+  // math.
+  var rawCurrency  = typeof meta.currency === 'string' ? meta.currency.toUpperCase() : null;
+  var isAgorot      = rawCurrency === 'ILA';
+  var price         = isAgorot ? rawPrice / 100 : rawPrice;
+  var currency      = isAgorot ? 'ILS' : rawCurrency;
+  var sessionEpoch  = (typeof meta.regularMarketTime === 'number' && isFinite(meta.regularMarketTime))
+    ? meta.regularMarketTime : null;
+
+  return { symbol: sym, price: price, change_percent: change_percent, source: source,
+           currency: currency, sessionEpoch: sessionEpoch };
 }
 
 // ─── Portfolio / Holdings — Slice 1C-1A: Runtime Price Bridge ─────────────────
@@ -7089,8 +7259,15 @@ async function _pfLiveSingle(sym, allSyms, capturedRunId, batchCanceller) {
         if (_pfLiveCanAcceptTerminal(capturedRunId, batchCanceller, symCanceller)) {
           _pfLiveTerminalReason = body.reason;
           if (body.reason === 'SERVER_DISABLED') _pfLiveServerDisabled = true;
+          _pfLiveFailAt[sym] = Date.now();
           batchCanceller.abort('terminal-stop');
-          _pfLiveClearAllVisibleLiveCells(allSyms);
+          // P-2A: no longer blanks the whole panel here — a terminal
+          // condition stops further fetches but must not hide previously
+          // persisted EOD data for this or any other holding. The
+          // caller's post-batch re-render (_pfEodAutoFetchIfDue /
+          // _pfEodManualRefresh) redisplays every symbol from the
+          // persisted cache, correctly reflecting stale/missing per
+          // symbol via _pfEodIsStale.
         }
         return null;
       }
@@ -7152,6 +7329,7 @@ async function _pfLiveBatch(syms, allSyms) {
           var norm = r.value;
           _portfolioRuntime[norm.symbol] = norm;
           _pfLiveFreshAt[norm.symbol]    = Date.now();
+          _pfEodCacheSet(norm.symbol, norm);
           _updatePortfolioCard(norm.symbol, norm);
         }
       });
@@ -7194,7 +7372,10 @@ function _updatePortfolioCard(sym, mkt) {
     el.style.display = '';
     var priceSpan = document.createElement('span');
     priceSpan.className = 'pf-pos-mkt-price';
-    priceSpan.textContent = '$' + mkt.price.toFixed(2);
+    // Unknown/unrecognized currency is never assumed to be USD — the
+    // number is shown with no invented symbol rather than a false $ label.
+    var curSym = mkt.currency && PF_CURRENCY_SYMBOLS[mkt.currency];
+    priceSpan.textContent = (curSym || '') + mkt.price.toFixed(2);
     el.appendChild(priceSpan);
     if (typeof mkt.change_percent === 'number' && isFinite(mkt.change_percent)) {
       var sep = document.createElement('span');
@@ -7212,6 +7393,38 @@ function _updatePortfolioCard(sym, mkt) {
                           : mkt.change_percent < 0 ? 'pf-pos-mkt-chg--neg'
                           : 'pf-pos-mkt-chg--zero';
       el.appendChild(chgSpan);
+
+      // P-2A: holding-level estimated day money move — display-only,
+      // positionSize stays in its own native currency (never converted),
+      // never written to pt_holdings. Only rendered when the holding has
+      // a known, supported native currency (USD or ILS) — the percentage
+      // is currency-independent, but the resulting money amount is not,
+      // and an unlabeled/assumed-currency amount would be dishonest.
+      var h = loadHoldings()[sym];
+      if (h && typeof h.positionSize === 'number' && isFinite(h.positionSize) && h.positionSize > 0
+          && (h.currency === 'USD' || h.currency === 'ILS')) {
+        var estMove   = h.positionSize * mkt.change_percent / 100;
+        var estSign   = estMove > 0 ? '+' : (estMove < 0 ? '-' : '');
+        var estSpan = document.createElement('span');
+        estSpan.className   = 'pf-pos-mkt-est';
+        estSpan.textContent = '≈ ' + estSign + PF_CURRENCY_SYMBOLS[h.currency] + Math.abs(estMove).toFixed(2) + ' est.';
+        el.appendChild(estSpan);
+      }
+    }
+    // P-2A: trading/session date, from Yahoo's own regularMarketTime — no
+    // calendar knowledge, purely a label of which session this data is.
+    if (typeof mkt.sessionEpoch === 'number' && isFinite(mkt.sessionEpoch)) {
+      var dateSpan = document.createElement('span');
+      dateSpan.className   = 'pf-pos-mkt-day-lbl';
+      dateSpan.textContent = new Date(mkt.sessionEpoch * 1000)
+        .toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      el.appendChild(dateSpan);
+    }
+    if (mkt.stale) {
+      var staleTag = document.createElement('span');
+      staleTag.className   = 'pf-res-state stale';
+      staleTag.textContent = 'Stale';
+      el.appendChild(staleTag);
     }
     return;
   }
@@ -7558,8 +7771,8 @@ function saveAddPosition() {
   // rejected below, same as any other invalid input.
   var positionSize = Number(investedInp.value.trim());
 
-  if (!/^[A-Z]{1,10}$/.test(sym)) {
-    warnEl.textContent = 'Symbol must be 1–10 letters (A–Z only).';
+  if (!/^[A-Z]{1,10}(\.TA)?$/.test(sym)) {
+    warnEl.textContent = 'Symbol must be 1–10 letters (A–Z only), optionally followed by .TA for Tel Aviv Stock Exchange.';
     symInp.focus();
     return;
   }
