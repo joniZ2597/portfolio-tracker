@@ -9639,7 +9639,10 @@ function _validatePortfolioBackup(obj) {
     if (!t || typeof t !== 'object' || Array.isArray(t))
       return { error: 'tickers[' + j + ']: each item must be an object.' };
     var tsym = typeof t.symbol === 'string' ? t.symbol.trim().toUpperCase() : '';
-    if (!/^[A-Z]{1,10}$/.test(tsym))
+    // This pattern must stay identical to the sibling copies in
+    // _pfNormalizeHoldingEntry (symOk) and saveAddPosition() — see
+    // their comments for why.
+    if (!/^[A-Z]{1,10}(\.TA)?$/.test(tsym))
       return { error: 'tickers[' + j + ']: invalid symbol: ' + JSON.stringify(t.symbol) };
     if (seenSyms.has(tsym)) continue;
     seenSyms.add(tsym);

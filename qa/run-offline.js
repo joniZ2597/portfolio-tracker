@@ -124,6 +124,23 @@ function extractFunctionSource(content, name) {
   return null;
 }
 
+// Extract a top-level `var name = ...;` declaration verbatim, up to its
+// terminating semicolon. Used by the backup-fidelity phase to pull in the
+// small constants _pfNormalizeHoldingEntry depends on, so the sandbox tests
+// the real current values rather than a reimplemented copy that could drift.
+function extractVarSource(content, name) {
+  const sig = 'var ' + name;
+  const start = content.indexOf(sig);
+  if (start === -1) {
+    return null;
+  }
+  const semi = content.indexOf(';', start);
+  if (semi === -1) {
+    return null;
+  }
+  return content.slice(start, semi + 1);
+}
+
 const OFFLINE_TESTS = [
   'qa/research_evidence_contract_test.js',
   'qa/research_evidence_mock_provider_test.js',
@@ -1304,6 +1321,113 @@ function phaseTerminalChainIntegrity() {
   }
 }
 
+function phaseBackupFidelity() {
+  header('Phase 7 - Backup fidelity (.TA ticker restore alignment)');
+
+  const content = read('index.html');
+  if (content === null) {
+    fail('backup-fidelity', 'index.html is missing');
+    return;
+  }
+
+  let total = 0;
+  let okCount = 0;
+  function check(name, cond) {
+    total += 1;
+    if (cond) {
+      okCount += 1;
+    } else {
+      fail('backup-fidelity', 'assertion failed: ' + name);
+    }
+  }
+
+  // Structural: the three .TA-aware symbol-grammar copies must stay
+  // byte-identical to each other (the exact drift risk the inline comment
+  // added alongside this fix calls out).
+  (function () {
+    const pattern = '/^[A-Z]{1,10}(\\.TA)?$/';
+    const occurrences = content.split(pattern).length - 1;
+    check('the .TA symbol pattern occurs exactly 3 times (normalizer, saveAddPosition, backup ticker validator), all byte-identical', occurrences === 3);
+  })();
+
+  let factory;
+  try {
+    const validateSrc = extractFunctionSource(content, '_validatePortfolioBackup');
+    const normalizeSrc = extractFunctionSource(content, '_pfNormalizeHoldingEntry');
+    const normalizePositionSrc = extractFunctionSource(content, '_normalizePosition');
+    const isFiniteNumSrc = extractFunctionSource(content, '_pfIsFiniteNum');
+    const knownFieldsSrc = extractVarSource(content, 'PF_KNOWN_HOLDING_FIELDS');
+    const wrapperMarkerSrc = extractVarSource(content, 'PF_HOLDING_WRAPPER_MARKER');
+    const reservedKeysSrc = extractVarSource(content, 'PF_RESERVED_MARKER_KEYS');
+    if (!validateSrc || !normalizeSrc || !normalizePositionSrc || !isFiniteNumSrc || !knownFieldsSrc || !wrapperMarkerSrc || !reservedKeysSrc) {
+      fail('backup-fidelity', 'could not extract _validatePortfolioBackup or one of its dependencies from index.html');
+      return;
+    }
+    // eslint-disable-next-line no-new-func
+    factory = new Function(
+      isFiniteNumSrc + '\n' + knownFieldsSrc + '\n' + wrapperMarkerSrc + '\n' + reservedKeysSrc + '\n' +
+        normalizeSrc + '\n' + normalizePositionSrc + '\n' + validateSrc +
+        '\nreturn { _validatePortfolioBackup: _validatePortfolioBackup };'
+    )();
+  } catch (e) {
+    fail('backup-fidelity', 'factory build error: ' + e.message);
+    return;
+  }
+
+  const _validatePortfolioBackup = factory._validatePortfolioBackup;
+
+  function backupDoc(tickerSymbol) {
+    return {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      sourceOrigin: 'http://localhost',
+      appBaseline: 'test',
+      holdings: { AAPL: { symbol: 'AAPL', positionSize: 1000, currency: 'USD', source: 'manual' } },
+      tickers: [{ symbol: tickerSymbol }]
+    };
+  }
+
+  // Malformed-symbol coverage deliberately proves the "." is literal, not a
+  // wildcard. A short probe like "TEVAXTA" cannot discriminate this — at 7
+  // letters it matches the base [A-Z]{1,10} clause on its own, regardless
+  // of whether the suffix group's dot is escaped, so it passes either way.
+  // The base clause caps at 10 letters, so a 13-character probe (10 letters
+  // + one non-dot character + "TA") can ONLY match via the suffix group —
+  // an unescaped (.TA)? would wrongly accept it (the "." matching that one
+  // extra character as a wildcard); the correctly-escaped (\.TA)? rejects
+  // it, since there is no literal dot at that position.
+  (function () {
+    check('TEVA.TA accepted', _validatePortfolioBackup(backupDoc('TEVA.TA')).error === null);
+    check('AAPL accepted (plain-letters regression)', _validatePortfolioBackup(backupDoc('AAPL')).error === null);
+    check('TEVA.US rejected (wrong suffix)', _validatePortfolioBackup(backupDoc('TEVA.US')).error !== null);
+    check('10-letter symbol + non-dot char + TA rejected (proves the dot is literal, not a wildcard)',
+      _validatePortfolioBackup(backupDoc('AAAAAAAAAAXTA')).error !== null);
+    check('AB1C rejected (digit still rejected)', _validatePortfolioBackup(backupDoc('AB1C')).error !== null);
+  })();
+
+  // End-to-end: a backup with both a .TA holding and its matching .TA
+  // watchlist ticker validates successfully as a whole.
+  (function () {
+    const doc = {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      sourceOrigin: 'http://localhost',
+      appBaseline: 'test',
+      holdings: { 'TEVA.TA': { symbol: 'TEVA.TA', positionSize: 5000, currency: 'ILS', source: 'manual' } },
+      tickers: [{ symbol: 'TEVA.TA' }]
+    };
+    const result = _validatePortfolioBackup(doc);
+    check('.TA holding + matching .TA watchlist ticker both validate end-to-end',
+      result.error === null &&
+      result.holdings['TEVA.TA'] && result.holdings['TEVA.TA'].symbol === 'TEVA.TA' &&
+      result.tickers.length === 1 && result.tickers[0].symbol === 'TEVA.TA');
+  })();
+
+  if (okCount === total) {
+    pass(total + ' backup-fidelity assertion(s) passed');
+  }
+}
+
 function main() {
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
@@ -1314,6 +1438,7 @@ function main() {
   phaseResolverTests();
   phaseResearchViewTests();
   phaseTerminalChainIntegrity();
+  phaseBackupFidelity();
 
   console.log('\n=== Summary ===');
 
