@@ -5929,28 +5929,283 @@ function _initKlCard() {
 // Storage: pt_holdings only. Never reads/writes pt_results, pt_tickers,
 // scoring engines, scan flow, Actionable Take, or any existing key.
 
-function loadHoldings() {
-  var raw = localStorage.getItem('pt_holdings');
-  if (raw === null) return {};
-  var parsed;
-  try { parsed = JSON.parse(raw); }
-  catch(e) { console.warn('[PT] pt_holdings: JSON parse error — loading empty', e); return {}; }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    console.warn('[PT] pt_holdings: unexpected root type — loading empty'); return {};
+// ─── P-1: Persistence-safety state (module-level, in-memory only) ──────────
+// Set by loadHoldings() only when the pt_holdings root itself is unparseable
+// or the wrong type — not for individual malformed entries, which are
+// preserved and flagged instead. While true, saveHoldings() refuses to
+// write, so a partial/empty in-memory state can never overwrite whatever is
+// actually on disk. Cleared by the next loadHoldings() call that reads a
+// valid (or empty) root — e.g. after a reload once the value is fixed, or
+// after a successful Restore, which writes independently of this flag.
+// _renderPortfolioPanel() reads this (and per-entry _corrupt/_issues, which
+// travel inside the returned holdings object) on every render to show an
+// immediate visible warning — never console-only, never deferred to a save.
+var _pfRootCorrupted = false;
+
+function _pfIsFiniteNum(v) { return typeof v === 'number' && isFinite(v); }
+
+// Every field this normalizer explicitly understands. Anything else present
+// on a stored entry is real legacy/unmodeled data, not noise — P-1 simply
+// doesn't interpret it yet (this QA pass found real pt_holdings entries
+// carrying pnlPercent/partialProfitTaken from elsewhere in the app). It is
+// preserved, never silently dropped — see _pfNormalizeHoldingEntry.
+var PF_KNOWN_HOLDING_FIELDS = ['symbol', 'positionSize', 'manualPlPct', 'currency', 'source', 'updatedAt', 'baselineAt'];
+
+// The ONLY signal this normalizer trusts to mean "this stored value is my
+// own previously-written wrapper shape, and _raw is the true original to
+// unwrap to." A single, specific, versioned marker — not an inference from
+// a combination of ordinary field names (_raw/_issues/_legacyFields alone
+// are never sufficient). A real stored holding could otherwise
+// coincidentally match a heuristic and have its genuine data misread as
+// internal metadata. This name is namespaced enough that accidental
+// collision with real-world data is practically eliminated.
+var PF_HOLDING_WRAPPER_MARKER = '_pfNormalizedHoldingWrapperV1';
+
+// Internal P-1 namespace: these top-level keys are this normalizer's own
+// metadata, never ordinary holding data. A legacy field that happens to be
+// named one of these must never be exposed at that top-level key — doing so
+// would be silently misread as real metadata (e.g. a legacy "_corrupt"
+// string would make an otherwise-valid, freshly-repaired entry look corrupt
+// forever, with no UI path to clear it). The original value is never lost:
+// it stays fully recoverable via _legacyFields and the full _raw copy. This
+// is an explicit, narrow exception to the general "unknown fields stay at
+// their original top-level key" rule below — ordinary unknown fields (e.g.
+// pnlPercent, partialProfitTaken) are unaffected and still pass through.
+var PF_RESERVED_MARKER_KEYS = ['_corrupt', '_raw', '_issues', '_legacyFields', PF_HOLDING_WRAPPER_MARKER];
+
+// Per-entry normalizer. Never silently discards or "fixes" data:
+//  - Structurally unusable (not an object, or no valid positive
+//    positionSize) → preserved whole as a _corrupt placeholder carrying the
+//    untouched original value; nothing is guessed or dropped.
+//  - Structurally usable but has one or more PRESENT-and-invalid KNOWN
+//    fields (wrong type / fails format check) → those fields are recorded
+//    in _issues (field + original raw value); the live field is left unset
+//    (never fabricated), not silently coerced away. A later add/edit that
+//    resubmits the whole entry through the form is the only thing that can
+//    clear an issue — that is the "explicit user repair".
+//  - Fields this function does not recognize at all (not on
+//    PF_KNOWN_HOLDING_FIELDS) are NOT issues — they may be perfectly valid
+//    data this version just doesn't interpret. They are kept at their
+//    ORIGINAL top-level key on the returned entry, completely unmodified —
+//    so any existing code reading e.g. holding.pnlPercent directly is
+//    unaffected — AND recorded in _legacyFields, a marker distinct from
+//    _issues so "unmodeled" is never described as "invalid". No field name
+//    is excluded from this preservation EXCEPT the reserved internal
+//    marker names themselves (PF_RESERVED_MARKER_KEYS: _corrupt / _raw /
+//    _issues / _legacyFields / PF_HOLDING_WRAPPER_MARKER) — a legacy field
+//    with one of those exact names is never exposed at that top-level key,
+//    since it would be silently misread as this normalizer's own metadata.
+//    The colliding value is never lost: it is still captured in both
+//    _legacyFields and the full _raw copy. _legacyFields must be carried
+//    forward by any save that replaces this entry, since no UI yet lets an
+//    owner knowingly discard them — that carrying-forward is a separate,
+//    specifically-reviewed change to saveAddPosition/saveEditPosition, not
+//    asserted here.
+//  - A KNOWN field that is simply ABSENT (not present-and-invalid) is not
+//    an issue: currency absent stays unset/unknown (currency is financial
+//    data and is never inferred); source absent/null is safely labeled
+//    'legacy' (provenance metadata describing origin, not a fabricated
+//    value) — but source PRESENT-and-blank/whitespace/wrong-type is still
+//    an issue, not a silent 'legacy' default, same as any other
+//    present-but-invalid known field.
+//  - _raw (the untouched original object) is attached, alongside
+//    PF_HOLDING_WRAPPER_MARKER, whenever there are _issues and/or
+//    _legacyFields (or the entry is _corrupt) — a full-fidelity fallback.
+//  - raw is unwrapped to its true original ONLY when it carries
+//    PF_HOLDING_WRAPPER_MARKER === true alongside _raw — never inferred
+//    from field-name combinations.
+function _pfNormalizeHoldingEntry(key, raw) {
+  var rawIsObj = raw !== null && typeof raw === 'object' && !Array.isArray(raw);
+  var looksLikeOwnWrapper = rawIsObj && raw[PF_HOLDING_WRAPPER_MARKER] === true && raw._raw !== undefined;
+  var src      = looksLikeOwnWrapper ? raw._raw : raw;
+  var srcIsObj = src !== null && typeof src === 'object' && !Array.isArray(src);
+  var symOk    = /^[A-Z]{1,10}$/.test(key);
+  var posOk    = srcIsObj && _pfIsFiniteNum(src.positionSize) && src.positionSize > 0;
+  if (!symOk || !srcIsObj || !posOk) {
+    var corruptEntry = Object.create(null);
+    corruptEntry.symbol = key;
+    // A structurally-unusable entry can still carry real unknown fields
+    // (e.g. positionSize stored as a string alongside a legitimate
+    // pnlPercent from another feature). Capture them the same way a
+    // usable entry does. A legacy field named one of PF_RESERVED_MARKER_KEYS
+    // is captured in _legacyFields/_raw but skipped at the top level, since
+    // exposing it there would collide with this entry's own internal
+    // metadata. An Edit-repair (which only replaces the form-collected
+    // fields) carries these forward via _pfCarryForwardLegacyFields instead
+    // of silently discarding them.
+    if (srcIsObj) {
+      var corruptLegacyFields = Object.create(null);
+      var corruptHasLegacyFields = false;
+      Object.keys(src).forEach(function(k) {
+        if (PF_KNOWN_HOLDING_FIELDS.indexOf(k) !== -1) return;
+        if (PF_RESERVED_MARKER_KEYS.indexOf(k) === -1) corruptEntry[k] = src[k];
+        corruptLegacyFields[k] = src[k];
+        corruptHasLegacyFields = true;
+      });
+      if (corruptHasLegacyFields) corruptEntry._legacyFields = corruptLegacyFields;
+    }
+    corruptEntry._corrupt = true;
+    corruptEntry._raw = src;
+    corruptEntry[PF_HOLDING_WRAPPER_MARKER] = true;
+    return corruptEntry;
   }
-  var valid = Object.values(parsed).every(function(h) {
-    return h !== null && typeof h === 'object' && !Array.isArray(h) &&
-           typeof h.symbol === 'string' && /^[A-Z]{1,10}$/.test(h.symbol) &&
-           typeof h.positionSize === 'number' && isFinite(h.positionSize) && h.positionSize > 0 &&
-           (h.manualPlPct === undefined || h.manualPlPct === null ||
-            (typeof h.manualPlPct === 'number' && isFinite(h.manualPlPct)));
+
+  // Object.create(null): unrecognized field names (below) come from
+  // stored/imported data and are kept at their ORIGINAL top-level key on
+  // this same entry — same __proto__-key risk as the top-level holdings
+  // map in loadHoldings(). Verified safe to use here: this codebase never
+  // calls .hasOwnProperty()/instanceof Object directly on a holding entry
+  // (only the prototype-agnostic Object.prototype.hasOwnProperty.call
+  // pattern appears anywhere in index.html); Object.keys/values/entries,
+  // spread/Object.assign, and JSON.stringify all work identically on a
+  // null-prototype object.
+  var entry = Object.create(null);
+  entry.symbol = key;
+  entry.positionSize = src.positionSize;
+  var issues = [];
+  if (src.symbol !== undefined && src.symbol !== key) issues.push({ field: 'symbol', raw: src.symbol });
+  if (src.manualPlPct !== undefined && src.manualPlPct !== null) {
+    if (_pfIsFiniteNum(src.manualPlPct)) entry.manualPlPct = src.manualPlPct;
+    else issues.push({ field: 'manualPlPct', raw: src.manualPlPct });
+  }
+  // Currency is financial data — never inferred/defaulted. Passed through
+  // only if present AND valid; present-but-invalid is flagged, not guessed.
+  if (src.currency !== undefined && src.currency !== null) {
+    if (typeof src.currency === 'string' && /^[A-Z]{3}$/.test(src.currency)) entry.currency = src.currency;
+    else issues.push({ field: 'currency', raw: src.currency });
+  }
+  // Source is provenance metadata, not a financial value — absent/null may
+  // default to 'legacy'. But present-and-invalid (blank/whitespace or wrong
+  // type) is a real issue and must NOT be silently folded into 'legacy'.
+  if (src.source === undefined || src.source === null) {
+    entry.source = 'legacy';
+  } else if (typeof src.source === 'string' && src.source.trim() !== '') {
+    entry.source = src.source.trim();
+  } else {
+    issues.push({ field: 'source', raw: src.source }); // entry.source intentionally left unset
+  }
+  if (src.updatedAt !== undefined && src.updatedAt !== null) {
+    if (typeof src.updatedAt === 'string' && !isNaN(Date.parse(src.updatedAt))) entry.updatedAt = src.updatedAt;
+    else issues.push({ field: 'updatedAt', raw: src.updatedAt });
+  }
+  if (src.baselineAt !== undefined && src.baselineAt !== null) {
+    if (typeof src.baselineAt === 'string' && !isNaN(Date.parse(src.baselineAt))) entry.baselineAt = src.baselineAt;
+    else issues.push({ field: 'baselineAt', raw: src.baselineAt });
+  }
+
+  // Unrecognized fields: preserved verbatim at their original top-level key
+  // AND recorded in _legacyFields — except PF_RESERVED_MARKER_KEYS, which
+  // are captured in _legacyFields/_raw only, never exposed at the top level
+  // (see doc comment above on the collision case).
+  var legacyFields = Object.create(null);
+  var hasLegacyFields = false;
+  Object.keys(src).forEach(function(k) {
+    if (PF_KNOWN_HOLDING_FIELDS.indexOf(k) !== -1) return;
+    if (PF_RESERVED_MARKER_KEYS.indexOf(k) === -1) entry[k] = src[k];
+    legacyFields[k] = src[k];
+    hasLegacyFields = true;
   });
-  if (!valid) { console.warn('[PT] pt_holdings: schema validation failed — loading empty'); return {}; }
-  return parsed;
+  if (hasLegacyFields) entry._legacyFields = legacyFields;
+  if (issues.length > 0 || hasLegacyFields) {
+    entry._raw = src;
+    entry[PF_HOLDING_WRAPPER_MARKER] = true;
+  }
+  if (issues.length > 0) entry._issues = issues;
+  return entry;
 }
 
+function loadHoldings() {
+  var raw = localStorage.getItem('pt_holdings');
+  if (raw === null) { _pfRootCorrupted = false; return {}; }
+  var parsed;
+  try { parsed = JSON.parse(raw); }
+  catch(e) {
+    console.warn('[PT] pt_holdings: JSON parse error — root unreadable, saving blocked until resolved', e);
+    _pfRootCorrupted = true;
+    return {};
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    console.warn('[PT] pt_holdings: unexpected root type — root unreadable, saving blocked until resolved');
+    _pfRootCorrupted = true;
+    return {};
+  }
+  _pfRootCorrupted = false;
+  // Object.create(null): keys come from parsed JSON and are not restricted
+  // to the symbol regex until _pfNormalizeHoldingEntry runs — a malformed
+  // entry can legitimately have a raw key like "__proto__". Assigning that
+  // via bracket notation into a normal {}-prototype object would trigger
+  // the inherited Object.prototype.__proto__ accessor and hijack out's
+  // prototype; a null-prototype object has no such accessor to trigger.
+  var out = Object.create(null);
+  Object.keys(parsed).forEach(function(key) {
+    out[key] = _pfNormalizeHoldingEntry(key, parsed[key]);
+  });
+  return out;
+}
+
+// saveHoldings()/_pfWriteHoldingsRaw() persist the WHOLE holdings map every
+// time, including bystander entries an unrelated Add/Edit/Delete never
+// touched. Those bystanders can be carrying _pfNormalizeHoldingEntry's own
+// in-memory wrapper shape (_raw / _issues / _legacyFields / _corrupt /
+// PF_HOLDING_WRAPPER_MARKER) — that shape is derived/runtime state for THIS
+// version of the normalizer, not real holding data, and must never be
+// written to storage as if it were: doing so leaks an implementation detail
+// into the persistence schema and makes every unrelated save rewrite
+// bystander entries into a bulkier shape they never asked for. The correct
+// thing to persist for a wrapped entry is exactly _raw (the untouched
+// original the wrapper is a stash of) — _pfNormalizeHoldingEntry rebuilds
+// the identical issues/legacyFields/corrupt classification from that same
+// _raw on the next load, so nothing is lost. An entry with no wrapper
+// (clean, or freshly built by Add/Edit) passes through unchanged.
+function _pfSerializeHoldingForStorage(entry) {
+  if (entry && typeof entry === 'object' &&
+      entry[PF_HOLDING_WRAPPER_MARKER] === true && entry._raw !== undefined) {
+    return entry._raw;
+  }
+  return entry;
+}
+function _pfSerializeHoldingsForStorage(h) {
+  var out = Object.create(null);
+  Object.keys(h).forEach(function(key) {
+    out[key] = _pfSerializeHoldingForStorage(h[key]);
+  });
+  return out;
+}
+
+// Returns { ok: true } on success or { ok: false, reason } on failure —
+// callers must check this and must not report/act on success when it fails.
 function saveHoldings(h) {
-  localStorage.setItem('pt_holdings', JSON.stringify(h));
+  if (_pfRootCorrupted) return { ok: false, reason: 'ROOT_CORRUPTED' };
+  try {
+    localStorage.setItem('pt_holdings', JSON.stringify(_pfSerializeHoldingsForStorage(h)));
+    return { ok: true };
+  } catch (e) {
+    console.warn('[PT] pt_holdings: save failed', e);
+    return { ok: false, reason: 'STORAGE_ERROR', error: e };
+  }
+}
+
+function _pfSaveFailureMessage(saveResult) {
+  if (saveResult && saveResult.reason === 'ROOT_CORRUPTED') {
+    return 'Save blocked — your saved portfolio data could not be read on this page load and may be damaged. Nothing was changed. Reload the page, or use RESTORE to load a backup.';
+  }
+  return 'Save failed — your browser storage is unavailable or full. This change was NOT saved.';
+}
+
+// Restore/import is the intended recovery path when the live root is
+// corrupted, so its write must NOT be blocked by _pfRootCorrupted — that
+// guard exists to stop ordinary saves from clobbering an unreadable root
+// with a partial in-memory state; restore's entire purpose is to replace
+// that root with a known-good value. Same try/catch failure reporting as
+// saveHoldings(), without the corruption gate.
+function _pfWriteHoldingsRaw(h) {
+  try {
+    localStorage.setItem('pt_holdings', JSON.stringify(_pfSerializeHoldingsForStorage(h)));
+    return { ok: true };
+  } catch (e) {
+    console.warn('[PT] pt_holdings: restore write failed', e);
+    return { ok: false, reason: 'STORAGE_ERROR', error: e };
+  }
 }
 
 function switchMainView(view) {
@@ -6015,16 +6270,32 @@ function _calcPortfolioAggregates(holdings) {
 }
 
 // ─── Slice 1D-2: Pure sort helper — read-only, no mutation ──────────────────
+function _pfSortablePosVal(entry) {
+  var n = Number(entry[1] && entry[1].positionSize);
+  return (isFinite(n) && n > 0) ? n : null;
+}
+
+// Contract: for 'invested-desc'/'invested-asc', the caller must pass entries
+// that are ALL the same currency (or all currency-unknown). positionSize is
+// a raw recorded value with no FX conversion in P-1 — USD and ILS amounts
+// are not numerically comparable, so mixing currencies into one call here
+// would produce a fake cross-currency ordering. _renderPortfolioPanel calls
+// this once per currency group, never once across the whole mixed
+// portfolio. 'symbol' mode has no such restriction — it's currency-agnostic
+// by construction and may be called on any entry set.
 function _sortHoldingsEntries(entries, mode) {
   var out = entries.slice();
-  if (mode === 'invested-desc') {
+  if (mode === 'invested-desc' || mode === 'invested-asc') {
+    var dir = mode === 'invested-desc' ? -1 : 1;
     out.sort(function(a, b) {
-      var diff = b[1].positionSize - a[1].positionSize;
-      return diff !== 0 ? diff : a[0].localeCompare(b[0]);
-    });
-  } else if (mode === 'invested-asc') {
-    out.sort(function(a, b) {
-      var diff = a[1].positionSize - b[1].positionSize;
+      var av = _pfSortablePosVal(a), bv = _pfSortablePosVal(b);
+      // Invalid/missing positionSize (e.g. a preserved _corrupt entry)
+      // always sorts last, in both directions, rather than producing an
+      // undefined NaN-comparator order.
+      if (av === null && bv === null) return a[0].localeCompare(b[0]);
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      var diff = (av - bv) * dir;
       return diff !== 0 ? diff : a[0].localeCompare(b[0]);
     });
   } else {
@@ -6102,6 +6373,29 @@ function _renderPortfolioPanel() {
   hdr.appendChild(hdrRight);
   panel.appendChild(hdr);
 
+  // Root corruption gets its own branch, never the empty state below — a
+  // corrupted-but-possibly-non-empty pt_holdings must never present as
+  // "No positions yet. Add your first holding." (loadHoldings() already
+  // refused to guess at the contents; saveHoldings() already refuses to
+  // write until this clears). RESTORE ↑ is the only recovery path that
+  // still works here — it writes independently of this flag.
+  if (_pfRootCorrupted) {
+    var corruptBlock = document.createElement('div');
+    corruptBlock.className = 'pf-empty';
+    var cIcon = document.createElement('div');
+    cIcon.className   = 'pf-empty-icon';
+    cIcon.textContent = '⚠';
+    cIcon.style.color = 'var(--red2)';
+    var cTxt = document.createElement('div');
+    cTxt.className   = 'pf-empty-text';
+    cTxt.style.color = 'var(--red2)';
+    cTxt.textContent = 'Your saved portfolio data could not be read on this page load. Nothing was deleted, and saving is blocked until this is resolved. Use RESTORE ↑ to load a backup, or reload the page if this was temporary.';
+    corruptBlock.appendChild(cIcon);
+    corruptBlock.appendChild(cTxt);
+    panel.appendChild(corruptBlock);
+    return;
+  }
+
   if (count === 0) {
     var empty = document.createElement('div');
     empty.className = 'pf-empty';
@@ -6115,33 +6409,104 @@ function _renderPortfolioPanel() {
     empty.appendChild(txt);
     panel.appendChild(empty);
   } else {
-    function _pfFmtMoney(v) { var n=Number(v); return (isFinite(n)&&n>0)?'$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—'; }
-    var totalInvested = Object.values(holdings).reduce(function(s,h){ return s + (isFinite(Number(h.positionSize))&&Number(h.positionSize)>0?Number(h.positionSize):0); }, 0);
+    var PF_CURRENCY_SYMBOLS = { USD: '$', ILS: '₪' };
+    function _pfFmtCurrencyValue(v, currency) {
+      var n = Number(v);
+      if (!isFinite(n) || n <= 0) return '—';
+      var formatted = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      var sym = PF_CURRENCY_SYMBOLS[currency];
+      return sym ? (sym + formatted) : formatted;
+    }
+
+    // Per-currency subtotals only — USD and ILS are not summed together (no
+    // FX rate exists yet in P-1). A currency-unknown or _issues-flagged-
+    // currency legacy holding is counted but never summed into a value,
+    // since an unlabeled amount cannot honestly be added to anything. A
+    // metadata-only issue (e.g. on manualPlPct/source/updatedAt) does NOT
+    // exclude an entry here — only an invalid/missing positionSize or
+    // currency does, since those are the two fields this total depends on.
+    var usdSubtotal = 0, ilsSubtotal = 0, unknownCurrencyCount = 0, hasCorrupt = false;
+    Object.values(holdings).forEach(function(h) {
+      if (h._corrupt === true) { hasCorrupt = true; return; }
+      var n = Number(h.positionSize);
+      if (!isFinite(n) || n <= 0) return;
+      if (h.currency === 'USD') usdSubtotal += n;
+      else if (h.currency === 'ILS') ilsSubtotal += n;
+      else unknownCurrencyCount += 1;
+    });
+
+    // Two distinct categories, surfaced with distinct wording: _corrupt/
+    // _issues means something couldn't be read correctly (a real problem);
+    // _legacyFields-only means the holding has additional fields this
+    // version doesn't interpret, which may be perfectly valid data — never
+    // described as "could not be read".
+    var brokenSymbols = Object.keys(holdings).filter(function(k) {
+      var h = holdings[k];
+      return h._corrupt === true || (h._issues && h._issues.length > 0);
+    });
+    var legacyFieldSymbols = Object.keys(holdings).filter(function(k) {
+      var h = holdings[k];
+      return !brokenSymbols.includes(k) && h._legacyFields && Object.keys(h._legacyFields).length > 0;
+    });
+    if (brokenSymbols.length > 0) {
+      var flagBanner = document.createElement('div');
+      flagBanner.className   = 'pf-guidance';
+      flagBanner.style.color = 'var(--red2)';
+      flagBanner.textContent = brokenSymbols.length + ' holding' + (brokenSymbols.length === 1 ? '' : 's') +
+        ' could not be fully read and need attention (' + brokenSymbols.join(', ') + '). Nothing was deleted — open Edit on each to repair.';
+      panel.appendChild(flagBanner);
+    }
+    if (legacyFieldSymbols.length > 0) {
+      var legacyBanner = document.createElement('div');
+      legacyBanner.className   = 'pf-guidance';
+      legacyBanner.style.color = 'var(--yellow2)';
+      legacyBanner.textContent = legacyFieldSymbols.length + ' holding' + (legacyFieldSymbols.length === 1 ? '' : 's') +
+        ' contain additional legacy field(s) not yet used by Pulse (' + legacyFieldSymbols.join(', ') + '). They are currently preserved and will not be interpreted by P-1.';
+      panel.appendChild(legacyBanner);
+    }
 
     var summary = document.createElement('div');
     summary.className = 'pf-summary';
-    var statPos = document.createElement('div');
-    statPos.className = 'pf-summary-stat';
-    var statPosLbl = document.createElement('div');
-    statPosLbl.className   = 'pf-summary-lbl';
-    statPosLbl.textContent = 'Positions';
-    var statPosVal = document.createElement('div');
-    statPosVal.className   = 'pf-summary-val';
-    statPosVal.textContent = String(count);
-    statPos.appendChild(statPosLbl);
-    statPos.appendChild(statPosVal);
-    var statInv = document.createElement('div');
-    statInv.className = 'pf-summary-stat';
-    var statInvLbl = document.createElement('div');
-    statInvLbl.className   = 'pf-summary-lbl';
-    statInvLbl.textContent = 'Total Invested';
-    var statInvVal = document.createElement('div');
-    statInvVal.className   = 'pf-summary-val';
-    statInvVal.textContent = '$' + totalInvested.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-    statInv.appendChild(statInvLbl);
-    statInv.appendChild(statInvVal);
-    summary.appendChild(statPos);
-    summary.appendChild(statInv);
+    function _pfSummaryStat(label, valueText) {
+      var s = document.createElement('div');
+      s.className = 'pf-summary-stat';
+      var l = document.createElement('div');
+      l.className   = 'pf-summary-lbl';
+      l.textContent = label;
+      var v = document.createElement('div');
+      v.className   = 'pf-summary-val';
+      v.textContent = valueText;
+      s.appendChild(l);
+      s.appendChild(v);
+      return s;
+    }
+    summary.appendChild(_pfSummaryStat('Positions', String(count)));
+    if (usdSubtotal > 0) {
+      summary.appendChild(_pfSummaryStat('USD Recorded Value', '$' + usdSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })));
+    }
+    if (ilsSubtotal > 0) {
+      summary.appendChild(_pfSummaryStat('ILS Recorded Value', '₪' + ilsSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })));
+    }
+    if (unknownCurrencyCount > 0) {
+      summary.appendChild(_pfSummaryStat('Currency Not Recorded', String(unknownCurrencyCount) + (unknownCurrencyCount === 1 ? ' holding' : ' holdings')));
+    }
+    // Portfolio Total (ILS) is the owner's stated target model, but P-1 has
+    // no FX rate and must not present a total as complete when it isn't. A
+    // real number is shown ONLY when every holding's value is both known
+    // and already ILS: no USD (needs a rate this slice doesn't have), no
+    // unknown/invalid-currency holdings with a value, and no _corrupt
+    // holdings (value/currency unavailable at all). Otherwise: '—' with an
+    // honest, specific reason rather than a silently partial number.
+    var totalBlockedByUsd     = usdSubtotal > 0;
+    var totalBlockedByGaps    = unknownCurrencyCount > 0 || hasCorrupt;
+    if (!totalBlockedByUsd && !totalBlockedByGaps && ilsSubtotal > 0) {
+      summary.appendChild(_pfSummaryStat('Portfolio Total (ILS)', '₪' + ilsSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })));
+    } else {
+      var totalReasons = [];
+      if (totalBlockedByUsd)  totalReasons.push('FX conversion pending');
+      if (totalBlockedByGaps) totalReasons.push('Incomplete holding data');
+      summary.appendChild(_pfSummaryStat('Portfolio Total (ILS)', '— · ' + totalReasons.join(' · ')));
+    }
     panel.appendChild(summary);
 
     var agg = _calcPortfolioAggregates(holdings);
@@ -6202,6 +6567,16 @@ function _renderPortfolioPanel() {
     }
 
     // ─── Slice 1D-2: Sort bar ─────────────────────────────────────────────────
+    // Recorded value ↓/↑ compares raw positionSize numerically — only
+    // meaningful within a single currency. When holdings span more than one
+    // of USD / ILS / currency-unknown, those two buttons are disabled
+    // rather than silently comparing unlike currencies (no card regrouping
+    // — the card list stays flat; see _sortHoldingsEntries's contract
+    // comment).
+    var _pfCurrencyBucketsPresent = (usdSubtotal > 0 ? 1 : 0) + (ilsSubtotal > 0 ? 1 : 0) + (unknownCurrencyCount > 0 ? 1 : 0);
+    var investedSortDisabled = _pfCurrencyBucketsPresent > 1;
+    if (investedSortDisabled && _portfolioSortMode !== 'symbol') _portfolioSortMode = 'symbol';
+
     var sortBar = document.createElement('div');
     sortBar.className = 'pf-sort-bar';
     var sortLbl = document.createElement('span');
@@ -6210,19 +6585,48 @@ function _renderPortfolioPanel() {
     sortBar.appendChild(sortLbl);
     [
       { mode: 'symbol',        label: 'Symbol A–Z' },
-      { mode: 'invested-desc', label: 'Invested ↓' },
-      { mode: 'invested-asc',  label: 'Invested ↑' }
+      { mode: 'invested-desc', label: 'Recorded value ↓' },
+      { mode: 'invested-asc',  label: 'Recorded value ↑' }
     ].forEach(function(opt) {
+      var isInvestedMode = opt.mode === 'invested-desc' || opt.mode === 'invested-asc';
       var btn = document.createElement('button');
       btn.className   = 'pf-sort-btn' + (_portfolioSortMode === opt.mode ? ' active' : '');
       btn.textContent = opt.label;
-      btn.onclick     = function() {
-        _portfolioSortMode = opt.mode;
-        _renderPortfolioPanel();
-      };
+      if (isInvestedMode && investedSortDisabled) {
+        btn.disabled     = true;
+        btn.title        = 'Unavailable — holdings span more than one currency; sorting by recorded value would compare unlike currencies.';
+        btn.style.opacity = '0.4';
+        btn.style.cursor   = 'not-allowed';
+      } else {
+        btn.onclick = function() {
+          _portfolioSortMode = opt.mode;
+          _renderPortfolioPanel();
+        };
+      }
       sortBar.appendChild(btn);
     });
     panel.appendChild(sortBar);
+
+    // Allocation is a separate completeness question from Portfolio Total
+    // (ILS) — a USD-only portfolio has no valid ILS total without FX, but
+    // its allocation % is still exact because every holding and the
+    // denominator share one currency. Denominator is set only when every
+    // valid holding is the SAME single currency and there are no
+    // unknown-currency/_corrupt gaps; mixed USD+ILS (or any gap) leaves it
+    // null, and every card falls back to '—'. Metadata-only issues (not on
+    // positionSize/currency) never affect usdSubtotal/ilsSubtotal/
+    // totalBlockedByGaps, so they never block allocation either.
+    var allocationDenominatorCurrency = null;
+    var allocationDenominatorValue    = 0;
+    if (!totalBlockedByGaps) {
+      if (usdSubtotal > 0 && ilsSubtotal === 0) {
+        allocationDenominatorCurrency = 'USD';
+        allocationDenominatorValue    = usdSubtotal;
+      } else if (ilsSubtotal > 0 && usdSubtotal === 0) {
+        allocationDenominatorCurrency = 'ILS';
+        allocationDenominatorValue    = ilsSubtotal;
+      }
+    }
 
     var list = document.createElement('div');
     list.className = 'pf-positions-list';
@@ -6234,27 +6638,65 @@ function _renderPortfolioPanel() {
       var symEl = document.createElement('div');
       symEl.className   = 'pf-pos-sym';
       symEl.textContent = sym;
-      var meta = document.createElement('div');
-      meta.className   = 'pf-pos-meta';
-      meta.textContent = _pfFmtMoney(h.positionSize) + ' invested';
       card.appendChild(symEl);
+
+      // _corrupt entries render a minimal, visibly-flagged card — no
+      // meta/allocation/P&L/research/live-price, since none of that is
+      // meaningful data for an entry that couldn't be read. Edit lets the
+      // owner repair it (an explicit replacement, not a silent fix);
+      // Delete discards it. Nothing here was silently dropped from storage.
+      if (h._corrupt === true) {
+        card.style.borderColor = 'var(--red2)';
+        var corruptMsg = document.createElement('div');
+        corruptMsg.className   = 'pf-pos-meta';
+        corruptMsg.style.color = 'var(--red2)';
+        corruptMsg.textContent = '⚠ Could not be read — data preserved, not deleted. Edit to repair or Delete to discard.';
+        card.appendChild(corruptMsg);
+        var corruptActions = document.createElement('div');
+        corruptActions.className = 'pf-pos-card-actions';
+        var cEditBtn = document.createElement('button');
+        cEditBtn.className   = 'btn-pf-edit';
+        cEditBtn.textContent = 'Edit';
+        cEditBtn.onclick     = function(){ openEditPositionModal(sym); };
+        var cDelBtn = document.createElement('button');
+        cDelBtn.className   = 'btn-pf-delete';
+        cDelBtn.textContent = 'Delete';
+        cDelBtn.onclick     = function(){ deletePosition(sym); };
+        corruptActions.appendChild(cEditBtn);
+        corruptActions.appendChild(cDelBtn);
+        card.appendChild(corruptActions);
+        list.appendChild(card);
+        return;
+      }
+
+      var meta = document.createElement('div');
+      meta.className = 'pf-pos-meta';
+      var _currencyKnown = h.currency === 'USD' || h.currency === 'ILS';
+      meta.textContent = _pfFmtCurrencyValue(h.positionSize, h.currency) + ' · Recorded position value' + (_currencyKnown ? '' : ' (currency unknown)');
       card.appendChild(meta);
-      var posSize = isFinite(Number(h.positionSize)) && Number(h.positionSize) > 0 ? Number(h.positionSize) : 0;
-      var allocPct = totalInvested > 0 ? (posSize / totalInvested * 100) : 0;
+
       var allocEl = document.createElement('div');
-      allocEl.className   = 'pf-pos-alloc';
-      allocEl.textContent = allocPct.toFixed(1) + '% of portfolio';
+      allocEl.className = 'pf-pos-alloc';
+      if (allocationDenominatorCurrency !== null && h.currency === allocationDenominatorCurrency) {
+        var _allocN = Number(h.positionSize);
+        allocEl.textContent = (isFinite(_allocN) && _allocN > 0)
+          ? ((_allocN / allocationDenominatorValue * 100).toFixed(1) + '% of portfolio')
+          : '—';
+      } else {
+        allocEl.textContent = '—';
+      }
       card.appendChild(allocEl);
+
       var plEl = document.createElement('div');
       plEl.className = 'pf-pos-pl';
       if (h.manualPlPct !== undefined && h.manualPlPct !== null) {
         var prefix = h.manualPlPct > 0 ? '+' : '';
-        plEl.textContent = 'Manual P/L ' + prefix + Number(h.manualPlPct).toFixed(1) + '%';
+        plEl.textContent = 'Baseline manual P/L ' + prefix + Number(h.manualPlPct).toFixed(1) + '%';
         if (h.manualPlPct > 0)      plEl.classList.add('pf-pos-pl--pos');
         else if (h.manualPlPct < 0) plEl.classList.add('pf-pos-pl--neg');
         else                        plEl.classList.add('pf-pos-pl--zero');
       } else {
-        plEl.textContent = 'Manual P/L —';
+        plEl.textContent = 'Baseline manual P/L —';
         plEl.classList.add('pf-pos-pl--muted');
       }
       card.appendChild(plEl);
@@ -6925,6 +7367,42 @@ function _openResearchDetailPanel(sym, res, ageMs, triggerBtn) {
 
 // ─── Portfolio / Holdings — Slice 1B-1: Add Position ─────────────────────────
 
+// Currency is required for every new/edited holding, restricted to the
+// owner's actual real-world currencies. Never auto-selected except when
+// editing an entry that already has one of these two values — never
+// inferred from any other holding, and never defaulted for a brand-new
+// entry or for a legacy entry whose currency was never recorded (those
+// stay "Unknown" — see _pfCurrencyDisplay — until explicitly edited).
+var PF_CURRENCY_CODES = ['USD', 'ILS'];
+function _pfCurrencySelectField(inputId, currentVal) {
+  var row = document.createElement('div');
+  row.className = 'ap-field-row';
+  var lbl = document.createElement('label');
+  lbl.className   = 'ap-lbl';
+  lbl.textContent = 'Currency';
+  lbl.htmlFor     = inputId;
+  var sel = document.createElement('select');
+  sel.id        = inputId;
+  sel.className = 'ap-inp';
+  var placeholderOpt = document.createElement('option');
+  placeholderOpt.value       = '';
+  placeholderOpt.textContent = '— Select —';
+  placeholderOpt.disabled    = true;
+  sel.appendChild(placeholderOpt);
+  PF_CURRENCY_CODES.forEach(function(code) {
+    var opt = document.createElement('option');
+    opt.value       = code;
+    opt.textContent = code;
+    sel.appendChild(opt);
+  });
+  var preset = (PF_CURRENCY_CODES.indexOf(currentVal) !== -1) ? currentVal : '';
+  sel.value = preset;
+  if (preset === '') placeholderOpt.selected = true;
+  row.appendChild(lbl);
+  row.appendChild(sel);
+  return row;
+}
+
 function openAddPositionModal() {
   var overlay = document.getElementById('addPositionOverlay');
   var modal   = document.getElementById('addPositionModal');
@@ -6967,9 +7445,10 @@ function openAddPositionModal() {
     return row;
   }
 
-  body.appendChild(_apField('Symbol',           'apSymbol',   'e.g. AAPL'));
-  body.appendChild(_apField('Invested ($)',      'apInvested', 'e.g. 5000'));
-  body.appendChild(_apField('P/L % (optional)', 'apPlPct',    'e.g. 12.5 or -8.2'));
+  body.appendChild(_apField('Symbol',                           'apSymbol',   'e.g. AAPL'));
+  body.appendChild(_apField('Recorded position value',          'apInvested', 'e.g. 5000'));
+  body.appendChild(_apField('Baseline manual P/L % (optional)', 'apPlPct',    'e.g. 12.5 or -8.2'));
+  body.appendChild(_pfCurrencySelectField('apCurrency', undefined));
 
   var warn = document.createElement('div');
   warn.id        = 'apWarnMsg';
@@ -7012,16 +7491,72 @@ function closeAddPositionModal() {
   document.removeEventListener('keydown', _onAddPositionEscape);
 }
 
+// baselineAt only advances when positionSize/manualPlPct actually change
+// value. A brand-new holding gets one immediately; an existing holding
+// whose values are unchanged keeps whatever it already had — including
+// staying absent/unknown if it never had one — so saving unrelated
+// metadata (e.g. currency) can never establish or silently re-date a
+// baseline a future slice will read. Adding or removing manualPlPct counts
+// as a value change (captured naturally by !==, undefined vs. a number).
+function _pfComputeBaselineAt(prevEntry, positionSize, manualPlPct, nowIso) {
+  if (!prevEntry) return nowIso;
+  var changed = prevEntry.positionSize !== positionSize || prevEntry.manualPlPct !== manualPlPct;
+  return changed ? nowIso : prevEntry.baselineAt;
+}
+
+// Carries any _legacyFields from the entry being replaced onto the new
+// entry, at their original top-level keys only — mutates entry in place.
+// There is no UI yet that lets an owner knowingly discard legacy fields,
+// so saving positionSize/manualPlPct/currency through Add/Edit must not
+// silently delete them as a side effect of an unrelated edit.
+// Object.defineProperty, not bracket assignment: legacy key names are
+// untrusted data, and entry here is an ordinary {}-prototype object
+// literal (its fixed, hardcoded field names — symbol/positionSize/etc —
+// carry no injection risk and stay as plain literal assignment) — so
+// entry[k] = ... for an arbitrary k such as "__proto__" would trigger the
+// inherited Object.prototype accessor and hijack entry's prototype.
+// _legacyFields itself is deliberately NOT re-attached here — it's derived
+// metadata, not stored data. The next loadHoldings() call recomputes it
+// fresh from these same top-level keys via _pfNormalizeHoldingEntry;
+// persisting it directly would risk the normalizer treating its own
+// metadata as another unrecognized field and nesting over repeated
+// save/load cycles. A legacy field whose name collides with
+// PF_RESERVED_MARKER_KEYS is skipped here too — entry is a freshly-built
+// object with no wrapper of its own, so unlike a bystander entry there is
+// no _raw for _pfSerializeHoldingForStorage to fall back to; writing e.g. a
+// legacy "_corrupt" straight onto entry's top level would put it directly
+// into storage as a bare top-level field with no wrapper to explain it.
+// This is a narrow, accepted trade-off: a real field literally named one of
+// these five internal-namespace strings is lost the moment its holding is
+// explicitly repaired/edited through the UI, in exchange for storage never
+// containing a top-level key that collides with the normalizer's own
+// metadata names. Ordinary legacy fields (pnlPercent, weirdField, etc.) are
+// unaffected and still carry forward exactly as before.
+function _pfCarryForwardLegacyFields(entry, prevEntry) {
+  if (!prevEntry || !prevEntry._legacyFields) return;
+  Object.keys(prevEntry._legacyFields).forEach(function(k) {
+    if (PF_RESERVED_MARKER_KEYS.indexOf(k) !== -1) return;
+    Object.defineProperty(entry, k, {
+      value: prevEntry._legacyFields[k],
+      enumerable: true, writable: true, configurable: true
+    });
+  });
+}
+
 function saveAddPosition() {
   var symInp      = document.getElementById('apSymbol');
   var investedInp = document.getElementById('apInvested');
   var plPctInp    = document.getElementById('apPlPct');
+  var currInp     = document.getElementById('apCurrency');
   var warnEl      = document.getElementById('apWarnMsg');
   if (!symInp || !investedInp || !warnEl) return;
   warnEl.textContent = '';
 
   var sym          = symInp.value.trim().toUpperCase();
-  var positionSize = parseFloat(investedInp.value.trim());
+  // Number(), not parseFloat(): parseFloat("5000abc") silently reads as
+  // 5000, accepting trailing garbage. Number("5000abc") is NaN and gets
+  // rejected below, same as any other invalid input.
+  var positionSize = Number(investedInp.value.trim());
 
   if (!/^[A-Z]{1,10}$/.test(sym)) {
     warnEl.textContent = 'Symbol must be 1–10 letters (A–Z only).';
@@ -7029,7 +7564,7 @@ function saveAddPosition() {
     return;
   }
   if (!isFinite(positionSize) || positionSize <= 0) {
-    warnEl.textContent = 'Invested amount must be a number greater than 0.';
+    warnEl.textContent = 'Recorded position value must be a number greater than 0.';
     investedInp.focus();
     return;
   }
@@ -7038,9 +7573,9 @@ function saveAddPosition() {
   if (plPctInp) {
     var plPctRaw = plPctInp.value.trim();
     if (plPctRaw !== '') {
-      var plPctVal = parseFloat(plPctRaw);
+      var plPctVal = Number(plPctRaw);
       if (!isFinite(plPctVal)) {
-        warnEl.textContent = 'P/L % must be a number (e.g. 12.5 or -8.2), or leave blank.';
+        warnEl.textContent = 'Baseline manual P/L % must be a number (e.g. 12.5 or -8.2), or leave blank.';
         plPctInp.focus();
         return;
       }
@@ -7048,13 +7583,32 @@ function saveAddPosition() {
     }
   }
 
+  var currency = currInp ? currInp.value : '';
+  if (PF_CURRENCY_CODES.indexOf(currency) === -1) {
+    warnEl.textContent = 'Select a currency (USD or ILS).';
+    if (currInp) currInp.focus();
+    return;
+  }
+
   var holdings    = loadHoldings();
-  var isDuplicate = Object.prototype.hasOwnProperty.call(holdings, sym);
-  var entry       = { symbol: sym, positionSize: positionSize };
+  var prevEntry   = Object.prototype.hasOwnProperty.call(holdings, sym) ? holdings[sym] : null;
+  var isDuplicate = prevEntry !== null;
+  var nowIso      = new Date().toISOString();
+  var entry       = {
+    symbol: sym, positionSize: positionSize, currency: currency, source: 'manual',
+    updatedAt: nowIso, baselineAt: _pfComputeBaselineAt(prevEntry, positionSize, manualPlPct, nowIso)
+  };
   if (manualPlPct !== undefined) entry.manualPlPct = manualPlPct;
-  holdings[sym]   = entry;
-  saveHoldings(holdings);
-  // EG-17A: one-way bridge — holding in pt_holdings must be reflected in watchlist position awareness
+  _pfCarryForwardLegacyFields(entry, prevEntry);
+  holdings[sym] = entry;
+  var saveResult = saveHoldings(holdings);
+  if (!saveResult.ok) {
+    warnEl.textContent = _pfSaveFailureMessage(saveResult);
+    return;
+  }
+  // EG-17A: one-way bridge — holding in pt_holdings must be reflected in
+  // watchlist position awareness. Only runs after a confirmed successful
+  // save — never records a position that wasn't actually persisted.
   var _wlEnt17a = findTicker(sym);
   var _curPos17a = (_wlEnt17a && _wlEnt17a.position) || {};
   upsertTicker(sym, { position: _normalizePosition(Object.assign({}, _curPos17a, { hasPosition: true })) });
@@ -7126,8 +7680,32 @@ function openEditPositionModal(sym) {
     return row;
   }
 
-  body.appendChild(_epField('Invested ($)',      'apEditInvested', 'e.g. 5000',           h.positionSize));
-  body.appendChild(_epField('P/L % (optional)', 'apEditPlPct',    'e.g. 12.5 or -8.2',   h.manualPlPct));
+  if (h._corrupt === true || (h._issues && h._issues.length > 0)) {
+    var issueNote = document.createElement('div');
+    issueNote.className   = 'ap-warn';
+    issueNote.style.color = 'var(--yellow2)';
+    if (h._corrupt === true) {
+      issueNote.textContent = 'This holding\'s stored data could not be read and was preserved unused, as-is. Saving below replaces it with a new, valid holding built from the fields you enter here — an explicit replacement, not an automatic fix.';
+    } else {
+      var _epEditableIssueFields = { manualPlPct: true, currency: true };
+      var _epEditableFields    = h._issues.filter(function(i){ return _epEditableIssueFields[i.field]; }).map(function(i){ return i.field; });
+      var _epNonEditableFields = h._issues.filter(function(i){ return !_epEditableIssueFields[i.field]; }).map(function(i){ return i.field; });
+      var _epMsgParts = [];
+      if (_epEditableFields.length > 0) {
+        _epMsgParts.push('Could not be read, shown blank below: ' + _epEditableFields.join(', ') + '. Enter a value and save to repair it' +
+          (_epEditableFields.indexOf('manualPlPct') !== -1 ? ' — leaving Baseline manual P/L blank removes the invalid stored value rather than keeping it' : '') + '.');
+      }
+      if (_epNonEditableFields.length > 0) {
+        _epMsgParts.push('Also could not be read: ' + _epNonEditableFields.join(', ') + '. These are not directly editable here — saving does not confirm the original values were reviewed.');
+      }
+      issueNote.textContent = _epMsgParts.join(' ');
+    }
+    body.appendChild(issueNote);
+  }
+
+  body.appendChild(_epField('Recorded position value',          'apEditInvested', 'e.g. 5000',         h.positionSize));
+  body.appendChild(_epField('Baseline manual P/L % (optional)', 'apEditPlPct',    'e.g. 12.5 or -8.2', h.manualPlPct));
+  body.appendChild(_pfCurrencySelectField('apEditCurrency', h.currency));
 
   var warn = document.createElement('div');
   warn.id        = 'apEditWarnMsg';
@@ -7174,14 +7752,18 @@ function closeEditPositionModal() {
 function saveEditPosition() {
   var investedInp = document.getElementById('apEditInvested');
   var plPctInp    = document.getElementById('apEditPlPct');
+  var currInp     = document.getElementById('apEditCurrency');
   var warnEl      = document.getElementById('apEditWarnMsg');
   if (!investedInp || !warnEl || !_editPosSym) return;
   warnEl.textContent = '';
 
-  var positionSize = parseFloat(investedInp.value.trim());
+  // Number(), not parseFloat(): parseFloat("5000abc") silently reads as
+  // 5000, accepting trailing garbage. Number("5000abc") is NaN and gets
+  // rejected below, same as any other invalid input.
+  var positionSize = Number(investedInp.value.trim());
 
   if (!isFinite(positionSize) || positionSize <= 0) {
-    warnEl.textContent = 'Invested amount must be a number greater than 0.';
+    warnEl.textContent = 'Recorded position value must be a number greater than 0.';
     investedInp.focus();
     return;
   }
@@ -7190,9 +7772,9 @@ function saveEditPosition() {
   if (plPctInp) {
     var plPctRaw = plPctInp.value.trim();
     if (plPctRaw !== '') {
-      var plPctVal = parseFloat(plPctRaw);
+      var plPctVal = Number(plPctRaw);
       if (!isFinite(plPctVal)) {
-        warnEl.textContent = 'P/L % must be a number (e.g. 12.5 or -8.2), or leave blank.';
+        warnEl.textContent = 'Baseline manual P/L % must be a number (e.g. 12.5 or -8.2), or leave blank.';
         plPctInp.focus();
         return;
       }
@@ -7200,19 +7782,53 @@ function saveEditPosition() {
     }
   }
 
+  var currency = currInp ? currInp.value : '';
+  if (PF_CURRENCY_CODES.indexOf(currency) === -1) {
+    warnEl.textContent = 'Select a currency (USD or ILS).';
+    if (currInp) currInp.focus();
+    return;
+  }
+
   var holdings = loadHoldings();
+  // Checked before the existence check below: if the root itself couldn't
+  // be read, holdings is {} and _editPosSym would look "missing" even
+  // though it may well still be there — report the real cause, not a
+  // misleading "Position no longer exists."
+  if (_pfRootCorrupted) {
+    warnEl.textContent = _pfSaveFailureMessage({ reason: 'ROOT_CORRUPTED' });
+    return;
+  }
   if (!Object.prototype.hasOwnProperty.call(holdings, _editPosSym)) {
     warnEl.textContent = 'Position no longer exists.';
     return;
   }
-  holdings[_editPosSym].positionSize = positionSize;
-  if (manualPlPct !== undefined) {
-    holdings[_editPosSym].manualPlPct = manualPlPct;
-  } else {
-    delete holdings[_editPosSym].manualPlPct;
+  var prevEntry = holdings[_editPosSym];
+  var nowIso    = new Date().toISOString();
+  // Saving through this form is a full, explicit replacement of the KNOWN
+  // fields: symbol is always the storage key and source is always
+  // 'manual' at updatedAt: now — regardless of what those fields held
+  // before, so any prior _issues/_raw for them (or for a fully _corrupt
+  // entry) do not carry forward; that replacement is the "explicit user
+  // repair". baselineAt is the one KNOWN-field exception: it only advances
+  // on an actual positionSize/manualPlPct change, so an edit that doesn't
+  // change those leaves baselineAt exactly as _pfComputeBaselineAt
+  // resolves it. _legacyFields is different from all of the above — it is
+  // NOT known/editable data, so it is explicitly carried forward via
+  // _pfCarryForwardLegacyFields rather than dropped by this replacement;
+  // there is no UI yet that lets an owner knowingly discard it.
+  var entry = {
+    symbol: _editPosSym, positionSize: positionSize, currency: currency, source: 'manual',
+    updatedAt: nowIso, baselineAt: _pfComputeBaselineAt(prevEntry, positionSize, manualPlPct, nowIso)
+  };
+  if (manualPlPct !== undefined) entry.manualPlPct = manualPlPct;
+  _pfCarryForwardLegacyFields(entry, prevEntry);
+  holdings[_editPosSym] = entry;
+  var saveResult = saveHoldings(holdings);
+  if (!saveResult.ok) {
+    warnEl.textContent = _pfSaveFailureMessage(saveResult);
+    return;
   }
-  saveHoldings(holdings);
-  // EG-17A: one-way bridge — holding in pt_holdings must be reflected in watchlist position awareness
+  // EG-17A: one-way bridge — only runs after a confirmed successful save.
   var _wlEnt17a = findTicker(_editPosSym);
   var _curPos17a = (_wlEnt17a && _wlEnt17a.position) || {};
   upsertTicker(_editPosSym, { position: _normalizePosition(Object.assign({}, _curPos17a, { hasPosition: true })) });
@@ -7223,8 +7839,20 @@ function saveEditPosition() {
 function deletePosition(sym) {
   if (!confirm('Remove ' + sym + ' from your portfolio?')) return;
   var holdings = loadHoldings();
+  // Same ordering fix as saveEditPosition: check root-corruption before
+  // mutating/saving, so a corrupted root reports the real cause instead of
+  // silently no-op'ing or writing a partial state.
+  if (_pfRootCorrupted) {
+    showToast(_pfSaveFailureMessage({ reason: 'ROOT_CORRUPTED' }));
+    return;
+  }
   delete holdings[sym];
-  saveHoldings(holdings);
+  var saveResult = saveHoldings(holdings);
+  if (!saveResult.ok) {
+    showToast(_pfSaveFailureMessage(saveResult));
+    return;
+  }
+  // EG-17A: one-way bridge — only runs after a confirmed successful save.
   var _wlEnt17b = findTicker(sym);
   if (_wlEnt17b) upsertTicker(sym, { position: _normalizePosition({ hasPosition: false }) });
   _renderPortfolioPanel();
@@ -8683,27 +9311,55 @@ function exportPortfolioBackup() {
 
 // ── EG-19A: Pre-import backup — distinct filename, aborts on invalid current data ──
 // Returns true on success. Returns false and shows toast on failure (caller must not write).
+// Restore exists to recover from exactly this situation, so creating the
+// pre-import backup must never itself become the reason recovery is
+// blocked. Both keys being overwritten are handled symmetrically: a valid
+// value is parsed and included normally; an unreadable/wrong-shape value
+// has its original raw string preserved under a *RawUnparseable diagnostic
+// field (recovery evidence only, not a normal import schema field —
+// _validatePortfolioBackup ignores unknown envelope fields, so these do
+// not round-trip through a later re-import; they survive only in this one
+// downloaded file). Either way this function proceeds and returns true —
+// it no longer has an abort path.
 function _downloadPreImportBackup() {
   var holdingsRaw = localStorage.getItem('pt_holdings');
   var tickersRaw  = localStorage.getItem('pt_tickers');
-  var holdings, tickers;
+  var holdings, tickers, holdingsRawUnparseable, tickersRawUnparseable;
+
   if (holdingsRaw !== null) {
-    try { holdings = JSON.parse(holdingsRaw); }
-    catch(e) { showToast('Import aborted: current pt_holdings is invalid — cannot create pre-import backup.'); return false; }
+    try {
+      var parsedH = JSON.parse(holdingsRaw);
+      if (parsedH === null || typeof parsedH !== 'object' || Array.isArray(parsedH)) throw new Error('unexpected root type');
+      holdings = parsedH;
+    } catch (e) {
+      holdings = {};
+      holdingsRawUnparseable = holdingsRaw;
+    }
   } else { holdings = {}; }
+
   if (tickersRaw !== null) {
-    try { tickers = JSON.parse(tickersRaw); }
-    catch(e) { showToast('Import aborted: current pt_tickers is invalid — cannot create pre-import backup.'); return false; }
+    try {
+      var parsedT = JSON.parse(tickersRaw);
+      if (!Array.isArray(parsedT)) throw new Error('unexpected root type');
+      tickers = parsedT;
+    } catch (e) {
+      tickers = [];
+      tickersRawUnparseable = tickersRaw;
+    }
   } else { tickers = []; }
+
+  var payload = {
+    schemaVersion: 1,
+    exportedAt:    new Date().toISOString(),
+    appBaseline:   '5e26485',
+    sourceOrigin:  window.location.origin,
+    holdings:      holdings,
+    tickers:       tickers
+  };
+  if (holdingsRawUnparseable !== undefined) payload.holdingsRawUnparseable = holdingsRawUnparseable;
+  if (tickersRawUnparseable  !== undefined) payload.tickersRawUnparseable  = tickersRawUnparseable;
   _ptDownload(
-    new Blob([JSON.stringify({
-      schemaVersion: 1,
-      exportedAt:    new Date().toISOString(),
-      appBaseline:   '5e26485',
-      sourceOrigin:  window.location.origin,
-      holdings:      holdings,
-      tickers:       tickers
-    }, null, 2)], { type: 'application/json' }),
+    new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
     'pt_pre_import_backup_' + _ptTimestamp() + '.json'
   );
   return true;
@@ -8728,24 +9384,21 @@ function _validatePortfolioBackup(obj) {
   var rawHoldings = obj.holdings;
   if (rawHoldings === null || typeof rawHoldings !== 'object' || Array.isArray(rawHoldings))
     return { error: 'holdings must be an object.' };
-  var normalizedHoldings = {};
-  var holdingVals = Object.values(rawHoldings);
-  for (var i = 0; i < holdingVals.length; i++) {
-    var h = holdingVals[i];
-    if (!h || typeof h !== 'object' || Array.isArray(h))
-      return { error: 'holdings entry ' + i + ' is not an object.' };
-    var sym = typeof h.symbol === 'string' ? h.symbol.trim().toUpperCase() : '';
-    if (!/^[A-Z]{1,10}$/.test(sym))
-      return { error: 'holdings entry has invalid symbol: ' + JSON.stringify(h.symbol) };
-    if (typeof h.positionSize !== 'number' || !isFinite(h.positionSize) || h.positionSize <= 0)
-      return { error: 'holdings[' + sym + ']: positionSize must be a positive finite number.' };
-    if (h.manualPlPct !== undefined && h.manualPlPct !== null &&
-        (typeof h.manualPlPct !== 'number' || !isFinite(h.manualPlPct)))
-      return { error: 'holdings[' + sym + ']: manualPlPct must be a finite number or null.' };
-    var entry = { symbol: sym, positionSize: h.positionSize };
-    if (typeof h.manualPlPct === 'number' && isFinite(h.manualPlPct)) entry.manualPlPct = h.manualPlPct;
-    normalizedHoldings[sym] = entry;
-  }
+  // Reuse the exact same tolerant per-entry normalizer loadHoldings() uses,
+  // instead of a separate hand-rolled strict validator. Two reasons: (1)
+  // any unrelated save writes the WHOLE holdings object back to disk, so an
+  // untouched _corrupt/_issues-flagged entry ends up in every exported
+  // backup — hard-rejecting the file over one flagged entry would make the
+  // owner's own export unrestorable; (2) it keeps one tolerant-loading
+  // definition instead of two that could drift apart. Object.create(null):
+  // keys come from an untrusted imported file, same __proto__-key risk as
+  // loadHoldings(). _pfNormalizeHoldingEntry never errors, so this loop can
+  // no longer fail — holdings-content is no longer a possible error() case
+  // below (envelope-shape checks above remain the real failure modes).
+  var normalizedHoldings = Object.create(null);
+  Object.keys(rawHoldings).forEach(function(key) {
+    normalizedHoldings[key] = _pfNormalizeHoldingEntry(key, rawHoldings[key]);
+  });
   var rawTickers = obj.tickers;
   if (!Array.isArray(rawTickers))
     return { error: 'tickers must be an array.' };
@@ -8801,12 +9454,48 @@ function importPortfolioBackup(file) {
               'A pre-import backup will be downloaded first.';
     if (!window.confirm(msg)) return;
     if (!_downloadPreImportBackup()) return;
-    localStorage.setItem('pt_holdings', JSON.stringify(result.holdings));
-    localStorage.setItem('pt_tickers',  JSON.stringify(result.tickers));
-    loadWatchlist();
-    _reconcileWatchlistPositionsFromHoldings();
-    _renderPortfolioPanel();
-    showToast('Restored — ' + hCount + ' holding' + (hCount !== 1 ? 's' : '') + ', ' + tCount + ' ticker' + (tCount !== 1 ? 's' : ''));
+    // Holdings write uses the bypass-gate helper (restore must work even
+    // when the live root is currently corrupted) and is checked — a
+    // storage failure here must report failure, not proceed as if it
+    // succeeded.
+    var holdingsWrite = _pfWriteHoldingsRaw(result.holdings);
+    if (!holdingsWrite.ok) {
+      showToast('Restore failed — holdings could not be saved (storage unavailable or full). Nothing was changed.');
+      return;
+    }
+    // Re-read through the normal load path immediately: this is what
+    // actually clears _pfRootCorrupted (only a successful loadHoldings()
+    // does that) and confirms the just-written root is readable through
+    // the same normalization the rest of the app uses — not just that the
+    // write call itself didn't throw.
+    loadHoldings();
+    if (_pfRootCorrupted) {
+      showToast('Restore failed — holdings were written but could not be read back. Portfolio state may be inconsistent; reload the page before continuing.');
+      return;
+    }
+    // Tickers is a second, independent localStorage write, not part of an
+    // atomic transaction — no rollback is attempted if it fails after
+    // holdings already succeeded.
+    var tickersOk;
+    try {
+      localStorage.setItem('pt_tickers', JSON.stringify(result.tickers));
+      tickersOk = true;
+    } catch (e) {
+      console.warn('[PT] pt_tickers: restore write failed', e);
+      tickersOk = false;
+    }
+    if (tickersOk) {
+      loadWatchlist();
+      _reconcileWatchlistPositionsFromHoldings();
+      _renderPortfolioPanel();
+      showToast('Restored — ' + hCount + ' holding' + (hCount !== 1 ? 's' : '') + ', ' + tCount + ' ticker' + (tCount !== 1 ? 's' : ''));
+    } else {
+      // Do not reconcile or touch the watchlist — it was not written, and
+      // reconciling now could mutate it off the back of a restore that
+      // only half-completed.
+      _renderPortfolioPanel();
+      showToast('Partially restored — ' + hCount + ' holding' + (hCount !== 1 ? 's' : '') + ' saved. The watchlist could NOT be saved (storage unavailable or full) and was left unchanged.');
+    }
   };
   reader.onerror = function() { showToast('Import failed: could not read file'); };
   reader.readAsText(file);
