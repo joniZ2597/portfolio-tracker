@@ -1101,6 +1101,209 @@ function phaseResearchViewTests() {
   }
 }
 
+function phaseTerminalChainIntegrity() {
+  header('Phase 6 - Terminal-chain integrity (scoring/persistence boundary)');
+
+  const content = read('index.html');
+  if (content === null) {
+    fail('terminal-chain', 'index.html is missing');
+    return;
+  }
+
+  let total = 0;
+  let okCount = 0;
+  function check(name, cond) {
+    total += 1;
+    if (cond) {
+      okCount += 1;
+    } else {
+      fail('terminal-chain', 'assertion failed: ' + name);
+    }
+  }
+
+  // Structural: applyCapitalReturnsNudge( must occur exactly once in the
+  // whole file — the function declaration itself. Zero call sites anywhere.
+  (function () {
+    const re = /applyCapitalReturnsNudge\(/g;
+    const matches = content.match(re) || [];
+    check('applyCapitalReturnsNudge( occurs exactly once (declaration only, no call sites)', matches.length === 1);
+    check('the one occurrence is the function declaration', content.indexOf('function applyCapitalReturnsNudge(') !== -1);
+  })();
+
+  // Structural: the mid-scan write path validates before pushing into
+  // newResults; the old unvalidated push pattern is gone.
+  (function () {
+    check('mid-scan push now goes through _isValidScanResult first',
+      content.indexOf('const validBatchResults = batchResults.filter(_isValidScanResult);') !== -1 &&
+      content.indexOf('newResults.push(...validBatchResults);') !== -1);
+    check('old unvalidated newResults.push(...batchResults) pattern is gone',
+      content.indexOf('newResults.push(...batchResults);') === -1);
+  })();
+
+  // Structural: the catch path still performs no pt_results write. Scoped
+  // via extractFunctionSource to runAnalysis's own body first, so this
+  // can't collide with any other catch block in the file, and depends on
+  // no localized UI text.
+  (function () {
+    const runAnalysisSrc = extractFunctionSource(content, 'runAnalysis');
+    check('runAnalysis function extracted', !!runAnalysisSrc);
+    if (runAnalysisSrc) {
+      const catchStart = runAnalysisSrc.indexOf('} catch (err) {');
+      check('runAnalysis catch block found', catchStart !== -1);
+      if (catchStart !== -1) {
+        const finallyIdx = runAnalysisSrc.indexOf('} finally {', catchStart);
+        const catchBody = finallyIdx !== -1 ? runAnalysisSrc.slice(catchStart, finallyIdx) : runAnalysisSrc.slice(catchStart);
+        check('runAnalysis catch block performs no pt_results write', catchBody.indexOf("localStorage.setItem('pt_results'") === -1);
+      }
+    }
+  })();
+
+  let factory;
+  try {
+    const enforceSrc = extractFunctionSource(content, 'enforceScoreConsistency');
+    const validatorSrc = extractFunctionSource(content, '_isValidScanResult');
+    const mergeSrc = extractFunctionSource(content, 'mergeResultsByTicker');
+    if (!enforceSrc || !validatorSrc || !mergeSrc) {
+      fail('terminal-chain', 'could not extract enforceScoreConsistency / _isValidScanResult / mergeResultsByTicker from index.html');
+      return;
+    }
+    // eslint-disable-next-line no-new-func
+    factory = new Function(
+      enforceSrc + '\n' + validatorSrc + '\n' + mergeSrc +
+        '\nreturn { enforceScoreConsistency: enforceScoreConsistency, _isValidScanResult: _isValidScanResult, mergeResultsByTicker: mergeResultsByTicker };'
+    )();
+  } catch (e) {
+    fail('terminal-chain', 'factory build error: ' + e.message);
+    return;
+  }
+
+  const enforceScoreConsistency = factory.enforceScoreConsistency;
+  const _isValidScanResult = factory._isValidScanResult;
+  const mergeResultsByTicker = factory.mergeResultsByTicker;
+
+  const BULLISH_CTX = JSON.stringify('raised PT and upgrade to buy, earnings beat expectations');
+  const VALID_SUMMARY = 'This is a valid synthetic summary body used purely for offline pin fixtures and exceeds fifty characters.';
+
+  function baseItem(overrides) {
+    return Object.assign({
+      ticker: 'AAPL',
+      sentiment: 'neutral',
+      sentiment_score: 50,
+      summary: VALID_SUMMARY,
+      _verifiedChangePct: 1.2
+    }, overrides || {});
+  }
+
+  // Qualifying real item: verified data present, real analysis, score<65,
+  // bullish context -> boost fires exactly as before.
+  (function () {
+    const out = enforceScoreConsistency([baseItem()], BULLISH_CTX);
+    check('qualifying item: boost fires (score->72, sentiment positive)',
+      out[0].sentiment_score === 72 && out[0].sentiment === 'positive');
+  })();
+
+  // Genuinely verified 0.00% day must NOT be confused with missing data —
+  // boost still fires normally.
+  (function () {
+    const out = enforceScoreConsistency([baseItem({ _verifiedChangePct: 0 })], BULLISH_CTX);
+    check('verified 0.00% day is eligible for the boost (not treated as missing data)',
+      out[0].sentiment_score === 72 && out[0].sentiment === 'positive');
+  })();
+
+  // Synthetic/AI-failure item must never be rewritten, even with bullish context.
+  (function () {
+    const synthetic = baseItem({ _aiUnavailable: true, sentiment_score: 50, sentiment: 'neutral' });
+    delete synthetic._verifiedChangePct; // a failed-AI item may also lack verified data
+    const out = enforceScoreConsistency([synthetic], BULLISH_CTX);
+    check('synthetic/_aiUnavailable item immune to the boost',
+      out[0].sentiment_score === 50 && out[0].sentiment === 'neutral');
+  })();
+
+  // Synthetic item WITH verified market data present must still be immune
+  // (the _aiUnavailable guard, not just the no-data guard, must independently hold).
+  (function () {
+    const out = enforceScoreConsistency([baseItem({ _aiUnavailable: true, sentiment_score: 50, sentiment: 'neutral' })], BULLISH_CTX);
+    check('synthetic item immune even when verified market data is present',
+      out[0].sentiment_score === 50 && out[0].sentiment === 'neutral');
+  })();
+
+  // Missing verified market data (real analysis) -> boost must not fire,
+  // even though bullish/bearish counts and score would otherwise qualify.
+  (function () {
+    const noData = baseItem();
+    delete noData._verifiedChangePct;
+    const out = enforceScoreConsistency([noData], BULLISH_CTX);
+    check('no verified market data -> boost skipped',
+      out[0].sentiment_score === noData.sentiment_score && out[0].sentiment === noData.sentiment);
+  })();
+
+  // Pre-existing guards remain intact: down day, extended_near_ath, below_key_mas.
+  (function () {
+    const out = enforceScoreConsistency([baseItem({ _changePct: -5 })], BULLISH_CTX);
+    check('pre-existing down-day guard unchanged (boost skipped)', out[0].sentiment_score === 50);
+  })();
+  (function () {
+    const out = enforceScoreConsistency([baseItem({ technical_setup: 'extended_near_ath' })], BULLISH_CTX);
+    check('pre-existing extended_near_ath guard unchanged (boost skipped)', out[0].sentiment_score === 50);
+  })();
+  (function () {
+    const out = enforceScoreConsistency([baseItem({ technical_setup: 'below_key_mas' })], BULLISH_CTX);
+    check('pre-existing below_key_mas guard unchanged (boost skipped)', out[0].sentiment_score === 50);
+  })();
+
+  // Non-qualifying (no bullish signal) -> unchanged, verified data present.
+  (function () {
+    const out = enforceScoreConsistency([baseItem()], JSON.stringify('no notable analyst activity'));
+    check('no bullish signal -> item unchanged', out[0].sentiment_score === 50 && out[0].sentiment === 'neutral');
+  })();
+
+  // _isValidScanResult: the exact pre-existing predicate set, now shared.
+  (function () {
+    check('valid item accepted', _isValidScanResult(baseItem()) === true);
+    check('missing ticker rejected', _isValidScanResult(baseItem({ ticker: '' })) === false);
+    check('score out of range rejected', _isValidScanResult(baseItem({ sentiment_score: 999 })) === false);
+    check('short summary rejected', _isValidScanResult(baseItem({ summary: 'too short' })) === false);
+    check('invalid sentiment enum rejected', _isValidScanResult(baseItem({ sentiment: 'bullish' })) === false);
+    check('raw-blob marker rejected', _isValidScanResult(baseItem({ summary: VALID_SUMMARY + ' __raw__' })) === false);
+    check('perplexity-blob marker rejected', _isValidScanResult(baseItem({ summary: VALID_SUMMARY + ' === PERPLEXITY' })) === false);
+    check('news-context marker rejected', _isValidScanResult(baseItem({ summary: VALID_SUMMARY + ' %%NEWS_CONTEXT' })) === false);
+  })();
+
+  // Simulated multi-batch scan using the real, composed extracted functions:
+  // proves valid current-scan items persist, an invalid current-scan item
+  // never does, and untouched historical results are byte-stable —
+  // regardless of whether a later batch never runs (simulated throw).
+  (function () {
+    const previousResults = [{ ticker: 'GOOG', sentiment_score: 60, summary: VALID_SUMMARY, sentiment: 'neutral' }];
+    const previousSnapshot = JSON.stringify(previousResults);
+    let newResults = [];
+
+    const batch1 = [{ ticker: 'AAPL', sentiment_score: 55, summary: VALID_SUMMARY, sentiment: 'positive' }];
+    newResults.push(...batch1.filter(_isValidScanResult));
+    const mergedAfterBatch1 = mergeResultsByTicker(previousResults, newResults);
+    check('sim-scan: valid batch-1 item (AAPL) persisted mid-scan',
+      mergedAfterBatch1.some(r => r.ticker === 'AAPL' && r.sentiment_score === 55));
+    check('sim-scan: untouched previousResults (GOOG) still present after batch 1',
+      mergedAfterBatch1.some(r => r.ticker === 'GOOG' && r.sentiment_score === 60));
+
+    // Batch 2 produces a malformed item (score out of range) — simulates the
+    // ticker whose analysis a later throw would otherwise have interrupted.
+    const batch2 = [{ ticker: 'MSFT', sentiment_score: 999, summary: VALID_SUMMARY, sentiment: 'positive' }];
+    newResults.push(...batch2.filter(_isValidScanResult));
+    const mergedAfterBatch2 = mergeResultsByTicker(previousResults, newResults);
+    check('sim-scan: invalid batch-2 item (MSFT) never persisted',
+      !mergedAfterBatch2.some(r => r.ticker === 'MSFT'));
+    check('sim-scan: valid batch-1 item (AAPL) still present after batch 2',
+      mergedAfterBatch2.some(r => r.ticker === 'AAPL' && r.sentiment_score === 55));
+    check('sim-scan: previousResults (GOOG) remains byte-stable throughout',
+      JSON.stringify(previousResults) === previousSnapshot);
+  })();
+
+  if (okCount === total) {
+    pass(total + ' terminal-chain integrity assertion(s) passed');
+  }
+}
+
 function main() {
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
@@ -1110,6 +1313,7 @@ function main() {
   phaseForbiddenSurface();
   phaseResolverTests();
   phaseResearchViewTests();
+  phaseTerminalChainIntegrity();
 
   console.log('\n=== Summary ===');
 

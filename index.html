@@ -3792,6 +3792,18 @@ function enforceScoreConsistency(results, newsContext) {
   return results.map(item => {
     const score = item.sentiment_score || 50;
     const chgPct = item._changePct || 0;
+    // Terminal-chain integrity: a synthetic/AI-failure fallback item must
+    // never be rewritten into a fabricated bullish score — its honest
+    // neutral/50 fallback state is the correct final state.
+    if (item._aiUnavailable === true) { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (AI unavailable — synthetic fallback item)`); return item; }
+    // Terminal-chain integrity: _changePct above is coerced to 0 when
+    // market data is missing, which would otherwise silently defeat the
+    // down-day guard on an unknown-price day. _verifiedChangePct is set by
+    // orchestrate() only when real market data was fetched (genuinely
+    // absent, never coerced, otherwise) — the correct signal for whether
+    // we actually know this ticker's price moved. A genuinely verified
+    // 0.00% day still passes this check normally.
+    if (typeof item._verifiedChangePct !== 'number') { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (no verified market data)`); return item; }
     if (typeof chgPct === 'number' && chgPct < -3) { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (down day ${chgPct}%)`); return item; }
     if (item.technical_setup === 'extended_near_ath') { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (extended_near_ath)`); return item; }
     if (item.technical_setup === 'below_key_mas') { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (below_key_mas)`); return item; }
@@ -4189,8 +4201,11 @@ async function analyzeChunk(batch, today) {
     const mkt = stockData[item.ticker];
     return mkt ? { ...item, _changePct: mkt.change_percent } : item;
   });
-  const resultsWithCapReturns = applyCapitalReturnsNudge(resultsWithPct);
-  return enforceScoreConsistency(resultsWithCapReturns, JSON.stringify(pplxData));
+  // Terminal-chain integrity slice (2026-08-08): applyCapitalReturnsNudge
+  // removed from the active scoring chain per Main Control ruling — the
+  // function remains in source, uncalled, for future non-scoring/display
+  // use. Newly scored items no longer receive _crNudge.
+  return enforceScoreConsistency(resultsWithPct, JSON.stringify(pplxData));
 }
 
 // ── renderResults ────────────────────────────────────────────────────────────
@@ -10420,6 +10435,27 @@ function mergeResultsByTicker(previousResults, newResults) {
   return Array.from(map.values());
 }
 
+// ── _isValidScanResult ───────────────────────────────────────────────────────
+// Terminal-chain integrity: the single validator for anything eligible to
+// persist to pt_results, shared identically by the mid-scan write and the
+// final write — a mid-scan-only item can never survive with a shape the
+// final write would reject. Predicates unchanged from the pre-existing
+// final-write filter, only extracted for reuse. Applies only to results the
+// current scan produces — previousResults (unscanned prior tickers) are
+// never passed through this and are outside this slice's scope.
+function _isValidScanResult(r) {
+  const ok = r &&
+    typeof r.ticker === 'string' && r.ticker.length > 0 &&
+    typeof r.sentiment_score === 'number' && r.sentiment_score >= 0 && r.sentiment_score <= 100 &&
+    typeof r.summary === 'string' && r.summary.length > 50 &&
+    ['positive','negative','neutral'].includes(r.sentiment) &&
+    !r.summary.includes('=== PERPLEXITY') &&
+    !r.summary.includes('%%NEWS_CONTEXT') &&
+    !r.summary.includes('__raw__');
+  if (!ok) console.warn('[PT] REJECTED malformed result:', JSON.stringify(r).slice(0,120));
+  return ok;
+}
+
 // ── cancelScan ──────────────────────────────────────────────────────────────
 function cancelScan() {
   if (!_analysisRunning) return;
@@ -10488,7 +10524,12 @@ async function runAnalysis() {
       setProgress(pct, `מנתח ${batch.join(', ')}...`);
       const batchResults = await analyzeChunk(batch, today);
       _currentScanTicker = null;
-      newResults.push(...batchResults);
+      // Terminal-chain integrity: validate this batch's current-scan results
+      // before they become eligible for any pt_results write — the same
+      // validator the final write uses. previousResults (unscanned prior
+      // tickers) are never filtered or touched by this.
+      const validBatchResults = batchResults.filter(_isValidScanResult);
+      newResults.push(...validBatchResults);
       // Merge new results over previous — preserves results for tickers not yet rescanned
       const merged = mergeResultsByTicker(previousResults, newResults);
       results = merged;
@@ -10531,19 +10572,10 @@ async function runAnalysis() {
     setProgress(100, 'הניתוח הושלם!');
     const dateStr = new Date().toLocaleString('he-IL');
 
-    // Validate only the newly scanned results
-    const validNew = newResults.filter(r => {
-      const ok = r &&
-        typeof r.ticker === 'string' && r.ticker.length > 0 &&
-        typeof r.sentiment_score === 'number' && r.sentiment_score >= 0 && r.sentiment_score <= 100 &&
-        typeof r.summary === 'string' && r.summary.length > 50 &&
-        ['positive','negative','neutral'].includes(r.sentiment) &&
-        !r.summary.includes('=== PERPLEXITY') &&
-        !r.summary.includes('%%NEWS_CONTEXT') &&
-        !r.summary.includes('__raw__');
-      if (!ok) console.warn('[PT] REJECTED malformed result:', JSON.stringify(r).slice(0,120));
-      return ok;
-    });
+    // Validate only the newly scanned results — same validator the mid-scan
+    // write now uses (Terminal-chain integrity slice); kept here as
+    // defense-in-depth at the final boundary.
+    const validNew = newResults.filter(_isValidScanResult);
 
     // Dedup within new results (keep latest)
     const seen = new Set();
