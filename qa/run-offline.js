@@ -105,6 +105,13 @@ function extractFunctionSource(content, name) {
   if (start === -1) {
     return null;
   }
+  // "async function name(...)" matches sig starting at "function" — that
+  // would silently drop the "async " prefix and produce an illegal (still
+  // containing await, but no longer async) copy. Detect and include it.
+  const ASYNC_PREFIX = 'async ';
+  const realStart = (start >= ASYNC_PREFIX.length && content.slice(start - ASYNC_PREFIX.length, start) === ASYNC_PREFIX)
+    ? start - ASYNC_PREFIX.length
+    : start;
   const braceStart = content.indexOf('{', start);
   if (braceStart === -1) {
     return null;
@@ -117,7 +124,7 @@ function extractFunctionSource(content, name) {
     } else if (ch === '}') {
       depth -= 1;
       if (depth === 0) {
-        return content.slice(start, i + 1);
+        return content.slice(realStart, i + 1);
       }
     }
   }
@@ -1428,7 +1435,489 @@ function phaseBackupFidelity() {
   }
 }
 
-function main() {
+async function phasePortfolioReporting() {
+  header('Phase 8 - Portfolio Reporting (P-2B cash/FX/total/allocation/day-estimate/backup-v2)');
+
+  const content = read('index.html');
+  if (content === null) {
+    fail('portfolio-reporting', 'index.html is missing');
+    return;
+  }
+
+  let factory;
+  try {
+    const pieces = {
+      isFiniteNumSrc:        extractFunctionSource(content, '_pfIsFiniteNum'),
+      cashLoadSrc:           extractFunctionSource(content, '_pfCashLoad'),
+      cashSaveSrc:           extractFunctionSource(content, '_pfCashSave'),
+      cashClearSrc:          extractFunctionSource(content, '_pfCashClear'),
+      fxLoadCacheSrc:        extractFunctionSource(content, '_pfFxLoadCache'),
+      fxSaveCacheSrc:        extractFunctionSource(content, '_pfFxSaveCache'),
+      fxRateValidSrc:        extractFunctionSource(content, '_pfFxRateValid'),
+      fxStateSrc:            extractFunctionSource(content, '_pfFxState'),
+      fxBackupValidSrc:      extractFunctionSource(content, '_pfFxBackupRecordValid'),
+      eodLoadCacheSrc:       extractFunctionSource(content, '_pfEodLoadCache'),
+      eodSaveCacheSrc:       extractFunctionSource(content, '_pfEodSaveCache'),
+      eodIsStaleSrc:         extractFunctionSource(content, '_pfEodIsStale'),
+      dayEstimateSrc:        extractFunctionSource(content, '_pfPortfolioDayEstimate'),
+      reportingSrc:          extractFunctionSource(content, '_pfComputePortfolioReporting'),
+      holdingIlsValueSrc:    extractFunctionSource(content, '_pfHoldingIlsValue'),
+      applyCashFxRestoreSrc: extractFunctionSource(content, '_pfApplyCashFxRestore'),
+      normalizeSrc:          extractFunctionSource(content, '_pfNormalizeHoldingEntry'),
+      normalizePositionSrc:  extractFunctionSource(content, '_normalizePosition'),
+      validateBackupSrc:     extractFunctionSource(content, '_validatePortfolioBackup'),
+      cashKeySrc:            extractVarSource(content, 'PF_CASH_KEY'),
+      fxCacheKeySrc:         extractVarSource(content, 'PF_FX_CACHE_KEY'),
+      fxFreshDaysSrc:        extractVarSource(content, 'PF_FX_FRESH_MAX_AGE_DAYS'),
+      fxValidDaysSrc:        extractVarSource(content, 'PF_FX_VALID_MAX_AGE_DAYS'),
+      eodCacheKeySrc:        extractVarSource(content, 'PF_EOD_CACHE_KEY'),
+      knownFieldsSrc:        extractVarSource(content, 'PF_KNOWN_HOLDING_FIELDS'),
+      wrapperMarkerSrc:      extractVarSource(content, 'PF_HOLDING_WRAPPER_MARKER'),
+      reservedKeysSrc:       extractVarSource(content, 'PF_RESERVED_MARKER_KEYS')
+    };
+    const missing = Object.keys(pieces).filter(function (k) { return !pieces[k]; });
+    if (missing.length > 0) {
+      fail('portfolio-reporting', 'could not extract from index.html: ' + missing.join(', '));
+      return;
+    }
+
+    // eslint-disable-next-line no-new-func
+    factory = new Function(
+      'localStorage',
+      pieces.cashKeySrc + '\n' + pieces.fxCacheKeySrc + '\n' + pieces.fxFreshDaysSrc + '\n' +
+        pieces.fxValidDaysSrc + '\n' + pieces.eodCacheKeySrc + '\n' +
+        pieces.knownFieldsSrc + '\n' + pieces.wrapperMarkerSrc + '\n' + pieces.reservedKeysSrc + '\n' +
+        pieces.isFiniteNumSrc + '\n' + pieces.cashLoadSrc + '\n' + pieces.cashSaveSrc + '\n' + pieces.cashClearSrc + '\n' +
+        pieces.fxLoadCacheSrc + '\n' + pieces.fxSaveCacheSrc + '\n' + pieces.fxRateValidSrc + '\n' +
+        pieces.fxStateSrc + '\n' + pieces.fxBackupValidSrc + '\n' +
+        pieces.eodLoadCacheSrc + '\n' + pieces.eodSaveCacheSrc + '\n' + pieces.eodIsStaleSrc + '\n' + pieces.dayEstimateSrc + '\n' +
+        pieces.reportingSrc + '\n' + pieces.holdingIlsValueSrc + '\n' + pieces.applyCashFxRestoreSrc + '\n' +
+        pieces.normalizeSrc + '\n' + pieces.normalizePositionSrc + '\n' + pieces.validateBackupSrc +
+        '\nreturn { _pfCashLoad: _pfCashLoad, _pfCashSave: _pfCashSave, _pfCashClear: _pfCashClear,' +
+        ' _pfFxLoadCache: _pfFxLoadCache, _pfFxRateValid: _pfFxRateValid, _pfFxState: _pfFxState,' +
+        ' _pfFxBackupRecordValid: _pfFxBackupRecordValid, _pfPortfolioDayEstimate: _pfPortfolioDayEstimate,' +
+        ' _pfComputePortfolioReporting: _pfComputePortfolioReporting, _pfHoldingIlsValue: _pfHoldingIlsValue,' +
+        ' _pfApplyCashFxRestore: _pfApplyCashFxRestore, _validatePortfolioBackup: _validatePortfolioBackup };'
+    );
+  } catch (e) {
+    fail('portfolio-reporting', 'factory build error: ' + e.message);
+    return;
+  }
+
+  function makeMockLocalStorage(seed) {
+    const store = Object.assign({}, seed || {});
+    return {
+      getItem: function (k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+      setItem: function (k, v) { store[k] = v; },
+      removeItem: function (k) { delete store[k]; },
+      _store: store
+    };
+  }
+
+  let total = 0;
+  let okCount = 0;
+  function check(name, cond) {
+    total += 1;
+    if (cond) {
+      okCount += 1;
+    } else {
+      fail('portfolio-reporting', 'assertion failed: ' + name);
+    }
+  }
+
+  const DAY = 24 * 60 * 60 * 1000;
+  function fxRecord(ageMsOrOverrides) {
+    const base = {
+      rate: 3.68, effectiveAt: new Date().toISOString(), source: 'boi',
+      fetchedAt: new Date().toISOString(), lastAttemptAt: new Date().toISOString(), lastAttemptOk: true
+    };
+    if (typeof ageMsOrOverrides === 'number') {
+      base.effectiveAt = new Date(Date.now() - ageMsOrOverrides).toISOString();
+      return base;
+    }
+    return Object.assign(base, ageMsOrOverrides || {});
+  }
+
+  // ── Cash: three distinct states, never coerced to zero ─────────────────────
+  (function () {
+    const apiUnset = factory(makeMockLocalStorage({}));
+    check('cash unset -> state unset (no key)', apiUnset._pfCashLoad().state === 'unset');
+
+    const apiZero = factory(makeMockLocalStorage({ pt_cash: JSON.stringify({ amountILS: 0, asOf: '2026-08-01' }) }));
+    const zeroState = apiZero._pfCashLoad();
+    check('explicit amountILS:0 -> state recorded, amountILS 0 (not treated as unset)',
+      zeroState.state === 'recorded' && zeroState.amountILS === 0);
+
+    const apiUnparseable = factory(makeMockLocalStorage({ pt_cash: 'not json{{{' }));
+    check('unparseable pt_cash -> state invalid', apiUnparseable._pfCashLoad().state === 'invalid');
+
+    const apiNegative = factory(makeMockLocalStorage({ pt_cash: JSON.stringify({ amountILS: -5, asOf: '2026-08-01' }) }));
+    check('negative amountILS -> state invalid', apiNegative._pfCashLoad().state === 'invalid');
+
+    const apiRw = factory(makeMockLocalStorage({}));
+    const saveResult = apiRw._pfCashSave(17626, '2026-08-09');
+    check('_pfCashSave writes a recorded value readable back',
+      saveResult.ok === true && apiRw._pfCashLoad().state === 'recorded' && apiRw._pfCashLoad().amountILS === 17626);
+    const clearResult = apiRw._pfCashClear();
+    check('_pfCashClear returns to unset, not a written zero', clearResult.ok === true && apiRw._pfCashLoad().state === 'unset');
+  })();
+
+  // ── FX: three-state freshness (fresh / aged-but-valid / stale-invalid) ─────
+  (function () {
+    const apiMissing = factory(makeMockLocalStorage({}));
+    check('no pt_fx key -> state missing', apiMissing._pfFxState(apiMissing._pfFxLoadCache()) === 'missing');
+
+    const apiFresh = factory(makeMockLocalStorage({ pt_fx: JSON.stringify(fxRecord(1 * DAY)) }));
+    check('age 1 day -> fresh', apiFresh._pfFxState(apiFresh._pfFxLoadCache()) === 'fresh');
+
+    const apiAged = factory(makeMockLocalStorage({ pt_fx: JSON.stringify(fxRecord(4 * DAY)) }));
+    check('age 4 days -> aged-but-valid', apiAged._pfFxState(apiAged._pfFxLoadCache()) === 'aged-but-valid');
+
+    const apiStale = factory(makeMockLocalStorage({ pt_fx: JSON.stringify(fxRecord(10 * DAY)) }));
+    check('age 10 days -> stale-invalid, treated like missing for totals', apiStale._pfFxState(apiStale._pfFxLoadCache()) === 'stale-invalid');
+
+    const apiBadRate = factory(makeMockLocalStorage({ pt_fx: JSON.stringify(fxRecord({ rate: -1 })) }));
+    check('non-positive rate -> state missing', apiBadRate._pfFxState(apiBadRate._pfFxLoadCache()) === 'missing');
+  })();
+
+  // ── FX backup-record strictness (all six fields, source === 'boi') ─────────
+  (function () {
+    const api = factory(makeMockLocalStorage({}));
+    check('complete valid fx record accepted', api._pfFxBackupRecordValid(fxRecord()) === true);
+    const missingOk = fxRecord(); delete missingOk.lastAttemptOk;
+    check('missing lastAttemptOk rejected', api._pfFxBackupRecordValid(missingOk) === false);
+    check('lastAttemptOk non-boolean rejected', api._pfFxBackupRecordValid(fxRecord({ lastAttemptOk: 'true' })) === false);
+    const missingAt = fxRecord(); delete missingAt.lastAttemptAt;
+    check('missing lastAttemptAt rejected', api._pfFxBackupRecordValid(missingAt) === false);
+    check("source !== 'boi' rejected", api._pfFxBackupRecordValid(fxRecord({ source: 'other' })) === false);
+    check('non-finite rate rejected', api._pfFxBackupRecordValid(fxRecord({ rate: NaN })) === false);
+    check('unparseable effectiveAt rejected', api._pfFxBackupRecordValid(fxRecord({ effectiveAt: 'not-a-date' })) === false);
+    check('unparseable fetchedAt rejected', api._pfFxBackupRecordValid(fxRecord({ fetchedAt: 'not-a-date' })) === false);
+  })();
+
+  // ── Portfolio Total formula (_pfComputePortfolioReporting) ─────────────────
+  // Same production function _renderPortfolioPanel calls — pinned directly
+  // rather than reimplemented, so QA and render can never disagree.
+  (function () {
+    const api = factory(makeMockLocalStorage({}));
+    const recordedCash = { state: 'recorded', amountILS: 1000, asOf: '2026-08-09' };
+    const unsetCash = { state: 'unset' };
+    const freshFx = fxRecord(1 * DAY);
+
+    (function () {
+      const r = api._pfComputePortfolioReporting(0, 5000, 0, false, 0, recordedCash, {});
+      check('ILS 5000 + cash 1000 -> Portfolio Total 6000, complete', r.completeness === true && r.total === 6000);
+    })();
+    (function () {
+      const r = api._pfComputePortfolioReporting(1000, 0, 0, false, 0, recordedCash, freshFx);
+      check('USD 1000 + FX 3.68 + cash 1000 -> Portfolio Total matches positionSize*rate + cash exactly',
+        r.completeness === true && Math.abs(r.total - (1000 * freshFx.rate + 1000)) < 1e-9);
+    })();
+    (function () {
+      const r = api._pfComputePortfolioReporting(1000, 5000, 0, false, 0, recordedCash, freshFx);
+      check('mixed ILS 5000 + USD 1000@rate + cash 1000 -> Portfolio Total sums all three components',
+        r.completeness === true && Math.abs(r.total - (5000 + 1000 * freshFx.rate + 1000)) < 1e-9);
+    })();
+    check('missing cash -> Portfolio Total NOT complete',
+      api._pfComputePortfolioReporting(0, 5000, 0, false, 0, unsetCash, {}).completeness === false);
+    check('USD present + missing FX -> Portfolio Total NOT complete',
+      api._pfComputePortfolioReporting(1000, 0, 0, false, 0, recordedCash, {}).completeness === false);
+    check('USD present + stale-invalid FX -> Portfolio Total NOT complete',
+      api._pfComputePortfolioReporting(1000, 0, 0, false, 0, recordedCash, fxRecord(10 * DAY)).completeness === false);
+    (function () {
+      const rUnknown = api._pfComputePortfolioReporting(0, 5000, 1, false, 0, recordedCash, {});
+      check('unknown-currency holding present -> NOT complete (Known Assets Total semantics)',
+        rUnknown.completeness === false && rUnknown.knownHasComponent === true);
+      const rCorrupt = api._pfComputePortfolioReporting(0, 5000, 0, true, 1, recordedCash, {});
+      check('corrupt holding present -> NOT complete (Known Assets Total semantics)',
+        rCorrupt.completeness === false && rCorrupt.knownHasComponent === true);
+    })();
+  })();
+
+  // ── Allocation math (denominator always includes cash) ─────────────────────
+  (function () {
+    const api = factory(makeMockLocalStorage({}));
+    const cash = { state: 'recorded', amountILS: 1300, asOf: '2026-08-09' };
+    const fx = fxRecord({ rate: 3.70 });
+    const r = api._pfComputePortfolioReporting(1000, 5000, 0, false, 0, cash, fx);
+    check('mixed allocation: denominator = 10000 (5000 ILS + 1000*3.70 USD + 1300 cash)',
+      r.completeness === true && Math.abs(r.allocationDenominatorValue - 10000) < 1e-9);
+
+    const ilsIls = api._pfHoldingIlsValue({ positionSize: 5000, currency: 'ILS' }, fx);
+    const usdIls = api._pfHoldingIlsValue({ positionSize: 1000, currency: 'USD' }, fx);
+    const ilsPct = ilsIls / r.allocationDenominatorValue * 100;
+    const usdPct = usdIls / r.allocationDenominatorValue * 100;
+    const cashPct = r.cashIlsForTotal / r.allocationDenominatorValue * 100;
+    check('ILS holding allocation = 50%', Math.abs(ilsPct - 50) < 1e-9);
+    check('USD holding allocation = 37%', Math.abs(usdPct - 37) < 1e-9);
+    check('cash allocation = 13%', Math.abs(cashPct - 13) < 1e-9);
+    check('allocations sum to 100%', Math.abs(ilsPct + usdPct + cashPct - 100) < 1e-9);
+
+    check('incomplete portfolio (cash unset) -> allocation denominator 0 (suppressed)',
+      api._pfComputePortfolioReporting(1000, 5000, 0, false, 0, { state: 'unset' }, {}).allocationDenominatorValue === 0);
+    check('missing FX with USD holdings -> allocation suppressed',
+      api._pfComputePortfolioReporting(1000, 0, 0, false, 0, cash, {}).allocationDenominatorValue === 0);
+    check('stale-invalid FX with USD holdings -> allocation suppressed',
+      api._pfComputePortfolioReporting(1000, 0, 0, false, 0, cash, fxRecord(10 * DAY)).allocationDenominatorValue === 0);
+
+    const zeroCash = { state: 'recorded', amountILS: 0, asOf: '2026-08-09' };
+    const rZero = api._pfComputePortfolioReporting(0, 5000, 0, false, 0, zeroCash, {});
+    check('explicit cash amountILS:0 -> still valid completeness input', rZero.completeness === true && rZero.total === 5000);
+  })();
+
+  // ── Portfolio-level day estimate ────────────────────────────────────────────
+  (function () {
+    function eodEntry(changePercent, opts) {
+      opts = opts || {};
+      const e = { price: 100, changePercent: changePercent, currency: opts.currency || 'USD', sessionEpoch: 1, fetchedAt: new Date().toISOString() };
+      if (opts.stale) e.lastFailAt = new Date().toISOString();
+      return e;
+    }
+
+    (function () {
+      const api = factory(makeMockLocalStorage({ pt_eod_cache: JSON.stringify({ 'TEVA.TA': eodEntry(2, { currency: 'ILS' }) }) }));
+      const est = api._pfPortfolioDayEstimate({ 'TEVA.TA': { symbol: 'TEVA.TA', positionSize: 10000, currency: 'ILS' } });
+      check('TASE/ILS 10000 @ +2% -> +200 exact, positionSize never divided by 100', est !== null && Math.abs(est.totalIls - 200) < 1e-9);
+      check('single fully-covered holding -> not partial', est !== null && est.partial === false);
+    })();
+
+    (function () {
+      const api = factory(makeMockLocalStorage({ pt_eod_cache: JSON.stringify({ AAA: eodEntry(0, { currency: 'ILS' }) }) }));
+      const est = api._pfPortfolioDayEstimate({ AAA: { symbol: 'AAA', positionSize: 5000, currency: 'ILS' } });
+      check('genuine 0.00% change -> real zero move, estimate still returned (not suppressed as missing)', est !== null && est.totalIls === 0);
+    })();
+
+    (function () {
+      const api = factory(makeMockLocalStorage({
+        pt_eod_cache: JSON.stringify({ AAPL: eodEntry(1, { currency: 'USD' }) }),
+        pt_fx: JSON.stringify(fxRecord(1 * DAY))
+      }));
+      const est = api._pfPortfolioDayEstimate({ AAPL: { symbol: 'AAPL', positionSize: 1000, currency: 'USD' } });
+      check('USD 1000 @ +1% with fresh FX 3.68 -> +36.80 (positionSize * pct/100 * rate)', est !== null && Math.abs(est.totalIls - 36.8) < 1e-9);
+    })();
+
+    (function () {
+      const api = factory(makeMockLocalStorage({
+        pt_eod_cache: JSON.stringify({ AAPL: eodEntry(1, { currency: 'USD' }) }),
+        pt_fx: JSON.stringify(fxRecord(4 * DAY))
+      }));
+      const est = api._pfPortfolioDayEstimate({ AAPL: { symbol: 'AAPL', positionSize: 1000, currency: 'USD' } });
+      check('USD holding with aged-but-valid FX (not fresh) -> estimate suppressed, stricter than the total\'s bar', est === null);
+    })();
+
+    (function () {
+      const api = factory(makeMockLocalStorage({ pt_eod_cache: JSON.stringify({ AAA: eodEntry(2, { currency: 'ILS', stale: true }) }) }));
+      const est = api._pfPortfolioDayEstimate({ AAA: { symbol: 'AAA', positionSize: 5000, currency: 'ILS' } });
+      check('stale EOD on the only covered holding -> suppressed', est === null);
+    })();
+
+    (function () {
+      const api = factory(makeMockLocalStorage({ pt_eod_cache: JSON.stringify({ AAA: eodEntry(2, { currency: 'ILS' }) }) }));
+      const holdings = {
+        AAA: { symbol: 'AAA', positionSize: 5000, currency: 'ILS' },
+        BBB: { symbol: 'BBB', positionSize: 1000 }
+      };
+      const est = api._pfPortfolioDayEstimate(holdings);
+      check('unknown-currency holding excluded from covered set does not block the estimate', est !== null);
+      check('estimate marked partial when a holding was excluded', est !== null && est.partial === true);
+    })();
+
+    (function () {
+      const api = factory(makeMockLocalStorage({ pt_eod_cache: JSON.stringify({ AAA: eodEntry(2, { currency: 'ILS' }) }) }));
+      const holdings = {
+        AAA: { symbol: 'AAA', positionSize: 5000, currency: 'ILS' },
+        CCC: { symbol: 'CCC', _corrupt: true }
+      };
+      const est = api._pfPortfolioDayEstimate(holdings);
+      check('_corrupt holding excluded from covered set, does not block, marks partial', est !== null && est.partial === true);
+    })();
+
+    (function () {
+      const api = factory(makeMockLocalStorage({}));
+      const est = api._pfPortfolioDayEstimate({ ZZZ: { symbol: 'ZZZ', positionSize: 100 } });
+      check('zero covered holdings -> suppressed (null)', est === null);
+    })();
+  })();
+
+  // ── Backup v2: cash/fx null/object/malformed/absent envelope semantics ─────
+  (function () {
+    function baseDoc(schemaVersion, extra) {
+      return Object.assign({
+        schemaVersion: schemaVersion,
+        exportedAt: new Date().toISOString(),
+        sourceOrigin: 'http://localhost',
+        appBaseline: 'test',
+        holdings: {},
+        tickers: []
+      }, extra || {});
+    }
+    const api = factory(makeMockLocalStorage({}));
+
+    (function () {
+      const r = api._validatePortfolioBackup(baseDoc(2, { cash: null, fx: null }));
+      check('v2 cash:null, fx:null -> accepted, both null (explicit clear)', r.error === null && r.cash === null && r.fx === null);
+    })();
+    (function () {
+      const r = api._validatePortfolioBackup(baseDoc(2, { cash: { amountILS: 0, asOf: '2026-08-01' }, fx: null }));
+      check('v2 cash amountILS:0 -> accepted and preserved as a real zero (not dropped/rejected)',
+        r.error === null && r.cash && r.cash.amountILS === 0);
+    })();
+    (function () {
+      const r = api._validatePortfolioBackup(baseDoc(2, { cash: null, fx: fxRecord() }));
+      check('v2 valid complete fx object -> accepted and round-trips all six fields unchanged',
+        r.error === null && r.fx && r.fx.rate === 3.68 && r.fx.source === 'boi' &&
+        typeof r.fx.lastAttemptAt === 'string' && typeof r.fx.lastAttemptOk === 'boolean');
+    })();
+    check('v2 with cash key absent -> rejected, absence is not "leave untouched" for v2',
+      api._validatePortfolioBackup(baseDoc(2, { fx: null })).error !== null);
+    check('v2 with fx key absent -> rejected',
+      api._validatePortfolioBackup(baseDoc(2, { cash: null })).error !== null);
+    check('v2 malformed cash (negative amountILS) -> whole import rejected',
+      api._validatePortfolioBackup(baseDoc(2, { cash: { amountILS: -5, asOf: '2026-08-01' }, fx: null })).error !== null);
+    (function () {
+      const badFx = fxRecord(); delete badFx.lastAttemptOk;
+      check('v2 malformed fx (missing lastAttemptOk) -> whole import rejected',
+        api._validatePortfolioBackup(baseDoc(2, { cash: null, fx: badFx })).error !== null);
+    })();
+    check("v2 fx.source !== 'boi' -> whole import rejected",
+      api._validatePortfolioBackup(baseDoc(2, { cash: null, fx: fxRecord({ source: 'yahoo' }) })).error !== null);
+    (function () {
+      const r = api._validatePortfolioBackup(baseDoc(1));
+      check('v1 payload -> cash/fx both undefined, signal to leave local state untouched',
+        r.error === null && r.cash === undefined && r.fx === undefined);
+    })();
+    check('unknown schemaVersion 3 -> rejected',
+      api._validatePortfolioBackup(baseDoc(3, { cash: null, fx: null })).error !== null);
+  })();
+
+  // ── Backup restore application: _pfApplyCashFxRestore (shared with importPortfolioBackup) ──
+  (function () {
+    (function () {
+      const ls = makeMockLocalStorage({ pt_cash: 'PRE_EXISTING_CASH', pt_fx: 'PRE_EXISTING_FX' });
+      const api = factory(ls);
+      const failed = api._pfApplyCashFxRestore(undefined, undefined);
+      check('v1 restore (both undefined) -> no failures reported, no keys touched',
+        failed.length === 0 && ls._store.pt_cash === 'PRE_EXISTING_CASH' && ls._store.pt_fx === 'PRE_EXISTING_FX');
+    })();
+    (function () {
+      const ls = makeMockLocalStorage({ pt_cash: JSON.stringify({ amountILS: 500, asOf: '2026-08-01' }) });
+      const api = factory(ls);
+      const failed = api._pfApplyCashFxRestore(null, undefined);
+      check('v2 cash:null -> pt_cash cleared', failed.length === 0 && api._pfCashLoad().state === 'unset');
+    })();
+    (function () {
+      const ls = makeMockLocalStorage({ pt_fx: JSON.stringify(fxRecord()) });
+      const api = factory(ls);
+      const failed = api._pfApplyCashFxRestore(undefined, null);
+      check('v2 fx:null -> pt_fx cleared', failed.length === 0 && ls._store.pt_fx === undefined);
+    })();
+    (function () {
+      const ls = makeMockLocalStorage({});
+      const api = factory(ls);
+      const fx = fxRecord();
+      const failed = api._pfApplyCashFxRestore({ amountILS: 17626, asOf: '2026-08-09' }, fx);
+      const restoredCash = api._pfCashLoad();
+      const restoredFx = JSON.parse(ls._store.pt_fx);
+      check('v2 valid cash+fx -> both write with zero failures',
+        failed.length === 0 && restoredCash.state === 'recorded' && restoredCash.amountILS === 17626);
+      check('v2 fx restore round-trips all six fields unchanged (no re-normalization)',
+        restoredFx.rate === fx.rate && restoredFx.effectiveAt === fx.effectiveAt && restoredFx.source === fx.source &&
+        restoredFx.fetchedAt === fx.fetchedAt && restoredFx.lastAttemptAt === fx.lastAttemptAt && restoredFx.lastAttemptOk === fx.lastAttemptOk);
+    })();
+    (function () {
+      const ls = makeMockLocalStorage({});
+      ls.setItem = function () { throw new Error('QUOTA_EXCEEDED'); };
+      const api = factory(ls);
+      const failed = api._pfApplyCashFxRestore({ amountILS: 100, asOf: '2026-08-09' }, fxRecord());
+      check('simulated storage failure on both writes -> both reported as failed, not silently successful',
+        failed.indexOf('cash') !== -1 && failed.indexOf('FX rate') !== -1);
+    })();
+  })();
+
+  // ── FX gate defense-in-depth: all three network entry points self-gate ─────
+  // Regression-pins the correction that added a strict gate check inside
+  // _pfFxFetchOnce/_pfFxAutoFetchIfDue/_pfFxManualRefresh themselves (not
+  // just at their call sites), so no future direct call from anywhere can
+  // reach the network while the gate is off.
+  await (async function () {
+    let fxGateFactory;
+    try {
+      const g = {
+        isFiniteNumSrc:       extractFunctionSource(content, '_pfIsFiniteNum'),
+        fxLoadCacheSrc:       extractFunctionSource(content, '_pfFxLoadCache'),
+        fxSaveCacheSrc:       extractFunctionSource(content, '_pfFxSaveCache'),
+        fxCacheSetSuccessSrc: extractFunctionSource(content, '_pfFxCacheSetSuccess'),
+        fxCacheSetFailureSrc: extractFunctionSource(content, '_pfFxCacheSetFailure'),
+        fxFetchOnceSrc:       extractFunctionSource(content, '_pfFxFetchOnce'),
+        fxAutoFetchSrc:       extractFunctionSource(content, '_pfFxAutoFetchIfDue'),
+        fxManualRefreshSrc:   extractFunctionSource(content, '_pfFxManualRefresh'),
+        fxCacheKeySrc:        extractVarSource(content, 'PF_FX_CACHE_KEY'),
+        fxAutoCooldownSrc:    extractVarSource(content, 'PF_FX_AUTO_COOLDOWN_MS'),
+        fxFailCooldownSrc:    extractVarSource(content, 'PF_FX_FAIL_COOLDOWN_MS')
+      };
+      const missing = Object.keys(g).filter(function (k) { return !g[k]; });
+      if (missing.length > 0) {
+        fail('portfolio-reporting', 'FX gate: could not extract from index.html: ' + missing.join(', '));
+        return;
+      }
+      // eslint-disable-next-line no-new-func
+      fxGateFactory = new Function(
+        'localStorage', 'window', 'fetch', '_pfIsPortfolioViewActive', '_renderPortfolioPanel',
+        'var _pfFxFetching = false;\n' +
+          g.fxCacheKeySrc + '\n' + g.fxAutoCooldownSrc + '\n' + g.fxFailCooldownSrc + '\n' +
+          g.isFiniteNumSrc + '\n' + g.fxLoadCacheSrc + '\n' + g.fxSaveCacheSrc + '\n' +
+          g.fxCacheSetSuccessSrc + '\n' + g.fxCacheSetFailureSrc + '\n' +
+          g.fxFetchOnceSrc + '\n' + g.fxAutoFetchSrc + '\n' + g.fxManualRefreshSrc +
+          '\nreturn { _pfFxFetchOnce: _pfFxFetchOnce, _pfFxAutoFetchIfDue: _pfFxAutoFetchIfDue, _pfFxManualRefresh: _pfFxManualRefresh };'
+      );
+    } catch (e) {
+      fail('portfolio-reporting', 'FX gate: factory build error: ' + e.message);
+      return;
+    }
+
+    function makeCountingFetch(shouldSucceed) {
+      let calls = 0;
+      const fn = function () {
+        calls += 1;
+        if (!shouldSucceed) return Promise.reject(new Error('fetch should not have been called with the gate off'));
+        return Promise.resolve({
+          ok: true,
+          json: function () {
+            return Promise.resolve({ status: 'OK', rate: 3.68, effectiveAt: new Date().toISOString(), source: 'boi', fetchedAt: new Date().toISOString() });
+          }
+        });
+      };
+      fn.callCount = function () { return calls; };
+      return fn;
+    }
+    const noopViewActive = function () { return false; };
+    const noopRender = function () {};
+
+    const gateOffEntryPoints = [
+      ['_pfFxAutoFetchIfDue', function (api) { return api._pfFxAutoFetchIfDue(); }],
+      ['_pfFxManualRefresh', function (api) { return api._pfFxManualRefresh(); }],
+      ['_pfFxFetchOnce', function (api) { return api._pfFxFetchOnce(); }]
+    ];
+    for (const pair of gateOffEntryPoints) {
+      const fetchMock = makeCountingFetch(false);
+      const api = fxGateFactory(makeMockLocalStorage({}), { PT_ENABLE_PORTFOLIO_FX: false }, fetchMock, noopViewActive, noopRender);
+      await pair[1](api);
+      check('gate OFF: ' + pair[0] + '() -> zero fetches', fetchMock.callCount() === 0);
+    }
+
+    const fetchMockOn = makeCountingFetch(true);
+    const apiOn = fxGateFactory(makeMockLocalStorage({}), { PT_ENABLE_PORTFOLIO_FX: true }, fetchMockOn, noopViewActive, noopRender);
+    const okOn = await apiOn._pfFxFetchOnce();
+    check('gate ON: _pfFxFetchOnce() reaches the fetch call', fetchMockOn.callCount() === 1);
+    check('gate ON: successful fetch returns true', okOn === true);
+  })();
+
+  if (okCount === total) {
+    pass(total + ' portfolio-reporting assertion(s) passed');
+  }
+}
+
+async function main() {
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
 
@@ -1439,6 +1928,7 @@ function main() {
   phaseResearchViewTests();
   phaseTerminalChainIntegrity();
   phaseBackupFidelity();
+  await phasePortfolioReporting();
 
   console.log('\n=== Summary ===');
 
@@ -1459,4 +1949,7 @@ function main() {
   console.log('OFFLINE VALIDATION: PASS');
 }
 
-main();
+main().catch(function (e) {
+  console.error(e);
+  process.exit(1);
+});

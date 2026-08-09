@@ -689,8 +689,8 @@ select.edit-inp{appearance:none;cursor:pointer}
 /* ─── PORTFOLIO PANEL (Slice 1B-1: Add Position) ────────────────── */
 .btn-add-position{font-family:var(--mono);font-size:9px;font-weight:700;background:var(--blue);color:#fff;border:none;border-radius:3px;padding:5px 10px;cursor:pointer;flex-shrink:0}
 .btn-add-position:hover{background:#1D4ED8}
-#addPositionOverlay,#editPositionOverlay,#pfCloudOverlay,#pfCloudSaveOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center}
-#addPositionOverlay.open,#editPositionOverlay.open,#pfCloudOverlay.open,#pfCloudSaveOverlay.open{display:flex}
+#addPositionOverlay,#editPositionOverlay,#pfCloudOverlay,#pfCloudSaveOverlay,#editCashOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center}
+#addPositionOverlay.open,#editPositionOverlay.open,#pfCloudOverlay.open,#pfCloudSaveOverlay.open,#editCashOverlay.open{display:flex}
 .ap-modal{background:var(--card);border:1px solid var(--border);border-radius:8px;width:340px;max-width:95vw;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.6)}
 .ap-modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 12px;border-bottom:1px solid var(--border)}
 .ap-modal-title{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px}
@@ -721,12 +721,6 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-pos-pl--zero{color:var(--text3)}
 .pf-pos-pl--muted{color:var(--text3);opacity:.55}
 .pf-pos-alloc{font-family:var(--mono);font-size:10px;color:var(--text3);opacity:.7;letter-spacing:.3px;margin-top:2px}
-.pf-pos-chg{font-family:var(--mono);font-size:10px;letter-spacing:.4px;margin-top:3px;display:flex;gap:6px;align-items:baseline}
-.pf-pos-chg-price{color:var(--text2)}
-.pf-pos-chg-pct--pos{color:var(--green2)}
-.pf-pos-chg-pct--neg{color:var(--red2)}
-.pf-pos-chg-pct--zero{color:var(--text3)}
-.pf-pos-chg-age{color:var(--text3);opacity:.65}
 /* ─── PORTFOLIO PANEL (Slice 1C-1A: Runtime Price Bridge) ─── */
 .pf-pos-mkt{font-family:var(--mono);font-size:10px;letter-spacing:.4px;margin-top:3px;display:flex;gap:6px;align-items:baseline}
 .pf-pos-mkt-price{color:var(--text2)}
@@ -4364,13 +4358,6 @@ function _getResearchForHolding(symbol) {
   return _resolveResearchForHolding(symbol).result;
 }
 
-function _getDailyChangeForHolding(symbol) {
-  var source = (_cockpitResults && _cockpitResults.length)
-    ? _cockpitResults
-    : _srSafeParseResults();
-  return source.find(function(r) { return r && r.ticker === symbol; }) || null;
-}
-
 function _resolveResearchForHolding(symbol) {
   // Slice A: read-only per-symbol resolver. Normalizes the symbol, then merges
   // candidates from both _cockpitResults and the persisted pt_results read
@@ -6227,6 +6214,72 @@ function _pfWriteHoldingsRaw(h) {
   }
 }
 
+// ─── P-2B: Cash persistence (pt_cash) ───────────────────────────────────────
+// Separate top-level key, NOT a pseudo-holding — never touches pt_holdings.
+// Three explicit states, never conflated:
+//   'unset'    — no pt_cash key at all ("not recorded"). Contributes nothing
+//                to any total; a total can never be "complete" while this
+//                holds. This is the ordinary state before the owner has ever
+//                recorded cash, and MUST NOT be treated as amountILS: 0.
+//   'recorded' — { amountILS: <finite number >= 0>, asOf: <parseable date> }.
+//                amountILS: 0 is a real, owner-confirmed zero and is a valid
+//                'recorded' state, distinct from 'unset'.
+//   'invalid'  — key present but malformed (non-finite amount, unparseable
+//                date, wrong type). Treated like 'unset' for total-
+//                completeness purposes (contributes nothing) but disclosed
+//                with different wording ("cash data invalid"). Never
+//                auto-repaired by a mere read — only an explicit owner edit
+//                (a fresh _pfCashSave call) overwrites it.
+var PF_CASH_KEY = 'pt_cash';
+
+function _pfCashLoad() {
+  var raw = localStorage.getItem(PF_CASH_KEY);
+  if (raw === null) return { state: 'unset' };
+  var parsed;
+  try { parsed = JSON.parse(raw); }
+  catch (e) { return { state: 'invalid', raw: raw }; }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { state: 'invalid', raw: parsed };
+  }
+  var amountOk = _pfIsFiniteNum(parsed.amountILS) && parsed.amountILS >= 0;
+  var asOfOk   = typeof parsed.asOf === 'string' && !isNaN(Date.parse(parsed.asOf));
+  if (!amountOk || !asOfOk) return { state: 'invalid', raw: parsed };
+  return { state: 'recorded', amountILS: parsed.amountILS, asOf: parsed.asOf };
+}
+
+// Validates before writing — an invalid save is rejected outright rather than
+// persisted and flagged, since this is a single owner-entered scalar (unlike
+// the tolerant per-entry holdings normalizer, there is no bystander data here
+// that a stricter write could clobber).
+function _pfCashSave(amountILS, asOf) {
+  if (!_pfIsFiniteNum(amountILS) || amountILS < 0) {
+    return { ok: false, reason: 'INVALID_AMOUNT' };
+  }
+  if (typeof asOf !== 'string' || isNaN(Date.parse(asOf))) {
+    return { ok: false, reason: 'INVALID_DATE' };
+  }
+  try {
+    localStorage.setItem(PF_CASH_KEY, JSON.stringify({ amountILS: amountILS, asOf: asOf }));
+    return { ok: true };
+  } catch (e) {
+    console.warn('[PT] pt_cash: save failed', e);
+    return { ok: false, reason: 'STORAGE_ERROR', error: e };
+  }
+}
+
+// Clearing removes the key entirely — back to 'unset' ("not recorded"),
+// never a written { amountILS: 0 } (that would be a real recorded zero, a
+// different, distinct state).
+function _pfCashClear() {
+  try {
+    localStorage.removeItem(PF_CASH_KEY);
+    return { ok: true };
+  } catch (e) {
+    console.warn('[PT] pt_cash: clear failed', e);
+    return { ok: false, reason: 'STORAGE_ERROR', error: e };
+  }
+}
+
 function switchMainView(view) {
   document.querySelectorAll('.app-nav-tab[data-view]').forEach(function(t) {
     var isThis = t.dataset.view === view;
@@ -6297,6 +6350,121 @@ function _calcPortfolioAggregates(holdings) {
     livePrice = { covered: liveCovered, total: total };
   }
   return { manualPl: { covered: manualPl, total: total }, research: research, livePrice: livePrice };
+}
+
+// ─── P-2B: Portfolio Total / allocation — single source of truth ────────────
+// Pure. No DOM, no localStorage read of its own (subtotals/cashState/fxCache
+// are passed in, already loaded by the caller). This is the ONE place the
+// completeness/total/allocation-denominator rule is defined — _renderPortfolioPanel
+// and the offline QA suite both consume it, so the two can never drift into
+// different definitions of "complete" or different arithmetic.
+//
+// completeness requires: cash actually recorded (not merely absent and
+// treated as zero), no unknown-currency/corrupt holdings, and — only if any
+// USD holding exists — a usable (fresh or aged-but-valid) FX rate. Missing
+// cash/FX/gaps never silently become zero; completeness=false means the
+// caller must show a "Known Assets Total" (partial, disclosed), never an
+// unqualified "Portfolio Total".
+function _pfComputePortfolioReporting(usdSubtotal, ilsSubtotal, unknownCurrencyCount, hasCorrupt, corruptCount, cashState, fxCache) {
+  var fxState = _pfFxState(fxCache);
+  var fxUsableForTotal = fxState === 'fresh' || fxState === 'aged-but-valid';
+  var completeness = cashState.state === 'recorded'
+    && unknownCurrencyCount === 0
+    && !hasCorrupt
+    && (usdSubtotal === 0 || fxUsableForTotal);
+
+  var completenessReasons = [];
+  if (cashState.state === 'unset')   completenessReasons.push('Cash not recorded');
+  if (cashState.state === 'invalid') completenessReasons.push('Cash data invalid');
+  if (unknownCurrencyCount > 0)      completenessReasons.push(unknownCurrencyCount + (unknownCurrencyCount === 1 ? ' unknown-currency holding excluded' : ' unknown-currency holdings excluded'));
+  if (hasCorrupt)                    completenessReasons.push(corruptCount + (corruptCount === 1 ? ' corrupt holding excluded' : ' corrupt holdings excluded'));
+  if (usdSubtotal > 0 && fxState === 'missing')       completenessReasons.push('USD holdings excluded — FX unavailable');
+  if (usdSubtotal > 0 && fxState === 'stale-invalid') completenessReasons.push('USD holdings excluded — FX stale');
+
+  var cashIlsForTotal = cashState.state === 'recorded' ? cashState.amountILS : 0;
+
+  var result = {
+    fxState: fxState,
+    fxUsableForTotal: fxUsableForTotal,
+    completeness: completeness,
+    completenessReasons: completenessReasons,
+    cashIlsForTotal: cashIlsForTotal
+  };
+
+  if (completeness) {
+    // Full unified total = every component, USD converted at fxCache.rate.
+    result.total = cashIlsForTotal + ilsSubtotal + (usdSubtotal > 0 ? usdSubtotal * fxCache.rate : 0);
+    result.knownHasComponent = null; // not applicable in the complete state
+    // Allocation denominator = the same complete total — allocation is only
+    // ever shown alongside a complete Portfolio Total, never a partial one.
+    result.allocationDenominatorValue = result.total;
+  } else {
+    // A component "counts" independently of whether it happens to sum to
+    // exactly zero — cash explicitly recorded as amountILS:0 is a real known
+    // value, not an absence, and must contribute ₪0.00, not be treated as
+    // "no component". ilsSubtotal/usdSubtotal have no equivalent ambiguity:
+    // a holding only ever contributes when positionSize > 0 (enforced by
+    // _pfNormalizeHoldingEntry), so a zero subtotal there always means "no
+    // such holding exists", never "a recorded zero".
+    var knownUsdIncluded = fxUsableForTotal && usdSubtotal > 0;
+    result.total = cashIlsForTotal + ilsSubtotal + (knownUsdIncluded ? usdSubtotal * fxCache.rate : 0);
+    result.knownHasComponent = cashState.state === 'recorded' || ilsSubtotal > 0 || knownUsdIncluded;
+    result.allocationDenominatorValue = 0;
+  }
+  return result;
+}
+
+// Pure. One holding's value in ILS, using the same conversion rule the
+// reporting model above uses: ILS-native as-is, USD * fxCache.rate, any
+// other/unknown currency unrepresentable — returns null rather than
+// inventing a number (caller must exclude, never default to 0).
+function _pfHoldingIlsValue(h, fxCache) {
+  var n = Number(h.positionSize);
+  if (!isFinite(n) || n <= 0) return null;
+  if (h.currency === 'ILS') return n;
+  if (h.currency === 'USD') return (fxCache && _pfIsFiniteNum(fxCache.rate)) ? n * fxCache.rate : null;
+  return null;
+}
+
+// ─── P-2B: Portfolio-level day estimate ─────────────────────────────────────
+// Read-only. Covered set = valid-currency (USD/ILS), non-corrupt holdings —
+// the same set already excluded from Portfolio Total/Known Assets Total.
+// Unknown-currency/corrupt holdings are simply skipped (excludedCount),
+// never able to permanently suppress this by themselves. Suppressed
+// (returns null) unless EVERY covered holding has fresh (non-stale) EOD
+// coverage AND — only for a USD holding in the covered set — FX is strictly
+// 'fresh' (stricter than Portfolio Total's fresh-OR-aged-but-valid bar,
+// since this is a same-day move claim, not a snapshot value).
+function _pfPortfolioDayEstimate(holdings) {
+  var eodCache = _pfEodLoadCache();
+  var fxCache  = _pfFxLoadCache();
+  var fxState  = _pfFxState(fxCache);
+  var total = 0;
+  var coveredCount = 0;
+  var excludedCount = 0;
+  var allFresh = true;
+  Object.keys(holdings).forEach(function(sym) {
+    var h = holdings[sym];
+    if (h._corrupt === true || (h.currency !== 'USD' && h.currency !== 'ILS')) {
+      excludedCount += 1;
+      return;
+    }
+    coveredCount += 1;
+    var n = Number(h.positionSize);
+    if (!isFinite(n) || n <= 0) { allFresh = false; return; }
+    var cacheEntry = eodCache[sym];
+    var hasFreshEod = !!cacheEntry && !_pfEodIsStale(cacheEntry)
+      && typeof cacheEntry.changePercent === 'number' && isFinite(cacheEntry.changePercent);
+    if (!hasFreshEod) { allFresh = false; return; }
+    if (h.currency === 'USD') {
+      if (fxState !== 'fresh') { allFresh = false; return; }
+      total += n * cacheEntry.changePercent / 100 * fxCache.rate;
+    } else {
+      total += n * cacheEntry.changePercent / 100;
+    }
+  });
+  if (coveredCount === 0 || !allFresh) return null;
+  return { totalIls: total, partial: excludedCount > 0 };
 }
 
 // ─── Slice 1D-2: Pure sort helper — read-only, no mutation ──────────────────
@@ -6395,14 +6563,20 @@ function _renderPortfolioPanel() {
     hdrRight.appendChild(cloudBtn);
   }
 
-  // P-2A: manual refresh — always fetches (bypasses the automatic
-  // cooldown), same client gate as the rest of the live-price feature.
-  if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true && count > 0) {
+  // P-2A/P-2B: manual refresh — always fetches (bypasses the automatic
+  // cooldown). Shown when either the live-price or FX gate is on; each half
+  // of the click handler independently checks its own gate (mirroring how
+  // _pfEodManualRefresh/_pfFxManualRefresh already self-gate) so a portfolio
+  // with only one of the two features enabled never fires the other's call.
+  if ((window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true || window.PT_ENABLE_PORTFOLIO_FX === true) && count > 0) {
     var refreshBtn = document.createElement('button');
     refreshBtn.className   = 'btn-export';
     refreshBtn.textContent = 'REFRESH ⟳';
-    refreshBtn.title       = 'Fetch latest completed-session prices now';
-    refreshBtn.onclick     = function() { _pfEodManualRefresh(Object.keys(loadHoldings())); };
+    refreshBtn.title       = 'Fetch latest completed-session prices / FX rate now';
+    refreshBtn.onclick     = function() {
+      if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true) _pfEodManualRefresh(Object.keys(loadHoldings()));
+      if (window.PT_ENABLE_PORTFOLIO_FX === true) _pfFxManualRefresh();
+    };
     hdrRight.appendChild(refreshBtn);
   }
 
@@ -6466,9 +6640,9 @@ function _renderPortfolioPanel() {
     // metadata-only issue (e.g. on manualPlPct/source/updatedAt) does NOT
     // exclude an entry here — only an invalid/missing positionSize or
     // currency does, since those are the two fields this total depends on.
-    var usdSubtotal = 0, ilsSubtotal = 0, unknownCurrencyCount = 0, hasCorrupt = false;
+    var usdSubtotal = 0, ilsSubtotal = 0, unknownCurrencyCount = 0, hasCorrupt = false, corruptCount = 0;
     Object.values(holdings).forEach(function(h) {
-      if (h._corrupt === true) { hasCorrupt = true; return; }
+      if (h._corrupt === true) { hasCorrupt = true; corruptCount += 1; return; }
       var n = Number(h.positionSize);
       if (!isFinite(n) || n <= 0) return;
       if (h.currency === 'USD') usdSubtotal += n;
@@ -6531,22 +6705,148 @@ function _renderPortfolioPanel() {
     if (unknownCurrencyCount > 0) {
       summary.appendChild(_pfSummaryStat('Currency Not Recorded', String(unknownCurrencyCount) + (unknownCurrencyCount === 1 ? ' holding' : ' holdings')));
     }
-    // Portfolio Total (ILS) is the owner's stated target model, but P-1 has
-    // no FX rate and must not present a total as complete when it isn't. A
-    // real number is shown ONLY when every holding's value is both known
-    // and already ILS: no USD (needs a rate this slice doesn't have), no
-    // unknown/invalid-currency holdings with a value, and no _corrupt
-    // holdings (value/currency unavailable at all). Otherwise: '—' with an
-    // honest, specific reason rather than a silently partial number.
-    var totalBlockedByUsd     = usdSubtotal > 0;
-    var totalBlockedByGaps    = unknownCurrencyCount > 0 || hasCorrupt;
-    if (!totalBlockedByUsd && !totalBlockedByGaps && ilsSubtotal > 0) {
-      summary.appendChild(_pfSummaryStat('Portfolio Total (ILS)', '₪' + ilsSubtotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })));
+    // ─── P-2B: Cash, FX, and the two-label Portfolio Total honesty model ───
+    // All completeness/total/allocation-denominator math lives in
+    // _pfComputePortfolioReporting (pure, shared with the offline QA suite)
+    // — this block only turns its result into DOM. Missing cash/FX/gaps
+    // never silently become zero; they flip the total's label from
+    // "Portfolio Total" to "Known Assets Total" and are disclosed by name
+    // rather than folded into a number that looks complete.
+    var cashState  = _pfCashLoad();
+    var fxCache    = _pfFxLoadCache();
+    var reporting  = _pfComputePortfolioReporting(usdSubtotal, ilsSubtotal, unknownCurrencyCount, hasCorrupt, corruptCount, cashState, fxCache);
+    var fxState    = reporting.fxState;
+    var completeness = reporting.completeness;
+    var completenessReasons = reporting.completenessReasons;
+
+    // Cash line — always rendered regardless of any gate, three distinct
+    // states, never coerced to a number when unset/invalid (see _pfCashLoad).
+    // Allocation % (cash's own share of the complete portfolio) is appended
+    // only when completeness is true — the approved model always includes
+    // cash in the denominator, so cash needs the same owner-visible
+    // allocation figure a holding card gets, not just its raw ₪ amount.
+    var cashBlock = document.createElement('div');
+    cashBlock.className = 'pf-summary-stat';
+    var cashLbl = document.createElement('div');
+    cashLbl.className   = 'pf-summary-lbl';
+    cashLbl.textContent = 'Cash (ILS)';
+    var cashVal = document.createElement('div');
+    cashVal.className = 'pf-summary-val';
+    if (cashState.state === 'recorded') {
+      cashVal.textContent = '₪' + cashState.amountILS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    } else if (cashState.state === 'invalid') {
+      cashVal.textContent = '— (cash data invalid)';
+      cashVal.style.color = 'var(--red2)';
     } else {
-      var totalReasons = [];
-      if (totalBlockedByUsd)  totalReasons.push('FX conversion pending');
-      if (totalBlockedByGaps) totalReasons.push('Incomplete holding data');
-      summary.appendChild(_pfSummaryStat('Portfolio Total (ILS)', '— · ' + totalReasons.join(' · ')));
+      cashVal.textContent = '— (not recorded)';
+    }
+    cashBlock.appendChild(cashLbl);
+    cashBlock.appendChild(cashVal);
+    if (completeness && reporting.allocationDenominatorValue > 0) {
+      var cashAllocEl = document.createElement('div');
+      cashAllocEl.className = 'pf-pos-alloc';
+      cashAllocEl.textContent = (reporting.cashIlsForTotal / reporting.allocationDenominatorValue * 100).toFixed(1) + '% of portfolio';
+      cashBlock.appendChild(cashAllocEl);
+    }
+    var cashActions = document.createElement('div');
+    cashActions.style.cssText = 'display:flex;gap:6px;margin-top:4px';
+    var cashEditBtn = document.createElement('button');
+    cashEditBtn.className   = 'btn-pf-edit';
+    cashEditBtn.textContent = 'Edit';
+    cashEditBtn.onclick     = function(){ openEditCashModal(); };
+    cashActions.appendChild(cashEditBtn);
+    if (cashState.state === 'recorded') {
+      var cashClearBtn = document.createElement('button');
+      cashClearBtn.className   = 'btn-pf-delete';
+      cashClearBtn.textContent = 'Clear';
+      // Persistence failures are detected, not silently ignored — same rule
+      // P-1 applies to saveHoldings(). showToast mirrors deletePosition's
+      // own failure-reporting pattern for a direct (non-modal) panel action.
+      cashClearBtn.onclick     = function() {
+        if (!confirm('Clear recorded cash? This returns cash to "not recorded" — it will NOT be treated as zero.')) return;
+        var clearResult = _pfCashClear();
+        if (clearResult.ok !== true) {
+          showToast('Clear failed — your browser storage is unavailable or full. Cash was NOT cleared.');
+          return;
+        }
+        _renderPortfolioPanel();
+      };
+      cashActions.appendChild(cashClearBtn);
+    }
+    cashBlock.appendChild(cashActions);
+    summary.appendChild(cashBlock);
+
+    // FX status chip — always rendered, never gated. PT_ENABLE_PORTFOLIO_FX
+    // only controls whether a fetch is ever attempted (_pfFxAutoFetchIfDue/
+    // _pfFxManualRefresh) — with it off, or on but never yet successful,
+    // this honestly shows "FX unavailable" rather than inventing a rate.
+    var fxChip = document.createElement('div');
+    fxChip.className = 'pf-summary-stat';
+    var fxChipLbl = document.createElement('div');
+    fxChipLbl.className   = 'pf-summary-lbl';
+    fxChipLbl.textContent = 'FX (USD/ILS)';
+    var fxChipVal = document.createElement('div');
+    fxChipVal.className = 'pf-summary-val';
+    if (fxState === 'missing') {
+      fxChipVal.textContent = 'FX unavailable';
+    } else {
+      var fxDateStr = new Date(fxCache.effectiveAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      var fxLabel = fxCache.rate.toFixed(2) + ' · ' + fxDateStr + ' · ' + String(fxCache.source || 'boi').toUpperCase();
+      if (fxState === 'fresh') {
+        fxChipVal.textContent = 'FX ' + fxLabel;
+      } else if (fxState === 'aged-but-valid') {
+        fxChipVal.textContent = 'FX ' + fxLabel + ' (aged)';
+        fxChipVal.style.color = 'var(--yellow2)';
+      } else {
+        fxChipVal.textContent = 'FX ' + fxLabel + ' — stale, not used in totals';
+        fxChipVal.style.color = 'var(--yellow2)';
+      }
+    }
+    fxChip.appendChild(fxChipLbl);
+    fxChip.appendChild(fxChipVal);
+    summary.appendChild(fxChip);
+
+    // Portfolio Total (ILS) — two-label honesty model, value/completeness
+    // already computed by _pfComputePortfolioReporting above. "Portfolio
+    // Total" claims completeness; "Known Assets Total" never does, and
+    // always discloses exactly what it excludes (completenessReasons). An
+    // aged-but-valid FX rate is good enough for this total (amber-qualified)
+    // but not for the stricter day-estimate below.
+    if (completeness) {
+      var totalValText = '₪' + reporting.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      var totalStat = _pfSummaryStat('Portfolio Total (ILS)', totalValText);
+      if (fxState === 'aged-but-valid') {
+        var totalQualifier = document.createElement('div');
+        totalQualifier.style.cssText = 'font-size:10px;color:var(--yellow2);margin-top:2px';
+        totalQualifier.textContent = 'FX as of ' + new Date(fxCache.effectiveAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' (aged)';
+        totalStat.appendChild(totalQualifier);
+      }
+      summary.appendChild(totalStat);
+    } else {
+      var knownValText = reporting.knownHasComponent
+        ? ('₪' + reporting.total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+        : '—';
+      var knownStat = _pfSummaryStat('Known Assets Total (ILS)', knownValText);
+      var knownDetail = document.createElement('div');
+      knownDetail.style.cssText = 'font-size:10px;color:var(--text3);margin-top:2px';
+      knownDetail.textContent = 'Excludes: ' + completenessReasons.join(' · ');
+      knownStat.appendChild(knownDetail);
+      summary.appendChild(knownStat);
+    }
+
+    // Portfolio-level day estimate — see _pfPortfolioDayEstimate: strictly
+    // fresh-FX-only for USD holdings (stricter than the total's bar above),
+    // all-covered-fresh-or-suppress, never presented as full-portfolio when
+    // any holding was excluded from the covered set.
+    var dayEst = _pfPortfolioDayEstimate(holdings);
+    if (dayEst !== null) {
+      var estSign = dayEst.totalIls > 0 ? '+' : (dayEst.totalIls < 0 ? '-' : '');
+      var estLabel = 'Est. Daily Move' + (dayEst.partial ? ' (covered holdings only)' : '');
+      var estValText = estSign + '₪' + Math.abs(dayEst.totalIls).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      var estStat = _pfSummaryStat(estLabel, estValText);
+      var estValEl = estStat.querySelector('.pf-summary-val');
+      if (estValEl) estValEl.style.color = dayEst.totalIls > 0 ? 'var(--green2)' : dayEst.totalIls < 0 ? 'var(--red2)' : '';
+      summary.appendChild(estStat);
     }
     panel.appendChild(summary);
 
@@ -6648,26 +6948,18 @@ function _renderPortfolioPanel() {
     });
     panel.appendChild(sortBar);
 
-    // Allocation is a separate completeness question from Portfolio Total
-    // (ILS) — a USD-only portfolio has no valid ILS total without FX, but
-    // its allocation % is still exact because every holding and the
-    // denominator share one currency. Denominator is set only when every
-    // valid holding is the SAME single currency and there are no
-    // unknown-currency/_corrupt gaps; mixed USD+ILS (or any gap) leaves it
-    // null, and every card falls back to '—'. Metadata-only issues (not on
-    // positionSize/currency) never affect usdSubtotal/ilsSubtotal/
-    // totalBlockedByGaps, so they never block allocation either.
-    var allocationDenominatorCurrency = null;
-    var allocationDenominatorValue    = 0;
-    if (!totalBlockedByGaps) {
-      if (usdSubtotal > 0 && ilsSubtotal === 0) {
-        allocationDenominatorCurrency = 'USD';
-        allocationDenominatorValue    = usdSubtotal;
-      } else if (ilsSubtotal > 0 && usdSubtotal === 0) {
-        allocationDenominatorCurrency = 'ILS';
-        allocationDenominatorValue    = ilsSubtotal;
-      }
-    }
+    // Allocation now always means "share of the full portfolio including
+    // cash" (P-2B) — shown ONLY under completeness === true, using
+    // reporting.allocationDenominatorValue (the same unified total as
+    // Portfolio Total (ILS) above) as denominator. The former single-
+    // currency-only fallback (e.g. a valid USD-only-portfolio percentage
+    // with no cash/FX involved) is intentionally not used here: presenting
+    // a holdings-only percentage under the "allocation" label once cash is
+    // part of this feature's model would misrepresent it as the complete
+    // portfolio allocation. See Known Assets Total above for what an
+    // incomplete portfolio shows instead — allocation has no partial-state
+    // equivalent, only shown or suppressed.
+    var allocationDenominatorValue = reporting.allocationDenominatorValue;
 
     var list = document.createElement('div');
     list.className = 'pf-positions-list';
@@ -6718,10 +7010,10 @@ function _renderPortfolioPanel() {
 
       var allocEl = document.createElement('div');
       allocEl.className = 'pf-pos-alloc';
-      if (allocationDenominatorCurrency !== null && h.currency === allocationDenominatorCurrency) {
-        var _allocN = Number(h.positionSize);
-        allocEl.textContent = (isFinite(_allocN) && _allocN > 0)
-          ? ((_allocN / allocationDenominatorValue * 100).toFixed(1) + '% of portfolio')
+      if (completeness && allocationDenominatorValue > 0) {
+        var _allocIls = _pfHoldingIlsValue(h, fxCache);
+        allocEl.textContent = (_allocIls !== null)
+          ? ((_allocIls / allocationDenominatorValue * 100).toFixed(1) + '% of portfolio')
           : '—';
       } else {
         allocEl.textContent = '—';
@@ -6741,42 +7033,14 @@ function _renderPortfolioPanel() {
         plEl.classList.add('pf-pos-pl--muted');
       }
       card.appendChild(plEl);
-      var chgR = _getDailyChangeForHolding(sym);
-      if (chgR &&
-          typeof chgR._verifiedChangePct === 'number' && isFinite(chgR._verifiedChangePct) &&
-          typeof chgR._verifiedPrice === 'number' && isFinite(chgR._verifiedPrice) && chgR._verifiedPrice > 0) {
-        var chgTs = chgR._timestamp || chgR._orchestratedAt || null;
-        var chgTsMs = chgTs ? new Date(chgTs).getTime() : NaN;
-        var chgAgeMs = (chgTs && !isNaN(chgTsMs)) ? (Date.now() - chgTsMs) : null;
-        if (chgAgeMs !== null && !isNaN(chgAgeMs) && chgAgeMs >= 0 && chgAgeMs < 172800000) {
-          var chgEl = document.createElement('div');
-          chgEl.className = 'pf-pos-chg';
-          var chgPriceSpan = document.createElement('span');
-          chgPriceSpan.className = 'pf-pos-chg-price';
-          chgPriceSpan.textContent = '$' + chgR._verifiedPrice.toFixed(2) + ' · ';
-          chgEl.appendChild(chgPriceSpan);
-          var chgPctSpan = document.createElement('span');
-          var chgPct = chgR._verifiedChangePct;
-          if (chgPct > 0) {
-            chgPctSpan.className = 'pf-pos-chg-pct--pos';
-            chgPctSpan.textContent = '+' + chgPct.toFixed(2) + '%';
-          } else if (chgPct < 0) {
-            chgPctSpan.className = 'pf-pos-chg-pct--neg';
-            chgPctSpan.textContent = chgPct.toFixed(2) + '%';
-          } else {
-            chgPctSpan.className = 'pf-pos-chg-pct--zero';
-            chgPctSpan.textContent = '0.00%';
-          }
-          chgEl.appendChild(chgPctSpan);
-          if (chgAgeMs >= 72000000) {
-            var chgAgeSpan = document.createElement('span');
-            chgAgeSpan.className = 'pf-pos-chg-age';
-            chgAgeSpan.textContent = ' · ' + Math.round(chgAgeMs / 3600000) + 'h ago';
-            chgEl.appendChild(chgAgeSpan);
-          }
-          card.appendChild(chgEl);
-        }
-      }
+      // P-2B: the old scan-derived day-change block (48h-freshness, hardcoded
+      // $ prefix, read via _getDailyChangeForHolding) was removed here — the
+      // P-2A EOD-based estimate below (_updatePortfolioCard's .pf-pos-mkt
+      // element) is now the panel's sole day-change source, avoiding two
+      // contradictory numbers on one card. With both PT_ENABLE_PORTFOLIO_
+      // LIVE_PRICES and PT_ENABLE_PORTFOLIO_FX off, no day-change number is
+      // shown here — an accepted, honest consequence, not a regression to
+      // silently paper over.
       if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true) {
         var mktEl      = document.createElement('div');
         mktEl.id        = 'pf-mkt-' + sym;
@@ -7110,6 +7374,184 @@ window.addEventListener('focus', function() {
   var syms = Object.keys(loadHoldings());
   if (syms.length) _pfEodAutoFetchIfDue(syms);
 });
+window.addEventListener('focus', function() {
+  if (window.PT_ENABLE_PORTFOLIO_FX !== true || !_pfIsPortfolioViewActive()) return;
+  _pfFxAutoFetchIfDue();
+});
+
+// ── P-2B: Bank of Israel FX cache (pt_fx) ───────────────────────────────────
+// A single daily rate, not per-symbol like pt_eod_cache — cooldown/attempt
+// bookkeeping is folded into the SAME pt_fx record (lastAttemptAt/
+// lastAttemptOk) rather than a second key, unlike P-2A's separate
+// pt_eod_last_fetch. Same disposable-cache philosophy as pt_eod_cache: a
+// re-derivable-from-network cache, not real user data — corruption or a
+// write failure just means "re-fetch next time," logged, never user-facing
+// as a save-blocking error the way pt_holdings root corruption is.
+//
+// Gate: PT_ENABLE_PORTFOLIO_FX (client) controls network-fetch eligibility
+// ONLY — every rendering/formula consumer of FX state stays completely
+// ungated (see _renderPortfolioPanel), since "missing" is already an
+// honestly-disclosed degradation, not an error. Unlike P-2A's
+// _pfEodAutoFetchIfDue/_pfEodManualRefresh (which trust their call sites to
+// gate-check), the three functions below each independently verify
+// `window.PT_ENABLE_PORTFOLIO_FX === true` — at the top of both trigger
+// functions AND again at the actual network boundary in _pfFxFetchOnce(),
+// which has no valid non-network purpose. This is deliberate defense in
+// depth: no future direct call to any of these three, from anywhere, can
+// reach the network while the gate is off, regardless of what its caller
+// did or didn't check.
+var PF_FX_CACHE_KEY          = 'pt_fx';
+var PF_FX_AUTO_COOLDOWN_MS   = 4 * 60 * 60 * 1000;   // 4h — automatic open/focus fetch cooldown
+var PF_FX_FAIL_COOLDOWN_MS   = 30 * 60 * 1000;       // 30min — after a failed automatic attempt
+
+// Named-constant freshness policy — an explicit engineering choice informed
+// by Bank of Israel's real publication cadence (once daily on foreign-
+// currency business days only; no rate on weekends/Israeli holidays/some
+// Western holidays), NOT extracted from a BoI SLA (none exists — BoI
+// states it has no obligation to publish on any specific date). Kept as
+// named constants so this policy can be revised later without touching any
+// total/allocation/estimate formula that consumes _pfFxState()'s result.
+var PF_FX_FRESH_MAX_AGE_DAYS = 3;   // <= this: 'fresh' — safe for total AND day estimate
+var PF_FX_VALID_MAX_AGE_DAYS = 6;   // <= this: 'aged-but-valid' — safe for total only
+
+function _pfFxLoadCache() {
+  try {
+    var raw = localStorage.getItem(PF_FX_CACHE_KEY);
+    if (raw === null) return {};
+    var parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch (e) {
+    console.warn('[PT] pt_fx: unreadable, starting empty (disposable cache)', e);
+    return {};
+  }
+}
+function _pfFxSaveCache(cache) {
+  try { localStorage.setItem(PF_FX_CACHE_KEY, JSON.stringify(cache)); }
+  catch (e) { console.warn('[PT] pt_fx: write failed (disposable cache)', e); }
+}
+
+// A successful fetch overwrites rate/effectiveAt/source/fetchedAt outright —
+// BoI's API always returns the single latest available rate regardless of
+// when it's called, so there is no partial-update case to reconcile.
+function _pfFxCacheSetSuccess(rate, effectiveAt, source) {
+  var cache = _pfFxLoadCache();
+  cache.rate        = rate;
+  cache.effectiveAt = effectiveAt;
+  cache.source      = source;
+  cache.fetchedAt    = new Date().toISOString();
+  cache.lastAttemptAt = cache.fetchedAt;
+  cache.lastAttemptOk = true;
+  _pfFxSaveCache(cache);
+}
+// A failed attempt stamps ONLY the attempt-bookkeeping fields — the last
+// successfully-cached rate/effectiveAt (if any) is left untouched, mirroring
+// how _pfEodApplyAttemptOutcome's lastFailAt never destroys a symbol's
+// underlying cached price.
+function _pfFxCacheSetFailure() {
+  var cache = _pfFxLoadCache();
+  cache.lastAttemptAt = new Date().toISOString();
+  cache.lastAttemptOk = false;
+  _pfFxSaveCache(cache);
+}
+
+function _pfFxRateValid(cache) {
+  return !!cache && _pfIsFiniteNum(cache.rate) && cache.rate > 0
+    && typeof cache.effectiveAt === 'string' && !isNaN(Date.parse(cache.effectiveAt));
+}
+
+// One of 'missing' | 'fresh' | 'aged-but-valid' | 'stale-invalid'.
+// 'stale-invalid' is deliberately treated like 'missing' by every
+// total/allocation/estimate consumer — an aged rate does not keep producing
+// a unified figure indefinitely.
+function _pfFxState(cache) {
+  if (!_pfFxRateValid(cache)) return 'missing';
+  var ageDays = (Date.now() - Date.parse(cache.effectiveAt)) / (24 * 60 * 60 * 1000);
+  if (ageDays <= PF_FX_FRESH_MAX_AGE_DAYS) return 'fresh';
+  if (ageDays <= PF_FX_VALID_MAX_AGE_DAYS) return 'aged-but-valid';
+  return 'stale-invalid';
+}
+
+// Strict validator for the COMPLETE backup-restorable pt_fx record — all six
+// persisted fields, not just the render-usability subset _pfFxRateValid()
+// checks (rate/effectiveAt only). Financial usability and backup-schema
+// validity are separate concerns: a record can be usable for rendering
+// (_pfFxRateValid true) while still being incomplete for a faithful,
+// deterministic backup round-trip (this function false) if lastAttemptAt/
+// lastAttemptOk/source/fetchedAt are missing or malformed. Shared by BOTH
+// export (decides whether the live cache backs up faithfully) and backup
+// import validation (accepts/rejects an untrusted file's fx object) so the
+// two never drift into different definitions of "valid". source must be
+// exactly 'boi' — the sole current producer (boi-fx-proxy.js) — rather than
+// any non-empty string, so a validated record can be restored byte-for-byte
+// with no normalization (no .trim()); this is deliberately tight to the
+// current single source and can be loosened if a second provider is ever
+// added.
+function _pfFxBackupRecordValid(rec) {
+  return !!rec
+    && _pfIsFiniteNum(rec.rate) && rec.rate > 0
+    && typeof rec.effectiveAt === 'string' && !isNaN(Date.parse(rec.effectiveAt))
+    && rec.source === 'boi'
+    && typeof rec.fetchedAt === 'string' && !isNaN(Date.parse(rec.fetchedAt))
+    && typeof rec.lastAttemptAt === 'string' && !isNaN(Date.parse(rec.lastAttemptAt))
+    && typeof rec.lastAttemptOk === 'boolean';
+}
+
+var _pfFxFetching = false;
+
+// The actual network boundary. Gate-checked here too (not just by its two
+// callers below) because this function has no valid non-network purpose —
+// nothing about it is safe to run with the gate off.
+async function _pfFxFetchOnce() {
+  if (window.PT_ENABLE_PORTFOLIO_FX !== true) return false;
+  if (_pfFxFetching) return false;
+  _pfFxFetching = true;
+  try {
+    var resp = await fetch('/.netlify/functions/boi-fx-proxy', { method: 'GET' });
+    if (!resp.ok) { _pfFxCacheSetFailure(); return false; }
+    var body = await resp.json().catch(function() { return null; });
+    if (!body || body.status !== 'OK' || !_pfIsFiniteNum(body.rate) || body.rate <= 0 ||
+        typeof body.effectiveAt !== 'string' || isNaN(Date.parse(body.effectiveAt))) {
+      _pfFxCacheSetFailure();
+      return false;
+    }
+    _pfFxCacheSetSuccess(body.rate, body.effectiveAt, typeof body.source === 'string' ? body.source : 'boi');
+    return true;
+  } catch (e) {
+    console.warn('[PT] pt_fx: fetch failed', e);
+    _pfFxCacheSetFailure();
+    return false;
+  } finally {
+    _pfFxFetching = false;
+  }
+}
+
+// Automatic (open/focus) trigger: cooldown-gated exactly like
+// _pfEodAutoFetchIfDue, but over the single pt_fx record's own
+// lastAttemptAt/lastAttemptOk rather than a separate last-fetch key. No
+// prior attempt at all → always eligible (first-ever fetch, not a repeat).
+// Gate-checked here (not just at call sites) — see comment above.
+async function _pfFxAutoFetchIfDue() {
+  if (window.PT_ENABLE_PORTFOLIO_FX !== true) return;
+  if (_pfFxFetching) return;
+  var cache = _pfFxLoadCache();
+  var lastAttemptMs = typeof cache.lastAttemptAt === 'string' ? Date.parse(cache.lastAttemptAt) : NaN;
+  if (!isNaN(lastAttemptMs)) {
+    var cooldownMs = cache.lastAttemptOk === true ? PF_FX_AUTO_COOLDOWN_MS : PF_FX_FAIL_COOLDOWN_MS;
+    if ((Date.now() - lastAttemptMs) < cooldownMs) return;
+  }
+  await _pfFxFetchOnce();
+  if (_pfIsPortfolioViewActive()) _renderPortfolioPanel();
+}
+
+// Manual refresh never cooldown-gates — always attempts a fetch. Gate-
+// checked here (not just at call sites) — see comment above.
+async function _pfFxManualRefresh() {
+  if (window.PT_ENABLE_PORTFOLIO_FX !== true) return;
+  if (_pfFxFetching) return;
+  await _pfFxFetchOnce();
+  if (_pfIsPortfolioViewActive()) _renderPortfolioPanel();
+}
 
 function _pfLiveCanWrite(capturedRunId) {
   return capturedRunId === _pfLiveRunId
@@ -7141,19 +7583,12 @@ function _pfLiveAbortActiveRun(cause) {
   if (c) c.abort(cause);
 }
 
+// P-2B: the .pf-pos-chg fallback element no longer exists (old scan-derived
+// day-change block removed) — no fallback branch to check anymore.
 function _pfLiveClearCardLiveCell(sym) {
   var el = document.getElementById('pf-mkt-' + sym);
   if (!el) return;
-  var card     = el.closest('.pf-pos-card');
-  var fallback = card ? card.querySelector('.pf-pos-chg') : null;
   while (el.firstChild) el.removeChild(el.firstChild);
-  if (fallback) {
-    fallback.style.display = '';
-    if (window.getComputedStyle(fallback).display !== 'none') {
-      el.style.display = 'none';
-      return;
-    }
-  }
   el.style.display = '';
   var dash = document.createElement('span');
   dash.className   = 'pf-pos-mkt-price';
@@ -7376,14 +7811,13 @@ async function _portfolioFetchPrices(eligibleSyms, allSyms) {
   await _pfLiveBatch(eligibleSyms, allSyms);
 }
 
+// P-2B: the .pf-pos-chg fallback element no longer exists (old scan-derived
+// day-change block removed) — no fallback branch to check anymore.
 function _updatePortfolioCard(sym, mkt) {
   var el = document.getElementById('pf-mkt-' + sym);
   if (!el) return;
-  var card     = el.closest('.pf-pos-card');
-  var fallback = card ? card.querySelector('.pf-pos-chg') : null;
   while (el.firstChild) el.removeChild(el.firstChild);
   if (mkt && typeof mkt.price === 'number' && isFinite(mkt.price)) {
-    if (fallback) fallback.style.display = 'none';
     el.style.display = '';
     var priceSpan = document.createElement('span');
     priceSpan.className = 'pf-pos-mkt-price';
@@ -7442,13 +7876,6 @@ function _updatePortfolioCard(sym, mkt) {
       el.appendChild(staleTag);
     }
     return;
-  }
-  if (fallback) {
-    fallback.style.display = '';
-    if (window.getComputedStyle(fallback).display !== 'none') {
-      el.style.display = 'none';
-      return;
-    }
   }
   el.style.display = '';
   var dash = document.createElement('span');
@@ -8061,6 +8488,150 @@ function saveEditPosition() {
   var _curPos17a = (_wlEnt17a && _wlEnt17a.position) || {};
   upsertTicker(_editPosSym, { position: _normalizePosition(Object.assign({}, _curPos17a, { hasPosition: true })) });
   closeEditPositionModal();
+  _renderPortfolioPanel();
+}
+
+// ─── P-2B: Cash edit modal — mirrors openEditPositionModal's structure ──────
+function openEditCashModal() {
+  var overlay = document.getElementById('editCashOverlay');
+  var modal   = document.getElementById('editCashModal');
+  if (!overlay || !modal) return;
+  var cashState = _pfCashLoad();
+  modal.innerHTML = '';
+
+  var hdr = document.createElement('div');
+  hdr.className = 'ap-modal-hdr';
+  var titleEl = document.createElement('span');
+  titleEl.className   = 'ap-modal-title';
+  titleEl.textContent = 'Cash (ILS)';
+  var closeBtn = document.createElement('button');
+  closeBtn.className   = 'api-close-btn';
+  closeBtn.textContent = '✕';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.onclick     = closeEditCashModal;
+  hdr.appendChild(titleEl);
+  hdr.appendChild(closeBtn);
+
+  var body = document.createElement('div');
+  body.className = 'ap-modal-body';
+
+  if (cashState.state === 'invalid') {
+    var invalidNote = document.createElement('div');
+    invalidNote.className   = 'ap-warn';
+    invalidNote.style.color = 'var(--red2)';
+    invalidNote.textContent = 'Stored cash data could not be read and was preserved unused. Enter a value below and save to replace it.';
+    body.appendChild(invalidNote);
+  }
+
+  var amountRow = document.createElement('div');
+  amountRow.className = 'ap-field-row';
+  var amountLbl = document.createElement('label');
+  amountLbl.className   = 'ap-lbl';
+  amountLbl.textContent = 'Cash amount (₪)';
+  amountLbl.htmlFor     = 'pfCashAmount';
+  var amountInp = document.createElement('input');
+  amountInp.id          = 'pfCashAmount';
+  amountInp.type        = 'text';
+  amountInp.className   = 'ap-inp';
+  amountInp.placeholder = 'e.g. 17626';
+  amountInp.value       = cashState.state === 'recorded' ? String(cashState.amountILS) : '';
+  amountRow.appendChild(amountLbl);
+  amountRow.appendChild(amountInp);
+  body.appendChild(amountRow);
+
+  var asOfRow = document.createElement('div');
+  asOfRow.className = 'ap-field-row';
+  var asOfLbl = document.createElement('label');
+  asOfLbl.className   = 'ap-lbl';
+  asOfLbl.textContent = 'As of date';
+  asOfLbl.htmlFor     = 'pfCashAsOf';
+  var asOfInp = document.createElement('input');
+  asOfInp.id        = 'pfCashAsOf';
+  asOfInp.type      = 'date';
+  asOfInp.className = 'ap-inp';
+  // Local calendar date, not toISOString() (UTC) — during local evening
+  // hours UTC has already rolled to tomorrow, which would default this
+  // field to the wrong day.
+  var _now = new Date();
+  var _todayIso = _now.getFullYear() + '-' + String(_now.getMonth() + 1).padStart(2, '0') + '-' + String(_now.getDate()).padStart(2, '0');
+  var _cashAsOfDatePart = (cashState.state === 'recorded' && typeof cashState.asOf === 'string')
+    ? cashState.asOf.slice(0, 10) : '';
+  asOfInp.value = /^\d{4}-\d{2}-\d{2}$/.test(_cashAsOfDatePart) ? _cashAsOfDatePart : _todayIso;
+  asOfRow.appendChild(asOfLbl);
+  asOfRow.appendChild(asOfInp);
+  body.appendChild(asOfRow);
+
+  var warn = document.createElement('div');
+  warn.id        = 'pfCashWarnMsg';
+  warn.className = 'ap-warn';
+  body.appendChild(warn);
+
+  var actions = document.createElement('div');
+  actions.className = 'ap-actions';
+  var cancelBtn = document.createElement('button');
+  cancelBtn.className   = 'btn-edit-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick     = closeEditCashModal;
+  var saveBtn = document.createElement('button');
+  saveBtn.className   = 'btn-edit-save';
+  saveBtn.textContent = 'Save';
+  saveBtn.onclick     = saveEditCash;
+  actions.appendChild(cancelBtn);
+  actions.appendChild(saveBtn);
+
+  modal.appendChild(hdr);
+  modal.appendChild(body);
+  modal.appendChild(actions);
+
+  overlay.classList.add('open');
+  document.addEventListener('keydown', _onEditCashEscape);
+  setTimeout(function() { var f = document.getElementById('pfCashAmount'); if (f) f.focus(); }, 30);
+}
+
+function _onEditCashEscape(e) {
+  if (e.key === 'Escape') closeEditCashModal();
+}
+
+function closeEditCashModal() {
+  var overlay = document.getElementById('editCashOverlay');
+  if (overlay) overlay.classList.remove('open');
+  document.removeEventListener('keydown', _onEditCashEscape);
+}
+
+function saveEditCash() {
+  var amountInp = document.getElementById('pfCashAmount');
+  var asOfInp   = document.getElementById('pfCashAsOf');
+  var warnEl    = document.getElementById('pfCashWarnMsg');
+  if (!amountInp || !asOfInp || !warnEl) return;
+  warnEl.textContent = '';
+
+  // Number('') === 0 — an untouched/cleared field must NOT silently become
+  // a recorded zero. Blank is rejected outright; only an explicitly typed
+  // "0" reaches _pfCashSave as a real recorded zero.
+  var amountText = amountInp.value.trim();
+  if (amountText === '') {
+    warnEl.textContent = 'Enter a cash amount, including 0 if cash is explicitly zero.';
+    amountInp.focus();
+    return;
+  }
+  var amount = Number(amountText);
+  if (!isFinite(amount) || amount < 0) {
+    warnEl.textContent = 'Cash amount must be a number of 0 or more.';
+    amountInp.focus();
+    return;
+  }
+  var asOf = asOfInp.value;
+  if (typeof asOf !== 'string' || isNaN(Date.parse(asOf))) {
+    warnEl.textContent = 'Enter a valid as-of date.';
+    asOfInp.focus();
+    return;
+  }
+  var saveResult = _pfCashSave(amount, asOf);
+  if (!saveResult.ok) {
+    warnEl.textContent = 'Save failed — your browser storage is unavailable or full. This change was NOT saved.';
+    return;
+  }
+  closeEditCashModal();
   _renderPortfolioPanel();
 }
 
@@ -9524,14 +10095,52 @@ function exportPortfolioBackup() {
       showToast('Export failed: pt_tickers has unexpected format'); return;
     }
   } else { tickers = []; }
+
+  // P-2B: cash/fx are always included in a v2 export, as null ("not
+  // recorded"/"not cached") or a valid object — never omitted, so a later
+  // import can tell "not recorded" apart from "this file predates the
+  // feature" (schemaVersion 1). Locally invalid cash (reachable only via
+  // manual storage tampering) exports as null with a non-blocking warning —
+  // not silently dropped without comment. fx reconstructs the complete
+  // persisted pt_fx shape (all six fields, including lastAttemptAt/
+  // lastAttemptOk — real persisted source state, not disposable runtime-
+  // only bookkeeping) only when _pfFxBackupRecordValid confirms every field
+  // is present and well-formed. The warning below fires whenever the raw
+  // pt_fx key exists at all but fails that check — whether it's merely
+  // backup-incomplete (still fine for rendering) or fully malformed/
+  // unreadable (also fails _pfFxRateValid) — since either way the owner's
+  // real cached data did not make it into this backup and they should know.
+  // No key at all is the ordinary "never fetched yet" state and warns
+  // nothing.
+  var cashStateForExport = _pfCashLoad();
+  if (cashStateForExport.state === 'invalid') {
+    showToast('Note: locally stored cash data could not be read and was exported as "not recorded" — edit and save cash to fix this.');
+  }
+  var cashPayload = cashStateForExport.state === 'recorded'
+    ? { amountILS: cashStateForExport.amountILS, asOf: cashStateForExport.asOf }
+    : null;
+  var fxCacheForExport = _pfFxLoadCache();
+  var fxRawPresentForExport = localStorage.getItem(PF_FX_CACHE_KEY) !== null;
+  var fxBackupValid = _pfFxBackupRecordValid(fxCacheForExport);
+  if (fxRawPresentForExport && !fxBackupValid) {
+    showToast('Note: cached FX data could not be backed up faithfully (incomplete or unreadable record) and was exported as "not cached" — refresh FX to fix this.');
+  }
+  var fxPayload = fxBackupValid ? {
+    rate: fxCacheForExport.rate, effectiveAt: fxCacheForExport.effectiveAt,
+    source: fxCacheForExport.source, fetchedAt: fxCacheForExport.fetchedAt,
+    lastAttemptAt: fxCacheForExport.lastAttemptAt, lastAttemptOk: fxCacheForExport.lastAttemptOk
+  } : null;
+
   _ptDownload(
     new Blob([JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       exportedAt:    new Date().toISOString(),
       appBaseline:   '5e26485',
       sourceOrigin:  window.location.origin,
       holdings:      holdings,
-      tickers:       tickers
+      tickers:       tickers,
+      cash:          cashPayload,
+      fx:            fxPayload
     }, null, 2)], { type: 'application/json' }),
     'pt_backup_' + _ptTimestamp() + '.json'
   );
@@ -9576,16 +10185,38 @@ function _downloadPreImportBackup() {
     }
   } else { tickers = []; }
 
+  // P-2B: same symmetric treatment as holdings/tickers above — cash is real
+  // owner-entered data, so an invalid local cash record's raw value is
+  // preserved as a diagnostic field, same as holdingsRawUnparseable/
+  // tickersRawUnparseable. fx is explicitly a disposable, re-derivable-from-
+  // network cache (see _pfFxLoadCache's own doc comment) — an invalid/
+  // incomplete local record simply exports as null here, no diagnostic
+  // field, no toast (this function never shows one, by design: it must not
+  // itself become a reason recovery is blocked).
+  var cashStateForSnapshot = _pfCashLoad();
+  var cashSnapshotPayload = cashStateForSnapshot.state === 'recorded'
+    ? { amountILS: cashStateForSnapshot.amountILS, asOf: cashStateForSnapshot.asOf }
+    : null;
+  var fxCacheForSnapshot = _pfFxLoadCache();
+  var fxSnapshotPayload = _pfFxBackupRecordValid(fxCacheForSnapshot) ? {
+    rate: fxCacheForSnapshot.rate, effectiveAt: fxCacheForSnapshot.effectiveAt,
+    source: fxCacheForSnapshot.source, fetchedAt: fxCacheForSnapshot.fetchedAt,
+    lastAttemptAt: fxCacheForSnapshot.lastAttemptAt, lastAttemptOk: fxCacheForSnapshot.lastAttemptOk
+  } : null;
+
   var payload = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     exportedAt:    new Date().toISOString(),
     appBaseline:   '5e26485',
     sourceOrigin:  window.location.origin,
     holdings:      holdings,
-    tickers:       tickers
+    tickers:       tickers,
+    cash:          cashSnapshotPayload,
+    fx:            fxSnapshotPayload
   };
   if (holdingsRawUnparseable !== undefined) payload.holdingsRawUnparseable = holdingsRawUnparseable;
   if (tickersRawUnparseable  !== undefined) payload.tickersRawUnparseable  = tickersRawUnparseable;
+  if (cashStateForSnapshot.state === 'invalid') payload.cashRawUnparseable = cashStateForSnapshot.raw;
   _ptDownload(
     new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
     'pt_pre_import_backup_' + _ptTimestamp() + '.json'
@@ -9593,14 +10224,18 @@ function _downloadPreImportBackup() {
   return true;
 }
 
-// ── EG-19A: Backup validation ─────────────────────────────────────────────────
-// Success: { error: null, holdings, tickers, exportedAt, sourceOrigin, appBaseline }
+// ── EG-19A/P-2B: Backup validation ────────────────────────────────────────────
+// Success: { error: null, holdings, tickers, exportedAt, sourceOrigin,
+//   appBaseline, cash, fx } — cash/fx are `undefined` for a schemaVersion 1
+//   payload (caller's signal to leave local pt_cash/pt_fx untouched — v1
+//   predates this feature and cannot express cash/fx intent), otherwise
+//   each is `null` (explicit clear) or a validated object (restore verbatim).
 // Failure: { error: string } — caller must write nothing.
 function _validatePortfolioBackup(obj) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj))
     return { error: 'Not a valid backup object.' };
-  if (obj.schemaVersion !== 1)
-    return { error: 'Unknown backup version (' + obj.schemaVersion + '). Only version 1 is supported.' };
+  if (obj.schemaVersion !== 1 && obj.schemaVersion !== 2)
+    return { error: 'Unknown backup version (' + obj.schemaVersion + '). Only version 1 or 2 is supported.' };
   if (typeof obj.exportedAt !== 'string' || !obj.exportedAt.trim())
     return { error: 'exportedAt must be a non-empty string.' };
   if (isNaN(Date.parse(obj.exportedAt)))
@@ -9656,11 +10291,90 @@ function _validatePortfolioBackup(obj) {
       position:     _normalizePosition(t.position)
     });
   }
+  // P-2B: cash/fx — schemaVersion 1 predates this feature and structurally
+  // cannot express cash/fx intent, so both stay `undefined` (the caller's
+  // signal to leave local pt_cash/pt_fx completely untouched). schemaVersion
+  // 2 always carries a deterministic instruction: the key must be present
+  // and be either null (explicit clear) or a validated object — an absent
+  // key on a self-declared v2 payload is a contract violation, not read as
+  // "leave untouched" (a genuine v2 export always includes both keys), and
+  // any malformed shape hard-rejects the WHOLE import, same strict-envelope
+  // tier as exportedAt/sourceOrigin above — no partial-success imports. The
+  // fx shape check reuses _pfFxBackupRecordValid exactly (same six-field,
+  // source==='boi' definition export uses) and every field is restored
+  // unchanged (no .trim()/normalization) — validation may reject malformed
+  // input, but must not silently rewrite a valid persisted record.
+  var validatedCash, validatedFx;
+  if (obj.schemaVersion === 2) {
+    if (!Object.prototype.hasOwnProperty.call(obj, 'cash'))
+      return { error: 'schemaVersion 2 requires a cash field (null or {amountILS, asOf}).' };
+    if (obj.cash === null) {
+      validatedCash = null;
+    } else {
+      if (!obj.cash || typeof obj.cash !== 'object' || Array.isArray(obj.cash))
+        return { error: 'cash must be null or an object.' };
+      if (!_pfIsFiniteNum(obj.cash.amountILS) || obj.cash.amountILS < 0)
+        return { error: 'cash.amountILS must be a finite number >= 0.' };
+      if (typeof obj.cash.asOf !== 'string' || isNaN(Date.parse(obj.cash.asOf)))
+        return { error: 'cash.asOf must be a valid date string.' };
+      validatedCash = { amountILS: obj.cash.amountILS, asOf: obj.cash.asOf };
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(obj, 'fx'))
+      return { error: 'schemaVersion 2 requires an fx field (null or the full pt_fx record).' };
+    if (obj.fx === null) {
+      validatedFx = null;
+    } else {
+      if (!_pfFxBackupRecordValid(obj.fx))
+        return { error: 'fx must be null or a complete {rate, effectiveAt, source, fetchedAt, lastAttemptAt, lastAttemptOk} record.' };
+      validatedFx = {
+        rate: obj.fx.rate, effectiveAt: obj.fx.effectiveAt, source: obj.fx.source,
+        fetchedAt: obj.fx.fetchedAt, lastAttemptAt: obj.fx.lastAttemptAt, lastAttemptOk: obj.fx.lastAttemptOk
+      };
+    }
+  }
+  // else: schemaVersion === 1 — validatedCash/validatedFx stay undefined.
+
   return {
     error: null, holdings: normalizedHoldings, tickers: normalizedTickers,
     exportedAt: obj.exportedAt.trim(), sourceOrigin: obj.sourceOrigin.trim(),
-    appBaseline: obj.appBaseline.trim()
+    appBaseline: obj.appBaseline.trim(), cash: validatedCash, fx: validatedFx
   };
+}
+
+// ── P-2B: apply a validated backup's cash/fx instruction to storage ──────────
+// Pure with respect to control flow (no confirm/FileReader/DOM here) — takes
+// exactly what _validatePortfolioBackup already validated and returns which
+// parts (if any) failed to write, so importPortfolioBackup and the offline
+// QA suite exercise the identical write logic instead of two copies that
+// could drift. `undefined` (schemaVersion 1) touches nothing; `null` clears;
+// a validated object restores verbatim (fx's six fields written unchanged,
+// no re-normalization — same "don't rewrite a valid persisted record" rule
+// _validatePortfolioBackup itself follows).
+function _pfApplyCashFxRestore(validatedCash, validatedFx) {
+  var failedParts = [];
+  if (validatedCash !== undefined) {
+    var cashWrite = validatedCash === null ? _pfCashClear() : _pfCashSave(validatedCash.amountILS, validatedCash.asOf);
+    if (!cashWrite.ok) failedParts.push('cash');
+  }
+  if (validatedFx !== undefined) {
+    var fxWriteOk = true;
+    try {
+      if (validatedFx === null) {
+        localStorage.removeItem(PF_FX_CACHE_KEY);
+      } else {
+        localStorage.setItem(PF_FX_CACHE_KEY, JSON.stringify({
+          rate: validatedFx.rate, effectiveAt: validatedFx.effectiveAt, source: validatedFx.source,
+          fetchedAt: validatedFx.fetchedAt, lastAttemptAt: validatedFx.lastAttemptAt, lastAttemptOk: validatedFx.lastAttemptOk
+        }));
+      }
+    } catch (e) {
+      console.warn('[PT] pt_fx: restore write failed', e);
+      fxWriteOk = false;
+    }
+    if (!fxWriteOk) failedParts.push('FX rate');
+  }
+  return failedParts;
 }
 
 // ── EG-19A: Portfolio data backup import ─────────────────────────────────────
@@ -9715,17 +10429,26 @@ function importPortfolioBackup(file) {
       console.warn('[PT] pt_tickers: restore write failed', e);
       tickersOk = false;
     }
+
+    // P-2B: cash/fx apply independently of tickers, after holdings has
+    // already succeeded, via the shared _pfApplyCashFxRestore (same function
+    // the offline QA suite exercises directly).
+    var failedParts = [];
+    if (!tickersOk) failedParts.push('watchlist');
+    failedParts = failedParts.concat(_pfApplyCashFxRestore(result.cash, result.fx));
+
     if (tickersOk) {
+      // Do not reconcile or touch the watchlist when it was not written —
+      // reconciling now could mutate it off the back of a restore that only
+      // half-completed.
       loadWatchlist();
       _reconcileWatchlistPositionsFromHoldings();
-      _renderPortfolioPanel();
+    }
+    _renderPortfolioPanel();
+    if (failedParts.length === 0) {
       showToast('Restored — ' + hCount + ' holding' + (hCount !== 1 ? 's' : '') + ', ' + tCount + ' ticker' + (tCount !== 1 ? 's' : ''));
     } else {
-      // Do not reconcile or touch the watchlist — it was not written, and
-      // reconciling now could mutate it off the back of a restore that
-      // only half-completed.
-      _renderPortfolioPanel();
-      showToast('Partially restored — ' + hCount + ' holding' + (hCount !== 1 ? 's' : '') + ' saved. The watchlist could NOT be saved (storage unavailable or full) and was left unchanged.');
+      showToast('Partially restored — ' + hCount + ' holding' + (hCount !== 1 ? 's' : '') + ' saved. Could NOT save: ' + failedParts.join(', ') + ' (storage unavailable or full).');
     }
   };
   reader.onerror = function() { showToast('Import failed: could not read file'); };
@@ -11047,6 +11770,11 @@ async function checkAllApis() {
 <!-- ADD POSITION MODAL — content built by openAddPositionModal() via DOM methods -->
 <div id="addPositionOverlay" onclick="if(event.target===this)closeAddPositionModal()">
   <div class="ap-modal" id="addPositionModal"></div>
+</div>
+
+<!-- EDIT CASH MODAL — content built by openEditCashModal() via DOM methods -->
+<div id="editCashOverlay" onclick="if(event.target===this)closeEditCashModal()">
+  <div class="ap-modal" id="editCashModal"></div>
 </div>
 
 <!-- EG-19B-2: LOAD FROM CLOUD MODAL — content built by openLoadFromCloudModal() via DOM methods -->

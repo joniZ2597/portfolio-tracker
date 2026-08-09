@@ -24,7 +24,8 @@
  *   FR05  import allowlist (exactly 3), no dynamic import() / require()
  *   FR06  .mjs syntax (node --check) + endpoint-exposure pin — BASELINE-
  *         SPECIFIC: exactly the 12 function-eligible entries of branch-dev
- *         baseline 93bcfb0 plus the new fund-facts.mjs, and NOTHING else
+ *         baseline 93bcfb0 plus fund-facts.mjs and boi-fx-proxy.js, and
+ *         NOTHING else
  *   FR07  import-inert: a clean child imports the .mjs under a throwing fetch
  *         guard — zero network/store/provider activity at import time
  *   FR08  OPTIONS -> 204 empty body, CORS parity
@@ -59,16 +60,18 @@ const TOKEN = 'tok-fund-facts-route-qa-1';
 const AUTH = 'Bearer ' + TOKEN;
 const ALLOWED_IMPORTS = ['@netlify/blobs', '@netlify/aws-lambda-compat', './lib/fund-facts-core.js'];
 
-// FR06 exposure pin — BASELINE-SPECIFIC. This exact 13-entry list is pinned to
+// FR06 exposure pin — BASELINE-SPECIFIC. This exact 14-entry list is pinned to
 // branch-dev baseline 93bcfb0 (the 12 function-eligible top-level entries
-// shipped there) plus the new fund-facts.mjs route added by C1-S4. Its job is
-// to DETECT UNEXPECTED ROUTE EXPOSURE: any other file in netlify/functions is
-// an accidental endpoint and a hard failure. A future INTENTIONAL function
+// shipped there) plus fund-facts.mjs (C1-S4) and boi-fx-proxy.js (P-2B —
+// gated-OFF-by-default Bank of Israel FX proxy). Its job is to DETECT
+// UNEXPECTED ROUTE EXPOSURE: any other file in netlify/functions is an
+// accidental endpoint and a hard failure. A future INTENTIONAL function
 // addition therefore requires explicit re-baselining of this test — updating
 // the pin is a deliberate, reviewed act, never an incidental edit.
 const EXPECTED_FUNCTIONS = [
   'anthropic-proxy.js',
   'av-proxy.js',
+  'boi-fx-proxy.js',
   'capital-returns.js',
   'edgar-form4.js',
   'finance-search.js',
@@ -192,7 +195,7 @@ async function runTests() {
     });
 
     // ── FR06: syntax + baseline-specific endpoint-exposure pin ───────────────
-    await test('FR06 .mjs parses (node --check); netlify/functions exposes ONLY the 13 pinned entries (baseline 93bcfb0 + fund-facts.mjs; intentional additions require re-baselining)', async function () {
+    await test('FR06 .mjs parses (node --check); netlify/functions exposes ONLY the 14 pinned entries (baseline 93bcfb0 + fund-facts.mjs + boi-fx-proxy.js; intentional additions require re-baselining)', async function () {
       const r = spawnSync(process.execPath, ['--check', MJS_ABS], { encoding: 'utf8' });
       assert.strictEqual(r.status, 0, 'node --check failed: ' + ((r.stderr || '') + (r.stdout || '')).trim());
       const eligible = fs.readdirSync(path.join(ROOT, 'netlify/functions'), { withFileTypes: true })
@@ -200,7 +203,7 @@ async function runTests() {
         .map(function (e) { return e.name; })
         .sort();
       assert.deepStrictEqual(eligible, EXPECTED_FUNCTIONS.slice().sort(),
-        'unexpected route exposure — function-eligible set drifted from the 93bcfb0+fund-facts.mjs pin: ' + JSON.stringify(eligible));
+        'unexpected route exposure — function-eligible set drifted from the 93bcfb0+fund-facts.mjs+boi-fx-proxy.js pin: ' + JSON.stringify(eligible));
     });
 
     // ── FR07: import-inert in a clean child ──────────────────────────────────
