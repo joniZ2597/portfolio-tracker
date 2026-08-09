@@ -689,8 +689,8 @@ select.edit-inp{appearance:none;cursor:pointer}
 /* ─── PORTFOLIO PANEL (Slice 1B-1: Add Position) ────────────────── */
 .btn-add-position{font-family:var(--mono);font-size:9px;font-weight:700;background:var(--blue);color:#fff;border:none;border-radius:3px;padding:5px 10px;cursor:pointer;flex-shrink:0}
 .btn-add-position:hover{background:#1D4ED8}
-#addPositionOverlay,#editPositionOverlay,#pfCloudOverlay,#pfCloudSaveOverlay,#editCashOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center}
-#addPositionOverlay.open,#editPositionOverlay.open,#pfCloudOverlay.open,#pfCloudSaveOverlay.open,#editCashOverlay.open{display:flex}
+#addPositionOverlay,#editPositionOverlay,#pfCloudOverlay,#pfCloudSaveOverlay,#editCashOverlay,#editReconOverlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center}
+#addPositionOverlay.open,#editPositionOverlay.open,#pfCloudOverlay.open,#pfCloudSaveOverlay.open,#editCashOverlay.open,#editReconOverlay.open{display:flex}
 .ap-modal{background:var(--card);border:1px solid var(--border);border-radius:8px;width:340px;max-width:95vw;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.6)}
 .ap-modal-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 12px;border-bottom:1px solid var(--border)}
 .ap-modal-title{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:1.5px}
@@ -6297,6 +6297,130 @@ function _pfCashClear() {
   }
 }
 
+// ─── P-4A-1: Broker reconciliation (pt_recon) ───────────────────────────────
+// Mirrors pt_cash's persistence pattern exactly — same three states (unset /
+// recorded / invalid), same editor shape (amount + as-of + Save/Clear).
+// 'unset' MUST NOT be interpreted as zero anywhere downstream, same rule as
+// cash. declaredExclusionsILS/exclusionsNote are owner-entered too, but are
+// only meaningful alongside brokerTotalILS/asOf — the 'recorded' state
+// requires all four fields present-and-valid (unlike pt_cash's two), so a
+// restored/loaded record is always a complete, self-consistent snapshot;
+// there is no partial-recon state to reason about downstream.
+var PF_RECON_KEY = 'pt_recon';
+
+function _pfReconLoad() {
+  var raw = localStorage.getItem(PF_RECON_KEY);
+  if (raw === null) return { state: 'unset' };
+  var parsed;
+  try { parsed = JSON.parse(raw); }
+  catch (e) { return { state: 'invalid', raw: raw }; }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { state: 'invalid', raw: parsed };
+  }
+  var brokerOk     = _pfIsFiniteNum(parsed.brokerTotalILS) && parsed.brokerTotalILS >= 0;
+  var asOfOk       = typeof parsed.asOf === 'string' && !isNaN(Date.parse(parsed.asOf));
+  var exclusionsOk = _pfIsFiniteNum(parsed.declaredExclusionsILS) && parsed.declaredExclusionsILS >= 0;
+  var noteOk       = typeof parsed.exclusionsNote === 'string';
+  if (!brokerOk || !asOfOk || !exclusionsOk || !noteOk) return { state: 'invalid', raw: parsed };
+  return {
+    state: 'recorded', brokerTotalILS: parsed.brokerTotalILS, asOf: parsed.asOf,
+    declaredExclusionsILS: parsed.declaredExclusionsILS, exclusionsNote: parsed.exclusionsNote
+  };
+}
+
+// Validates before writing — an invalid save is rejected outright, same
+// rationale as _pfCashSave (a single owner-entered record, no bystander data
+// a stricter write could clobber). declaredExclusionsILS/exclusionsNote
+// default to 0/'' here (the editor always calls this with concrete values,
+// never omits them) so every persisted 'recorded' record is always complete.
+function _pfReconSave(brokerTotalILS, asOf, declaredExclusionsILS, exclusionsNote) {
+  if (!_pfIsFiniteNum(brokerTotalILS) || brokerTotalILS < 0) return { ok: false, reason: 'INVALID_BROKER_TOTAL' };
+  if (typeof asOf !== 'string' || isNaN(Date.parse(asOf))) return { ok: false, reason: 'INVALID_DATE' };
+  if (!_pfIsFiniteNum(declaredExclusionsILS) || declaredExclusionsILS < 0) return { ok: false, reason: 'INVALID_EXCLUSIONS' };
+  if (typeof exclusionsNote !== 'string') return { ok: false, reason: 'INVALID_NOTE' };
+  try {
+    localStorage.setItem(PF_RECON_KEY, JSON.stringify({
+      brokerTotalILS: brokerTotalILS, asOf: asOf,
+      declaredExclusionsILS: declaredExclusionsILS, exclusionsNote: exclusionsNote
+    }));
+    return { ok: true };
+  } catch (e) {
+    console.warn('[PT] pt_recon: save failed', e);
+    return { ok: false, reason: 'STORAGE_ERROR', error: e };
+  }
+}
+
+function _pfReconClear() {
+  try {
+    localStorage.removeItem(PF_RECON_KEY);
+    return { ok: true };
+  } catch (e) {
+    console.warn('[PT] pt_recon: clear failed', e);
+    return { ok: false, reason: 'STORAGE_ERROR', error: e };
+  }
+}
+
+// Pure. The oldest baselineAt among non-corrupt holdings that have one — the
+// CONSERVATIVE HEURISTIC the v1 staleness guard is built on, explicitly NOT
+// a true portfolio snapshot timestamp: Pulse has no field meaning "all these
+// values were captured together", baselineAt is per-holding and moves
+// independently, and the oldest value is the pessimistic bound (it flags
+// staleness at least as often as a true snapshot timestamp would, never
+// less). Returns null when no holding has a valid baselineAt (e.g. an empty
+// portfolio) — the staleness guard has nothing to compare against and is
+// skipped in that case, not defaulted to "stale".
+function _pfReconOldestBaselineAt(holdings) {
+  var oldest = null;
+  Object.keys(holdings).forEach(function(sym) {
+    var h = holdings[sym];
+    if (h._corrupt === true) return;
+    if (typeof h.baselineAt !== 'string' || isNaN(Date.parse(h.baselineAt))) return;
+    if (oldest === null || Date.parse(h.baselineAt) < Date.parse(oldest)) oldest = h.baselineAt;
+  });
+  return oldest;
+}
+
+var PF_RECON_STALE_MAX_DAYS = 3;
+
+// Pure. No DOM, no localStorage read of its own — reconState/portfolioTotalIls/
+// portfolioComplete/oldestBaselineAt are all passed in, already loaded by the
+// caller, same contract as _pfComputePortfolioReporting/_pfHoldingPl. Returns
+// a status-tagged result; _renderPortfolioPanel only turns it into DOM.
+// Deliberately kept separate from P-2B's completeness/Portfolio-Total model —
+// "complete" (no known component missing) and "reconciled" (matches the
+// broker) are two distinct claims — but reconciliation cannot compute a
+// meaningful gap without a reliable ILS total to compare against, so an
+// incomplete Portfolio Total suppresses the comparison rather than silently
+// comparing against a partial number.
+function _pfComputeReconciliation(reconState, portfolioTotalIls, portfolioComplete, oldestBaselineAt) {
+  if (reconState.state === 'unset')   return { status: 'unset' };
+  if (reconState.state === 'invalid') return { status: 'invalid' };
+
+  var stale = false;
+  var staleDays = null;
+  if (oldestBaselineAt !== null) {
+    staleDays = Math.abs(Date.parse(reconState.asOf) - Date.parse(oldestBaselineAt)) / (24 * 60 * 60 * 1000);
+    stale = staleDays > PF_RECON_STALE_MAX_DAYS;
+  }
+  // While stale: suppress the unexplained-gap alarm AND do not call the
+  // portfolio reconciled either — a third, neutral outcome. This check MUST
+  // precede the completeness/tolerance comparison below, since a stale
+  // comparison is unreliable regardless of what the arithmetic would say.
+  if (stale) return { status: 'stale', staleDays: staleDays };
+
+  if (!portfolioComplete) return { status: 'total-incomplete' };
+
+  var exclusions = reconState.declaredExclusionsILS;
+  var unexplained = reconState.brokerTotalILS - portfolioTotalIls - exclusions;
+  var tolerance = Math.max(1.0, reconState.brokerTotalILS * 0.0005);
+  var withinTolerance = Math.abs(unexplained) <= tolerance;
+
+  return {
+    status: withinTolerance ? (exclusions > 0 ? 'reconciled-with-exclusions' : 'fully-reconciled') : 'unexplained-gap',
+    unexplained: unexplained, tolerance: tolerance, exclusions: exclusions
+  };
+}
+
 function switchMainView(view) {
   document.querySelectorAll('.app-nav-tab[data-view]').forEach(function(t) {
     var isThis = t.dataset.view === view;
@@ -6958,7 +7082,13 @@ function _renderPortfolioPanel() {
       fxChipVal.textContent = 'FX unavailable';
     } else {
       var fxDateStr = new Date(fxCache.effectiveAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      var fxLabel = fxCache.rate.toFixed(2) + ' · ' + fxDateStr + ' · ' + String(fxCache.source || 'boi').toUpperCase();
+      // P-4A-1 FX-chip precision rider: the old 2dp display (3.01) rounded
+      // far enough from the actual stored/used rate (3.006) to mis-reconcile
+      // a real MRNA position by +₪19.90 vs the ₪10.85 the calculation
+      // actually produces. 4dp plus a full-value tooltip so a manual
+      // hand-reconciliation against this chip matches the math exactly — no
+      // change to the rate itself or how it's persisted/used in formulas.
+      var fxLabel = fxCache.rate.toFixed(4) + ' · ' + fxDateStr + ' · ' + String(fxCache.source || 'boi').toUpperCase();
       if (fxState === 'fresh') {
         fxChipVal.textContent = 'FX ' + fxLabel;
       } else if (fxState === 'aged-but-valid') {
@@ -6968,6 +7098,7 @@ function _renderPortfolioPanel() {
         fxChipVal.textContent = 'FX ' + fxLabel + ' — stale, not used in totals';
         fxChipVal.style.color = 'var(--yellow2)';
       }
+      fxChipVal.title = 'Exact rate used in calculations: ' + fxCache.rate;
     }
     fxChip.appendChild(fxChipLbl);
     fxChip.appendChild(fxChipVal);
@@ -7000,6 +7131,93 @@ function _renderPortfolioPanel() {
       knownStat.appendChild(knownDetail);
       summary.appendChild(knownStat);
     }
+
+    // ─── P-4A-1: Broker reconciliation ───────────────────────────────────────
+    // Deliberately separate from P-2B's completeness/Portfolio-Total model
+    // above — "complete" (no known component missing) and "reconciled"
+    // (matches the broker) are two distinct claims, kept visually and
+    // semantically apart. _pfComputeReconciliation owns the entire state
+    // machine (unset/invalid/stale/total-incomplete/fully-reconciled/
+    // reconciled-with-exclusions/unexplained-gap); this block only turns its
+    // result into DOM.
+    var reconState = _pfReconLoad();
+    var reconOldestBaselineAt = _pfReconOldestBaselineAt(holdings);
+    var recon = _pfComputeReconciliation(reconState, reporting.total, completeness, reconOldestBaselineAt);
+
+    var reconStat = document.createElement('div');
+    reconStat.className = 'pf-summary-stat';
+    var reconLbl = document.createElement('div');
+    reconLbl.className   = 'pf-summary-lbl';
+    reconLbl.textContent = 'Broker Reconciliation';
+    var reconVal = document.createElement('div');
+    reconVal.className = 'pf-summary-val';
+
+    if (recon.status === 'unset') {
+      reconVal.textContent = 'Broker total — (not recorded)';
+    } else if (recon.status === 'invalid') {
+      reconVal.textContent = 'Broker total — (data invalid)';
+      reconVal.style.color = 'var(--red2)';
+    } else if (recon.status === 'stale') {
+      reconVal.textContent = 'Comparison may be stale';
+      reconVal.style.color = 'var(--yellow2)';
+    } else if (recon.status === 'total-incomplete') {
+      reconVal.textContent = 'Reconciliation unavailable';
+      reconVal.style.color = 'var(--text3)';
+    } else if (recon.status === 'fully-reconciled') {
+      reconVal.textContent = 'Reconciled · as of ' + new Date(reconState.asOf).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      reconVal.style.color = 'var(--green2)';
+    } else if (recon.status === 'reconciled-with-exclusions') {
+      reconVal.textContent = 'Reconciled · ₪' + recon.exclusions.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+        ' declared exclusions · as of ' + new Date(reconState.asOf).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      reconVal.style.color = 'var(--green2)';
+      if (reconState.exclusionsNote) reconVal.title = reconState.exclusionsNote;
+    } else if (recon.status === 'unexplained-gap') {
+      reconVal.textContent = 'Unexplained ₪' + Math.abs(recon.unexplained).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+        ' — a holding may be missing from Pulse';
+      reconVal.style.color = 'var(--yellow2)';
+    }
+    reconStat.appendChild(reconLbl);
+    reconStat.appendChild(reconVal);
+
+    if (recon.status === 'total-incomplete') {
+      var reconIncompleteDetail = document.createElement('div');
+      reconIncompleteDetail.style.cssText = 'font-size:10px;color:var(--text3);margin-top:2px';
+      reconIncompleteDetail.textContent = 'Portfolio Total (ILS) is incomplete — see Known Assets Total above';
+      reconStat.appendChild(reconIncompleteDetail);
+    }
+    if (recon.status === 'stale' && recon.staleDays !== null) {
+      var reconStaleDetail = document.createElement('div');
+      reconStaleDetail.style.cssText = 'font-size:10px;color:var(--text3);margin-top:2px';
+      reconStaleDetail.textContent = Math.round(recon.staleDays) + ' day(s) between recorded as-of and oldest holding baseline (conservative heuristic)';
+      reconStat.appendChild(reconStaleDetail);
+    }
+
+    var reconActions = document.createElement('div');
+    reconActions.style.cssText = 'display:flex;gap:6px;margin-top:4px';
+    var reconEditBtn = document.createElement('button');
+    reconEditBtn.className   = 'btn-pf-edit';
+    reconEditBtn.textContent = 'Edit';
+    reconEditBtn.onclick     = function(){ openEditReconModal(); };
+    reconActions.appendChild(reconEditBtn);
+    if (reconState.state === 'recorded') {
+      var reconClearBtn = document.createElement('button');
+      reconClearBtn.className   = 'btn-pf-delete';
+      reconClearBtn.textContent = 'Clear';
+      // Persistence failures are detected, not silently ignored — same rule
+      // the cash Clear button above follows.
+      reconClearBtn.onclick     = function() {
+        if (!confirm('Clear recorded broker reconciliation? This returns it to "not recorded" — it will NOT be treated as reconciled or as a gap.')) return;
+        var clearResult = _pfReconClear();
+        if (clearResult.ok !== true) {
+          showToast('Clear failed — your browser storage is unavailable or full. Reconciliation was NOT cleared.');
+          return;
+        }
+        _renderPortfolioPanel();
+      };
+      reconActions.appendChild(reconClearBtn);
+    }
+    reconStat.appendChild(reconActions);
+    summary.appendChild(reconStat);
 
     // Portfolio-level day estimate — see _pfPortfolioDayEstimate: strictly
     // fresh-FX-only for USD holdings (stricter than the total's bar above),
@@ -8999,6 +9217,198 @@ function saveEditCash() {
   _renderPortfolioPanel();
 }
 
+// ─── P-4A-1: Broker reconciliation edit modal — mirrors openEditCashModal's structure ──
+function openEditReconModal() {
+  var overlay = document.getElementById('editReconOverlay');
+  var modal   = document.getElementById('editReconModal');
+  if (!overlay || !modal) return;
+  var reconState = _pfReconLoad();
+  modal.innerHTML = '';
+
+  var hdr = document.createElement('div');
+  hdr.className = 'ap-modal-hdr';
+  var titleEl = document.createElement('span');
+  titleEl.className   = 'ap-modal-title';
+  titleEl.textContent = 'Broker Reconciliation';
+  var closeBtn = document.createElement('button');
+  closeBtn.className   = 'api-close-btn';
+  closeBtn.textContent = '✕';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.onclick     = closeEditReconModal;
+  hdr.appendChild(titleEl);
+  hdr.appendChild(closeBtn);
+
+  var body = document.createElement('div');
+  body.className = 'ap-modal-body';
+
+  if (reconState.state === 'invalid') {
+    var invalidNote = document.createElement('div');
+    invalidNote.className   = 'ap-warn';
+    invalidNote.style.color = 'var(--red2)';
+    invalidNote.textContent = 'Stored reconciliation data could not be read and was preserved unused. Enter values below and save to replace it.';
+    body.appendChild(invalidNote);
+  }
+
+  var brokerRow = document.createElement('div');
+  brokerRow.className = 'ap-field-row';
+  var brokerLbl = document.createElement('label');
+  brokerLbl.className   = 'ap-lbl';
+  brokerLbl.textContent = 'Broker total (₪)';
+  brokerLbl.htmlFor     = 'pfReconBrokerTotal';
+  var brokerInp = document.createElement('input');
+  brokerInp.id          = 'pfReconBrokerTotal';
+  brokerInp.type        = 'text';
+  brokerInp.className   = 'ap-inp';
+  brokerInp.placeholder = 'e.g. 78567.62';
+  brokerInp.value       = reconState.state === 'recorded' ? String(reconState.brokerTotalILS) : '';
+  brokerRow.appendChild(brokerLbl);
+  brokerRow.appendChild(brokerInp);
+  body.appendChild(brokerRow);
+
+  var asOfRow = document.createElement('div');
+  asOfRow.className = 'ap-field-row';
+  var asOfLbl = document.createElement('label');
+  asOfLbl.className   = 'ap-lbl';
+  asOfLbl.textContent = 'As of date';
+  asOfLbl.htmlFor     = 'pfReconAsOf';
+  var asOfInp = document.createElement('input');
+  asOfInp.id        = 'pfReconAsOf';
+  asOfInp.type      = 'date';
+  asOfInp.className = 'ap-inp';
+  // Local calendar date, not toISOString() (UTC) — same rationale as the
+  // cash editor's as-of field above.
+  var _now = new Date();
+  var _todayIso = _now.getFullYear() + '-' + String(_now.getMonth() + 1).padStart(2, '0') + '-' + String(_now.getDate()).padStart(2, '0');
+  var _reconAsOfDatePart = (reconState.state === 'recorded' && typeof reconState.asOf === 'string')
+    ? reconState.asOf.slice(0, 10) : '';
+  asOfInp.value = /^\d{4}-\d{2}-\d{2}$/.test(_reconAsOfDatePart) ? _reconAsOfDatePart : _todayIso;
+  asOfRow.appendChild(asOfLbl);
+  asOfRow.appendChild(asOfInp);
+  body.appendChild(asOfRow);
+
+  var exclRow = document.createElement('div');
+  exclRow.className = 'ap-field-row';
+  var exclLbl = document.createElement('label');
+  exclLbl.className   = 'ap-lbl';
+  exclLbl.textContent = 'Declared exclusions (₪, optional)';
+  exclLbl.htmlFor     = 'pfReconExclusions';
+  var exclInp = document.createElement('input');
+  exclInp.id          = 'pfReconExclusions';
+  exclInp.type        = 'text';
+  exclInp.className   = 'ap-inp';
+  exclInp.placeholder = 'e.g. 2400.22 — known assets Pulse does not track';
+  exclInp.value       = reconState.state === 'recorded' ? String(reconState.declaredExclusionsILS) : '';
+  exclRow.appendChild(exclLbl);
+  exclRow.appendChild(exclInp);
+  body.appendChild(exclRow);
+
+  var noteRow = document.createElement('div');
+  noteRow.className = 'ap-field-row';
+  var noteLbl = document.createElement('label');
+  noteLbl.className   = 'ap-lbl';
+  noteLbl.textContent = 'Exclusions note (optional)';
+  noteLbl.htmlFor     = 'pfReconNote';
+  var noteInp = document.createElement('input');
+  noteInp.id          = 'pfReconNote';
+  noteInp.type        = 'text';
+  noteInp.className   = 'ap-inp';
+  noteInp.placeholder = 'e.g. fund 5139233 ₪2,237.56 · fund 5131925 ₪12.27 · USD cash ₪150.39';
+  noteInp.value       = reconState.state === 'recorded' ? reconState.exclusionsNote : '';
+  noteRow.appendChild(noteLbl);
+  noteRow.appendChild(noteInp);
+  body.appendChild(noteRow);
+
+  var warn = document.createElement('div');
+  warn.id        = 'pfReconWarnMsg';
+  warn.className = 'ap-warn';
+  body.appendChild(warn);
+
+  var actions = document.createElement('div');
+  actions.className = 'ap-actions';
+  var cancelBtn = document.createElement('button');
+  cancelBtn.className   = 'btn-edit-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick     = closeEditReconModal;
+  var saveBtn = document.createElement('button');
+  saveBtn.className   = 'btn-edit-save';
+  saveBtn.textContent = 'Save';
+  saveBtn.onclick     = saveEditRecon;
+  actions.appendChild(cancelBtn);
+  actions.appendChild(saveBtn);
+
+  modal.appendChild(hdr);
+  modal.appendChild(body);
+  modal.appendChild(actions);
+
+  overlay.classList.add('open');
+  document.addEventListener('keydown', _onEditReconEscape);
+  setTimeout(function() { var f = document.getElementById('pfReconBrokerTotal'); if (f) f.focus(); }, 30);
+}
+
+function _onEditReconEscape(e) {
+  if (e.key === 'Escape') closeEditReconModal();
+}
+
+function closeEditReconModal() {
+  var overlay = document.getElementById('editReconOverlay');
+  if (overlay) overlay.classList.remove('open');
+  document.removeEventListener('keydown', _onEditReconEscape);
+}
+
+function saveEditRecon() {
+  var brokerInp = document.getElementById('pfReconBrokerTotal');
+  var asOfInp   = document.getElementById('pfReconAsOf');
+  var exclInp   = document.getElementById('pfReconExclusions');
+  var noteInp   = document.getElementById('pfReconNote');
+  var warnEl    = document.getElementById('pfReconWarnMsg');
+  if (!brokerInp || !asOfInp || !warnEl) return;
+  warnEl.textContent = '';
+
+  // Number('') === 0 — an untouched/cleared field must NOT silently become
+  // a recorded zero, same rule the cash editor's amount field follows.
+  var brokerText = brokerInp.value.trim();
+  if (brokerText === '') {
+    warnEl.textContent = 'Enter the broker total, including 0 if explicitly zero.';
+    brokerInp.focus();
+    return;
+  }
+  var brokerTotalILS = Number(brokerText);
+  if (!isFinite(brokerTotalILS) || brokerTotalILS < 0) {
+    warnEl.textContent = 'Broker total must be a number of 0 or more.';
+    brokerInp.focus();
+    return;
+  }
+  var asOf = asOfInp.value;
+  if (typeof asOf !== 'string' || isNaN(Date.parse(asOf))) {
+    warnEl.textContent = 'Enter a valid as-of date.';
+    asOfInp.focus();
+    return;
+  }
+  // Declared exclusions: blank -> 0 (an explicit, deliberate default here —
+  // unlike cash/broker total, "no exclusions declared" and "zero exclusions
+  // declared" are the same real-world fact, not two different states).
+  var exclText = exclInp ? exclInp.value.trim() : '';
+  var declaredExclusionsILS = 0;
+  if (exclText !== '') {
+    var exclVal = Number(exclText);
+    if (!isFinite(exclVal) || exclVal < 0) {
+      warnEl.textContent = 'Declared exclusions must be a number of 0 or more, or left blank.';
+      if (exclInp) exclInp.focus();
+      return;
+    }
+    declaredExclusionsILS = exclVal;
+  }
+  var exclusionsNote = noteInp ? noteInp.value.trim() : '';
+
+  var saveResult = _pfReconSave(brokerTotalILS, asOf, declaredExclusionsILS, exclusionsNote);
+  if (!saveResult.ok) {
+    warnEl.textContent = 'Save failed — your browser storage is unavailable or full. This change was NOT saved.';
+    return;
+  }
+  closeEditReconModal();
+  _renderPortfolioPanel();
+}
+
 function deletePosition(sym) {
   if (!confirm('Remove ' + sym + ' from your portfolio?')) return;
   var holdings = loadHoldings();
@@ -10495,16 +10905,31 @@ function exportPortfolioBackup() {
     lastAttemptAt: fxCacheForExport.lastAttemptAt, lastAttemptOk: fxCacheForExport.lastAttemptOk
   } : null;
 
+  // P-4A-1: recon is always included in a v4 export, same "null vs omitted"
+  // rule cash/fx already follow — never omitted, so a later import can tell
+  // "not recorded" apart from "this file predates the feature" (schemaVersion
+  // < 4). Locally invalid recon exports as null with a non-blocking warning,
+  // same treatment as invalid cash above.
+  var reconStateForExport = _pfReconLoad();
+  if (reconStateForExport.state === 'invalid') {
+    showToast('Note: locally stored reconciliation data could not be read and was exported as "not recorded" — edit and save reconciliation to fix this.');
+  }
+  var reconPayload = reconStateForExport.state === 'recorded' ? {
+    brokerTotalILS: reconStateForExport.brokerTotalILS, asOf: reconStateForExport.asOf,
+    declaredExclusionsILS: reconStateForExport.declaredExclusionsILS, exclusionsNote: reconStateForExport.exclusionsNote
+  } : null;
+
   _ptDownload(
     new Blob([JSON.stringify({
-      schemaVersion: 3,
+      schemaVersion: 4,
       exportedAt:    new Date().toISOString(),
       appBaseline:   '5e26485',
       sourceOrigin:  window.location.origin,
       holdings:      holdings,
       tickers:       tickers,
       cash:          cashPayload,
-      fx:            fxPayload
+      fx:            fxPayload,
+      recon:         reconPayload
     }, null, 2)], { type: 'application/json' }),
     'pt_backup_' + _ptTimestamp() + '.json'
   );
@@ -10567,20 +10992,29 @@ function _downloadPreImportBackup() {
     source: fxCacheForSnapshot.source, fetchedAt: fxCacheForSnapshot.fetchedAt,
     lastAttemptAt: fxCacheForSnapshot.lastAttemptAt, lastAttemptOk: fxCacheForSnapshot.lastAttemptOk
   } : null;
+  // P-4A-1: recon is real owner-entered data like cash (not a disposable
+  // network cache like fx) — same symmetric diagnostic-field treatment.
+  var reconStateForSnapshot = _pfReconLoad();
+  var reconSnapshotPayload = reconStateForSnapshot.state === 'recorded' ? {
+    brokerTotalILS: reconStateForSnapshot.brokerTotalILS, asOf: reconStateForSnapshot.asOf,
+    declaredExclusionsILS: reconStateForSnapshot.declaredExclusionsILS, exclusionsNote: reconStateForSnapshot.exclusionsNote
+  } : null;
 
   var payload = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     exportedAt:    new Date().toISOString(),
     appBaseline:   '5e26485',
     sourceOrigin:  window.location.origin,
     holdings:      holdings,
     tickers:       tickers,
     cash:          cashSnapshotPayload,
-    fx:            fxSnapshotPayload
+    fx:            fxSnapshotPayload,
+    recon:         reconSnapshotPayload
   };
   if (holdingsRawUnparseable !== undefined) payload.holdingsRawUnparseable = holdingsRawUnparseable;
   if (tickersRawUnparseable  !== undefined) payload.tickersRawUnparseable  = tickersRawUnparseable;
   if (cashStateForSnapshot.state === 'invalid') payload.cashRawUnparseable = cashStateForSnapshot.raw;
+  if (reconStateForSnapshot.state === 'invalid') payload.reconRawUnparseable = reconStateForSnapshot.raw;
   _ptDownload(
     new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
     'pt_pre_import_backup_' + _ptTimestamp() + '.json'
@@ -10598,8 +11032,8 @@ function _downloadPreImportBackup() {
 function _validatePortfolioBackup(obj) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj))
     return { error: 'Not a valid backup object.' };
-  if (obj.schemaVersion !== 1 && obj.schemaVersion !== 2 && obj.schemaVersion !== 3)
-    return { error: 'Unknown backup version (' + obj.schemaVersion + '). Only version 1, 2, or 3 is supported.' };
+  if (obj.schemaVersion !== 1 && obj.schemaVersion !== 2 && obj.schemaVersion !== 3 && obj.schemaVersion !== 4)
+    return { error: 'Unknown backup version (' + obj.schemaVersion + '). Only version 1, 2, 3, or 4 is supported.' };
   if (typeof obj.exportedAt !== 'string' || !obj.exportedAt.trim())
     return { error: 'exportedAt must be a non-empty string.' };
   if (isNaN(Date.parse(obj.exportedAt)))
@@ -10704,10 +11138,48 @@ function _validatePortfolioBackup(obj) {
   }
   // else: schemaVersion === 1 — validatedCash/validatedFx stay undefined.
 
+  // P-4A-1: recon — its OWN version gate (`>= 4`), deliberately separate from
+  // the cash/fx gate above (`>= 2`). This is the exact two-gate pattern P-3
+  // already established for costBasis/costBasisILS: widening only the
+  // envelope accept-list above without ALSO widening this gate would let a
+  // v4 backup validate while silently leaving pt_recon as `undefined`
+  // (untouched) instead of restored/cleared. v2/v3 predate recon and cannot
+  // express recon intent, so validatedRecon stays `undefined` for them —
+  // same "leave untouched" signal v1 gives cash/fx. A self-declared v4
+  // payload always carries a deterministic instruction: the key must be
+  // present and be either null (explicit clear) or a complete, valid
+  // {brokerTotalILS, asOf, declaredExclusionsILS, exclusionsNote} object —
+  // malformed/missing recon on a v4 payload hard-rejects the WHOLE import,
+  // same strict-envelope tier as cash/fx.
+  var validatedRecon;
+  if (obj.schemaVersion >= 4) {
+    if (!Object.prototype.hasOwnProperty.call(obj, 'recon'))
+      return { error: 'schemaVersion ' + obj.schemaVersion + ' requires a recon field (null or {brokerTotalILS, asOf, declaredExclusionsILS, exclusionsNote}).' };
+    if (obj.recon === null) {
+      validatedRecon = null;
+    } else {
+      if (!obj.recon || typeof obj.recon !== 'object' || Array.isArray(obj.recon))
+        return { error: 'recon must be null or an object.' };
+      if (!_pfIsFiniteNum(obj.recon.brokerTotalILS) || obj.recon.brokerTotalILS < 0)
+        return { error: 'recon.brokerTotalILS must be a finite number >= 0.' };
+      if (typeof obj.recon.asOf !== 'string' || isNaN(Date.parse(obj.recon.asOf)))
+        return { error: 'recon.asOf must be a valid date string.' };
+      if (!_pfIsFiniteNum(obj.recon.declaredExclusionsILS) || obj.recon.declaredExclusionsILS < 0)
+        return { error: 'recon.declaredExclusionsILS must be a finite number >= 0.' };
+      if (typeof obj.recon.exclusionsNote !== 'string')
+        return { error: 'recon.exclusionsNote must be a string.' };
+      validatedRecon = {
+        brokerTotalILS: obj.recon.brokerTotalILS, asOf: obj.recon.asOf,
+        declaredExclusionsILS: obj.recon.declaredExclusionsILS, exclusionsNote: obj.recon.exclusionsNote
+      };
+    }
+  }
+  // else: schemaVersion < 4 — validatedRecon stays undefined (v1/v2/v3 leave pt_recon untouched).
+
   return {
     error: null, holdings: normalizedHoldings, tickers: normalizedTickers,
     exportedAt: obj.exportedAt.trim(), sourceOrigin: obj.sourceOrigin.trim(),
-    appBaseline: obj.appBaseline.trim(), cash: validatedCash, fx: validatedFx
+    appBaseline: obj.appBaseline.trim(), cash: validatedCash, fx: validatedFx, recon: validatedRecon
   };
 }
 
@@ -10744,6 +11216,31 @@ function _pfApplyCashFxRestore(validatedCash, validatedFx) {
     if (!fxWriteOk) failedParts.push('FX rate');
   }
   return failedParts;
+}
+
+// P-4A-1: apply a validated backup's pt_recon instruction to storage. Mirrors
+// _pfApplyCashFxRestore's contract exactly (same undefined/null/object
+// three-way handling, same failedParts-array return shape so callers can
+// .concat() the two together) — kept as its own function rather than folded
+// into _pfApplyCashFxRestore to avoid touching that function's existing
+// signature/call sites/QA extraction for an unrelated field.
+function _pfApplyReconRestore(validatedRecon) {
+  if (validatedRecon === undefined) return [];
+  var ok = true;
+  try {
+    if (validatedRecon === null) {
+      localStorage.removeItem(PF_RECON_KEY);
+    } else {
+      localStorage.setItem(PF_RECON_KEY, JSON.stringify({
+        brokerTotalILS: validatedRecon.brokerTotalILS, asOf: validatedRecon.asOf,
+        declaredExclusionsILS: validatedRecon.declaredExclusionsILS, exclusionsNote: validatedRecon.exclusionsNote
+      }));
+    }
+  } catch (e) {
+    console.warn('[PT] pt_recon: restore write failed', e);
+    ok = false;
+  }
+  return ok ? [] : ['reconciliation'];
 }
 
 // ── EG-19A: Portfolio data backup import ─────────────────────────────────────
@@ -10805,6 +11302,7 @@ function importPortfolioBackup(file) {
     var failedParts = [];
     if (!tickersOk) failedParts.push('watchlist');
     failedParts = failedParts.concat(_pfApplyCashFxRestore(result.cash, result.fx));
+    failedParts = failedParts.concat(_pfApplyReconRestore(result.recon));
 
     if (tickersOk) {
       // Do not reconcile or touch the watchlist when it was not written —
@@ -12144,6 +12642,11 @@ async function checkAllApis() {
 <!-- EDIT CASH MODAL — content built by openEditCashModal() via DOM methods -->
 <div id="editCashOverlay" onclick="if(event.target===this)closeEditCashModal()">
   <div class="ap-modal" id="editCashModal"></div>
+</div>
+
+<!-- P-4A-1: EDIT RECONCILIATION MODAL — content built by openEditReconModal() via DOM methods -->
+<div id="editReconOverlay" onclick="if(event.target===this)closeEditReconModal()">
+  <div class="ap-modal" id="editReconModal"></div>
 </div>
 
 <!-- EG-19B-2: LOAD FROM CLOUD MODAL — content built by openLoadFromCloudModal() via DOM methods -->

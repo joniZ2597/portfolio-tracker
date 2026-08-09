@@ -2184,6 +2184,261 @@ function phaseMoneyMath() {
   }
 }
 
+function phaseReconciliation() {
+  header('Phase 10 - Broker Reconciliation (P-4A-1)');
+
+  const content = read('index.html');
+  if (content === null) {
+    fail('reconciliation', 'index.html is missing');
+    return;
+  }
+
+  let factory;
+  try {
+    const pieces = {
+      isFiniteNumSrc:        extractFunctionSource(content, '_pfIsFiniteNum'),
+      cashLoadSrc:           extractFunctionSource(content, '_pfCashLoad'),
+      cashSaveSrc:           extractFunctionSource(content, '_pfCashSave'),
+      cashClearSrc:          extractFunctionSource(content, '_pfCashClear'),
+      fxRateValidSrc:        extractFunctionSource(content, '_pfFxRateValid'),
+      fxBackupValidSrc:      extractFunctionSource(content, '_pfFxBackupRecordValid'),
+      normalizeSrc:          extractFunctionSource(content, '_pfNormalizeHoldingEntry'),
+      normalizePositionSrc:  extractFunctionSource(content, '_normalizePosition'),
+      validateBackupSrc:     extractFunctionSource(content, '_validatePortfolioBackup'),
+      applyCashFxRestoreSrc: extractFunctionSource(content, '_pfApplyCashFxRestore'),
+      reconLoadSrc:          extractFunctionSource(content, '_pfReconLoad'),
+      reconSaveSrc:          extractFunctionSource(content, '_pfReconSave'),
+      reconClearSrc:         extractFunctionSource(content, '_pfReconClear'),
+      reconOldestBaselineSrc: extractFunctionSource(content, '_pfReconOldestBaselineAt'),
+      computeReconSrc:       extractFunctionSource(content, '_pfComputeReconciliation'),
+      applyReconRestoreSrc:  extractFunctionSource(content, '_pfApplyReconRestore'),
+      cashKeySrc:            extractVarSource(content, 'PF_CASH_KEY'),
+      reconKeySrc:           extractVarSource(content, 'PF_RECON_KEY'),
+      reconStaleDaysSrc:     extractVarSource(content, 'PF_RECON_STALE_MAX_DAYS'),
+      fxCacheKeySrc:         extractVarSource(content, 'PF_FX_CACHE_KEY'),
+      knownFieldsSrc:        extractVarSource(content, 'PF_KNOWN_HOLDING_FIELDS'),
+      wrapperMarkerSrc:      extractVarSource(content, 'PF_HOLDING_WRAPPER_MARKER'),
+      reservedKeysSrc:       extractVarSource(content, 'PF_RESERVED_MARKER_KEYS')
+    };
+    const missing = Object.keys(pieces).filter(function (k) { return !pieces[k]; });
+    if (missing.length > 0) {
+      fail('reconciliation', 'could not extract from index.html: ' + missing.join(', '));
+      return;
+    }
+
+    // eslint-disable-next-line no-new-func
+    factory = new Function(
+      'localStorage',
+      pieces.cashKeySrc + '\n' + pieces.reconKeySrc + '\n' + pieces.reconStaleDaysSrc + '\n' +
+        pieces.fxCacheKeySrc + '\n' + pieces.knownFieldsSrc + '\n' + pieces.wrapperMarkerSrc + '\n' +
+        pieces.reservedKeysSrc + '\n' +
+        pieces.isFiniteNumSrc + '\n' + pieces.cashLoadSrc + '\n' + pieces.cashSaveSrc + '\n' + pieces.cashClearSrc + '\n' +
+        pieces.fxRateValidSrc + '\n' + pieces.fxBackupValidSrc + '\n' +
+        pieces.normalizeSrc + '\n' + pieces.normalizePositionSrc + '\n' + pieces.validateBackupSrc + '\n' +
+        pieces.applyCashFxRestoreSrc + '\n' +
+        pieces.reconLoadSrc + '\n' + pieces.reconSaveSrc + '\n' + pieces.reconClearSrc + '\n' +
+        pieces.reconOldestBaselineSrc + '\n' + pieces.computeReconSrc + '\n' + pieces.applyReconRestoreSrc +
+        '\nreturn { _pfCashLoad: _pfCashLoad, _pfCashSave: _pfCashSave, _pfCashClear: _pfCashClear,' +
+        ' _validatePortfolioBackup: _validatePortfolioBackup, _pfApplyCashFxRestore: _pfApplyCashFxRestore,' +
+        ' _pfReconLoad: _pfReconLoad, _pfReconSave: _pfReconSave, _pfReconClear: _pfReconClear,' +
+        ' _pfReconOldestBaselineAt: _pfReconOldestBaselineAt, _pfComputeReconciliation: _pfComputeReconciliation,' +
+        ' _pfApplyReconRestore: _pfApplyReconRestore };'
+    );
+  } catch (e) {
+    fail('reconciliation', 'factory build error: ' + e.message);
+    return;
+  }
+
+  function makeMockLocalStorage(seed) {
+    const store = Object.assign({}, seed || {});
+    return {
+      getItem: function (k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+      setItem: function (k, v) { store[k] = v; },
+      removeItem: function (k) { delete store[k]; },
+      _store: store
+    };
+  }
+
+  let total = 0;
+  let okCount = 0;
+  function check(name, cond) {
+    total += 1;
+    if (cond) {
+      okCount += 1;
+    } else {
+      fail('reconciliation', 'assertion failed: ' + name);
+    }
+  }
+  function approx(a, b, eps) {
+    return typeof a === 'number' && isFinite(a) && Math.abs(a - b) < (eps || 0.01);
+  }
+
+  const api = factory(makeMockLocalStorage({}));
+
+  // ── pt_recon: three states, mirrors pt_cash exactly ─────────────────────────
+  (function () {
+    const apiUnset = factory(makeMockLocalStorage({}));
+    check('recon unset -> state unset (no key)', apiUnset._pfReconLoad().state === 'unset');
+
+    const apiRecorded = factory(makeMockLocalStorage({
+      pt_recon: JSON.stringify({ brokerTotalILS: 78567.62, asOf: '2026-08-09', declaredExclusionsILS: 2400.22, exclusionsNote: 'fund note' })
+    }));
+    const recordedState = apiRecorded._pfReconLoad();
+    check('recon recorded -> all four fields readable',
+      recordedState.state === 'recorded' && recordedState.brokerTotalILS === 78567.62 &&
+      recordedState.declaredExclusionsILS === 2400.22 && recordedState.exclusionsNote === 'fund note');
+
+    const apiUnparseable = factory(makeMockLocalStorage({ pt_recon: 'not json{{{' }));
+    check('unparseable pt_recon -> state invalid', apiUnparseable._pfReconLoad().state === 'invalid');
+
+    const apiMissingField = factory(makeMockLocalStorage({ pt_recon: JSON.stringify({ brokerTotalILS: 100, asOf: '2026-08-09' }) }));
+    check('recon missing required field (declaredExclusionsILS/exclusionsNote) -> state invalid', apiMissingField._pfReconLoad().state === 'invalid');
+
+    const apiRw = factory(makeMockLocalStorage({}));
+    const saveResult = apiRw._pfReconSave(78567.62, '2026-08-09', 2400.22, 'note');
+    check('_pfReconSave writes a recorded value readable back',
+      saveResult.ok === true && apiRw._pfReconLoad().state === 'recorded' && apiRw._pfReconLoad().brokerTotalILS === 78567.62);
+    const clearResult = apiRw._pfReconClear();
+    check('_pfReconClear returns to unset, never a written zero', clearResult.ok === true && apiRw._pfReconLoad().state === 'unset');
+
+    check('_pfReconSave rejects negative brokerTotalILS', apiRw._pfReconSave(-1, '2026-08-09', 0, '').ok === false);
+    check('_pfReconSave rejects invalid asOf date', apiRw._pfReconSave(100, 'not-a-date', 0, '').ok === false);
+  })();
+
+  // ── _pfReconOldestBaselineAt: pessimistic-bound conservative heuristic ──────
+  (function () {
+    const holdings = {
+      AAA: { baselineAt: '2026-08-01T00:00:00.000Z' },
+      BBB: { baselineAt: '2026-07-15T00:00:00.000Z' },
+      CCC: { _corrupt: true, baselineAt: '2026-01-01T00:00:00.000Z' },
+      DDD: {}
+    };
+    check('oldest baselineAt: picks earliest among non-corrupt, valid entries (excludes corrupt/missing)',
+      api._pfReconOldestBaselineAt(holdings) === '2026-07-15T00:00:00.000Z');
+    check('oldest baselineAt: no relevant holdings -> null (guard has nothing to compare)', api._pfReconOldestBaselineAt({}) === null);
+  })();
+
+  // ── Real fixture (2026-08-09 verified Meitav reconciliation) ────────────────
+  (function () {
+    const fixtureRecon = { state: 'recorded', brokerTotalILS: 78567.62, asOf: '2026-08-09', declaredExclusionsILS: 2400.22, exclusionsNote: 'fund 5139233 ...' };
+    const r1 = api._pfComputeReconciliation(fixtureRecon, 76167.39, true, '2026-08-09');
+    check('fixture: unexplained = 0.01', approx(r1.unexplained, 0.01, 0.001));
+    check('fixture: inside tolerance -> reconciled-with-exclusions', r1.status === 'reconciled-with-exclusions');
+
+    const fixtureNoExclusions = Object.assign({}, fixtureRecon, { declaredExclusionsILS: 0 });
+    const r2 = api._pfComputeReconciliation(fixtureNoExclusions, 76167.39, true, '2026-08-09');
+    check('fixture, exclusions cleared: unexplained = 2400.23', approx(r2.unexplained, 2400.23, 0.001));
+    check('fixture, exclusions cleared: unexplained-gap', r2.status === 'unexplained-gap');
+
+    const staleFixture = Object.assign({}, fixtureRecon, { asOf: '2026-07-01' });
+    const r3 = api._pfComputeReconciliation(staleFixture, 76167.39, true, '2026-08-09');
+    check('fixture, stale asOf 2026-07-01: status stale (neither alarm nor reconciled)', r3.status === 'stale');
+    const staleFixtureNoExclusions = Object.assign({}, staleFixture, { declaredExclusionsILS: 0 });
+    const r4 = api._pfComputeReconciliation(staleFixtureNoExclusions, 76167.39, true, '2026-08-09');
+    check('fixture, stale AND would-be-gap: still stale, alarm suppressed', r4.status === 'stale');
+  })();
+
+  // ── Tolerance boundary: max(₪1.00, 0.05% of broker total), inclusive ────────
+  (function () {
+    const boundaryRecon = { state: 'recorded', brokerTotalILS: 10000, asOf: '2026-08-09', declaredExclusionsILS: 0, exclusionsNote: '' };
+    const atBoundary = api._pfComputeReconciliation(boundaryRecon, 9995, true, '2026-08-09'); // unexplained = 5, tolerance = 5
+    check('tolerance boundary: exactly at tolerance -> within (inclusive) -> fully-reconciled', atBoundary.status === 'fully-reconciled');
+    const justOutside = api._pfComputeReconciliation(boundaryRecon, 9994.98, true, '2026-08-09'); // unexplained = 5.02
+    check('tolerance boundary: just past tolerance -> unexplained-gap', justOutside.status === 'unexplained-gap');
+
+    const smallBrokerRecon = { state: 'recorded', brokerTotalILS: 500, asOf: '2026-08-09', declaredExclusionsILS: 0, exclusionsNote: '' };
+    // 0.05% of 500 = 0.25, so the ₪1.00 floor governs -> tolerance = 1.00
+    const floorCase = api._pfComputeReconciliation(smallBrokerRecon, 499.2, true, '2026-08-09'); // unexplained = 0.8, within ₪1 floor
+    check('tolerance floor: ₪1.00 minimum governs for small broker totals', floorCase.status === 'fully-reconciled');
+  })();
+
+  // ── unset/invalid pass-through, total-incomplete dependency on P-2B ─────────
+  (function () {
+    check('unset recon -> status unset', api._pfComputeReconciliation({ state: 'unset' }, 76167.39, true, '2026-08-09').status === 'unset');
+    check('invalid recon -> status invalid', api._pfComputeReconciliation({ state: 'invalid' }, 76167.39, true, '2026-08-09').status === 'invalid');
+    const incompleteResult = api._pfComputeReconciliation(
+      { state: 'recorded', brokerTotalILS: 78567.62, asOf: '2026-08-09', declaredExclusionsILS: 2400.22, exclusionsNote: '' },
+      76167.39, false, '2026-08-09'
+    );
+    check('P-2B Portfolio Total incomplete -> reconciliation unavailable (no false gap/reconciled claim)', incompleteResult.status === 'total-incomplete');
+  })();
+
+  // ── _pfApplyReconRestore: undefined/null/object three-way, mirrors cash/fx ──
+  (function () {
+    const ls = makeMockLocalStorage({});
+    const apiLocal = factory(ls);
+    const failedWrite = apiLocal._pfApplyReconRestore({ brokerTotalILS: 78567.62, asOf: '2026-08-09', declaredExclusionsILS: 2400.22, exclusionsNote: 'note' });
+    check('_pfApplyReconRestore: writes a valid record, no failures', failedWrite.length === 0);
+    const readBack = apiLocal._pfReconLoad();
+    check('_pfApplyReconRestore: written record reads back exactly', readBack.state === 'recorded' && readBack.brokerTotalILS === 78567.62 && readBack.exclusionsNote === 'note');
+    const failedClear = apiLocal._pfApplyReconRestore(null);
+    check('_pfApplyReconRestore(null): explicit clear -> unset', failedClear.length === 0 && apiLocal._pfReconLoad().state === 'unset');
+    const failedNoop = apiLocal._pfApplyReconRestore(undefined);
+    check('_pfApplyReconRestore(undefined): no-op, returns empty failedParts', failedNoop.length === 0);
+  })();
+
+  // ── pt_holdings/pt_cash byte-identical through a recon-only restore-apply ───
+  (function () {
+    const seedHoldings = JSON.stringify({ AAPL: { symbol: 'AAPL', positionSize: 5000, currency: 'USD', source: 'manual' } });
+    const seedCash = JSON.stringify({ amountILS: 17445.24, asOf: '2026-08-09' });
+    const ls = makeMockLocalStorage({ pt_holdings: seedHoldings, pt_cash: seedCash });
+    const apiLocal = factory(ls);
+    apiLocal._pfApplyReconRestore({ brokerTotalILS: 78567.62, asOf: '2026-08-09', declaredExclusionsILS: 2400.22, exclusionsNote: 'note' });
+    apiLocal._pfApplyReconRestore(null);
+    check('_pfApplyReconRestore never touches pt_holdings', ls._store.pt_holdings === seedHoldings);
+    check('_pfApplyReconRestore never touches pt_cash', ls._store.pt_cash === seedCash);
+  })();
+
+  // ── Backup v4: envelope accepted, recon required + restored ─────────────────
+  (function () {
+    function baseDoc(schemaVersion, extra) {
+      return Object.assign({
+        schemaVersion: schemaVersion, exportedAt: new Date().toISOString(),
+        sourceOrigin: 'http://localhost', appBaseline: 'test', holdings: {}, tickers: []
+      }, extra || {});
+    }
+
+    const v4Doc = baseDoc(4, {
+      cash: null, fx: null,
+      recon: { brokerTotalILS: 78567.62, asOf: '2026-08-09', declaredExclusionsILS: 2400.22, exclusionsNote: 'fund note' }
+    });
+    const v4Result = api._validatePortfolioBackup(v4Doc);
+    check('v4 backup: accepted', v4Result.error === null);
+    check('v4 backup: recon round-trips all four fields exactly',
+      v4Result.recon && v4Result.recon.brokerTotalILS === 78567.62 && v4Result.recon.asOf === '2026-08-09' &&
+      v4Result.recon.declaredExclusionsILS === 2400.22 && v4Result.recon.exclusionsNote === 'fund note');
+
+    const v4NullResult = api._validatePortfolioBackup(baseDoc(4, { cash: null, fx: null, recon: null }));
+    check('v4 recon:null -> accepted, explicit clear (not undefined)', v4NullResult.error === null && v4NullResult.recon === null);
+
+    check('v4 missing recon key -> whole import rejected',
+      api._validatePortfolioBackup(baseDoc(4, { cash: null, fx: null })).error !== null);
+
+    check('v4 malformed recon (negative brokerTotalILS) -> whole import rejected',
+      api._validatePortfolioBackup(baseDoc(4, { cash: null, fx: null, recon: { brokerTotalILS: -5, asOf: '2026-08-09', declaredExclusionsILS: 0, exclusionsNote: '' } })).error !== null);
+    check('v4 malformed recon (bad asOf) -> whole import rejected',
+      api._validatePortfolioBackup(baseDoc(4, { cash: null, fx: null, recon: { brokerTotalILS: 100, asOf: 'not-a-date', declaredExclusionsILS: 0, exclusionsNote: '' } })).error !== null);
+
+    const v1Result = api._validatePortfolioBackup(baseDoc(1));
+    check('v1 payload -> recon undefined (predates the feature)', v1Result.error === null && v1Result.recon === undefined);
+    const v2Result = api._validatePortfolioBackup(baseDoc(2, { cash: null, fx: null }));
+    check('v2 payload -> recon undefined, signal to leave local pt_recon untouched', v2Result.error === null && v2Result.recon === undefined);
+    const v3Result = api._validatePortfolioBackup(baseDoc(3, { cash: null, fx: null }));
+    check('v3 payload -> recon undefined, signal to leave local pt_recon untouched', v3Result.error === null && v3Result.recon === undefined);
+
+    check('unknown schemaVersion 5 -> rejected',
+      api._validatePortfolioBackup(baseDoc(5, { cash: null, fx: null, recon: null })).error !== null);
+  })();
+
+  // ── FX-chip precision rider — structural check on the actual rendered source ──
+  check('FX chip: displays 4dp precision (not the old 2dp)', /fxCache\.rate\.toFixed\(4\)/.test(content));
+  check('FX chip: full-rate tooltip exposes the exact calculation rate', /fxChipVal\.title = 'Exact rate used in calculations: ' \+ fxCache\.rate;/.test(content));
+
+  if (okCount === total) {
+    pass(total + ' reconciliation assertion(s) passed');
+  }
+}
+
 async function main() {
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
@@ -2197,6 +2452,7 @@ async function main() {
   phaseBackupFidelity();
   await phasePortfolioReporting();
   phaseMoneyMath();
+  phaseReconciliation();
 
   console.log('\n=== Summary ===');
 
