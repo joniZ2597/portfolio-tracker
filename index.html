@@ -772,6 +772,13 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-cov-lbl{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px}
 .pf-cov-val{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text2)}
 .pf-cov-detail{font-family:var(--mono);font-size:9px;font-weight:500;color:var(--text3)}
+/* ─── PORTFOLIO PANEL (P-4A-2: Needs Attention) ─── */
+.pf-attention{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:12px 16px;margin-bottom:12px}
+.pf-attention-hdr{font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+.pf-attention-item{font-size:11px;margin-top:8px}
+.pf-attention-hdr + .pf-attention-item{margin-top:0}
+.pf-attention-title{font-weight:600}
+.pf-attention-detail{font-size:10px;color:var(--text3);margin-top:2px}
 /* ─── PORTFOLIO PANEL (Slice 1D-1: Passive Data Guidance) ─── */
 .pf-guidance{font-size:11px;color:var(--text3);margin-top:6px;margin-bottom:4px}
 /* ─── PORTFOLIO PANEL (Slice 1D-2: Session Sort Control) ─── */
@@ -6717,6 +6724,152 @@ function _pfComputePortfolioPl(holdings, fxCache) {
   return result;
 }
 
+var PF_ATTENTION_STALE_MAX_DAYS = 7;
+
+// ─── P-4A-2: Needs Attention — deterministic portfolio-integrity summary ────
+// Pure. No DOM, no localStorage read of its own (holdings/fxCache/recon/
+// cashState are passed in, already loaded by the caller — same contract as
+// _pfComputeReconciliation/_pfComputePortfolioPl above). Aggregates signals
+// that already exist elsewhere in this file; introduces no new formula, no
+// new persisted key, and no numeric score — severity is an ordinal tier used
+// only to sort this list, never combined into a number or fed into
+// orchestrate/analyzeChunk/enforceScoreConsistency/_techCache.
+//
+// Dedup rules (deliberate, not incidental):
+//  - drift/ratio/fxUnusable reuse the exact _pfHoldingPl booleans
+//    _pfComputePortfolioPl already uses for its exclusionReasons counts, so
+//    the two surfaces can never disagree on which holding is excluded/why.
+//  - fxUnusable is portfolio-level in root cause (one shared fxCache), so it
+//    surfaces as ONE item, not one per affected USD holding.
+//  - corrupt holdings surface as ONE aggregated item — the existing red
+//    banner in _renderPortfolioPanel already itemizes them by symbol.
+//  - reconciliation 'total-incomplete' only fires when the cause is cash
+//    (state !== 'recorded'); unknown-currency/corrupt/FX causes already have
+//    their own items above, so firing this too would restate the same root
+//    cause under a different name.
+function _pfComputeNeedsAttention(holdings, fxCache, recon, cashState, nowMs) {
+  var now = _pfIsFiniteNum(nowMs) ? nowMs : Date.now();
+  var items = [];
+
+  if (recon.status === 'unexplained-gap') {
+    items.push({
+      id: 'recon:gap', severity: 'critical', category: 'reconciliation', symbol: null,
+      title: 'Broker reconciliation gap',
+      detail: '₪' + Math.abs(recon.unexplained).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+        ' unexplained vs. broker total — a holding may be missing from Pulse.',
+      sortKey: Math.abs(recon.unexplained)
+    });
+  } else if (recon.status === 'invalid') {
+    items.push({
+      id: 'recon:invalid', severity: 'medium', category: 'reconciliation', symbol: null,
+      title: 'Broker reconciliation data is invalid',
+      detail: 'The recorded reconciliation could not be read — re-enter the broker total.',
+      sortKey: 0
+    });
+  } else if (recon.status === 'stale') {
+    items.push({
+      id: 'recon:stale', severity: 'medium', category: 'reconciliation', symbol: null,
+      title: 'Broker reconciliation is stale',
+      detail: Math.round(recon.staleDays) + ' day(s) between recorded as-of and oldest holding baseline — cannot confirm there is no gap.',
+      sortKey: recon.staleDays
+    });
+  } else if (recon.status === 'unset') {
+    items.push({
+      id: 'recon:unavailable', severity: 'medium', category: 'reconciliation', symbol: null,
+      title: 'Broker reconciliation not recorded',
+      detail: 'Pulse has not yet been compared against the broker total — this is not a known gap, just an unmade comparison.',
+      sortKey: 0
+    });
+  } else if (recon.status === 'total-incomplete' && cashState.state !== 'recorded') {
+    items.push({
+      id: 'recon:total-incomplete', severity: 'high', category: 'reconciliation', symbol: null,
+      title: 'Cash not recorded — reconciliation unavailable',
+      detail: 'Portfolio Total is incomplete without a recorded cash balance, so it cannot be reliably compared to the broker total.',
+      sortKey: 0
+    });
+  }
+
+  var corruptCount = 0;
+  Object.keys(holdings).forEach(function(sym) {
+    if (holdings[sym]._corrupt === true) corruptCount += 1;
+  });
+  if (corruptCount > 0) {
+    items.push({
+      id: 'corrupt:aggregate', severity: 'critical', category: 'data-integrity', symbol: null,
+      title: corruptCount + (corruptCount === 1 ? ' holding has' : ' holdings have') + ' a corrupted record',
+      detail: 'Excluded from all portfolio reporting and money math — see the notice above and Edit each to repair.',
+      sortKey: corruptCount
+    });
+  }
+
+  var usdHoldingCount = 0;
+  Object.keys(holdings).sort().forEach(function(sym) {
+    var h = holdings[sym];
+    if (h._corrupt === true) return;
+    if (h.currency === 'USD') usdHoldingCount += 1;
+
+    var pl = _pfHoldingPl(h, fxCache);
+    if (!pl.eligibleForAggregation) {
+      if (!pl.currencyKnown) {
+        items.push({ id: 'exclusion:unknownCurrency:' + sym, severity: 'high', category: 'exclusion', symbol: sym,
+          title: sym + ': currency not recognized',
+          detail: 'Not USD or ILS — excluded from Portfolio Total and P/L totals.', sortKey: 0 });
+      } else if (!pl.costBasisValid) {
+        items.push({ id: 'exclusion:invalidCostBasis:' + sym, severity: 'high', category: 'exclusion', symbol: sym,
+          title: sym + ': cost basis missing or invalid',
+          detail: 'Add a valid cost basis to include this holding in Unrealized P/L.', sortKey: 0 });
+      } else if (pl.driftFlag) {
+        items.push({ id: 'drift:' + sym, severity: 'medium', category: 'drift', symbol: sym,
+          title: sym + ': P/L drift ' + pl.driftPp.toFixed(2) + 'pp',
+          detail: 'Recorded manual P/L differs from computed native P/L by ' + pl.driftPp.toFixed(2) + 'pp — verify against your broker.',
+          sortKey: pl.driftPp });
+      } else if (pl.ratioFlag) {
+        items.push({ id: 'ratio:' + sym, severity: 'medium', category: 'ratio', symbol: sym,
+          title: sym + ': cost basis ratio looks off',
+          detail: 'Implied FX rate at entry (' + pl.ratio.toFixed(2) + ') is outside the expected 2.0-5.0 range — verify cost basis units.',
+          sortKey: Math.abs(pl.ratio - 3.5) });
+      } else if (h.currency === 'USD' && !pl.costIlsAvailable) {
+        items.push({ id: 'exclusion:missingCostBasisIls:' + sym, severity: 'high', category: 'exclusion', symbol: sym,
+          title: sym + ': ILS cost basis not recorded',
+          detail: 'USD holdings need a recorded ILS cost basis to compute ILS P/L — add it via Edit.', sortKey: 0 });
+      }
+    }
+
+    if (typeof h.baselineAt === 'string' && !isNaN(Date.parse(h.baselineAt))) {
+      var ageDays = (now - Date.parse(h.baselineAt)) / (24 * 60 * 60 * 1000);
+      if (ageDays > PF_ATTENTION_STALE_MAX_DAYS) {
+        items.push({ id: 'stale:' + sym, severity: 'low', category: 'staleness', symbol: sym,
+          title: sym + ': position data has not been updated in ' + Math.floor(ageDays) + ' days',
+          detail: 'Verify position size, cost basis, and manual P/L still match your broker.',
+          sortKey: ageDays });
+      }
+    }
+  });
+
+  var attnFxState = _pfFxState(fxCache);
+  if (usdHoldingCount > 0 && (attnFxState === 'missing' || attnFxState === 'stale-invalid')) {
+    items.push({
+      id: 'fx:unavailable', severity: 'high', category: 'fx', symbol: null,
+      title: attnFxState === 'missing' ? 'FX rate unavailable' : 'FX rate is stale',
+      detail: usdHoldingCount + ' USD holding' + (usdHoldingCount === 1 ? '' : 's') +
+        ' cannot compute ILS value or P/L — ' +
+        (attnFxState === 'missing' ? 'no FX rate has been fetched yet.' : 'the stored FX rate is more than 6 days old.'),
+      sortKey: usdHoldingCount
+    });
+  }
+
+  var SEVERITY_RANK = { critical: 0, high: 1, medium: 2, low: 3 };
+  var CATEGORY_RANK = { reconciliation: 0, 'data-integrity': 1, fx: 2, exclusion: 3, drift: 4, ratio: 5, staleness: 6 };
+  items.sort(function(a, b) {
+    if (SEVERITY_RANK[a.severity] !== SEVERITY_RANK[b.severity]) return SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
+    if (CATEGORY_RANK[a.category] !== CATEGORY_RANK[b.category]) return CATEGORY_RANK[a.category] - CATEGORY_RANK[b.category];
+    if (b.sortKey !== a.sortKey) return b.sortKey - a.sortKey;
+    var as = a.symbol || '', bs = b.symbol || '';
+    return as.localeCompare(bs);
+  });
+  return items;
+}
+
 // ─── P-2B: Portfolio-level day estimate ─────────────────────────────────────
 // Read-only. Covered set = valid-currency (USD/ILS), non-corrupt holdings —
 // the same set already excluded from Portfolio Total/Known Assets Total.
@@ -7280,6 +7433,54 @@ function _renderPortfolioPanel() {
       pfPlNote.className   = 'pf-guidance';
       pfPlNote.textContent = 'Unrealized, current holdings only — realized gains from past exits not included.';
       panel.appendChild(pfPlNote);
+    }
+
+    // ─── P-4A-2: Needs Attention ──────────────────────────────────────
+    // Read-only aggregation of signals already computed above/elsewhere in
+    // this render pass (holdings, fxCache, cashState, recon) via
+    // _pfComputeNeedsAttention. See that function for dedup rules and
+    // ordering; this block only turns its already-sorted result into DOM,
+    // preserving the returned order exactly. Colors follow existing
+    // precedent: red for records that could not be read at all (corrupt
+    // holdings, invalid reconciliation data — same red used by the broken-
+    // holdings banner above and the recon "invalid" state); amber for every
+    // other item (a review/verify signal, not a hard error — same amber the
+    // Broker Reconciliation stat already uses for its own unexplained-gap
+    // state). Critical-tier items additionally get a bordered badge (inline
+    // style, no new CSS class) so they read as visually stronger than
+    // High/Medium/Low, which stay plain colored text.
+    var attentionItems = _pfComputeNeedsAttention(holdings, fxCache, recon, cashState);
+    if (attentionItems.length > 0) {
+      var attentionBlock = document.createElement('div');
+      attentionBlock.className = 'pf-attention';
+      var attentionHdr = document.createElement('div');
+      attentionHdr.className   = 'pf-attention-hdr';
+      attentionHdr.textContent = 'Needs Attention (' + attentionItems.length + ')';
+      attentionBlock.appendChild(attentionHdr);
+      attentionItems.forEach(function(item) {
+        var row = document.createElement('div');
+        row.className = 'pf-attention-item';
+        var isRed = (item.id === 'corrupt:aggregate' || item.id === 'recon:invalid');
+        var color = isRed ? 'var(--red2)' : 'var(--yellow2)';
+        var title = document.createElement('div');
+        title.className   = 'pf-attention-title';
+        title.style.color = color;
+        title.textContent = '⚠ ' + item.title;
+        if (item.severity === 'critical') {
+          title.style.display      = 'inline-block';
+          title.style.border       = '1px solid ' + color;
+          title.style.borderRadius = '3px';
+          title.style.padding      = '2px 7px';
+          title.style.fontWeight   = '700';
+        }
+        row.appendChild(title);
+        var detail = document.createElement('div');
+        detail.className   = 'pf-attention-detail';
+        detail.textContent = item.detail;
+        row.appendChild(detail);
+        attentionBlock.appendChild(row);
+      });
+      panel.appendChild(attentionBlock);
     }
 
     var agg = _calcPortfolioAggregates(holdings);

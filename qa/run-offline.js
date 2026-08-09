@@ -2439,6 +2439,331 @@ function phaseReconciliation() {
   }
 }
 
+function phaseNeedsAttention() {
+  header('Phase 11 - Needs Attention (P-4A-2)');
+
+  const content = read('index.html');
+  if (content === null) {
+    fail('needs-attention', 'index.html is missing');
+    return;
+  }
+
+  let factory;
+  try {
+    const pieces = {
+      isFiniteNumSrc:      extractFunctionSource(content, '_pfIsFiniteNum'),
+      fxRateValidSrc:      extractFunctionSource(content, '_pfFxRateValid'),
+      fxStateSrc:          extractFunctionSource(content, '_pfFxState'),
+      effectiveCostIlsSrc: extractFunctionSource(content, '_pfEffectiveCostIls'),
+      holdingPlSrc:        extractFunctionSource(content, '_pfHoldingPl'),
+      needsAttentionSrc:   extractFunctionSource(content, '_pfComputeNeedsAttention'),
+      fxFreshDaysSrc:      extractVarSource(content, 'PF_FX_FRESH_MAX_AGE_DAYS'),
+      fxValidDaysSrc:      extractVarSource(content, 'PF_FX_VALID_MAX_AGE_DAYS'),
+      attentionStaleDaysSrc: extractVarSource(content, 'PF_ATTENTION_STALE_MAX_DAYS')
+    };
+    const missing = Object.keys(pieces).filter(function (k) { return !pieces[k]; });
+    if (missing.length > 0) {
+      fail('needs-attention', 'could not extract from index.html: ' + missing.join(', '));
+      return;
+    }
+
+    // eslint-disable-next-line no-new-func
+    factory = new Function(
+      pieces.fxFreshDaysSrc + '\n' + pieces.fxValidDaysSrc + '\n' + pieces.attentionStaleDaysSrc + '\n' +
+        pieces.isFiniteNumSrc + '\n' + pieces.fxRateValidSrc + '\n' + pieces.fxStateSrc + '\n' +
+        pieces.effectiveCostIlsSrc + '\n' + pieces.holdingPlSrc + '\n' + pieces.needsAttentionSrc +
+        '\nreturn { _pfComputeNeedsAttention: _pfComputeNeedsAttention, _pfHoldingPl: _pfHoldingPl, _pfFxState: _pfFxState };'
+    );
+  } catch (e) {
+    fail('needs-attention', 'factory build error: ' + e.message);
+    return;
+  }
+
+  const api = factory();
+
+  let total = 0;
+  let okCount = 0;
+  function check(name, cond) {
+    total += 1;
+    if (cond) {
+      okCount += 1;
+    } else {
+      fail('needs-attention', 'assertion failed: ' + name);
+    }
+  }
+
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW_MS = Date.parse('2026-08-09T12:00:00.000Z');
+  function fxRecord(ageMsOrOverrides) {
+    const base = {
+      rate: 3.006, effectiveAt: new Date(NOW_MS).toISOString(), source: 'boi',
+      fetchedAt: new Date(NOW_MS).toISOString(), lastAttemptAt: new Date(NOW_MS).toISOString(), lastAttemptOk: true
+    };
+    if (typeof ageMsOrOverrides === 'number') {
+      base.effectiveAt = new Date(NOW_MS - ageMsOrOverrides).toISOString();
+      return base;
+    }
+    return Object.assign(base, ageMsOrOverrides || {});
+  }
+
+  // ── Reconciliation states: trigger, wording, and the cash-driven total-incomplete dedup rule ──
+  (function () {
+    const noHoldings = {};
+    const cashRecorded = { state: 'recorded', amountILS: 100, asOf: '2026-08-01' };
+    const cashUnset = { state: 'unset' };
+    const cashInvalid = { state: 'invalid' };
+
+    const gapItems = api._pfComputeNeedsAttention(noHoldings, {}, { status: 'unexplained-gap', unexplained: -2400.23, tolerance: 39.28, exclusions: 0 }, cashRecorded, NOW_MS);
+    check('recon unexplained-gap -> exactly one recon:gap item, critical',
+      gapItems.length === 1 && gapItems[0].id === 'recon:gap' && gapItems[0].severity === 'critical');
+    check('recon:gap detail cites the absolute unexplained amount', gapItems[0].detail.indexOf('2,400.23') !== -1);
+
+    const invalidItems = api._pfComputeNeedsAttention(noHoldings, {}, { status: 'invalid' }, cashRecorded, NOW_MS);
+    check('recon invalid -> recon:invalid, medium',
+      invalidItems.length === 1 && invalidItems[0].id === 'recon:invalid' && invalidItems[0].severity === 'medium');
+
+    const staleItems = api._pfComputeNeedsAttention(noHoldings, {}, { status: 'stale', staleDays: 5.4 }, cashRecorded, NOW_MS);
+    check('recon stale -> recon:stale, medium',
+      staleItems.length === 1 && staleItems[0].id === 'recon:stale' && staleItems[0].severity === 'medium');
+    check('recon:stale wording is honest — does not assert the recon:gap claim',
+      staleItems[0].detail.indexOf('a holding may be missing') === -1 && staleItems[0].detail.indexOf('cannot confirm') !== -1);
+
+    const unsetItems = api._pfComputeNeedsAttention(noHoldings, {}, { status: 'unset' }, cashRecorded, NOW_MS);
+    check('recon unset -> recon:unavailable (owner-directed, not silent), medium',
+      unsetItems.length === 1 && unsetItems[0].id === 'recon:unavailable' && unsetItems[0].severity === 'medium');
+    check('recon:unavailable wording does not assert the recon:gap claim', unsetItems[0].detail.indexOf('a holding may be missing') === -1);
+
+    const incompleteCashUnset = api._pfComputeNeedsAttention(noHoldings, {}, { status: 'total-incomplete' }, cashUnset, NOW_MS);
+    check('recon total-incomplete + cash unset -> recon:total-incomplete fires, high',
+      incompleteCashUnset.length === 1 && incompleteCashUnset[0].id === 'recon:total-incomplete' && incompleteCashUnset[0].severity === 'high');
+
+    const incompleteCashInvalid = api._pfComputeNeedsAttention(noHoldings, {}, { status: 'total-incomplete' }, cashInvalid, NOW_MS);
+    check('recon total-incomplete + cash invalid -> recon:total-incomplete fires',
+      incompleteCashInvalid.some(function (i) { return i.id === 'recon:total-incomplete'; }));
+
+    const incompleteCashRecorded = api._pfComputeNeedsAttention(noHoldings, {}, { status: 'total-incomplete' }, cashRecorded, NOW_MS);
+    check('dedup: recon total-incomplete + cash already recorded -> suppressed (root cause covered elsewhere)',
+      incompleteCashRecorded.length === 0);
+
+    const fullyReconciled = api._pfComputeNeedsAttention(noHoldings, {}, { status: 'fully-reconciled', unexplained: 0.01, tolerance: 39.28, exclusions: 0 }, cashRecorded, NOW_MS);
+    check('recon fully-reconciled -> no item', fullyReconciled.length === 0);
+
+    const reconciledWithExclusions = api._pfComputeNeedsAttention(noHoldings, {}, { status: 'reconciled-with-exclusions', unexplained: 0.01, tolerance: 39.28, exclusions: 2400.22 }, cashRecorded, NOW_MS);
+    check('recon reconciled-with-exclusions -> no item', reconciledWithExclusions.length === 0);
+  })();
+
+  // ── Corrupt holdings: aggregated into ONE item regardless of count ──
+  (function () {
+    const zero = { AAA: { symbol: 'AAA', positionSize: 1000, costBasis: 1000, currency: 'ILS' } };
+    const zeroItems = api._pfComputeNeedsAttention(zero, {}, { status: 'unset' }, { state: 'unset' }, NOW_MS);
+    check('no corrupt holdings -> no corrupt:aggregate item', !zeroItems.some(function (i) { return i.id === 'corrupt:aggregate'; }));
+
+    const one = { C1: { _corrupt: true } };
+    const oneItems = api._pfComputeNeedsAttention(one, {}, { status: 'unset' }, { state: 'unset' }, NOW_MS);
+    const oneItem = oneItems.filter(function (i) { return i.id === 'corrupt:aggregate'; })[0];
+    check('1 corrupt holding -> singular wording, critical', !!oneItem && oneItem.severity === 'critical' && /^1 holding has/.test(oneItem.title));
+
+    const three = { C1: { _corrupt: true }, C2: { _corrupt: true }, C3: { _corrupt: true } };
+    const threeItems = api._pfComputeNeedsAttention(three, {}, { status: 'unset' }, { state: 'unset' }, NOW_MS);
+    const corruptItems = threeItems.filter(function (i) { return i.id === 'corrupt:aggregate'; });
+    check('3 corrupt holdings -> exactly ONE item (not 3), plural wording', corruptItems.length === 1 && /^3 holdings have/.test(corruptItems[0].title));
+  })();
+
+  // ── Per-holding exclusion reasons (unknownCurrency / invalidCostBasis / missingCostBasisIls) ──
+  (function () {
+    const recon = { status: 'unset' };
+    const cash = { state: 'unset' };
+
+    const unknownCur = { UC: { symbol: 'UC', positionSize: 1000, costBasis: 1000, currency: 'GBP' } };
+    const ucItems = api._pfComputeNeedsAttention(unknownCur, {}, recon, cash, NOW_MS);
+    check('unknown currency -> exclusion:unknownCurrency item, high',
+      ucItems.some(function (i) { return i.id === 'exclusion:unknownCurrency:UC' && i.severity === 'high'; }));
+
+    const invalidCost = { IC: { symbol: 'IC', positionSize: 1000, costBasis: -5, currency: 'ILS' } };
+    const icItems = api._pfComputeNeedsAttention(invalidCost, {}, recon, cash, NOW_MS);
+    check('invalid cost basis -> exclusion:invalidCostBasis item, high',
+      icItems.some(function (i) { return i.id === 'exclusion:invalidCostBasis:IC' && i.severity === 'high'; }));
+
+    const missingIls = { MI: { symbol: 'MI', positionSize: 1000, costBasis: 1000, currency: 'USD' } };
+    const miItems = api._pfComputeNeedsAttention(missingIls, fxRecord(0), recon, cash, NOW_MS);
+    check('USD holding missing costBasisILS -> exclusion:missingCostBasisIls item, high',
+      miItems.some(function (i) { return i.id === 'exclusion:missingCostBasisIls:MI' && i.severity === 'high'; }));
+
+    const fullyEligible = { FE: { symbol: 'FE', positionSize: 1000, costBasis: 1000, costBasisILS: 3000, currency: 'USD' } };
+    const healthyRecon = { status: 'fully-reconciled', unexplained: 0, tolerance: 1, exclusions: 0 };
+    const feItems = api._pfComputeNeedsAttention(fullyEligible, fxRecord(0), healthyRecon, cash, NOW_MS);
+    check('fully eligible USD holding, fresh FX, healthy recon -> no item at all', feItems.length === 0);
+  })();
+
+  // ── Drift / ratio: threshold, boundary, and detail-text content ──
+  (function () {
+    const recon = { status: 'unset' };
+    const cash = { state: 'unset' };
+
+    const drifted = { DR: { symbol: 'DR', positionSize: 1000, costBasis: 1000, currency: 'ILS', manualPlPct: -15 } };
+    const drItems = api._pfComputeNeedsAttention(drifted, {}, recon, cash, NOW_MS);
+    const drItem = drItems.filter(function (i) { return i.id === 'drift:DR'; })[0];
+    check('drift-flagged holding -> drift item, medium, driftPp in detail',
+      !!drItem && drItem.severity === 'medium' && drItem.detail.indexOf('15.00pp') !== -1);
+
+    const ratioLow = { RL: { symbol: 'RL', positionSize: 1000, costBasis: 1000, costBasisILS: 1000, currency: 'USD' } };
+    const rlItems = api._pfComputeNeedsAttention(ratioLow, fxRecord(0), recon, cash, NOW_MS);
+    check('ratio below 2.0 -> ratio item, medium', rlItems.some(function (i) { return i.id === 'ratio:RL' && i.severity === 'medium'; }));
+
+    const ratioHigh = { RH: { symbol: 'RH', positionSize: 1000, costBasis: 1000, costBasisILS: 6000, currency: 'USD' } };
+    const rhItems = api._pfComputeNeedsAttention(ratioHigh, fxRecord(0), recon, cash, NOW_MS);
+    check('ratio above 5.0 -> ratio item, medium', rhItems.some(function (i) { return i.id === 'ratio:RH' && i.severity === 'medium'; }));
+
+    const ratioBoundaryLow = { RBL: { symbol: 'RBL', positionSize: 1000, costBasis: 1000, costBasisILS: 2000, currency: 'USD' } };
+    const rblItems = api._pfComputeNeedsAttention(ratioBoundaryLow, fxRecord(0), recon, cash, NOW_MS);
+    check('ratio exactly 2.0 (inclusive boundary) -> no ratio item', !rblItems.some(function (i) { return i.id === 'ratio:RBL'; }));
+
+    const ratioBoundaryHigh = { RBH: { symbol: 'RBH', positionSize: 1000, costBasis: 1000, costBasisILS: 5000, currency: 'USD' } };
+    const rbhItems = api._pfComputeNeedsAttention(ratioBoundaryHigh, fxRecord(0), recon, cash, NOW_MS);
+    check('ratio exactly 5.0 (inclusive boundary) -> no ratio item', !rbhItems.some(function (i) { return i.id === 'ratio:RBH'; }));
+  })();
+
+  // ── FX unavailable: decoupled trigger, exactly-one item, and the exact fixed regression ──
+  (function () {
+    const usdHolding = { UUU: { symbol: 'UUU', positionSize: 1000, costBasis: 1000, costBasisILS: 3000, currency: 'USD' } };
+    const recon = { status: 'unset' };
+    const cash = { state: 'unset' };
+
+    const freshItems = api._pfComputeNeedsAttention(usdHolding, fxRecord(0), recon, cash, NOW_MS);
+    check('FX fresh -> no fx:unavailable', !freshItems.some(function (i) { return i.id === 'fx:unavailable'; }));
+
+    const agedItems = api._pfComputeNeedsAttention(usdHolding, fxRecord(4 * DAY), recon, cash, NOW_MS);
+    check('FX aged-but-valid (4 days) -> no fx:unavailable', !agedItems.some(function (i) { return i.id === 'fx:unavailable'; }));
+
+    const staleItems = api._pfComputeNeedsAttention(usdHolding, fxRecord(10 * DAY), recon, cash, NOW_MS);
+    check('FX stale-invalid (10 days) -> fx:unavailable fires', staleItems.some(function (i) { return i.id === 'fx:unavailable'; }));
+
+    const missingItems = api._pfComputeNeedsAttention(usdHolding, {}, recon, cash, NOW_MS);
+    check('FX missing (no cache at all) -> fx:unavailable fires', missingItems.some(function (i) { return i.id === 'fx:unavailable'; }));
+
+    const noUsdHoldings = { III2: { symbol: 'III2', positionSize: 1000, costBasis: 1000, currency: 'ILS' } };
+    const noUsdItems = api._pfComputeNeedsAttention(noUsdHoldings, {}, recon, cash, NOW_MS);
+    check('no USD holdings at all -> fx:unavailable never fires even if FX missing', !noUsdItems.some(function (i) { return i.id === 'fx:unavailable'; }));
+
+    const onlyCorruptUsd = { CU: { _corrupt: true, currency: 'USD' } };
+    const onlyCorruptItems = api._pfComputeNeedsAttention(onlyCorruptUsd, {}, recon, cash, NOW_MS);
+    check('only USD holding is corrupt -> does not count, fx:unavailable does not fire', !onlyCorruptItems.some(function (i) { return i.id === 'fx:unavailable'; }));
+
+    const multiUsd = {
+      U1: { symbol: 'U1', positionSize: 1000, costBasis: 1000, costBasisILS: 3000, currency: 'USD' },
+      U2: { symbol: 'U2', positionSize: 1000, costBasis: 1000, costBasisILS: 3000, currency: 'USD' },
+      U3: { symbol: 'U3', positionSize: 1000, costBasis: 1000, costBasisILS: 3000, currency: 'USD' }
+    };
+    const multiItems = api._pfComputeNeedsAttention(multiUsd, fxRecord(10 * DAY), recon, cash, NOW_MS);
+    const fxItems = multiItems.filter(function (i) { return i.id === 'fx:unavailable'; });
+    check('3 USD holdings, FX stale -> exactly ONE fx:unavailable item (not 3)', fxItems.length === 1);
+    check('fx:unavailable detail cites the correct affected count', fxItems[0].detail.indexOf('3 USD holdings') !== -1);
+
+    // Regression pin: before the fix, fx:unavailable required a USD holding
+    // to reach the LAST branch of the exclusion ladder (!pl.fxUsable). A
+    // holding excluded for an EARLIER reason (missingCostBasisIls here)
+    // never reached that branch, so fx:unavailable silently failed to fire
+    // even though FX truly was unusable for the whole portfolio.
+    const onlyExcludedUsd = { MMM: { symbol: 'MMM', positionSize: 1000, costBasis: 1000, currency: 'USD' } };
+    const regressionItems = api._pfComputeNeedsAttention(onlyExcludedUsd, fxRecord(10 * DAY), recon, cash, NOW_MS);
+    const regressionIds = regressionItems.map(function (i) { return i.id; });
+    check('regression: fx:unavailable fires even when the only USD holding is excluded for a different reason first',
+      regressionIds.indexOf('fx:unavailable') !== -1);
+    check('regression: the excluded holding still gets its own missingCostBasisIls item too',
+      regressionIds.indexOf('exclusion:missingCostBasisIls:MMM') !== -1);
+  })();
+
+  // ── Manual-value staleness: 7-day threshold, strict boundary, corrupt-skip ──
+  (function () {
+    const eligibleBase = { positionSize: 1000, costBasis: 1000, currency: 'ILS' };
+    const exactly7 = Object.assign({}, eligibleBase, { symbol: 'EX7', baselineAt: new Date(NOW_MS - 7 * DAY).toISOString() });
+    const over7 = Object.assign({}, eligibleBase, { symbol: 'OV7', baselineAt: new Date(NOW_MS - 7 * DAY - 60000).toISOString() });
+    const recon = { status: 'unset' };
+    const cash = { state: 'unset' };
+
+    const items1 = api._pfComputeNeedsAttention({ EX7: exactly7 }, {}, recon, cash, NOW_MS);
+    check('staleness boundary: exactly 7 days -> no item (strict > only)', !items1.some(function (i) { return i.id === 'stale:EX7'; }));
+
+    const items2 = api._pfComputeNeedsAttention({ OV7: over7 }, {}, recon, cash, NOW_MS);
+    check('staleness boundary: 7 days + 1 minute -> item fires, low', items2.some(function (i) { return i.id === 'stale:OV7' && i.severity === 'low'; }));
+
+    const noBaseline = Object.assign({}, eligibleBase, { symbol: 'NB' });
+    const items3 = api._pfComputeNeedsAttention({ NB: noBaseline }, {}, recon, cash, NOW_MS);
+    check('missing baselineAt -> no crash, no stale item', !items3.some(function (i) { return i.id === 'stale:NB'; }));
+
+    const corruptOld = { CO: { _corrupt: true, baselineAt: new Date(NOW_MS - 365 * DAY).toISOString() } };
+    const items4 = api._pfComputeNeedsAttention(corruptOld, {}, recon, cash, NOW_MS);
+    check('corrupt holding with very old baselineAt -> skipped, no stale item', !items4.some(function (i) { return i.id === 'stale:CO'; }));
+  })();
+
+  // ── Full deterministic ordering: all four tiers present in one portfolio ──
+  (function () {
+    const kitchenSink = {
+      EEE: { symbol: 'EEE', positionSize: 1000, costBasis: 1000, currency: 'EUR' },
+      III: { symbol: 'III', positionSize: 1000, costBasis: 0, currency: 'ILS' },
+      MMM: { symbol: 'MMM', positionSize: 1000, costBasis: 1000, currency: 'USD' },
+      ZDR: { symbol: 'ZDR', positionSize: 1000, costBasis: 1000, currency: 'ILS', manualPlPct: -10 },
+      ADR: { symbol: 'ADR', positionSize: 1000, costBasis: 1000, currency: 'ILS', manualPlPct: -2 },
+      RRR: { symbol: 'RRR', positionSize: 1000, costBasis: 1000, costBasisILS: 1000, currency: 'USD' },
+      SSS: { symbol: 'SSS', positionSize: 1000, costBasis: 1000, currency: 'ILS', baselineAt: new Date(NOW_MS - 10 * DAY).toISOString() },
+      CORRUPT1: { _corrupt: true },
+      CORRUPT2: { _corrupt: true }
+    };
+    const kitchenFx = fxRecord(10 * DAY);
+    const kitchenRecon = { status: 'unexplained-gap', unexplained: 500, tolerance: 39.28, exclusions: 0 };
+    const kitchenCash = { state: 'recorded', amountILS: 1000, asOf: '2026-08-01' };
+    const items = api._pfComputeNeedsAttention(kitchenSink, kitchenFx, kitchenRecon, kitchenCash, NOW_MS);
+    const ids = items.map(function (i) { return i.id; });
+    const expected = [
+      'recon:gap', 'corrupt:aggregate', 'fx:unavailable',
+      'exclusion:unknownCurrency:EEE', 'exclusion:invalidCostBasis:III', 'exclusion:missingCostBasisIls:MMM',
+      'drift:ZDR', 'drift:ADR', 'ratio:RRR', 'stale:SSS'
+    ];
+    check('exact deterministic order across all four severity tiers, magnitude, and symbol tiebreaks',
+      ids.join('|') === expected.join('|'));
+  })();
+
+  // ── Determinism and no-mutation ──
+  (function () {
+    const holdings = { AAA: { symbol: 'AAA', positionSize: 1000, costBasis: 1000, currency: 'ILS', manualPlPct: -50 } };
+    const fx = fxRecord(0);
+    const recon = { status: 'unexplained-gap', unexplained: 500, tolerance: 39.28, exclusions: 0 };
+    const cash = { state: 'recorded', amountILS: 100, asOf: '2026-08-01' };
+    const holdingsBefore = JSON.stringify(holdings);
+    const fxBefore = JSON.stringify(fx);
+    const reconBefore = JSON.stringify(recon);
+    const cashBefore = JSON.stringify(cash);
+    const r1 = api._pfComputeNeedsAttention(holdings, fx, recon, cash, NOW_MS);
+    check('no mutation: holdings unchanged', JSON.stringify(holdings) === holdingsBefore);
+    check('no mutation: fxCache unchanged', JSON.stringify(fx) === fxBefore);
+    check('no mutation: recon unchanged', JSON.stringify(recon) === reconBefore);
+    check('no mutation: cashState unchanged', JSON.stringify(cash) === cashBefore);
+    const r2 = api._pfComputeNeedsAttention(holdings, fx, recon, cash, NOW_MS);
+    check('determinism: identical input + same nowMs -> byte-identical output', JSON.stringify(r1) === JSON.stringify(r2));
+  })();
+
+  // ── Healthy/empty portfolio and default-nowMs fallback ──
+  (function () {
+    const emptyItems = api._pfComputeNeedsAttention({}, {}, { status: 'unset' }, { state: 'unset' }, NOW_MS);
+    check('empty holdings + recon unset still yields recon:unavailable only (not zero)', emptyItems.length === 1 && emptyItems[0].id === 'recon:unavailable');
+
+    const trulyHealthy = { OK: { symbol: 'OK', positionSize: 1000, costBasis: 1000, costBasisILS: 3000, currency: 'USD' } };
+    const healthyItems = api._pfComputeNeedsAttention(trulyHealthy, fxRecord(0), { status: 'fully-reconciled', unexplained: 0, tolerance: 39.28, exclusions: 0 }, { state: 'recorded', amountILS: 100, asOf: '2026-08-01' }, NOW_MS);
+    check('fully healthy portfolio -> empty array', healthyItems.length === 0);
+
+    check('nowMs omitted -> falls back to Date.now() without throwing', (function () {
+      try {
+        api._pfComputeNeedsAttention({}, {}, { status: 'unset' }, { state: 'unset' });
+        return true;
+      } catch (e) { return false; }
+    })());
+  })();
+
+  if (okCount === total) {
+    pass(total + ' needs-attention assertion(s) passed');
+  }
+}
+
 async function main() {
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
@@ -2453,6 +2778,7 @@ async function main() {
   await phasePortfolioReporting();
   phaseMoneyMath();
   phaseReconciliation();
+  phaseNeedsAttention();
 
   console.log('\n=== Summary ===');
 
