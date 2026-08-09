@@ -5952,7 +5952,7 @@ function _pfIsFiniteNum(v) { return typeof v === 'number' && isFinite(v); }
 // doesn't interpret it yet (this QA pass found real pt_holdings entries
 // carrying pnlPercent/partialProfitTaken from elsewhere in the app). It is
 // preserved, never silently dropped — see _pfNormalizeHoldingEntry.
-var PF_KNOWN_HOLDING_FIELDS = ['symbol', 'positionSize', 'manualPlPct', 'currency', 'source', 'updatedAt', 'baselineAt'];
+var PF_KNOWN_HOLDING_FIELDS = ['symbol', 'positionSize', 'manualPlPct', 'currency', 'source', 'updatedAt', 'baselineAt', 'costBasis', 'costBasisILS'];
 
 // The ONLY signal this normalizer trusts to mean "this stored value is my
 // own previously-written wrapper shape, and _raw is the true original to
@@ -6073,6 +6073,23 @@ function _pfNormalizeHoldingEntry(key, raw) {
   if (src.manualPlPct !== undefined && src.manualPlPct !== null) {
     if (_pfIsFiniteNum(src.manualPlPct)) entry.manualPlPct = src.manualPlPct;
     else issues.push({ field: 'manualPlPct', raw: src.manualPlPct });
+  }
+  // P-3: costBasis/costBasisILS are type/presence-validated here only — a
+  // present-and-invalid value (non-finite/wrong type) is an _issues entry,
+  // same tier as manualPlPct above. A present-and-valid-but-<=0 value is NOT
+  // an issue here: sign/plausibility suppression is owned entirely by
+  // _pfHoldingPl (the P-3 render-time helper), not the normalizer — mirrors
+  // how Portfolio Total completeness lives in _pfComputePortfolioReporting,
+  // not here. This keeps a bad cost-basis value editable/visible rather than
+  // routing the whole entry into the _corrupt branch, which stays reserved
+  // for unusable positionSize.
+  if (src.costBasis !== undefined && src.costBasis !== null) {
+    if (_pfIsFiniteNum(src.costBasis)) entry.costBasis = src.costBasis;
+    else issues.push({ field: 'costBasis', raw: src.costBasis });
+  }
+  if (src.costBasisILS !== undefined && src.costBasisILS !== null) {
+    if (_pfIsFiniteNum(src.costBasisILS)) entry.costBasisILS = src.costBasisILS;
+    else issues.push({ field: 'costBasisILS', raw: src.costBasisILS });
   }
   // Currency is financial data — never inferred/defaulted. Passed through
   // only if present AND valid; present-but-invalid is flagged, not guessed.
@@ -6424,6 +6441,156 @@ function _pfHoldingIlsValue(h, fxCache) {
   if (h.currency === 'ILS') return n;
   if (h.currency === 'USD') return (fxCache && _pfIsFiniteNum(fxCache.rate)) ? n * fxCache.rate : null;
   return null;
+}
+
+// ─── P-3: Money math — Unrealized P/L (native + ILS) ────────────────────────
+// Pure. No DOM, no localStorage read of its own (fxCache is passed in,
+// already loaded by the caller) — same contract as _pfComputePortfolioReporting/
+// _pfHoldingIlsValue above, so _renderPortfolioPanel and the offline QA suite
+// share one definition and can never drift apart.
+//
+// Governing rule (P-3 scope doc): recorded broker fact > inferred financial
+// fact. costBasis/costBasisILS are load-bearing; manualPlPct is retained
+// unchanged and demoted to a native-side cross-check only (drift). There is
+// no V/(1+r) fallback anywhere in this file — the denominator is always the
+// recorded cost, never a manualPlPct-derived implied cost.
+
+// One holding's effective ILS cost — mirrors _pfHoldingIlsValue's "return
+// null, never invent" contract. ILS holdings: costBasis IS the ILS cost (no
+// duplicate field). USD holdings: costBasisILS is the durable, broker-
+// recorded fact — never derived from costBasis * any FX rate (that would
+// silently reinstate an inferred number the P-3 design explicitly rejects).
+// Any other/unknown currency is unrepresentable — null.
+function _pfEffectiveCostIls(h) {
+  if (h.currency === 'ILS') {
+    var n = Number(h.costBasis);
+    return (isFinite(n) && n > 0) ? n : null;
+  }
+  if (h.currency === 'USD') {
+    var m = Number(h.costBasisILS);
+    return (isFinite(m) && m > 0) ? m : null;
+  }
+  return null;
+}
+
+// One holding's full P-3 result. Never throws; fields the preconditions
+// don't support stay undefined rather than 0/NaN — callers must check the
+// boolean flags, not the numbers. currencyKnown gates plPctNativePct too: an
+// unknown currency does not guarantee positionSize and costBasis share a
+// unit, and unit-identity is exactly what makes the ratio valid (P-3 scope
+// §4) — manualPlPct may still render as the existing broker-recorded field.
+function _pfHoldingPl(h, fxCache) {
+  var currencyKnown     = h.currency === 'USD' || h.currency === 'ILS';
+  var costBasisNum      = Number(h.costBasis);
+  var costBasisValid    = _pfIsFiniteNum(costBasisNum) && costBasisNum > 0;
+  var positionSizeNum   = Number(h.positionSize);
+  var positionSizeValid = _pfIsFiniteNum(positionSizeNum) && positionSizeNum > 0;
+  var nativeAvailable   = currencyKnown && costBasisValid && positionSizeValid;
+
+  var result = {
+    currencyKnown: currencyKnown, costBasisValid: costBasisValid, nativeAvailable: nativeAvailable,
+    costIlsAvailable: false, ilsAvailable: false, driftFlag: false, ratioFlag: false,
+    fxUsable: false, eligibleForAggregation: false
+  };
+  if (!nativeAvailable) return result;
+
+  // NATIVE — plPctNativePct is on the SAME 0-100 percentage-point scale as
+  // manualPlPct (e.g. -19.3 means -19.3%), never a raw 0-1 ratio. Comparing
+  // a raw ratio against manualPlPct would silently misfire the drift check
+  // by two orders of magnitude — this scale match is load-bearing, not
+  // cosmetic.
+  result.plNative = positionSizeNum - costBasisNum;
+  result.plPctNativePct = (result.plNative / costBasisNum) * 100;
+  if (h.manualPlPct !== undefined && h.manualPlPct !== null && _pfIsFiniteNum(h.manualPlPct)) {
+    result.driftPp   = Math.abs(result.plPctNativePct - h.manualPlPct);
+    result.driftFlag = result.driftPp > 0.5;
+  }
+
+  // ILS — currency-specific cost/value resolution, then the shared formula.
+  // TASE prices/costs entered here are already in shekels (the owner enters
+  // Meitav's ₪ total directly) — this function must NEVER divide/multiply
+  // costBasis or costBasisILS by 100. The agorot÷100 conversion belongs
+  // exclusively to P-2A's live market-price path and never touches these
+  // owner-entered fields.
+  var costIls = _pfEffectiveCostIls(h);
+  result.costIlsAvailable = costIls !== null;
+  if (h.currency === 'ILS') {
+    result.ilsAvailable = result.costIlsAvailable;
+    if (result.ilsAvailable) result.valueIls = positionSizeNum;
+  } else { // USD
+    var fxState = _pfFxState(fxCache);
+    result.fxUsable    = fxState === 'fresh' || fxState === 'aged-but-valid';
+    result.ilsAvailable = result.costIlsAvailable && result.fxUsable;
+    if (result.ilsAvailable) result.valueIls = positionSizeNum * fxCache.rate;
+
+    // Ratio guard — informational only (display chip + aggregation
+    // exclusion), never routes to _corrupt, never suppresses native. Only
+    // evaluated when both cost fields are present and valid.
+    if (result.costIlsAvailable) {
+      result.ratio     = costIls / costBasisNum;
+      result.ratioFlag = result.ratio < 2.0 || result.ratio > 5.0;
+    }
+  }
+  if (result.ilsAvailable) {
+    result.costIls = costIls;
+    result.plIls   = result.valueIls - costIls;
+    result.plPctIlsPct = (result.plIls / costIls) * 100;
+    if (h.currency === 'USD') {
+      // Optional decomposition (detail view) — answers "stock or currency?"
+      // impliedPurchaseFx is DISPLAY-ONLY, never persisted or used as a
+      // cost — costBasisILS remains the sole recorded ILS cost fact.
+      result.impliedPurchaseFx = costIls / costBasisNum;
+      result.fxEffect = costBasisNum * (fxCache.rate - result.impliedPurchaseFx);
+    }
+  }
+
+  result.eligibleForAggregation = result.nativeAvailable && result.ilsAvailable &&
+    !result.driftFlag && !result.ratioFlag;
+  return result;
+}
+
+// Portfolio-level aggregate — ILS only, per P-3 scope §3. Sums ONLY holdings
+// where _pfHoldingPl marks eligibleForAggregation; every excluded holding's
+// reason is attributable (not just a count), matching the
+// _pfComputePortfolioReporting completenessReasons pattern. Cash is
+// deliberately never included here — it has no cost basis and contributes
+// to neither numerator nor denominator (it stays part of P-2B's separate
+// Portfolio Total). Corrupt holdings are excluded from both the numerator
+// and the "N of M" denominator, same precedent P-2B's Portfolio Total uses.
+function _pfComputePortfolioPl(holdings, fxCache) {
+  var totalValueIls = 0, totalCostIls = 0;
+  var coveredCount = 0, totalCount = 0;
+  var exclusionReasons = { unknownCurrency: 0, invalidCostBasis: 0, missingCostBasisIls: 0, drift: 0, ratio: 0, fxUnusable: 0 };
+  Object.keys(holdings).forEach(function(sym) {
+    var h = holdings[sym];
+    if (h._corrupt === true) return;
+    totalCount += 1;
+    var pl = _pfHoldingPl(h, fxCache);
+    if (pl.eligibleForAggregation) {
+      coveredCount  += 1;
+      totalValueIls += pl.valueIls;
+      totalCostIls  += pl.costIls;
+      return;
+    }
+    if (!pl.currencyKnown)  { exclusionReasons.unknownCurrency  += 1; return; }
+    if (!pl.costBasisValid) { exclusionReasons.invalidCostBasis += 1; return; }
+    if (pl.driftFlag)       { exclusionReasons.drift             += 1; return; }
+    if (pl.ratioFlag)       { exclusionReasons.ratio             += 1; return; }
+    if (h.currency === 'USD' && !pl.costIlsAvailable) { exclusionReasons.missingCostBasisIls += 1; return; }
+    if (h.currency === 'USD' && !pl.fxUsable)         { exclusionReasons.fxUnusable           += 1; return; }
+  });
+  var result = {
+    coveredCount: coveredCount, totalCount: totalCount,
+    complete: totalCount > 0 && coveredCount === totalCount,
+    exclusionReasons: exclusionReasons
+  };
+  if (coveredCount > 0) {
+    result.totalValueIls = totalValueIls;
+    result.totalCostIls  = totalCostIls;
+    result.totalPlIls    = totalValueIls - totalCostIls;
+    result.returnPctIls  = (result.totalPlIls / totalCostIls) * 100;
+  }
+  return result;
 }
 
 // ─── P-2B: Portfolio-level day estimate ─────────────────────────────────────
@@ -6848,7 +7015,54 @@ function _renderPortfolioPanel() {
       if (estValEl) estValEl.style.color = dayEst.totalIls > 0 ? 'var(--green2)' : dayEst.totalIls < 0 ? 'var(--red2)' : '';
       summary.appendChild(estStat);
     }
+
+    // ─── P-3: Unrealized P/L (ILS) — cost-basis-based money math ────────────
+    // Pure aggregation lives entirely in _pfComputePortfolioPl; this block
+    // only turns its result into DOM. Cash is never included (no cost
+    // basis — stays part of P-2B's separate Portfolio Total above). Shown
+    // only once at least one holding is eligible; an all-empty portfolio
+    // (no cost basis entered yet anywhere) shows nothing here rather than a
+    // permanent, meaningless "—" stat. Both stats carry their own "Covers N
+    // of M holdings" disclosure when incomplete — the return % is exactly as
+    // partial as the P/L money figure it's derived from, and must never
+    // read as a full-portfolio return when it isn't one.
+    var pfPl = _pfComputePortfolioPl(holdings, fxCache);
+    if (pfPl.coveredCount > 0) {
+      var pfPlCoverageText = 'Covers ' + pfPl.coveredCount + ' of ' + pfPl.totalCount + ' holdings';
+
+      var pfPlValText = (pfPl.totalPlIls >= 0 ? '+' : '-') + '₪' + Math.abs(pfPl.totalPlIls).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      var pfPlStat = _pfSummaryStat('Unrealized P/L (ILS)', pfPlValText);
+      var pfPlValEl = pfPlStat.querySelector('.pf-summary-val');
+      if (pfPlValEl) pfPlValEl.style.color = pfPl.totalPlIls > 0 ? 'var(--green2)' : pfPl.totalPlIls < 0 ? 'var(--red2)' : '';
+      if (!pfPl.complete) {
+        var pfPlDetail = document.createElement('div');
+        pfPlDetail.style.cssText = 'font-size:10px;color:var(--text3);margin-top:2px';
+        pfPlDetail.textContent = pfPlCoverageText;
+        pfPlStat.appendChild(pfPlDetail);
+      }
+      summary.appendChild(pfPlStat);
+
+      var pfRetLabel = 'Unrealized return (ILS)' + (pfPl.complete ? '' : ' (covered holdings only)');
+      var pfRetValText = (pfPl.returnPctIls >= 0 ? '+' : '') + pfPl.returnPctIls.toFixed(2) + '%';
+      var pfRetStat = _pfSummaryStat(pfRetLabel, pfRetValText);
+      var pfRetValEl = pfRetStat.querySelector('.pf-summary-val');
+      if (pfRetValEl) pfRetValEl.style.color = pfPl.returnPctIls > 0 ? 'var(--green2)' : pfPl.returnPctIls < 0 ? 'var(--red2)' : '';
+      if (!pfPl.complete) {
+        var pfRetDetail = document.createElement('div');
+        pfRetDetail.style.cssText = 'font-size:10px;color:var(--text3);margin-top:2px';
+        pfRetDetail.textContent = pfPlCoverageText;
+        pfRetStat.appendChild(pfRetDetail);
+      }
+      summary.appendChild(pfRetStat);
+    }
     panel.appendChild(summary);
+
+    if (pfPl.coveredCount > 0) {
+      var pfPlNote = document.createElement('div');
+      pfPlNote.className   = 'pf-guidance';
+      pfPlNote.textContent = 'Unrealized, current holdings only — realized gains from past exits not included.';
+      panel.appendChild(pfPlNote);
+    }
 
     var agg = _calcPortfolioAggregates(holdings);
     var covRow = document.createElement('div');
@@ -7033,6 +7247,81 @@ function _renderPortfolioPanel() {
         plEl.classList.add('pf-pos-pl--muted');
       }
       card.appendChild(plEl);
+
+      // ─── P-3: per-holding Unrealized P/L (native + ILS) ────────────────────
+      // Pure math lives entirely in _pfHoldingPl; this block only turns its
+      // result into DOM, mirroring the plEl block above. Unknown-currency
+      // holdings intentionally render NOTHING here (§4: all derived P-3
+      // metrics suppressed with no exception) — plEl above already shows
+      // the broker-recorded manualPlPct on its own for that case.
+      var pl3 = _pfHoldingPl(h, fxCache);
+      if (pl3.nativeAvailable) {
+        var pl3NativeEl = document.createElement('div');
+        pl3NativeEl.className = 'pf-pos-pl';
+        var pl3CurrSym = h.currency === 'USD' ? '$' : '₪';
+        pl3NativeEl.textContent = 'Unrealized P/L ' + (pl3.plNative >= 0 ? '+' : '-') + pl3CurrSym +
+          Math.abs(pl3.plNative).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+          ' (' + (pl3.plPctNativePct >= 0 ? '+' : '') + pl3.plPctNativePct.toFixed(2) + '% Native return)';
+        if (pl3.plNative > 0)      pl3NativeEl.classList.add('pf-pos-pl--pos');
+        else if (pl3.plNative < 0) pl3NativeEl.classList.add('pf-pos-pl--neg');
+        else                       pl3NativeEl.classList.add('pf-pos-pl--zero');
+        card.appendChild(pl3NativeEl);
+
+        // ILS holdings: native currency IS ILS, so plIls/plPctIlsPct are the
+        // exact same numbers as plNative/plPctNativePct above (see
+        // _pfHoldingPl's ILS branch — costIls===costBasis, valueIls===
+        // positionSize). Rendering a second "Unrealized P/L (ILS)" line for
+        // an ILS holding would just duplicate the line above under a
+        // different label, not show a genuinely distinct result. Only a USD
+        // holding's ILS conversion (costBasisILS + a usable FX rate)
+        // produces a number that differs from native, so this whole block
+        // — the ILS line and its two suppression messages — is USD-only.
+        if (h.currency === 'USD') {
+          if (pl3.ilsAvailable) {
+            var pl3IlsEl = document.createElement('div');
+            pl3IlsEl.className = 'pf-pos-pl';
+            pl3IlsEl.textContent = 'Unrealized P/L (ILS) ' + (pl3.plIls >= 0 ? '+' : '-') + '₪' +
+              Math.abs(pl3.plIls).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+              ' (' + (pl3.plPctIlsPct >= 0 ? '+' : '') + pl3.plPctIlsPct.toFixed(2) + '% Unrealized return (ILS))';
+            if (pl3.plIls > 0)      pl3IlsEl.classList.add('pf-pos-pl--pos');
+            else if (pl3.plIls < 0) pl3IlsEl.classList.add('pf-pos-pl--neg');
+            else                    pl3IlsEl.classList.add('pf-pos-pl--zero');
+            card.appendChild(pl3IlsEl);
+          } else if (!pl3.costIlsAvailable) {
+            var pl3MissingEl = document.createElement('div');
+            pl3MissingEl.className   = 'pf-pos-pl pf-pos-pl--muted';
+            pl3MissingEl.textContent = 'Unrealized P/L (ILS) — add ILS cost basis';
+            card.appendChild(pl3MissingEl);
+          } else if (!pl3.fxUsable) {
+            var pl3FxEl = document.createElement('div');
+            pl3FxEl.className   = 'pf-pos-pl pf-pos-pl--muted';
+            pl3FxEl.textContent = 'Unrealized P/L (ILS) — FX unavailable';
+            card.appendChild(pl3FxEl);
+          }
+        }
+
+        if (pl3.driftFlag) {
+          var pl3DriftEl = document.createElement('div');
+          pl3DriftEl.className   = 'pf-pos-pl';
+          pl3DriftEl.style.color = 'var(--yellow2)';
+          pl3DriftEl.title       = 'Native return ' + pl3.plPctNativePct.toFixed(2) + '% vs. recorded baseline manual P/L ' + Number(h.manualPlPct).toFixed(2) + '%';
+          pl3DriftEl.textContent = '⚠ Drift ' + pl3.driftPp.toFixed(2) + 'pp vs. baseline manual P/L';
+          card.appendChild(pl3DriftEl);
+        }
+        if (pl3.ratioFlag) {
+          var pl3RatioEl = document.createElement('div');
+          pl3RatioEl.className   = 'pf-pos-pl';
+          pl3RatioEl.style.color = 'var(--yellow2)';
+          pl3RatioEl.textContent = '⚠ Check units — ILS/native cost ratio ' + pl3.ratio.toFixed(2) + ' outside expected range';
+          card.appendChild(pl3RatioEl);
+        }
+      } else if (h.currency === 'USD' || h.currency === 'ILS') {
+        var pl3NoCostEl = document.createElement('div');
+        pl3NoCostEl.className   = 'pf-pos-pl pf-pos-pl--muted';
+        pl3NoCostEl.textContent = 'Unrealized P/L — add cost basis';
+        card.appendChild(pl3NoCostEl);
+      }
+
       // P-2B: the old scan-derived day-change block (48h-freshness, hardcoded
       // $ prefix, read via _getDailyChangeForHolding) was removed here — the
       // P-2A EOD-based estimate below (_updatePortfolioCard's .pf-pos-mkt
@@ -8103,6 +8392,8 @@ function openAddPositionModal() {
   body.appendChild(_apField('Symbol',                           'apSymbol',   'e.g. AAPL'));
   body.appendChild(_apField('Recorded position value',          'apInvested', 'e.g. 5000'));
   body.appendChild(_apField('Baseline manual P/L % (optional)', 'apPlPct',    'e.g. 12.5 or -8.2'));
+  body.appendChild(_apField('Cost basis, recorded (optional)',        'apCostBasis',    'native currency — TASE: ₪, USD: $'));
+  body.appendChild(_apField('Cost basis, ILS — USD holdings only (optional)', 'apCostBasisILS', 'broker-recorded shekel cost, e.g. Meitav FIFO ₪'));
   body.appendChild(_pfCurrencySelectField('apCurrency', undefined));
 
   var warn = document.createElement('div');
@@ -8146,16 +8437,19 @@ function closeAddPositionModal() {
   document.removeEventListener('keydown', _onAddPositionEscape);
 }
 
-// baselineAt only advances when positionSize/manualPlPct actually change
-// value. A brand-new holding gets one immediately; an existing holding
-// whose values are unchanged keeps whatever it already had — including
-// staying absent/unknown if it never had one — so saving unrelated
-// metadata (e.g. currency) can never establish or silently re-date a
-// baseline a future slice will read. Adding or removing manualPlPct counts
-// as a value change (captured naturally by !==, undefined vs. a number).
-function _pfComputeBaselineAt(prevEntry, positionSize, manualPlPct, nowIso) {
+// baselineAt only advances when positionSize/manualPlPct/costBasis/
+// costBasisILS actually change value. A brand-new holding gets one
+// immediately; an existing holding whose values are unchanged keeps
+// whatever it already had — including staying absent/unknown if it never
+// had one — so saving unrelated metadata (e.g. currency) can never
+// establish or silently re-date a baseline a future slice will read.
+// Adding or removing any of the four counts as a value change (captured
+// naturally by !==, undefined vs. a number) — P-3: costBasis/costBasisILS
+// join positionSize/manualPlPct on the same "last synced from broker" basis.
+function _pfComputeBaselineAt(prevEntry, positionSize, manualPlPct, costBasis, costBasisILS, nowIso) {
   if (!prevEntry) return nowIso;
-  var changed = prevEntry.positionSize !== positionSize || prevEntry.manualPlPct !== manualPlPct;
+  var changed = prevEntry.positionSize !== positionSize || prevEntry.manualPlPct !== manualPlPct ||
+    prevEntry.costBasis !== costBasis || prevEntry.costBasisILS !== costBasisILS;
   return changed ? nowIso : prevEntry.baselineAt;
 }
 
@@ -8202,6 +8496,8 @@ function saveAddPosition() {
   var symInp      = document.getElementById('apSymbol');
   var investedInp = document.getElementById('apInvested');
   var plPctInp    = document.getElementById('apPlPct');
+  var costInp     = document.getElementById('apCostBasis');
+  var costIlsInp  = document.getElementById('apCostBasisILS');
   var currInp     = document.getElementById('apCurrency');
   var warnEl      = document.getElementById('apWarnMsg');
   if (!symInp || !investedInp || !warnEl) return;
@@ -8238,6 +8534,36 @@ function saveAddPosition() {
     }
   }
 
+  // P-3: optional, same "blank = unset, present-and-invalid = reject" rule
+  // as manualPlPct above. No sign check here — a <=0 value is accepted and
+  // saved, then suppressed at render time by _pfHoldingPl (never corrupt).
+  var costBasis;
+  if (costInp) {
+    var costRaw = costInp.value.trim();
+    if (costRaw !== '') {
+      var costVal = Number(costRaw);
+      if (!isFinite(costVal)) {
+        warnEl.textContent = 'Cost basis must be a number, or leave blank.';
+        costInp.focus();
+        return;
+      }
+      costBasis = costVal;
+    }
+  }
+  var costBasisILS;
+  if (costIlsInp) {
+    var costIlsRaw = costIlsInp.value.trim();
+    if (costIlsRaw !== '') {
+      var costIlsVal = Number(costIlsRaw);
+      if (!isFinite(costIlsVal)) {
+        warnEl.textContent = 'Cost basis (ILS) must be a number, or leave blank.';
+        costIlsInp.focus();
+        return;
+      }
+      costBasisILS = costIlsVal;
+    }
+  }
+
   var currency = currInp ? currInp.value : '';
   if (PF_CURRENCY_CODES.indexOf(currency) === -1) {
     warnEl.textContent = 'Select a currency (USD or ILS).';
@@ -8251,9 +8577,11 @@ function saveAddPosition() {
   var nowIso      = new Date().toISOString();
   var entry       = {
     symbol: sym, positionSize: positionSize, currency: currency, source: 'manual',
-    updatedAt: nowIso, baselineAt: _pfComputeBaselineAt(prevEntry, positionSize, manualPlPct, nowIso)
+    updatedAt: nowIso, baselineAt: _pfComputeBaselineAt(prevEntry, positionSize, manualPlPct, costBasis, costBasisILS, nowIso)
   };
   if (manualPlPct !== undefined) entry.manualPlPct = manualPlPct;
+  if (costBasis !== undefined) entry.costBasis = costBasis;
+  if (costBasisILS !== undefined) entry.costBasisILS = costBasisILS;
   _pfCarryForwardLegacyFields(entry, prevEntry);
   holdings[sym] = entry;
   var saveResult = saveHoldings(holdings);
@@ -8342,7 +8670,7 @@ function openEditPositionModal(sym) {
     if (h._corrupt === true) {
       issueNote.textContent = 'This holding\'s stored data could not be read and was preserved unused, as-is. Saving below replaces it with a new, valid holding built from the fields you enter here — an explicit replacement, not an automatic fix.';
     } else {
-      var _epEditableIssueFields = { manualPlPct: true, currency: true };
+      var _epEditableIssueFields = { manualPlPct: true, currency: true, costBasis: true, costBasisILS: true };
       var _epEditableFields    = h._issues.filter(function(i){ return _epEditableIssueFields[i.field]; }).map(function(i){ return i.field; });
       var _epNonEditableFields = h._issues.filter(function(i){ return !_epEditableIssueFields[i.field]; }).map(function(i){ return i.field; });
       var _epMsgParts = [];
@@ -8360,6 +8688,8 @@ function openEditPositionModal(sym) {
 
   body.appendChild(_epField('Recorded position value',          'apEditInvested', 'e.g. 5000',         h.positionSize));
   body.appendChild(_epField('Baseline manual P/L % (optional)', 'apEditPlPct',    'e.g. 12.5 or -8.2', h.manualPlPct));
+  body.appendChild(_epField('Cost basis, recorded (optional)',        'apEditCostBasis',    'native currency — TASE: ₪, USD: $', h.costBasis));
+  body.appendChild(_epField('Cost basis, ILS — USD holdings only (optional)', 'apEditCostBasisILS', 'broker-recorded shekel cost, e.g. Meitav FIFO ₪', h.costBasisILS));
   body.appendChild(_pfCurrencySelectField('apEditCurrency', h.currency));
 
   var warn = document.createElement('div');
@@ -8407,6 +8737,8 @@ function closeEditPositionModal() {
 function saveEditPosition() {
   var investedInp = document.getElementById('apEditInvested');
   var plPctInp    = document.getElementById('apEditPlPct');
+  var costInp     = document.getElementById('apEditCostBasis');
+  var costIlsInp  = document.getElementById('apEditCostBasisILS');
   var currInp     = document.getElementById('apEditCurrency');
   var warnEl      = document.getElementById('apEditWarnMsg');
   if (!investedInp || !warnEl || !_editPosSym) return;
@@ -8434,6 +8766,36 @@ function saveEditPosition() {
         return;
       }
       manualPlPct = plPctVal;
+    }
+  }
+
+  // P-3: optional, same "blank = unset, present-and-invalid = reject" rule
+  // as manualPlPct above. No sign check here — a <=0 value is accepted and
+  // saved, then suppressed at render time by _pfHoldingPl (never corrupt).
+  var costBasis;
+  if (costInp) {
+    var costRaw = costInp.value.trim();
+    if (costRaw !== '') {
+      var costVal = Number(costRaw);
+      if (!isFinite(costVal)) {
+        warnEl.textContent = 'Cost basis must be a number, or leave blank.';
+        costInp.focus();
+        return;
+      }
+      costBasis = costVal;
+    }
+  }
+  var costBasisILS;
+  if (costIlsInp) {
+    var costIlsRaw = costIlsInp.value.trim();
+    if (costIlsRaw !== '') {
+      var costIlsVal = Number(costIlsRaw);
+      if (!isFinite(costIlsVal)) {
+        warnEl.textContent = 'Cost basis (ILS) must be a number, or leave blank.';
+        costIlsInp.focus();
+        return;
+      }
+      costBasisILS = costIlsVal;
     }
   }
 
@@ -8473,9 +8835,11 @@ function saveEditPosition() {
   // there is no UI yet that lets an owner knowingly discard it.
   var entry = {
     symbol: _editPosSym, positionSize: positionSize, currency: currency, source: 'manual',
-    updatedAt: nowIso, baselineAt: _pfComputeBaselineAt(prevEntry, positionSize, manualPlPct, nowIso)
+    updatedAt: nowIso, baselineAt: _pfComputeBaselineAt(prevEntry, positionSize, manualPlPct, costBasis, costBasisILS, nowIso)
   };
   if (manualPlPct !== undefined) entry.manualPlPct = manualPlPct;
+  if (costBasis !== undefined) entry.costBasis = costBasis;
+  if (costBasisILS !== undefined) entry.costBasisILS = costBasisILS;
   _pfCarryForwardLegacyFields(entry, prevEntry);
   holdings[_editPosSym] = entry;
   var saveResult = saveHoldings(holdings);
@@ -10133,7 +10497,7 @@ function exportPortfolioBackup() {
 
   _ptDownload(
     new Blob([JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       exportedAt:    new Date().toISOString(),
       appBaseline:   '5e26485',
       sourceOrigin:  window.location.origin,
@@ -10205,7 +10569,7 @@ function _downloadPreImportBackup() {
   } : null;
 
   var payload = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     exportedAt:    new Date().toISOString(),
     appBaseline:   '5e26485',
     sourceOrigin:  window.location.origin,
@@ -10234,8 +10598,8 @@ function _downloadPreImportBackup() {
 function _validatePortfolioBackup(obj) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj))
     return { error: 'Not a valid backup object.' };
-  if (obj.schemaVersion !== 1 && obj.schemaVersion !== 2)
-    return { error: 'Unknown backup version (' + obj.schemaVersion + '). Only version 1 or 2 is supported.' };
+  if (obj.schemaVersion !== 1 && obj.schemaVersion !== 2 && obj.schemaVersion !== 3)
+    return { error: 'Unknown backup version (' + obj.schemaVersion + '). Only version 1, 2, or 3 is supported.' };
   if (typeof obj.exportedAt !== 'string' || !obj.exportedAt.trim())
     return { error: 'exportedAt must be a non-empty string.' };
   if (isNaN(Date.parse(obj.exportedAt)))
@@ -10291,23 +10655,28 @@ function _validatePortfolioBackup(obj) {
       position:     _normalizePosition(t.position)
     });
   }
-  // P-2B: cash/fx — schemaVersion 1 predates this feature and structurally
-  // cannot express cash/fx intent, so both stay `undefined` (the caller's
-  // signal to leave local pt_cash/pt_fx completely untouched). schemaVersion
-  // 2 always carries a deterministic instruction: the key must be present
-  // and be either null (explicit clear) or a validated object — an absent
-  // key on a self-declared v2 payload is a contract violation, not read as
-  // "leave untouched" (a genuine v2 export always includes both keys), and
-  // any malformed shape hard-rejects the WHOLE import, same strict-envelope
-  // tier as exportedAt/sourceOrigin above — no partial-success imports. The
-  // fx shape check reuses _pfFxBackupRecordValid exactly (same six-field,
-  // source==='boi' definition export uses) and every field is restored
-  // unchanged (no .trim()/normalization) — validation may reject malformed
-  // input, but must not silently rewrite a valid persisted record.
+  // P-2B/P-3: cash/fx — schemaVersion 1 predates this feature and
+  // structurally cannot express cash/fx intent, so both stay `undefined`
+  // (the caller's signal to leave local pt_cash/pt_fx completely untouched).
+  // schemaVersion 2 AND 3 both always carry a deterministic instruction: the
+  // key must be present and be either null (explicit clear) or a validated
+  // object — an absent key on a self-declared v2/v3 payload is a contract
+  // violation, not read as "leave untouched" (a genuine v2/v3 export always
+  // includes both keys), and any malformed shape hard-rejects the WHOLE
+  // import, same strict-envelope tier as exportedAt/sourceOrigin above — no
+  // partial-success imports. P-3 introduced no new envelope field (costBasis/
+  // costBasisILS ride inside holdings{}, already covered by
+  // _pfNormalizeHoldingEntry above) — v3's only difference from v2 is the
+  // holdings schema, so this cash/fx block applies identically to both via
+  // `>= 2`, not a duplicated `=== 3` branch. The fx shape check reuses
+  // _pfFxBackupRecordValid exactly (same six-field, source==='boi'
+  // definition export uses) and every field is restored unchanged (no
+  // .trim()/normalization) — validation may reject malformed input, but must
+  // not silently rewrite a valid persisted record.
   var validatedCash, validatedFx;
-  if (obj.schemaVersion === 2) {
+  if (obj.schemaVersion >= 2) {
     if (!Object.prototype.hasOwnProperty.call(obj, 'cash'))
-      return { error: 'schemaVersion 2 requires a cash field (null or {amountILS, asOf}).' };
+      return { error: 'schemaVersion ' + obj.schemaVersion + ' requires a cash field (null or {amountILS, asOf}).' };
     if (obj.cash === null) {
       validatedCash = null;
     } else {
@@ -10321,7 +10690,7 @@ function _validatePortfolioBackup(obj) {
     }
 
     if (!Object.prototype.hasOwnProperty.call(obj, 'fx'))
-      return { error: 'schemaVersion 2 requires an fx field (null or the full pt_fx record).' };
+      return { error: 'schemaVersion ' + obj.schemaVersion + ' requires an fx field (null or the full pt_fx record).' };
     if (obj.fx === null) {
       validatedFx = null;
     } else {

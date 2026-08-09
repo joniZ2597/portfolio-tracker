@@ -1786,8 +1786,25 @@ async function phasePortfolioReporting() {
       check('v1 payload -> cash/fx both undefined, signal to leave local state untouched',
         r.error === null && r.cash === undefined && r.fx === undefined);
     })();
-    check('unknown schemaVersion 3 -> rejected',
-      api._validatePortfolioBackup(baseDoc(3, { cash: null, fx: null })).error !== null);
+    // P-3: schemaVersion 3 is now accepted and requires cash/fx exactly like
+    // v2 (the `>= 2` gate) — this directly exercises the two-version-check
+    // trap: widening only the envelope accept-list without also widening the
+    // cash/fx requirement gate would let a v3 backup validate while silently
+    // leaving cash/fx as `undefined` (untouched) instead of restored.
+    (function () {
+      const r = api._validatePortfolioBackup(baseDoc(3, { cash: null, fx: null }));
+      check('schemaVersion 3 -> accepted, cash/fx null (explicit clear), not undefined',
+        r.error === null && r.cash === null && r.fx === null);
+    })();
+    (function () {
+      const r = api._validatePortfolioBackup(baseDoc(3, { cash: { amountILS: 500, asOf: '2026-08-09' }, fx: fxRecord() }));
+      check('schemaVersion 3 -> cash/fx objects validated and restored, same as v2',
+        r.error === null && r.cash && r.cash.amountILS === 500 && r.fx && r.fx.rate === 3.68);
+    })();
+    check('schemaVersion 3 with cash key absent -> rejected, same as v2',
+      api._validatePortfolioBackup(baseDoc(3, { fx: null })).error !== null);
+    check('unknown schemaVersion 4 -> rejected',
+      api._validatePortfolioBackup(baseDoc(4, { cash: null, fx: null })).error !== null);
   })();
 
   // ── Backup restore application: _pfApplyCashFxRestore (shared with importPortfolioBackup) ──
@@ -1917,6 +1934,256 @@ async function phasePortfolioReporting() {
   }
 }
 
+function phaseMoneyMath() {
+  header('Phase 9 - Money Math (P-3 cost-basis P/L)');
+
+  const content = read('index.html');
+  if (content === null) {
+    fail('money-math', 'index.html is missing');
+    return;
+  }
+
+  let factory;
+  try {
+    const pieces = {
+      isFiniteNumSrc:       extractFunctionSource(content, '_pfIsFiniteNum'),
+      fxRateValidSrc:       extractFunctionSource(content, '_pfFxRateValid'),
+      fxStateSrc:           extractFunctionSource(content, '_pfFxState'),
+      fxBackupValidSrc:     extractFunctionSource(content, '_pfFxBackupRecordValid'),
+      normalizeSrc:         extractFunctionSource(content, '_pfNormalizeHoldingEntry'),
+      normalizePositionSrc: extractFunctionSource(content, '_normalizePosition'),
+      baselineAtSrc:        extractFunctionSource(content, '_pfComputeBaselineAt'),
+      effectiveCostIlsSrc:  extractFunctionSource(content, '_pfEffectiveCostIls'),
+      holdingPlSrc:         extractFunctionSource(content, '_pfHoldingPl'),
+      portfolioPlSrc:       extractFunctionSource(content, '_pfComputePortfolioPl'),
+      validateBackupSrc:    extractFunctionSource(content, '_validatePortfolioBackup'),
+      knownFieldsSrc:       extractVarSource(content, 'PF_KNOWN_HOLDING_FIELDS'),
+      wrapperMarkerSrc:     extractVarSource(content, 'PF_HOLDING_WRAPPER_MARKER'),
+      reservedKeysSrc:      extractVarSource(content, 'PF_RESERVED_MARKER_KEYS'),
+      fxFreshDaysSrc:       extractVarSource(content, 'PF_FX_FRESH_MAX_AGE_DAYS'),
+      fxValidDaysSrc:       extractVarSource(content, 'PF_FX_VALID_MAX_AGE_DAYS')
+    };
+    const missing = Object.keys(pieces).filter(function (k) { return !pieces[k]; });
+    if (missing.length > 0) {
+      fail('money-math', 'could not extract from index.html: ' + missing.join(', '));
+      return;
+    }
+
+    // eslint-disable-next-line no-new-func
+    factory = new Function(
+      pieces.knownFieldsSrc + '\n' + pieces.wrapperMarkerSrc + '\n' + pieces.reservedKeysSrc + '\n' +
+        pieces.fxFreshDaysSrc + '\n' + pieces.fxValidDaysSrc + '\n' +
+        pieces.isFiniteNumSrc + '\n' + pieces.fxRateValidSrc + '\n' + pieces.fxStateSrc + '\n' +
+        pieces.fxBackupValidSrc + '\n' + pieces.normalizeSrc + '\n' + pieces.normalizePositionSrc + '\n' +
+        pieces.baselineAtSrc + '\n' + pieces.effectiveCostIlsSrc + '\n' + pieces.holdingPlSrc + '\n' +
+        pieces.portfolioPlSrc + '\n' + pieces.validateBackupSrc +
+        '\nreturn { _pfIsFiniteNum: _pfIsFiniteNum, _pfFxState: _pfFxState,' +
+        ' _pfNormalizeHoldingEntry: _pfNormalizeHoldingEntry, _pfComputeBaselineAt: _pfComputeBaselineAt,' +
+        ' _pfEffectiveCostIls: _pfEffectiveCostIls, _pfHoldingPl: _pfHoldingPl,' +
+        ' _pfComputePortfolioPl: _pfComputePortfolioPl, _validatePortfolioBackup: _validatePortfolioBackup };'
+    );
+  } catch (e) {
+    fail('money-math', 'factory build error: ' + e.message);
+    return;
+  }
+
+  const api = factory();
+
+  let total = 0;
+  let okCount = 0;
+  function check(name, cond) {
+    total += 1;
+    if (cond) {
+      okCount += 1;
+    } else {
+      fail('money-math', 'assertion failed: ' + name);
+    }
+  }
+  function approx(a, b, eps) {
+    return typeof a === 'number' && isFinite(a) && Math.abs(a - b) < (eps || 0.01);
+  }
+
+  const DAY = 24 * 60 * 60 * 1000;
+  function fxRecord(ageMsOrOverrides) {
+    const base = {
+      rate: 3.006, effectiveAt: new Date().toISOString(), source: 'boi',
+      fetchedAt: new Date().toISOString(), lastAttemptAt: new Date().toISOString(), lastAttemptOk: true
+    };
+    if (typeof ageMsOrOverrides === 'number') {
+      base.effectiveAt = new Date(Date.now() - ageMsOrOverrides).toISOString();
+      return base;
+    }
+    return Object.assign(base, ageMsOrOverrides || {});
+  }
+
+  // ── Acceptance example A: Next Vision (TASE/ILS) ───────────────────────────
+  // Also the TASE-no-/100 pin: costBasis/positionSize are shekel totals the
+  // owner entered directly (never agorot) — a stray /100 regression would
+  // fail every numeric check below.
+  (function () {
+    const nextVision = { symbol: 'NVSN', positionSize: 7376, costBasis: 9140.22, currency: 'ILS', manualPlPct: -19.3 };
+    const pl = api._pfHoldingPl(nextVision, {});
+    check('Next Vision: nativeAvailable', pl.nativeAvailable === true);
+    check('Next Vision: plNative = -1764.22', approx(pl.plNative, -1764.22));
+    check('Next Vision: plPctNativePct = -19.30 (percentage points, not a ratio)', approx(pl.plPctNativePct, -19.302, 0.01));
+    check('Next Vision: driftPp ~= 0 vs recorded -19.3%', approx(pl.driftPp, 0, 0.05));
+    check('Next Vision: driftFlag false', pl.driftFlag === false);
+    check('Next Vision: ILS holding — ilsAvailable, plIls === plNative (no double-counting)', pl.ilsAvailable === true && approx(pl.plIls, pl.plNative, 0.001));
+    check('Next Vision: eligibleForAggregation', pl.eligibleForAggregation === true);
+  })();
+
+  // ── Acceptance examples B/C/D: MRNA (USD) native + ILS + FX decomposition ──
+  (function () {
+    const mrna = { symbol: 'MRNA', positionSize: 2011.78, costBasis: 1974.72, costBasisILS: 6036.56, currency: 'USD', manualPlPct: 1.88 };
+    const fxCache = fxRecord();
+    const pl = api._pfHoldingPl(mrna, fxCache);
+    check('MRNA native: plNative = 37.06', approx(pl.plNative, 37.06));
+    check('MRNA native: plPctNativePct = 1.88', approx(pl.plPctNativePct, 1.877, 0.01));
+    check('MRNA: driftPp ~= 0 vs recorded 1.88%', approx(pl.driftPp, 0, 0.05));
+    check('MRNA: fxUsable (fresh)', pl.fxUsable === true);
+    check('MRNA ILS: valueIls = 6047.41 (2011.78 * 3.006)', approx(pl.valueIls, 6047.41));
+    check('MRNA ILS: plIls = 10.85', approx(pl.plIls, 10.85));
+    check('MRNA ILS: plPctIlsPct = 0.18', approx(pl.plPctIlsPct, 0.18, 0.01));
+    check('MRNA: ratio ~= 3.0569, within [2.0, 5.0] -> not flagged', approx(pl.ratio, 3.0569, 0.001) && pl.ratioFlag === false);
+    check('MRNA decomposition: impliedPurchaseFx ~= 3.0569', approx(pl.impliedPurchaseFx, 3.0569, 0.001));
+    check('MRNA decomposition: fxEffect ~= -100.55, reconciles plIls - plNative*fx', approx(pl.fxEffect, -100.55, 0.05) && approx(pl.plIls, pl.plNative * fxCache.rate + pl.fxEffect, 0.01));
+    check('MRNA: eligibleForAggregation', pl.eligibleForAggregation === true);
+  })();
+
+  // ── Drift unit-conversion pin — the exact bug Codex flagged ────────────────
+  // plPctNativePct must be on the same 0-100 scale as manualPlPct. A ratio-
+  // vs-percentage regression (comparing a 0-1 ratio to a 0-100 manualPlPct)
+  // would make this holding's driftPp ~= 19.8 and wrongly flag it, even
+  // though the recorded and computed returns agree exactly.
+  (function () {
+    const h = { symbol: 'DRIFT', positionSize: 8000, costBasis: 10000, currency: 'ILS', manualPlPct: -20 };
+    const pl = api._pfHoldingPl(h, {});
+    check('drift unit pin: plPctNativePct = -20 (percentage points)', approx(pl.plPctNativePct, -20));
+    check('drift unit pin: exact match -> driftPp = 0, not ~19.8', approx(pl.driftPp, 0, 0.001));
+    check('drift unit pin: driftFlag false on exact match', pl.driftFlag === false);
+
+    const hFlagged = { symbol: 'DRIFT2', positionSize: 8000, costBasis: 10000, currency: 'ILS', manualPlPct: 0 };
+    const plFlagged = api._pfHoldingPl(hFlagged, {});
+    check('drift unit pin: real 20pp mismatch -> driftFlag true', plFlagged.driftFlag === true && approx(plFlagged.driftPp, 20, 0.01));
+  })();
+
+  // ── FX states: stale-invalid and missing both suppress ILS-side metrics ────
+  (function () {
+    const h = { symbol: 'STALE', positionSize: 2000, costBasis: 1900, costBasisILS: 6000, currency: 'USD', manualPlPct: 5 };
+    const plStale = api._pfHoldingPl(h, fxRecord(10 * DAY));
+    check('stale-invalid FX: native still available', plStale.nativeAvailable === true);
+    check('stale-invalid FX: fxUsable false', plStale.fxUsable === false);
+    check('stale-invalid FX: ilsAvailable false, plIls unset', plStale.ilsAvailable === false && plStale.plIls === undefined);
+    check('stale-invalid FX: excluded from aggregation', plStale.eligibleForAggregation === false);
+
+    const plMissing = api._pfHoldingPl(h, {});
+    check('missing FX: ilsAvailable false, native unaffected', plMissing.ilsAvailable === false && plMissing.nativeAvailable === true);
+
+    const plAged = api._pfHoldingPl(h, fxRecord(4 * DAY));
+    check('aged-but-valid FX: usable (converts, amber in render layer)', plAged.fxUsable === true && plAged.ilsAvailable === true);
+  })();
+
+  // ── Unknown currency: ALL derived metrics suppressed, no exception ─────────
+  (function () {
+    const h = { symbol: 'UNK', positionSize: 5000, costBasis: 4000, manualPlPct: 10 };
+    const pl = api._pfHoldingPl(h, {});
+    check('unknown currency: currencyKnown false', pl.currencyKnown === false);
+    check('unknown currency: nativeAvailable false, plPctNativePct unset', pl.nativeAvailable === false && pl.plPctNativePct === undefined);
+    check('unknown currency: ilsAvailable false', pl.ilsAvailable === false);
+    check('unknown currency: excluded from aggregation', pl.eligibleForAggregation === false);
+    check('unknown currency: manualPlPct itself untouched (render layer still shows it)', h.manualPlPct === 10);
+  })();
+
+  // ── Invalid cost basis: suppress only, never corrupt ────────────────────────
+  (function () {
+    [
+      { symbol: 'ZERO', positionSize: 1000, costBasis: 0, currency: 'ILS' },
+      { symbol: 'NEG',  positionSize: 1000, costBasis: -100, currency: 'USD', costBasisILS: 300 },
+      { symbol: 'NAN',  positionSize: 1000, costBasis: NaN, currency: 'ILS' }
+    ].forEach(function (h) {
+      const pl = api._pfHoldingPl(h, {});
+      check('invalid costBasis (' + h.symbol + '): costBasisValid false', pl.costBasisValid === false);
+      check('invalid costBasis (' + h.symbol + '): nativeAvailable false', pl.nativeAvailable === false);
+    });
+    // Normalizer-level confirmation: a negative-but-finite costBasis is NOT
+    // an _issues entry and does NOT route the holding to _corrupt — P-3
+    // suppression is owned entirely by _pfHoldingPl, not the normalizer.
+    const normalized = api._pfNormalizeHoldingEntry('ZZZ', { positionSize: 1000, currency: 'ILS', costBasis: -100 });
+    check('normalizer: negative costBasis passes through unmodified', normalized.costBasis === -100);
+    check('normalizer: negative costBasis does not mark the entry corrupt', normalized._corrupt !== true);
+    check('normalizer: negative costBasis is not an _issues entry', !normalized._issues || normalized._issues.length === 0);
+  })();
+
+  // ── Ratio plausibility guard: [2.0, 5.0] inclusive, display-only ───────────
+  (function () {
+    const fxCache = fxRecord();
+    const outOfRange = api._pfHoldingPl({ symbol: 'RATIO', positionSize: 2000, costBasis: 1900, costBasisILS: 1900, currency: 'USD' }, fxCache);
+    check('ratio 1.0 (out of range): ratioFlag true', outOfRange.ratioFlag === true);
+    check('ratio 1.0: still not corrupt-equivalent — ilsAvailable true, just excluded from aggregation', outOfRange.ilsAvailable === true && outOfRange.eligibleForAggregation === false);
+
+    const lowBound = api._pfHoldingPl({ symbol: 'R2', positionSize: 2000, costBasis: 1000, costBasisILS: 2000, currency: 'USD' }, fxCache);
+    check('ratio exactly 2.0: inclusive, not flagged', lowBound.ratioFlag === false);
+    const highBound = api._pfHoldingPl({ symbol: 'R5', positionSize: 2000, costBasis: 1000, costBasisILS: 5000, currency: 'USD' }, fxCache);
+    check('ratio exactly 5.0: inclusive, not flagged', highBound.ratioFlag === false);
+  })();
+
+  // ── Portfolio aggregation: eligible-only, coverage + exclusion reasons ─────
+  // Same holdings as acceptance example E (Next Vision + MRNA), plus two
+  // excluded holdings to pin coverage disclosure and per-reason attribution.
+  (function () {
+    const holdings = {
+      NVSN:    { symbol: 'NVSN', positionSize: 7376, costBasis: 9140.22, currency: 'ILS', manualPlPct: -19.3 },
+      MRNA:    { symbol: 'MRNA', positionSize: 2011.78, costBasis: 1974.72, costBasisILS: 6036.56, currency: 'USD', manualPlPct: 1.88 },
+      BADCUR:  { symbol: 'BADCUR', positionSize: 1000, costBasis: 900 },
+      NOCOST:  { symbol: 'NOCOST', positionSize: 1000, currency: 'ILS' }
+    };
+    const result = api._pfComputePortfolioPl(holdings, fxRecord());
+    check('portfolio: coveredCount = 2', result.coveredCount === 2);
+    check('portfolio: totalCount = 4', result.totalCount === 4);
+    check('portfolio: incomplete -> complete false', result.complete === false);
+    check('portfolio: totalValueIls ~= 13423.41 (example E)', approx(result.totalValueIls, 13423.41, 0.1));
+    check('portfolio: totalCostIls ~= 15176.78 (example E)', approx(result.totalCostIls, 15176.78, 0.1));
+    check('portfolio: totalPlIls ~= -1753.37 (example E)', approx(result.totalPlIls, -1753.37, 0.1));
+    check('portfolio: returnPctIls ~= -11.55 (example E)', approx(result.returnPctIls, -11.55, 0.05));
+    check('portfolio: unknownCurrency exclusion attributed', result.exclusionReasons.unknownCurrency === 1);
+    check('portfolio: invalidCostBasis exclusion attributed', result.exclusionReasons.invalidCostBasis === 1);
+  })();
+
+  // ── _pfComputeBaselineAt: extended to costBasis/costBasisILS ────────────────
+  (function () {
+    const prev = { positionSize: 100, manualPlPct: 5, costBasis: 90, costBasisILS: undefined, baselineAt: 'OLD' };
+    check('baselineAt: no field changed -> unchanged', api._pfComputeBaselineAt(prev, 100, 5, 90, undefined, 'NEW') === 'OLD');
+    check('baselineAt: costBasis changed -> advances', api._pfComputeBaselineAt(prev, 100, 5, 95, undefined, 'NEW') === 'NEW');
+    check('baselineAt: costBasisILS added -> advances', api._pfComputeBaselineAt(prev, 100, 5, 90, 300, 'NEW') === 'NEW');
+    check('baselineAt: no prevEntry -> nowIso', api._pfComputeBaselineAt(null, 100, 5, 90, undefined, 'NEW') === 'NEW');
+  })();
+
+  // ── Backup v3: envelope accepted, cash/fx required + restored, costBasis round-trips ──
+  (function () {
+    function baseDoc(schemaVersion, extra) {
+      return Object.assign({
+        schemaVersion: schemaVersion, exportedAt: new Date().toISOString(),
+        sourceOrigin: 'http://localhost', appBaseline: 'test', holdings: {}, tickers: []
+      }, extra || {});
+    }
+    const doc = baseDoc(3, {
+      holdings: { AAPL: { positionSize: 5000, currency: 'USD', costBasis: 4500, costBasisILS: 15000, source: 'manual', updatedAt: new Date().toISOString() } },
+      cash: { amountILS: 500, asOf: '2026-08-09' },
+      fx: fxRecord()
+    });
+    const r = api._validatePortfolioBackup(doc);
+    check('v3 backup: accepted', r.error === null);
+    check('v3 backup: costBasis round-trips', r.holdings.AAPL.costBasis === 4500);
+    check('v3 backup: costBasisILS round-trips', r.holdings.AAPL.costBasisILS === 15000);
+    check('v3 backup: cash restored (same requirement as v2)', r.cash && r.cash.amountILS === 500);
+    check('v3 backup: fx restored (same requirement as v2)', r.fx && r.fx.rate === fxRecord().rate);
+  })();
+
+  if (okCount === total) {
+    pass(total + ' money-math assertion(s) passed');
+  }
+}
+
 async function main() {
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
@@ -1929,6 +2196,7 @@ async function main() {
   phaseTerminalChainIntegrity();
   phaseBackupFidelity();
   await phasePortfolioReporting();
+  phaseMoneyMath();
 
   console.log('\n=== Summary ===');
 
