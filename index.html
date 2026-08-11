@@ -2340,6 +2340,200 @@ function _p5SynthesisPayload(accepted) {
   return { itemCount: items.length, items: items };
 }
 
+// ── Step 2 (P5-3 §11): local context + packet shell + renderer ──────────────
+// Owner rulings 2026-08-11: no gate (local/pure only — live-call boundary is
+// a Step 3 review) · weight via _pfComputeHoldingsSubtotals + the EXACT
+// existing reporting guard · market snapshot exposes only what pt_eod_cache
+// actually holds (changePercent + lastFailAt staleness — clock-independent);
+// close/session date are explicitly unavailable, never inferred ·
+// baselineAgeDays is display-only context from the injected clock — no
+// threshold/severity/decision semantics. Section-state vocabulary is the
+// ratified P5-3 set: news queued|collecting|done|failed · synthesis
+// pending|done|failed|suppressed (suppression reasons: news-failed ·
+// news-not-ok · zero-accepted-evidence · empty-synthesis-text). Packets are
+// plain JSON-serializable data: no DOM references, no functions, no
+// presentation state — the renderer consumes a packet, never builds one.
+
+function _p5CollectLocalContext(symbol, nowMs) {
+  var sym = typeof symbol === 'string' ? symbol.trim().toUpperCase() : '';
+  var ctx = {
+    symbol: sym, found: false, corrupt: false, holding: null, pl: null,
+    market: { present: false, changePercent: null, eodStale: null },
+    fx: { state: 'missing', rate: null, effectiveAt: null },
+    weight: { pct: null, unavailableReason: 'reporting-incomplete' }
+  };
+  if (sym === '') return ctx;
+  var holdings = loadHoldings();
+  var fxCache = _pfFxLoadCache();
+  var clock = (typeof nowMs === 'number' && isFinite(nowMs)) ? nowMs : null;
+  ctx.fx.state = _pfFxState(fxCache, nowMs);
+  if (ctx.fx.state !== 'missing') {
+    ctx.fx.rate = fxCache.rate;
+    ctx.fx.effectiveAt = fxCache.effectiveAt;
+  }
+  var h = holdings[sym];
+  if (!h || typeof h !== 'object') return ctx;
+  ctx.found = true;
+  if (h._corrupt === true) { ctx.corrupt = true; return ctx; }
+  var ageDays = null;
+  if (clock !== null && typeof h.baselineAt === 'string' && !isNaN(Date.parse(h.baselineAt))) {
+    ageDays = (clock - Date.parse(h.baselineAt)) / (24 * 60 * 60 * 1000);
+  }
+  ctx.holding = {
+    positionSize: h.positionSize === undefined ? null : h.positionSize,
+    currency: h.currency === undefined ? null : h.currency,
+    costBasis: h.costBasis === undefined ? null : h.costBasis,
+    costBasisILS: h.costBasisILS === undefined ? null : h.costBasisILS,
+    manualPlPct: h.manualPlPct === undefined ? null : h.manualPlPct,
+    baselineAt: typeof h.baselineAt === 'string' ? h.baselineAt : null,
+    baselineAgeDays: ageDays
+  };
+  ctx.pl = _pfHoldingPl(h, fxCache);
+  var eodEntry = _pfEodLoadCache()[sym];
+  if (eodEntry && typeof eodEntry === 'object') {
+    ctx.market.present = true;
+    ctx.market.changePercent = (typeof eodEntry.changePercent === 'number' && isFinite(eodEntry.changePercent)) ? eodEntry.changePercent : null;
+    ctx.market.eodStale = _pfEodIsStale(eodEntry);
+  }
+  // Weight: the exact existing P-2B allocation rule — reporting completeness
+  // guard + _pfHoldingIlsValue over the unified allocation denominator.
+  var sub = _pfComputeHoldingsSubtotals(holdings);
+  var reporting = _pfComputePortfolioReporting(sub.usdSubtotal, sub.ilsSubtotal,
+    sub.unknownCurrencyCount, sub.hasCorrupt, sub.corruptCount, _pfCashLoad(), fxCache);
+  if (!reporting.completeness) ctx.weight.unavailableReason = 'reporting-incomplete';
+  else if (!(reporting.allocationDenominatorValue > 0)) ctx.weight.unavailableReason = 'denominator-zero';
+  else {
+    var allocIls = _pfHoldingIlsValue(h, fxCache);
+    if (allocIls === null) ctx.weight.unavailableReason = 'holding-ils-value-unavailable';
+    else { ctx.weight.pct = allocIls / reporting.allocationDenominatorValue * 100; ctx.weight.unavailableReason = null; }
+  }
+  return ctx;
+}
+
+function _p5PacketStatus(packet) {
+  if (!packet || typeof packet !== 'object' || !packet.sections) return 'failed';
+  if (!packet.sections.portfolio || packet.sections.portfolio.found === false) return 'failed';
+  var news = packet.sections.news;
+  var synth = packet.sections.synthesis;
+  var accepted = (packet.counts && typeof packet.counts.accepted === 'number') ? packet.counts.accepted : 0;
+  if (news && news.state === 'done' && accepted >= 1 &&
+      synth && synth.state === 'done' &&
+      typeof synth.text === 'string' && synth.text.trim() !== '') return 'complete';
+  return 'partial';
+}
+
+function _p5BuildPacket(args) {
+  var asOf = (args && typeof args.asOf === 'string') ? args.asOf : null;
+  var ctx = (args && args.context) ? args.context : null;
+  var news = (args && args.news) ? args.news : null;
+  var providedSynthesis = (args && args.synthesis) ? args.synthesis : null;
+  var packet = {
+    asOf: asOf,
+    symbol: (ctx && typeof ctx.symbol === 'string') ? ctx.symbol : null,
+    sections: {
+      market: ctx ? ctx.market : null,
+      portfolio: ctx ? { found: ctx.found, corrupt: ctx.corrupt, holding: ctx.holding, pl: ctx.pl, fx: ctx.fx, weight: ctx.weight } : null,
+      news: news === null ? { state: 'queued', reason: null, accepted: [], rejected: [], counts: null } : news,
+      synthesis: { state: 'pending', reason: null, text: null, derivedFromAccepted: false }
+    },
+    counts: (news && news.counts) ? news.counts : null,
+    status: null
+  };
+  var newsState = packet.sections.news.state;
+  var newsOk = newsState === 'done';
+  var accepted = (packet.counts && typeof packet.counts.accepted === 'number') ? packet.counts.accepted : 0;
+  var usableText = (providedSynthesis && typeof providedSynthesis.text === 'string' &&
+                    providedSynthesis.text.trim() !== '') ? providedSynthesis.text.trim() : null;
+  if (newsState === 'failed') {
+    // News terminally unusable: synthesis can never be pending here.
+    packet.sections.synthesis = { state: 'suppressed', reason: 'news-failed', text: null, derivedFromAccepted: false };
+    if (providedSynthesis !== null) packet.discardedProvidedSynthesis = true;
+  } else if (newsOk && accepted < 1) {
+    packet.sections.synthesis = { state: 'suppressed', reason: 'zero-accepted-evidence', text: null, derivedFromAccepted: false };
+    if (providedSynthesis !== null) packet.discardedProvidedSynthesis = true;
+  } else if (providedSynthesis !== null) {
+    if (!newsOk) {
+      packet.sections.synthesis = { state: 'suppressed', reason: 'news-not-ok', text: null, derivedFromAccepted: false };
+      packet.discardedProvidedSynthesis = true;
+    } else if (usableText === null) {
+      // 'done' requires usable non-empty derived text — never an empty shell.
+      packet.sections.synthesis = { state: 'suppressed', reason: 'empty-synthesis-text', text: null, derivedFromAccepted: false };
+      packet.discardedProvidedSynthesis = true;
+    } else {
+      packet.sections.synthesis = { state: 'done', reason: null, text: usableText, derivedFromAccepted: true };
+    }
+  }
+  // news 'queued'/'collecting' with no provided synthesis: stays 'pending' —
+  // truthful only while the pipeline genuinely has not reached synthesis.
+  packet.status = _p5PacketStatus(packet);
+  return packet;
+}
+
+// DOM-only; renders EXCLUSIVELY into the caller-supplied mountEl. No global
+// document queries, no innerHTML anywhere, dynamic strings via textContent.
+// Structurally uncalled until Step 3 wires the UI.
+function _p5RenderPacket(packet, mountEl) {
+  if (!packet || !mountEl || typeof mountEl.appendChild !== 'function') return;
+  while (mountEl.firstChild) mountEl.removeChild(mountEl.firstChild);
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+  function stat(parent, label, value) {
+    var s = el('div', 'pf-summary-stat');
+    s.appendChild(el('div', 'pf-summary-lbl', label));
+    s.appendChild(el('div', 'pf-summary-val', value));
+    parent.appendChild(s);
+  }
+  var root = el('div', 'p5-packet');
+  root.appendChild(el('div', 'pf-summary-lbl', 'Research packet — ' + (packet.symbol || 'unknown') +
+    ' · as of ' + (packet.asOf || 'unknown') + ' · ' + (packet.status || 'unknown')));
+  var m = packet.sections.market;
+  var mBox = el('div', 'p5-section-market');
+  mBox.appendChild(el('div', 'pf-summary-lbl', 'Market snapshot'));
+  stat(mBox, 'Daily move', (m && m.present && m.changePercent !== null)
+    ? (m.changePercent.toFixed(2) + '%' + (m.eodStale ? ' (stale)' : '')) : 'unavailable');
+  stat(mBox, 'Close', 'not available locally');
+  stat(mBox, 'Session date', 'not available locally');
+  root.appendChild(mBox);
+  var p = packet.sections.portfolio;
+  var pBox = el('div', 'p5-section-portfolio');
+  pBox.appendChild(el('div', 'pf-summary-lbl', 'Portfolio context'));
+  if (!p || p.found === false) {
+    pBox.appendChild(el('div', 'dq-warn', 'Holding not found in portfolio.'));
+  } else if (p.corrupt === true) {
+    pBox.appendChild(el('div', 'dq-warn', 'Holding record is corrupted — repair it via Edit before researching.'));
+  } else {
+    stat(pBox, 'Recorded value', p.holding && p.holding.positionSize !== null
+      ? String(p.holding.positionSize) + ' ' + (p.holding.currency || '(currency not recorded)') : 'not recorded');
+    stat(pBox, 'Cost basis', p.holding && p.holding.costBasis !== null ? String(p.holding.costBasis) : 'not recorded');
+    stat(pBox, 'Native P/L', p.pl && p.pl.nativeAvailable
+      ? (p.pl.plNative.toFixed(2) + ' (' + p.pl.plPctNativePct.toFixed(2) + '%)') : 'unavailable');
+    stat(pBox, 'ILS P/L', p.pl && p.pl.ilsAvailable
+      ? (p.pl.plIls.toFixed(2) + ' (' + p.pl.plPctIlsPct.toFixed(2) + '%)') : 'unavailable');
+    stat(pBox, 'Weight', p.weight && p.weight.pct !== null
+      ? (p.weight.pct.toFixed(1) + '% of portfolio') : ('— (' + ((p.weight && p.weight.unavailableReason) || 'unavailable') + ')'));
+    stat(pBox, 'Position data age', p.holding && p.holding.baselineAgeDays !== null
+      ? (Math.floor(p.holding.baselineAgeDays) + ' days') : 'not recorded');
+  }
+  root.appendChild(pBox);
+  var n = packet.sections.news;
+  var nBox = el('div', 'p5-section-news');
+  nBox.appendChild(el('div', 'pf-summary-lbl', 'Recent news'));
+  nBox.appendChild(el('div', n && n.state === 'failed' ? 'dq-warn' : 'pf-guidance',
+    'News: ' + (n ? n.state : 'unknown') + (n && n.reason ? ' — ' + n.reason : '')));
+  root.appendChild(nBox);
+  var s2 = packet.sections.synthesis;
+  var sBox = el('div', 'p5-section-synthesis');
+  sBox.appendChild(el('div', 'pf-summary-lbl', 'Synthesis'));
+  sBox.appendChild(el('div', 'pf-guidance',
+    'Synthesis: ' + (s2 ? s2.state : 'unknown') + (s2 && s2.reason ? ' — ' + s2.reason : '')));
+  root.appendChild(sBox);
+  mountEl.appendChild(root);
+}
+
 // ═══ end P-5 sourcing validator (step 1) ══════════════════════════════
 
 // ═══ services/research-evidence-client.js — inlined (EG-20E-2A) ═══════
@@ -7485,6 +7679,22 @@ function _calcPortfolioAggregates(holdings) {
 // cash/FX/gaps never silently become zero; completeness=false means the
 // caller must show a "Known Assets Total" (partial, disclosed), never an
 // unqualified "Portfolio Total".
+// A1 narrow extraction (owner ruling 2026-08-11): the P-2B recorded-value
+// subtotal loop, lifted verbatim so the render path and the P-5 context
+// collector share ONE computation. No math change of any kind.
+function _pfComputeHoldingsSubtotals(holdings) {
+  var out = { usdSubtotal: 0, ilsSubtotal: 0, unknownCurrencyCount: 0, hasCorrupt: false, corruptCount: 0 };
+  Object.values(holdings).forEach(function(h) {
+    if (h._corrupt === true) { out.hasCorrupt = true; out.corruptCount += 1; return; }
+    var n = Number(h.positionSize);
+    if (!isFinite(n) || n <= 0) return;
+    if (h.currency === 'USD') out.usdSubtotal += n;
+    else if (h.currency === 'ILS') out.ilsSubtotal += n;
+    else out.unknownCurrencyCount += 1;
+  });
+  return out;
+}
+
 function _pfComputePortfolioReporting(usdSubtotal, ilsSubtotal, unknownCurrencyCount, hasCorrupt, corruptCount, cashState, fxCache) {
   var fxState = _pfFxState(fxCache);
   var fxUsableForTotal = fxState === 'fresh' || fxState === 'aged-but-valid';
@@ -8056,15 +8266,10 @@ function _renderPortfolioPanel() {
     // metadata-only issue (e.g. on manualPlPct/source/updatedAt) does NOT
     // exclude an entry here — only an invalid/missing positionSize or
     // currency does, since those are the two fields this total depends on.
-    var usdSubtotal = 0, ilsSubtotal = 0, unknownCurrencyCount = 0, hasCorrupt = false, corruptCount = 0;
-    Object.values(holdings).forEach(function(h) {
-      if (h._corrupt === true) { hasCorrupt = true; corruptCount += 1; return; }
-      var n = Number(h.positionSize);
-      if (!isFinite(n) || n <= 0) return;
-      if (h.currency === 'USD') usdSubtotal += n;
-      else if (h.currency === 'ILS') ilsSubtotal += n;
-      else unknownCurrencyCount += 1;
-    });
+    var _pfSub = _pfComputeHoldingsSubtotals(holdings);
+    var usdSubtotal = _pfSub.usdSubtotal, ilsSubtotal = _pfSub.ilsSubtotal,
+        unknownCurrencyCount = _pfSub.unknownCurrencyCount,
+        hasCorrupt = _pfSub.hasCorrupt, corruptCount = _pfSub.corruptCount;
 
     // Two distinct categories, surfaced with distinct wording: _corrupt/
     // _issues means something couldn't be read correctly (a real problem);
