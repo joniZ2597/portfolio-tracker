@@ -2642,6 +2642,21 @@ function phaseNeedsAttention() {
     const missingItems = api._pfComputeNeedsAttention(usdHolding, {}, recon, cash, NOW_MS);
     check('FX missing (no cache at all) -> fx:unavailable fires', missingItems.some(function (i) { return i.id === 'fx:unavailable'; }));
 
+    // P-4A-2 determinism fix (owner ruling (b), 2026-08-11): _pfFxState takes
+    // an optional injected clock; _pfComputeNeedsAttention passes its nowMs
+    // through, so the FX fixtures above are stable on any wall-clock date.
+    check('injected clock: 4-day record aged-but-valid at NOW_MS',
+      api._pfFxState(fxRecord(4 * DAY), NOW_MS) === 'aged-but-valid');
+    check('injected clock: same record stale-invalid 10 days later',
+      api._pfFxState(fxRecord(4 * DAY), NOW_MS + 10 * DAY) === 'stale-invalid');
+    check('injected clock: same record fresh at its own effectiveAt',
+      api._pfFxState(fxRecord(4 * DAY), NOW_MS - 4 * DAY) === 'fresh');
+    check('omitted clock falls back to Date.now() (real-now record fresh)',
+      api._pfFxState({
+        rate: 3.006, effectiveAt: new Date().toISOString(), source: 'boi',
+        fetchedAt: new Date().toISOString(), lastAttemptAt: new Date().toISOString(), lastAttemptOk: true
+      }) === 'fresh');
+
     const noUsdHoldings = { III2: { symbol: 'III2', positionSize: 1000, costBasis: 1000, currency: 'ILS' } };
     const noUsdItems = api._pfComputeNeedsAttention(noUsdHoldings, {}, recon, cash, NOW_MS);
     check('no USD holdings at all -> fx:unavailable never fires even if FX missing', !noUsdItems.some(function (i) { return i.id === 'fx:unavailable'; }));

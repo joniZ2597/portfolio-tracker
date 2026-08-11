@@ -7628,7 +7628,7 @@ function _pfComputeNeedsAttention(holdings, fxCache, recon, cashState, nowMs) {
     }
   });
 
-  var attnFxState = _pfFxState(fxCache);
+  var attnFxState = _pfFxState(fxCache, now);
   if (usdHoldingCount > 0 && (attnFxState === 'missing' || attnFxState === 'stale-invalid')) {
     items.push({
       id: 'fx:unavailable', severity: 'high', category: 'fx', symbol: null,
@@ -8954,9 +8954,12 @@ function _pfFxRateValid(cache) {
 // 'stale-invalid' is deliberately treated like 'missing' by every
 // total/allocation/estimate consumer — an aged rate does not keep producing
 // a unified figure indefinitely.
-function _pfFxState(cache) {
+function _pfFxState(cache, nowMs) {
   if (!_pfFxRateValid(cache)) return 'missing';
-  var ageDays = (Date.now() - Date.parse(cache.effectiveAt)) / (24 * 60 * 60 * 1000);
+  // Optional injected clock (P-4A-2 determinism fix): a finite nowMs wins;
+  // every existing caller that omits it keeps the Date.now() runtime behavior.
+  var fxNow = (typeof nowMs === 'number' && isFinite(nowMs)) ? nowMs : Date.now();
+  var ageDays = (fxNow - Date.parse(cache.effectiveAt)) / (24 * 60 * 60 * 1000);
   if (ageDays <= PF_FX_FRESH_MAX_AGE_DAYS) return 'fresh';
   if (ageDays <= PF_FX_VALID_MAX_AGE_DAYS) return 'aged-but-valid';
   return 'stale-invalid';
