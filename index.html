@@ -1370,6 +1370,788 @@ function getHistoricalCacheStats() {
 
 // ═══ end services/history.js ══════════════════════════════════════════
 
+// ═══ SCORE-V1-S1 — TECHNICAL SCORE (ratified rev-2 contract; gated, sidecar-only) ═══
+//
+// Implements the ratified SCORE-V1-S1 rev-2 contract (2026-08-10/11 rulings
+// D1–D6, S1-R1…R12, D-a…D-d + ratified exchange-calendar packet 2026-08-11).
+// Pipeline: _ts1FetchRawSeries (adapter) → _ts1NormalizeCandles (A4 +
+// official-calendar completed-session selection) → _ts1ValidateContinuity
+// (unit-break guard) → _ts1BuildSnapshot → scoreTickerTech (pure). Reached
+// ONLY via runTechScoreV1(), invoked manually (console) behind the strict
+// client gate window.PT_ENABLE_TECH_SCORE === true — structurally uncalled
+// otherwise.
+//
+// Isolation (SC-0): no read/write of pt_* except one read-only pt_tickers
+// parse in the caller for the approved sectorEtf mapping; no writes to any
+// persisted key; output only to the memory-only sidecar
+// window._techScoreDebug; no coupling to orchestrate/analyzeChunk/
+// enforceScoreConsistency/_techCache/historicalCache; no display surface.
+//
+// Exchange calendars are RATIFIED OFFICIAL POLICY DATA (NYSE + TASE official
+// publications, provenance below). Provider bars are never calendar
+// authority; no weekday approximation; outside verified coverage the session
+// status is unknown and everything fails closed.
+
+var TS1_POLICY_V1 = {
+  version: 'ts1-v1',
+  coverageFloor: 55,
+  requireSma: true,
+  componentTables: {
+    sma: { maxPoints: 35, bands: { above20: 4, above50: 6, above150: 7, above200: 10, stacked: 8 } },
+    rs: { maxPoints: 30, weights: { spy: 0.5, qqq: 0.25, sector: 0.25 },
+          bands: [ { upTo: -10, fraction: 0 }, { upTo: 0, fraction: 0.25 }, { upTo: 10, fraction: 0.6 }, { upTo: 25, fraction: 0.85 }, { upTo: null, fraction: 1 } ] },
+    high52w: { maxPoints: 20,
+          bands: [ { upTo: 5, points: 20 }, { upTo: 15, points: 14 }, { upTo: 30, points: 8 }, { upTo: 50, points: 3 }, { upTo: null, points: 0 } ] },
+    volume: { maxPoints: 15, shortWindow: 5, longWindow: 21,
+          bands: [ { upTo: 0.5, points: 0 }, { upTo: 0.8, points: 4 }, { upTo: 1.2, points: 8 }, { upTo: 1.5, points: 11 }, { upTo: null, points: 15 } ] }
+  },
+  stretch: { start: 3.5, full: 6.0 },
+  atr: { period: 14, minCandles: 15 },
+  freshness: { agedMaxSessions: 0, staleMaxSessions: 5 },
+  thresholds: { volumeMinObs: 21, rsMinPairedCloses: 64, high52wMinObs: 1 },
+  continuity: { unitBreakRatio: 20, persistenceWindow: 5 },
+  calendar: {
+    US: {
+      timeZone: 'America/New_York',
+      weekRules: [ { from: '2025-01-01', to: '2027-12-31', tradingDays: [1, 2, 3, 4, 5] } ],
+      closeRules: [ { from: '2025-01-01', to: '2027-12-31', dflt: '16:00' } ],
+      holidays: [
+        '2025-01-01', '2025-01-20', '2025-02-17', '2025-04-18', '2025-05-26',
+        '2025-06-19', '2025-07-04', '2025-09-01', '2025-11-27', '2025-12-25',
+        '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03', '2026-05-25',
+        '2026-06-19', '2026-07-03', '2026-09-07', '2026-11-26', '2026-12-25',
+        '2027-01-01', '2027-01-18', '2027-02-15', '2027-03-26', '2027-05-31',
+        '2027-06-18', '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24'
+      ],
+      shortenedSessions: {
+        '2025-07-03': '13:00', '2025-11-28': '13:00', '2025-12-24': '13:00',
+        '2026-11-27': '13:00', '2026-12-24': '13:00', '2027-11-26': '13:00'
+      },
+      coverage: { from: '2025-01-01', to: '2027-12-31' },
+      provenance: [
+        { range: '2025', source: 'ICE-NYSE press release Nov-2024 + official NYSE 2025 Trading Calendar PDF', retrievedAt: '2026-08-11' },
+        { range: '2026-2027', source: 'nyse.com/markets/hours-calendars (official page)', retrievedAt: '2026-08-11' }
+      ]
+    },
+    TASE: {
+      timeZone: 'Asia/Jerusalem',
+      weekRules: [
+        { from: '2025-01-01', to: '2026-01-03', tradingDays: [0, 1, 2, 3, 4] },
+        { from: '2026-01-04', to: '2027-12-31', tradingDays: [1, 2, 3, 4, 5] }
+      ],
+      closeRules: [ { from: '2026-01-04', to: '2027-12-31', dflt: '17:30', friday: '13:50' } ],
+      holidays: [
+        '2025-03-14', '2025-04-13', '2025-04-18', '2025-04-30', '2025-05-01',
+        '2025-06-01', '2025-06-02', '2025-08-03', '2025-09-22', '2025-09-23',
+        '2025-09-24', '2025-10-01', '2025-10-02', '2025-10-06', '2025-10-07',
+        '2025-10-13', '2025-10-14',
+        '2026-03-03', '2026-04-01', '2026-04-02', '2026-04-07', '2026-04-08',
+        '2026-04-21', '2026-04-22', '2026-05-21', '2026-05-22', '2026-07-23',
+        '2026-09-11', '2026-09-13', '2026-09-18', '2026-09-20', '2026-09-21',
+        '2026-09-25', '2026-10-02', '2026-10-27',
+        '2027-03-23', '2027-04-21', '2027-04-22', '2027-04-27', '2027-04-28',
+        '2027-05-11', '2027-05-12', '2027-06-10', '2027-06-11', '2027-08-12',
+        '2027-10-01', '2027-10-03', '2027-10-08', '2027-10-10', '2027-10-11',
+        '2027-10-15', '2027-10-22'
+      ],
+      shortenedSessions: {
+        '2026-04-06': '14:30', '2026-09-28': '14:30', '2026-09-29': '14:30',
+        '2026-09-30': '14:30', '2026-10-01': '14:30',
+        '2027-04-26': '14:30', '2027-10-18': '14:30', '2027-10-19': '14:30',
+        '2027-10-20': '14:30', '2027-10-21': '14:30'
+      },
+      coverage: { from: '2025-01-01', to: '2027-12-31' },
+      provenance: [
+        { range: '2025-2027', source: 'tase.co.il official Trading and Vacation Schedules page (per-year tables + hours tables — Mon-Fri as of 2026-01-04 per official statement, first Mon-Fri session 2026-01-05)', retrievedAt: '2026-08-11' }
+      ]
+    }
+  }
+};
+
+// Integrity codes whose presence for the HOLDING series applies the ratified
+// fail-closed disposition (S1-R9/R11). The scorer never interprets entry
+// contents beyond this ratified disposition; codes are echoed verbatim.
+var TS1_FAILCLOSED_INTEGRITY_CODES = ['SERIES_PROVENANCE_UNESTABLISHED', 'SERIES_UNIT_DISCONTINUITY'];
+
+function _ts1FiniteNum(v) {
+  return typeof v === 'number' && isFinite(v);
+}
+
+// FNV-1a 32-bit (offset 2166136261, prime 16777619, unsigned 32-bit overflow
+// via Math.imul), 8-char lowercase zero-padded hex. Inputs are validated
+// printable ASCII, so charCodeAt(i) === the UTF-8 byte.
+function _ts1Fnv1a(str) {
+  var h = 2166136261;
+  for (var i = 0; i < str.length; i++) {
+    h = (h ^ str.charCodeAt(i)) >>> 0;
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  var hex = h.toString(16);
+  while (hex.length < 8) hex = '0' + hex;
+  return hex;
+}
+
+function _ts1SymbolValid(symbol) {
+  return typeof symbol === 'string' && symbol.length > 0 &&
+         /^[\x21-\x7E]+$/.test(symbol) &&
+         symbol.indexOf('|') === -1 && symbol.indexOf(',') === -1;
+}
+
+// Canonical fingerprint string per rev-2: version-prefixed, '|' between
+// records, ',' within a candle record. ECMA-262 Number-to-String for
+// numbers, literal 'null' for null volume. symbol must be the canonical
+// validated ValidSeries symbol (printable ASCII, no reserved delimiters);
+// market is the closed enum. Returns null (⇒ fail closed upstream) on any
+// identity violation — never a partial string.
+function _ts1CanonicalString(symbol, market, dataAsOf, candles) {
+  if (!_ts1SymbolValid(symbol)) return null;
+  if (market !== 'US' && market !== 'TASE') return null;
+  if (typeof dataAsOf !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dataAsOf)) return null;
+  if (!Array.isArray(candles)) return null;
+  var parts = ['v1', symbol, market, dataAsOf, String(candles.length)];
+  for (var i = 0; i < candles.length; i++) {
+    var c = candles[i];
+    if (!c || typeof c !== 'object' || typeof c.date !== 'string') return null;
+    var vol = (c.volume === null || c.volume === undefined) ? 'null' : String(c.volume);
+    parts.push(c.date + ',' + String(c.open) + ',' + String(c.high) + ',' + String(c.low) + ',' + String(c.close) + ',' + vol);
+  }
+  return parts.join('|');
+}
+
+// Exchange-local date + minutes for an injected instant. Deterministic given
+// computedAt — no wall-clock access anywhere in this section except the
+// caller-injector runTechScoreV1.
+function _ts1ExchangeLocalParts(computedAtIso, timeZone) {
+  var d = new Date(computedAtIso);
+  if (isNaN(d.getTime())) return null;
+  var p = {};
+  try {
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: timeZone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false
+    }).formatToParts(d).forEach(function (x) { p[x.type] = x.value; });
+  } catch (e) {
+    return null;
+  }
+  var hour = parseInt(p.hour, 10);
+  if (hour === 24) hour = 0;
+  return { dateStr: p.year + '-' + p.month + '-' + p.day, minutes: hour * 60 + parseInt(p.minute, 10) };
+}
+
+function _ts1RuleFor(rules, dateStr) {
+  if (!Array.isArray(rules)) return null;
+  for (var i = 0; i < rules.length; i++) {
+    if (dateStr >= rules[i].from && dateStr <= rules[i].to) return rules[i];
+  }
+  return null;
+}
+
+// true = trading session · false = non-session · null = cannot be established
+// (outside verified coverage / no applicable week rule) — null NEVER counts.
+function _ts1IsTradingSession(dateStr, cal) {
+  if (typeof dateStr !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  if (!cal || !cal.coverage || dateStr < cal.coverage.from || dateStr > cal.coverage.to) return null;
+  var wk = _ts1RuleFor(cal.weekRules, dateStr);
+  if (!wk) return null;
+  var d = new Date(dateStr + 'T00:00:00Z');
+  if (isNaN(d.getTime())) return null;
+  if (wk.tradingDays.indexOf(d.getUTCDay()) === -1) return false;
+  if (cal.holidays.indexOf(dateStr) !== -1) return false;
+  return true;
+}
+
+// Close minutes for a session date: shortened-session override, else the
+// applicable closeRule (friday-aware). null = unknown (e.g. pre-2026 TASE —
+// never needed for strictly-past dates).
+function _ts1SessionCloseMinutes(dateStr, cal) {
+  var hhmm = cal.shortenedSessions && cal.shortenedSessions[dateStr];
+  if (!hhmm) {
+    var cr = _ts1RuleFor(cal.closeRules, dateStr);
+    if (!cr) return null;
+    var dow = new Date(dateStr + 'T00:00:00Z').getUTCDay();
+    hhmm = (dow === 5 && cr.friday) ? cr.friday : cr.dflt;
+  }
+  var p = hhmm.split(':');
+  return parseInt(p[0], 10) * 60 + parseInt(p[1], 10);
+}
+
+// true / false / null. Strictly-past session dates are completed by date;
+// the current exchange-local date needs a known close time, else null.
+function _ts1SessionCompleted(dateStr, cal, computedAtIso) {
+  var isSession = _ts1IsTradingSession(dateStr, cal);
+  if (isSession === null) return null;
+  if (isSession === false) return false;
+  var loc = _ts1ExchangeLocalParts(computedAtIso, cal.timeZone);
+  if (!loc) return null;
+  if (dateStr < loc.dateStr) return true;
+  if (dateStr > loc.dateStr) return false;
+  var closeMin = _ts1SessionCloseMinutes(dateStr, cal);
+  if (closeMin === null) return null;
+  return loc.minutes >= closeMin;
+}
+
+// ageSessions: completed exchange sessions strictly after dataAsOf as of
+// computedAt. EVERY date in the window must resolve definitively; any null
+// (unknown session status or uncomputable completion) ⇒ null ⇒ R4
+// fail-closed downstream. No weekday approximation, no guessing.
+function _ts1AgeSessions(dataAsOf, cal, computedAtIso) {
+  if (typeof dataAsOf !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dataAsOf)) return null;
+  var loc = _ts1ExchangeLocalParts(computedAtIso, cal.timeZone);
+  if (!loc) return null;
+  var count = 0;
+  var cur = new Date(dataAsOf + 'T00:00:00Z');
+  if (isNaN(cur.getTime())) return null;
+  for (var i = 0; i < 1200; i++) {
+    cur = new Date(cur.getTime() + 86400000);
+    var ds = cur.toISOString().slice(0, 10);
+    if (ds > loc.dateStr) break;
+    var isSession = _ts1IsTradingSession(ds, cal);
+    if (isSession === null) return null;
+    if (isSession === false) continue;
+    var completed = _ts1SessionCompleted(ds, cal, computedAtIso);
+    if (completed === null) return null;
+    if (completed === true) count += 1;
+  }
+  return count;
+}
+
+// A4 normalizer + ratified completed-session selection. Produces the single
+// ValidSeries shared by validator, builder, and scorer. Never mutates input.
+function _ts1NormalizeCandles(rawSeries, computedAtIso, policy) {
+  if (!rawSeries || typeof rawSeries !== 'object' || !Array.isArray(rawSeries.bars)) {
+    return { ok: false, error: 'BAD_INPUT' };
+  }
+  var cal = policy.calendar[rawSeries.market];
+  if (!cal) return { ok: false, error: 'BAD_INPUT' };
+  var byDate = {};
+  for (var i = 0; i < rawSeries.bars.length; i++) {
+    var b = rawSeries.bars[i];
+    if (!b || typeof b !== 'object') continue;
+    var d = b.date;
+    if (typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d)) continue;
+    if (!(_ts1FiniteNum(b.open) && b.open > 0 && _ts1FiniteNum(b.high) && b.high > 0 &&
+          _ts1FiniteNum(b.low) && b.low > 0 && _ts1FiniteNum(b.close) && b.close > 0)) continue;
+    // Ratified session selection: a bar is retained ONLY when the official
+    // calendar positively establishes its date as a trading session AND the
+    // session is completed as of computedAt. Non-sessions (incl. provider
+    // phantom bars on official closures) are excluded; unknown status is
+    // never inferred from bar existence — excluded, fail-closed direction.
+    if (_ts1SessionCompleted(d, cal, computedAtIso) !== true) continue;
+    // A4/P4 volume validity: finite AND >= 0. Zero retained as a distinct
+    // real observation (D4 applies at scoring); fractional positives valid;
+    // negative / non-finite / malformed -> null (never a numeric observation).
+    var v = (typeof b.volume === 'number' && isFinite(b.volume) && b.volume >= 0) ? b.volume : null;
+    byDate[d] = { date: d, open: b.open, high: b.high, low: b.low, close: b.close, volume: v };
+  }
+  var dates = Object.keys(byDate).sort();
+  if (dates.length === 0) return { ok: false, error: 'NO_VALID_CANDLES' };
+  var candles = dates.map(function (d2) { return byDate[d2]; });
+  return {
+    ok: true,
+    series: {
+      symbol: rawSeries.symbol, market: rawSeries.market, candles: candles,
+      dataAsOf: candles[candles.length - 1].date,
+      provenance: {
+        currency: rawSeries.currency === undefined ? null : rawSeries.currency,
+        provider: rawSeries.provider === undefined ? null : rawSeries.provider,
+        adjustedBasis: rawSeries.adjustedBasis === undefined ? null : rawSeries.adjustedBasis,
+        marketBasis: rawSeries.marketBasis === undefined ? null : rawSeries.marketBasis
+      }
+    }
+  };
+}
+
+function _ts1Median(values) {
+  var s = values.slice().sort(function (a, b) { return a - b; });
+  var n = s.length;
+  return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+}
+
+// Series-continuity validator (S1-R7…R9, D-c, D-d). Validator, never a
+// repairer: returns integrity entries, mutates nothing. Persistence follows
+// the ratified R8 disposition — evaluate what exists near series edges
+// (owner ruling 2026-08-11, asymmetric-cost principle).
+function _ts1ValidateContinuity(symbol, candles, policy) {
+  var K = policy.continuity.unitBreakRatio;
+  var m = policy.continuity.persistenceWindow;
+  var integrity = [];
+  for (var i = 1; i < candles.length; i++) {
+    var r = candles[i].close / candles[i - 1].close;
+    if (!(r >= K || r <= 1 / K)) continue;
+    var after = candles.slice(i, Math.min(i + m, candles.length)).map(function (c) { return c.close; });
+    var before = candles.slice(Math.max(0, i - m), i).map(function (c) { return c.close; });
+    var shift = _ts1Median(after) / _ts1Median(before);
+    integrity.push({
+      code: (shift >= K || shift <= 1 / K) ? 'SERIES_UNIT_DISCONTINUITY' : 'SERIES_SPIKE_SUSPECT',
+      series: symbol, breakDate: candles[i].date, observedRatio: r,
+      detector: 'close-ratio-level-shift',
+      params: { unitBreakRatio: K, persistenceWindow: m }
+    });
+  }
+  return integrity;
+}
+
+function _ts1Sma(closes, n) {
+  if (closes.length < n) return null;
+  var s = 0;
+  for (var i = closes.length - n; i < closes.length; i++) s += closes[i];
+  return s / n;
+}
+
+function _ts1High52w(candles, dataAsOf) {
+  var cutoff = new Date(dataAsOf + 'T00:00:00Z').getTime() - 364 * 86400000;
+  var best = null;
+  for (var i = 0; i < candles.length; i++) {
+    var t = new Date(candles[i].date + 'T00:00:00Z').getTime();
+    if (t < cutoff) continue;
+    if (best === null || candles[i].high > best) best = candles[i].high;
+  }
+  return best;
+}
+
+// RS per benchmark: 63 return intervals over the rsMinPairedCloses = 64 most
+// recent paired closes (rev-2). Benchmark provenance + continuity are checked
+// here; failures null the benchmark and surface integrity entries (S1-R9
+// benchmark-scope disposition).
+function _ts1RsValue(holding, bench, policy) {
+  var out = { value: null, integrity: [] };
+  if (!bench) return out;
+  var basis = bench.provenance ? bench.provenance.adjustedBasis : null;
+  if (basis !== 'explicit' && basis !== 'documented') {
+    out.integrity.push({
+      code: 'SERIES_PROVENANCE_UNESTABLISHED', series: bench.symbol, breakDate: null,
+      observedRatio: null, detector: 'adjusted-basis', params: { adjustedBasis: basis === undefined ? null : basis }
+    });
+    return out;
+  }
+  var integ = _ts1ValidateContinuity(bench.symbol, bench.candles, policy);
+  var broken = false;
+  for (var i = 0; i < integ.length; i++) {
+    out.integrity.push(integ[i]);
+    if (integ[i].code === 'SERIES_UNIT_DISCONTINUITY') broken = true;
+  }
+  if (broken) return out;
+  var benchByDate = {};
+  for (var j = 0; j < bench.candles.length; j++) benchByDate[bench.candles[j].date] = bench.candles[j].close;
+  var paired = [];
+  for (var k = 0; k < holding.candles.length; k++) {
+    var c = holding.candles[k];
+    if (benchByDate[c.date] !== undefined) paired.push({ h: c.close, b: benchByDate[c.date] });
+  }
+  var need = policy.thresholds.rsMinPairedCloses;
+  if (paired.length < need) return out;
+  var win = paired.slice(paired.length - need);
+  var hRet = (win[win.length - 1].h / win[0].h - 1) * 100;
+  var bRet = (win[win.length - 1].b / win[0].b - 1) * 100;
+  out.value = hRet - bRet;
+  return out;
+}
+
+// Snapshot builder (rev-2 §3). computedAt is the sole clock:
+// snapshotAsOf = computedAt by pinned BUILDER-OWNED identity — the builder
+// sources no wall-clock time. Fail-closed paths keep identity/freshness/
+// fingerprint metadata and null all derived fields.
+function _ts1BuildSnapshot(holding, benchmarks, policy, computedAt) {
+  var snap = {
+    symbol: holding.symbol, market: holding.market,
+    sma20: null, sma50: null, sma150: null, sma200: null, high52w: null,
+    rsSpy: null, rsQqq: null, rsSector: null,
+    dataAsOf: holding.dataAsOf, snapshotAsOf: computedAt, ageSessions: null,
+    currency: holding.provenance.currency, provider: holding.provenance.provider,
+    adjustedBasis: holding.provenance.adjustedBasis,
+    seriesFingerprint: null, integrity: []
+  };
+  var cal = policy.calendar[holding.market];
+  snap.ageSessions = cal ? _ts1AgeSessions(holding.dataAsOf, cal, computedAt) : null;
+
+  var canonical = _ts1CanonicalString(holding.symbol, holding.market, holding.dataAsOf, holding.candles);
+  if (canonical === null) {
+    // Invalid/non-canonical identity fails closed BEFORE fingerprinting (rev-2).
+    snap.integrity.push({
+      code: 'SERIES_PROVENANCE_UNESTABLISHED', series: String(holding.symbol), breakDate: null,
+      observedRatio: null, detector: 'identity-validation', params: null
+    });
+    return snap;
+  }
+  snap.seriesFingerprint = _ts1Fnv1a(canonical);
+
+  var basis = holding.provenance.adjustedBasis;
+  if (basis !== 'explicit' && basis !== 'documented') {
+    snap.integrity.push({
+      code: 'SERIES_PROVENANCE_UNESTABLISHED', series: holding.symbol, breakDate: null,
+      observedRatio: null, detector: 'adjusted-basis', params: { adjustedBasis: basis === undefined ? null : basis }
+    });
+    return snap;
+  }
+
+  var integ = _ts1ValidateContinuity(holding.symbol, holding.candles, policy);
+  var holdingBroken = false;
+  for (var i = 0; i < integ.length; i++) {
+    snap.integrity.push(integ[i]);
+    if (integ[i].code === 'SERIES_UNIT_DISCONTINUITY') holdingBroken = true;
+  }
+  if (holdingBroken) return snap;
+
+  var closes = holding.candles.map(function (c) { return c.close; });
+  snap.sma20 = _ts1Sma(closes, 20);
+  snap.sma50 = _ts1Sma(closes, 50);
+  snap.sma150 = _ts1Sma(closes, 150);
+  snap.sma200 = _ts1Sma(closes, 200);
+  snap.high52w = _ts1High52w(holding.candles, holding.dataAsOf);
+
+  if (holding.market !== 'TASE') {
+    var rsSpy = _ts1RsValue(holding, benchmarks && benchmarks.spy, policy);
+    var rsQqq = _ts1RsValue(holding, benchmarks && benchmarks.qqq, policy);
+    var rsSector = _ts1RsValue(holding, benchmarks && benchmarks.sector, policy);
+    snap.rsSpy = rsSpy.value; snap.rsQqq = rsQqq.value; snap.rsSector = rsSector.value;
+    var all = rsSpy.integrity.concat(rsQqq.integrity, rsSector.integrity);
+    for (var j = 0; j < all.length; j++) snap.integrity.push(all[j]);
+  }
+  // TASE (D-b): rsSpy/rsQqq/rsSector stay null unconditionally; no benchmark
+  // is consulted and no local benchmark may be invented.
+  return snap;
+}
+
+function _ts1Atr14(candles, policy) {
+  if (candles.length < policy.atr.minCandles) return null;
+  var period = policy.atr.period;
+  var trs = [];
+  for (var i = candles.length - period; i < candles.length; i++) {
+    var c = candles[i], prev = candles[i - 1];
+    trs.push(Math.max(c.high - c.low, Math.abs(c.high - prev.close), Math.abs(c.low - prev.close)));
+  }
+  var s = 0;
+  for (var j = 0; j < trs.length; j++) s += trs[j];
+  return s / period;
+}
+
+function _ts1BandLookup(bands, value, field) {
+  for (var i = 0; i < bands.length; i++) {
+    if (bands[i].upTo === null || value <= bands[i].upTo) return bands[i][field];
+  }
+  return bands[bands.length - 1][field];
+}
+
+// Pure Technical Score (ratified D2 signature; rev-2 §6 output shape).
+// No Date.now(), no Math.random(), no fetch, no storage, no DOM.
+// Final normalization is the RATIFIED coverage-adjusted rule (owner ruling
+// 2026-08-11 (a)): score = 100 * rawScore / availablePoints once D1
+// eligibility holds; within-RS weights are never redistributed.
+function scoreTickerTech(snap, candles, computedAt, policy) {
+  var reasons = {};
+  var missing = {};
+  function reason(c) { reasons[c] = true; }
+  function miss(f) { missing[f] = true; }
+
+  var comps = [
+    { id: 'sma', maxPoints: policy.componentTables.sma.maxPoints, availablePoints: 0, earned: 0, available: false, missingFields: [] },
+    { id: 'rs', maxPoints: policy.componentTables.rs.maxPoints, availablePoints: 0, earned: 0, available: false, missingFields: [] },
+    { id: 'high52w', maxPoints: policy.componentTables.high52w.maxPoints, availablePoints: 0, earned: 0, available: false, missingFields: [] },
+    { id: 'volume', maxPoints: policy.componentTables.volume.maxPoints, availablePoints: 0, earned: 0, available: false, missingFields: [] }
+  ];
+  var freshness = { computedAt: computedAt, dataAsOf: null, snapshotAsOf: null, ageSessions: null, tier: null, stale: null };
+
+  function finish(score, rawScore) {
+    var availablePoints = comps[0].availablePoints + comps[1].availablePoints + comps[2].availablePoints + comps[3].availablePoints;
+    return {
+      score: score, rawScore: rawScore,
+      availablePoints: availablePoints,
+      coveragePct: 100 * availablePoints / 100,
+      components: comps,
+      missingFields: Object.keys(missing).sort(),
+      reasonCodes: Object.keys(reasons).sort(),
+      freshness: freshness,
+      policyVersion: policy.version
+    };
+  }
+
+  // 1 · snapshot presence
+  if (!snap || typeof snap !== 'object') {
+    reason('NO_SNAPSHOT');
+    freshness.tier = 'stale-unusable'; freshness.stale = true;
+    return finish(null, null);
+  }
+  freshness.dataAsOf = typeof snap.dataAsOf === 'string' ? snap.dataAsOf : null;
+  freshness.snapshotAsOf = typeof snap.snapshotAsOf === 'string' ? snap.snapshotAsOf : null;
+  freshness.ageSessions = (Number.isInteger(snap.ageSessions) && snap.ageSessions >= 0) ? snap.ageSessions : null;
+
+  // 2 · integrity echo (always, verbatim, never synthesized here) + ratified
+  // fail-closed disposition when a fail-closed code names the holding series
+  var failClosedIntegrity = false;
+  if (Array.isArray(snap.integrity)) {
+    for (var ii = 0; ii < snap.integrity.length; ii++) {
+      var entry = snap.integrity[ii];
+      if (!entry || typeof entry.code !== 'string') continue;
+      reason(entry.code);
+      if (TS1_FAILCLOSED_INTEGRITY_CODES.indexOf(entry.code) !== -1 && entry.series === snap.symbol) {
+        failClosedIntegrity = true;
+      }
+    }
+  }
+
+  // 3 · candles
+  var haveCandles = Array.isArray(candles) && candles.length > 0;
+  if (!haveCandles) reason('NO_VALID_CANDLES');
+
+  // 4 · snap/candles correlation (rev-2) — verified only when candles exist.
+  // Recomputed VERBATIM from the received inputs: no re-normalization,
+  // reformatting, or rounding inside the scorer.
+  var fpOk = false;
+  if (haveCandles) {
+    var canonical = _ts1CanonicalString(snap.symbol, snap.market, snap.dataAsOf, candles);
+    fpOk = canonical !== null && typeof snap.seriesFingerprint === 'string' &&
+           _ts1Fnv1a(canonical) === snap.seriesFingerprint;
+    if (!fpOk) reason('SNAPSHOT_SERIES_MISMATCH');
+  }
+
+  // 5 · freshness (S1-R4 fail-closed; S1-R5 boundaries).
+  // snapshotAsOf = computedAt is a BUILDER-owned identity (rev-2 §3 item 2):
+  // the builder sources no wall-clock and stamps computedAt verbatim. The
+  // scorer validates presence/parseability ONLY (S1-R4) and never enforces
+  // equality — ownership pinned by offline fixtures, not scorer logic.
+  var f = policy.freshness;
+  var snapshotAsOfValid = freshness.snapshotAsOf !== null && !isNaN(Date.parse(freshness.snapshotAsOf));
+  if (!snapshotAsOfValid) miss('snapshotAsOf');
+  if (freshness.ageSessions === null) miss('ageSessions');
+  if (!snapshotAsOfValid || freshness.ageSessions === null) {
+    freshness.tier = 'stale-unusable';
+    reason('DATA_STALE_UNUSABLE');
+  } else if (freshness.ageSessions <= f.agedMaxSessions) {
+    freshness.tier = 'fresh';
+  } else if (freshness.ageSessions <= f.staleMaxSessions) {
+    freshness.tier = 'aged';
+    reason('DATA_AGED');
+  } else {
+    freshness.tier = 'stale-unusable';
+    reason('DATA_STALE_UNUSABLE');
+  }
+  freshness.stale = freshness.tier !== 'fresh';
+
+  // 6 · components. Candle-derived evaluation requires trusted, correlated
+  // candles; holding-series fail-closed integrity suppresses everything (S1-R9).
+  var trusted = haveCandles && fpOk && !failClosedIntegrity;
+  var close = trusted ? candles[candles.length - 1].close : null;
+
+  // — SMA Alignment (all-or-nothing; sma200-present availability, defensively
+  //   requiring all four finite plus a trusted close)
+  var smaC = comps[0];
+  var smaT = policy.componentTables.sma.bands;
+  var smaVals = { sma20: snap.sma20, sma50: snap.sma50, sma150: snap.sma150, sma200: snap.sma200 };
+  for (var sk in smaVals) {
+    if (!_ts1FiniteNum(smaVals[sk])) { smaC.missingFields.push(sk); miss(sk); }
+  }
+  if (trusted && smaC.missingFields.length === 0) {
+    smaC.available = true;
+    smaC.availablePoints = smaC.maxPoints;
+    var e = 0;
+    if (close > snap.sma20) e += smaT.above20;
+    if (close > snap.sma50) e += smaT.above50;
+    if (close > snap.sma150) e += smaT.above150;
+    if (close > snap.sma200) e += smaT.above200;
+    if (snap.sma50 > snap.sma150 && snap.sma150 > snap.sma200) e += smaT.stacked;
+    smaC.earned = e;
+  }
+
+  // — Relative Strength (fractional availability per §5.7; weights of
+  //   surviving benchmarks are NEVER redistributed)
+  var rsC = comps[1];
+  var rsT = policy.componentTables.rs;
+  var rsInputs = [
+    { key: 'rsSpy', weight: rsT.weights.spy, value: snap.rsSpy },
+    { key: 'rsQqq', weight: rsT.weights.qqq, value: snap.rsQqq },
+    { key: 'rsSector', weight: rsT.weights.sector, value: snap.rsSector }
+  ];
+  var sumW = 0, rsEarned = 0;
+  for (var ri = 0; ri < rsInputs.length; ri++) {
+    var rin = rsInputs[ri];
+    if (_ts1FiniteNum(rin.value)) {
+      sumW += rin.weight;
+      rsEarned += _ts1BandLookup(rsT.bands, rin.value, 'fraction') * rin.weight * rsT.maxPoints;
+    } else {
+      rsC.missingFields.push(rin.key);
+      miss(rin.key);
+    }
+  }
+  if (sumW > 0) {
+    rsC.available = true;
+    rsC.availablePoints = rsT.maxPoints * sumW;
+    rsC.earned = rsEarned;
+    if (sumW < 1) rsC.subCoverage = sumW;
+  }
+  if (!_ts1FiniteNum(snap.rsSector) && (_ts1FiniteNum(snap.rsSpy) || _ts1FiniteNum(snap.rsQqq))) {
+    reason('RS_SECTOR_MISSING');
+  }
+
+  // — 52-week-high proximity (D-a semantics) with D6 stretch penalty
+  var hiC = comps[2];
+  var hiT = policy.componentTables.high52w;
+  var atr = trusted ? _ts1Atr14(candles, policy) : null;
+  if (trusted && atr === null) reason('ATR_UNAVAILABLE');
+  if (!_ts1FiniteNum(snap.high52w)) { hiC.missingFields.push('high52w'); miss('high52w'); }
+  if (atr === null) hiC.missingFields.push('atr14');
+  if (trusted && atr !== null && _ts1FiniteNum(snap.high52w) && snap.high52w > 0 && _ts1FiniteNum(snap.sma20)) {
+    hiC.available = true;
+    hiC.availablePoints = hiC.maxPoints;
+    var dPct = 100 * (snap.high52w - close) / snap.high52w;
+    if (dPct < 0) dPct = 0;
+    var base = _ts1BandLookup(hiT.bands, dPct, 'points');
+    var stretch = (close - snap.sma20) / atr;
+    var factor = 1;
+    if (stretch > policy.stretch.start) {
+      factor = 1 - Math.min(1, (stretch - policy.stretch.start) / (policy.stretch.full - policy.stretch.start));
+    }
+    var earned3 = base * factor;
+    hiC.earned = earned3 > 0 ? earned3 : 0;
+  }
+
+  // — Volume Confirmation (D4: zero is invalid, never bearish; P4: fractional valid)
+  var volC = comps[3];
+  var volT = policy.componentTables.volume;
+  if (trusted) {
+    var zeroSeen = false;
+    var volValid = [];
+    for (var vi = 0; vi < candles.length; vi++) {
+      var vv = candles[vi].volume;
+      if (vv === 0) zeroSeen = true;
+      if (_ts1FiniteNum(vv) && vv > 0) volValid.push(vv);
+    }
+    if (zeroSeen) reason('VOLUME_AMBIGUOUS_ZERO');
+    if (volValid.length >= policy.thresholds.volumeMinObs) {
+      var longWin = volValid.slice(volValid.length - volT.longWindow);
+      var shortWin = volValid.slice(volValid.length - volT.shortWindow);
+      var mean = function (arr) { var s2 = 0; for (var x = 0; x < arr.length; x++) s2 += arr[x]; return s2 / arr.length; };
+      var volRatio = mean(shortWin) / mean(longWin);
+      volC.available = true;
+      volC.availablePoints = volC.maxPoints;
+      volC.earned = _ts1BandLookup(volT.bands, volRatio, 'points');
+    } else {
+      volC.missingFields.push('volumeObs');
+    }
+  } else {
+    volC.missingFields.push('volumeObs');
+  }
+
+  // 7 · coverage floor (D1 / SC-T1-R8) + whole-result gates
+  var availableTotal = comps[0].availablePoints + comps[1].availablePoints + comps[2].availablePoints + comps[3].availablePoints;
+  var smaOk = policy.requireSma ? smaC.available : true;
+  if (!smaOk) reason('SMA_COMPONENT_UNAVAILABLE');
+  if (availableTotal < policy.coverageFloor) reason('BELOW_COVERAGE_FLOOR');
+
+  var eligible = smaOk && availableTotal >= policy.coverageFloor &&
+                 trusted && freshness.tier !== 'stale-unusable';
+  if (!eligible) return finish(null, null);
+
+  var raw = comps[0].earned + comps[1].earned + comps[2].earned + comps[3].earned;
+  return finish(100 * raw / availableTotal, raw);
+}
+
+// ── Caller lane (gated; NOT invoked by any product flow) ─────────────────────
+
+// Adapter: same scan-path market-data endpoint the product already uses; keeps
+// meta for market identity + provenance. adjustedBasis: Polygon responses are
+// 'explicit' (netlify/functions/market-data.js requests adjusted=true —
+// repo-verifiable basis). Yahoo split-adjustment is NOT verifiably established
+// by a recorded provenance artifact in this slice ⇒ 'unknown' ⇒ the builder
+// fails closed (ratified rev-2 consequence; do not assume).
+async function _ts1FetchRawSeries(symbol) {
+  var sym = String(symbol || '').trim().toUpperCase();
+  if (!sym) return { error: 'BAD_SYMBOL' };
+  var url = '/.netlify/functions/market-data?symbol=' + encodeURIComponent(sym) + '&interval=1d&range=1y';
+  var res;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+  } catch (err) {
+    return { error: 'FETCH_FAILED: ' + (err && err.message ? err.message : String(err)) };
+  }
+  if (!res.ok) return { error: 'HTTP ' + res.status };
+  var data;
+  try { data = await res.json(); } catch (err2) { return { error: 'BAD_JSON' }; }
+  var result = data && data.chart && data.chart.result && data.chart.result[0];
+  if (!result) return { error: 'NO_CHART_RESULT' };
+  var meta = result.meta || {};
+  var provider = meta._provider === 'polygon' ? 'polygon' : 'yahoo';
+  var adjustedBasis = provider === 'polygon' ? 'explicit' : 'unknown';
+  var market = null, marketBasis = null;
+  var tz = meta.exchangeTimezoneName;
+  if (tz === 'America/New_York') { market = 'US'; marketBasis = 'provider-meta'; }
+  else if (tz === 'Asia/Jerusalem') { market = 'TASE'; marketBasis = 'provider-meta'; }
+  else if (tz === undefined || tz === null || tz === '') {
+    // .TA fallback ONLY when provider metadata is absent (rev-2); anything
+    // else stays unestablished and fails closed at the caller below.
+    if (/\.TA$/.test(sym)) { market = 'TASE'; marketBasis = 'symbol-suffix-fallback'; }
+  }
+  var ts = result.timestamp || [];
+  var q = (result.indicators && result.indicators.quote && result.indicators.quote[0]) || {};
+  var bars = [];
+  for (var i = 0; i < ts.length; i++) {
+    bars.push({
+      date: new Date(ts[i] * 1000).toISOString().slice(0, 10),
+      open: q.open ? q.open[i] : null, high: q.high ? q.high[i] : null,
+      low: q.low ? q.low[i] : null, close: q.close ? q.close[i] : null,
+      volume: q.volume ? q.volume[i] : null
+    });
+  }
+  return { symbol: sym, market: market, marketBasis: marketBasis, currency: meta.currency === undefined ? null : meta.currency, provider: provider, adjustedBasis: adjustedBasis, bars: bars };
+}
+
+function _ts1SectorEtfFor(symbol) {
+  // Read-only pt_tickers parse (approved mapping source); never writes.
+  try {
+    var arr = JSON.parse(localStorage.getItem('pt_tickers'));
+    if (!Array.isArray(arr)) return null;
+    for (var i = 0; i < arr.length; i++) {
+      var rec = arr[i];
+      if (rec && rec.symbol === symbol) {
+        return (typeof rec.sectorEtf === 'string' && rec.sectorEtf.trim() !== '') ? rec.sectorEtf.trim().toUpperCase() : null;
+      }
+    }
+  } catch (e) { /* unreadable mapping = no sector benchmark */ }
+  return null;
+}
+
+// Sole entry point. Strict client gate, checked first, zero side effects when
+// off. computedAt is minted HERE (the caller is the injector — D2/§5.5);
+// builder and scorer never source time. Sidecar is memory-only.
+async function runTechScoreV1(symbol) {
+  if (window.PT_ENABLE_TECH_SCORE !== true) {
+    return { status: 'GATE_OFF', reason: 'GATE_OFF' };
+  }
+  var computedAt = new Date().toISOString();
+  var policy = TS1_POLICY_V1;
+
+  var raw = await _ts1FetchRawSeries(symbol);
+  if (raw.error) return { status: 'UNAVAILABLE', reason: raw.error };
+  if (raw.market !== 'US' && raw.market !== 'TASE') {
+    return { status: 'UNAVAILABLE', reason: 'SERIES_PROVENANCE_UNESTABLISHED', detail: 'market identity unestablished' };
+  }
+  var norm = _ts1NormalizeCandles(raw, computedAt, policy);
+  if (!norm.ok) return { status: 'UNAVAILABLE', reason: norm.error };
+  var holding = norm.series;
+
+  var benchmarks = { spy: null, qqq: null, sector: null };
+  if (holding.market !== 'TASE') {
+    var sectorEtf = _ts1SectorEtfFor(holding.symbol);
+    var names = { spy: 'SPY', qqq: 'QQQ', sector: sectorEtf };
+    for (var key in names) {
+      if (!names[key]) continue;
+      var braw = await _ts1FetchRawSeries(names[key]);
+      if (braw.error || (braw.market !== 'US' && braw.market !== 'TASE')) continue;
+      var bnorm = _ts1NormalizeCandles(braw, computedAt, policy);
+      if (bnorm.ok) benchmarks[key] = bnorm.series;
+    }
+  }
+
+  var snap = _ts1BuildSnapshot(holding, benchmarks, policy, computedAt);
+  var scored = scoreTickerTech(snap, holding.candles, computedAt, policy);
+
+  window._techScoreDebug = window._techScoreDebug || {};
+  window._techScoreDebug[holding.symbol] = { result: scored, snap: snap, computedAt: computedAt };
+  return scored;
+}
+
+// ═══ end SCORE-V1-S1 technical score ══════════════════════════════════
+
 // ═══ services/research-evidence-client.js — inlined (EG-20E-2A) ═══════
 // Verbatim copy of the committed services/research-evidence-client.js (dd566bd),
 // minus the leading 'use strict' directive (a no-op mid-script). The dual-export

@@ -189,7 +189,8 @@ const CLIENT_GATES = [
   'PT_ENABLE_PORTFOLIO_LIVE_PRICES',
   'PT_ENABLE_QUERY_SPLIT_DEEPDIVE',
   'PT_ENABLE_SEC_EVIDENCE_STORE_CLIENT',
-  'PT_ENABLE_FUND_FACTS_READ_CLIENT'
+  'PT_ENABLE_FUND_FACTS_READ_CLIENT',
+  'PT_ENABLE_TECH_SCORE'
 ];
 
 const SERVER_GATES_DIRECT = [
@@ -2764,6 +2765,511 @@ function phaseNeedsAttention() {
   }
 }
 
+// Phase 11 - SCORE-V1-S1 Technical Score (ratified rev-2 contract).
+// Acceptance package fixtures: band boundaries, 15-subset truth table,
+// continuity/unit-break (real NXSN.TA failure shape) incl. edge candidates
+// per the 2026-08-11 evaluate-what-exists ruling, ratified normalization +
+// no-within-RS-redistribution, calendar/session predicate incl. the TASE
+// 2026-01-04 transition boundary, phantom-bar exclusion, A4 volume family,
+// freshness tiers + R4, snapshotAsOf builder-only ownership, golden
+// fingerprint vector, correlation fail-closed, rsMinPairedCloses invariance,
+// determinism, isolation. Policy validity is asserted against the shipped
+// TS1_POLICY_V1 constant (caller-side validation per rev-2 §3.13).
+function phaseTechScore() {
+  header('Phase 12 - Technical Score (SCORE-V1-S1)');
+
+  const content = read('index.html');
+  if (content === null) {
+    fail('tech-score', 'index.html is missing');
+    return;
+  }
+
+  const FN_NAMES = [
+    '_ts1FiniteNum', '_ts1Fnv1a', '_ts1SymbolValid', '_ts1CanonicalString',
+    '_ts1ExchangeLocalParts', '_ts1RuleFor', '_ts1IsTradingSession',
+    '_ts1SessionCloseMinutes', '_ts1SessionCompleted', '_ts1AgeSessions',
+    '_ts1NormalizeCandles', '_ts1Median', '_ts1ValidateContinuity',
+    '_ts1Sma', '_ts1High52w', '_ts1RsValue', '_ts1BuildSnapshot',
+    '_ts1Atr14', '_ts1BandLookup', 'scoreTickerTech'
+  ];
+  let api;
+  try {
+    const pieces = {
+      policySrc: extractVarSource(content, 'TS1_POLICY_V1'),
+      failClosedSrc: extractVarSource(content, 'TS1_FAILCLOSED_INTEGRITY_CODES')
+    };
+    for (const n of FN_NAMES) {
+      pieces[n] = extractFunctionSource(content, n);
+    }
+    const missingPieces = Object.keys(pieces).filter(function (k) { return !pieces[k]; });
+    if (missingPieces.length > 0) {
+      fail('tech-score', 'could not extract from index.html: ' + missingPieces.join(', '));
+      return;
+    }
+    // eslint-disable-next-line no-new-func
+    const factory = new Function(
+      pieces.policySrc + '\n' + pieces.failClosedSrc + '\n' +
+      FN_NAMES.map(function (n) { return pieces[n]; }).join('\n') +
+      '\nreturn { policy: TS1_POLICY_V1, ' +
+      FN_NAMES.map(function (n) { return n + ': ' + n; }).join(', ') + ' };'
+    );
+    api = factory();
+  } catch (e) {
+    fail('tech-score', 'factory build error: ' + e.message);
+    return;
+  }
+
+  let total = 0;
+  let okCount = 0;
+  function check(name, cond) {
+    total += 1;
+    if (cond) { okCount += 1; } else { fail('tech-score', 'assertion failed: ' + name); }
+  }
+  function approx(a, b, eps) {
+    return typeof a === 'number' && isFinite(a) && Math.abs(a - b) < (eps === undefined ? 1e-9 : eps);
+  }
+  function clonePolicy() { return JSON.parse(JSON.stringify(api.policy)); }
+
+  const POLICY = api.policy;
+  const COMPUTED_AT = '2026-08-10T21:30:00.000Z';
+
+  // Sequential weekday date generator ending at endDate (scorer fixtures only
+  // need syntactically valid, consistent dates — the pure scorer never
+  // consults the calendar).
+  function datesEnding(endDate, n) {
+    const out = [];
+    let cur = new Date(endDate + 'T00:00:00Z');
+    while (out.length < n) {
+      const dow = cur.getUTCDay();
+      if (dow !== 0 && dow !== 6) out.push(cur.toISOString().slice(0, 10));
+      cur = new Date(cur.getTime() - 86400000);
+    }
+    return out.reverse();
+  }
+  function mkCandles(n, opts) {
+    opts = opts || {};
+    const ds = datesEnding(opts.endDate || '2026-08-07', n);
+    return ds.map(function (d, i) {
+      const c = (opts.closes && opts.closes[i] !== undefined) ? opts.closes[i] : 100;
+      const v = (opts.volumes && opts.volumes[i] !== undefined) ? opts.volumes[i]
+        : (opts.volume !== undefined ? opts.volume : 1000000);
+      return { date: d, open: c, high: c + 1, low: c - 1, close: c, volume: v };
+    });
+  }
+  function snapFor(sym, market, candles, over) {
+    const dataAsOf = candles[candles.length - 1].date;
+    const F = api._ts1CanonicalString(sym, market, dataAsOf, candles);
+    const base = {
+      symbol: sym, market: market,
+      sma20: 95, sma50: 96, sma150: 90, sma200: 85, high52w: 105,
+      rsSpy: 26, rsQqq: 26, rsSector: 26,
+      dataAsOf: dataAsOf, snapshotAsOf: COMPUTED_AT, ageSessions: 0,
+      currency: 'USD', provider: 'polygon', adjustedBasis: 'explicit',
+      seriesFingerprint: F === null ? null : api._ts1Fnv1a(F), integrity: []
+    };
+    return Object.assign(base, over || {});
+  }
+  function run(snap, candles, policy) {
+    return api.scoreTickerTech(snap, candles, COMPUTED_AT, policy || POLICY);
+  }
+  function comp(res, id) {
+    for (const c of res.components) { if (c.id === id) return c; }
+    return null;
+  }
+
+  // Standard fixture: 30 candles flat 100, last-5 volume surge -> volRatio
+  // 1.615 -> V band > 1.5 -> 15. ATR = 2. Full snap earns S35 R30 A20 V15.
+  const VOL_SURGE = [];
+  for (let i = 0; i < 30; i++) VOL_SURGE.push(i >= 25 ? 2000000 : 1000000);
+  const STD = mkCandles(30, { volumes: VOL_SURGE });
+
+  // ── F1: band boundaries (every edge both sides) ─────────────────────────
+  (function () {
+    const rsB = POLICY.componentTables.rs.bands;
+    const edges = [
+      [-10, 0], [-10 + 1e-9, 0.25], [0, 0.25], [1e-9, 0.6],
+      [10, 0.6], [10 + 1e-9, 0.85], [25, 0.85], [25 + 1e-9, 1], [1000, 1]
+    ];
+    for (const [v, f] of edges) check('rs band at ' + v, api._ts1BandLookup(rsB, v, 'fraction') === f);
+    const hiB = POLICY.componentTables.high52w.bands;
+    const hiE = [[5, 20], [5 + 1e-9, 14], [15, 14], [15 + 1e-9, 8], [30, 8], [30 + 1e-9, 3], [50, 3], [50 + 1e-9, 0], [99, 0]];
+    for (const [v, p] of hiE) check('high52w band at ' + v, api._ts1BandLookup(hiB, v, 'points') === p);
+    const voB = POLICY.componentTables.volume.bands;
+    const voE = [[0.5, 0], [0.5 + 1e-9, 4], [0.8, 4], [0.8 + 1e-9, 8], [1.2, 8], [1.2 + 1e-9, 11], [1.5, 11], [1.5 + 1e-9, 15], [9, 15]];
+    for (const [v, p] of voE) check('volume band at ' + v, api._ts1BandLookup(voB, v, 'points') === p);
+  })();
+
+  // ── F2: 15-subset truth table (ratified SC-T1 §2 under S1 numbers) ──────
+  (function () {
+    // S is disabled via sma50/150/200 only: sma20 stays present because the
+    // A component's D6 stretch guard legitimately needs it — mirroring the
+    // real 199-candle case (short listing has sma20, lacks sma200).
+    const OFF = {
+      S: { sma50: null, sma150: null, sma200: null },
+      R: { rsSpy: null, rsQqq: null, rsSector: null },
+      A: { high52w: null }
+    };
+    const rows = [
+      ['V', 15, false], ['A', 20, false], ['R', 30, false], ['S', 35, false],
+      ['AV', 35, false], ['RV', 45, false], ['SV', 50, false], ['RA', 50, false],
+      ['SA', 55, true], ['RAV', 65, false], ['SR', 65, true], ['SAV', 70, true],
+      ['SRV', 80, true], ['SRA', 85, true], ['SRAV', 100, true]
+    ];
+    for (const [subset, avail, numeric] of rows) {
+      const over = {};
+      if (subset.indexOf('S') === -1) Object.assign(over, OFF.S);
+      if (subset.indexOf('R') === -1) Object.assign(over, OFF.R);
+      if (subset.indexOf('A') === -1) Object.assign(over, OFF.A);
+      const candles = subset.indexOf('V') === -1 ? mkCandles(30, { volume: null }) : STD;
+      const res = run(snapFor('TT', 'US', candles, over), candles);
+      check('truth ' + subset + ' availablePoints ' + avail, res.availablePoints === avail);
+      check('truth ' + subset + ' score ' + (numeric ? 'numeric' : 'null'),
+        numeric ? typeof res.score === 'number' : res.score === null);
+      if (subset.indexOf('S') === -1) check('truth ' + subset + ' SMA code', res.reasonCodes.indexOf('SMA_COMPONENT_UNAVAILABLE') !== -1);
+      if (avail < 55) check('truth ' + subset + ' floor code', res.reasonCodes.indexOf('BELOW_COVERAGE_FLOOR') !== -1);
+    }
+    // fractional variants (sector RS missing)
+    const sr = run(snapFor('TT', 'US', mkCandles(30, { volume: null }), { high52w: null, rsSector: null }), mkCandles(30, { volume: null }));
+    check('fractional S+R avail 57.5', sr.availablePoints === 57.5);
+    check('fractional S+R numeric', typeof sr.score === 'number');
+    check('fractional S+R RS_SECTOR_MISSING', sr.reasonCodes.indexOf('RS_SECTOR_MISSING') !== -1);
+    check('fractional S+R subCoverage 0.75', comp(sr, 'rs').subCoverage === 0.75);
+    const rav = run(snapFor('TT', 'US', STD, { sma50: null, sma150: null, sma200: null, rsSector: null }), STD);
+    check('fractional R+A+V 57.5 null (no SMA)', rav.availablePoints === 57.5 && rav.score === null &&
+      rav.reasonCodes.indexOf('SMA_COMPONENT_UNAVAILABLE') !== -1);
+  })();
+
+  // ── F5: ratified normalization + no within-RS redistribution ────────────
+  (function () {
+    // Config N: S=27 (no stacking), A=8 (d=20%), V=8 (volRatio 1), R per rs
+    const flat = mkCandles(30);
+    const baseOver = { sma50: 88, sma150: 90, sma200: 85, high52w: 125, rsSpy: 5, rsQqq: 15, rsSector: 26 };
+    const full = run(snapFor('NM', 'US', flat, baseOver), flat);
+    const fullRaw = 27 + (0.6 * 0.5 * 30) + (0.85 * 0.25 * 30) + (1 * 0.25 * 30) + 8 + 8; // 65.875
+    check('norm full avail 100', full.availablePoints === 100);
+    check('norm full raw', approx(full.rawScore, fullRaw));
+    check('norm full score === raw at 100 avail', approx(full.score, full.rawScore));
+    const noSector = run(snapFor('NM', 'US', flat, Object.assign({}, baseOver, { rsSector: null })), flat);
+    check('norm 92.5 avail', noSector.availablePoints === 92.5);
+    check('norm no-redistribution: spy+qqq earned unchanged',
+      approx(comp(noSector, 'rs').earned, comp(full, 'rs').earned - 7.5));
+    check('norm 92.5 raw = full raw - 7.5', approx(noSector.rawScore, fullRaw - 7.5));
+    check('norm 92.5 score = 100*raw/92.5', approx(noSector.score, 100 * (fullRaw - 7.5) / 92.5));
+    check('norm 92.5 score differs from raw (normalized)', !approx(noSector.score, noSector.rawScore));
+    // TASE 70-available case: S35 + A20 + V8, raw 63 -> score exactly 90
+    const taseC = mkCandles(30);
+    const tase = run(snapFor('TL', 'TASE', taseC, { rsSpy: null, rsQqq: null, rsSector: null }), taseC);
+    check('norm TASE avail 70', tase.availablePoints === 70);
+    check('norm TASE raw 63', approx(tase.rawScore, 63));
+    check('norm TASE score exactly 90', tase.score === 90);
+    check('norm TASE no RS_SECTOR_MISSING when all rs null', tase.reasonCodes.indexOf('RS_SECTOR_MISSING') === -1);
+  })();
+
+  // ── F3: continuity — NXSN shape, benchmark scope, spikes, edges ─────────
+  (function () {
+    // Real NXSN.TA failure shape (x102.6 sustained level shift, ILS->agorot)
+    const closes = [];
+    for (let i = 0; i < 10; i++) closes.push(3.0 + i * 0.01);
+    for (let i = 0; i < 10; i++) closes.push(308 + i);
+    const nx = mkCandles(20, { closes: closes });
+    const integ = api._ts1ValidateContinuity('NXSN.TA', nx, POLICY);
+    check('NXSN shape: one confirmed discontinuity',
+      integ.length === 1 && integ[0].code === 'SERIES_UNIT_DISCONTINUITY');
+    check('NXSN shape: breakDate is first shifted candle', integ[0].breakDate === nx[10].date);
+    check('NXSN shape: observedRatio ~x100 scale break (real observed x102.6)',
+      integ[0].observedRatio > 90 && integ[0].observedRatio < 110);
+    const holding = { symbol: 'NXSN.TA', market: 'TASE', candles: nx, dataAsOf: nx[19].date,
+      provenance: { currency: 'ILA', provider: 'yahoo', adjustedBasis: 'explicit', marketBasis: 'provider-meta' } };
+    const snap = api._ts1BuildSnapshot(holding, {}, POLICY, COMPUTED_AT);
+    check('NXSN builder: all derived null', snap.sma20 === null && snap.high52w === null && snap.rsSpy === null);
+    check('NXSN builder: fingerprint still stamped', typeof snap.seriesFingerprint === 'string');
+    const res = api.scoreTickerTech(snap, nx, COMPUTED_AT, POLICY);
+    check('NXSN scorer: score null', res.score === null && res.rawScore === null);
+    check('NXSN scorer: code echoed', res.reasonCodes.indexOf('SERIES_UNIT_DISCONTINUITY') !== -1);
+    check('NXSN scorer: volume suppressed too (R9)', comp(res, 'volume').available === false);
+    check('NXSN scorer: coverage metadata returned', res.components.length === 4 && res.availablePoints === 0);
+    // Benchmark-scope break: rs null only, holding still scored. 210 candles
+    // so the builder can compute sma150/200 (S must be available for D1).
+    const clean210 = mkCandles(210);
+    const brokenCloses = [];
+    for (let i = 0; i < 105; i++) brokenCloses.push(100);
+    for (let i = 0; i < 105; i++) brokenCloses.push(10250);
+    const benchBroken = { symbol: 'BSPY', candles: mkCandles(210, { closes: brokenCloses }),
+      provenance: { adjustedBasis: 'explicit' } };
+    const benchClean = { symbol: 'BQQQ', candles: clean210, provenance: { adjustedBasis: 'explicit' } };
+    const hold2 = { symbol: 'HB', market: 'US', candles: clean210, dataAsOf: clean210[209].date,
+      provenance: { currency: 'USD', provider: 'polygon', adjustedBasis: 'explicit', marketBasis: 'provider-meta' } };
+    const snap2 = api._ts1BuildSnapshot(hold2, { spy: benchBroken, qqq: benchClean, sector: null }, POLICY, COMPUTED_AT);
+    check('bench break: rsSpy null', snap2.rsSpy === null);
+    check('bench break: rsQqq computed', typeof snap2.rsQqq === 'number');
+    check('bench break: integrity names BSPY', snap2.integrity.some(function (e) {
+      return e.code === 'SERIES_UNIT_DISCONTINUITY' && e.series === 'BSPY';
+    }));
+    check('bench break: holding derived fields intact', typeof snap2.sma20 === 'number');
+    const res2 = api.scoreTickerTech(snap2, clean210, COMPUTED_AT, POLICY);
+    check('bench break: holding still scored', typeof res2.score === 'number');
+    check('bench break: code echoed without fail-close', res2.reasonCodes.indexOf('SERIES_UNIT_DISCONTINUITY') !== -1);
+    // Transient spike reverts -> advisory only
+    const spikeCloses = [];
+    for (let i = 0; i < 20; i++) spikeCloses.push(i === 10 ? 2500 : 100);
+    const spikeInteg = api._ts1ValidateContinuity('SPK', mkCandles(20, { closes: spikeCloses }), POLICY);
+    check('spike: no confirmed discontinuity', !spikeInteg.some(function (e) { return e.code === 'SERIES_UNIT_DISCONTINUITY'; }));
+    check('spike: advisory emitted', spikeInteg.some(function (e) { return e.code === 'SERIES_SPIKE_SUSPECT'; }));
+    // Ratio boundaries
+    const r20 = api._ts1ValidateContinuity('B20', mkCandles(12, { closes: [100, 100, 100, 100, 100, 100, 2000, 2000, 2000, 2000, 2000, 2000] }), POLICY);
+    check('ratio exactly 20 confirms', r20.some(function (e) { return e.code === 'SERIES_UNIT_DISCONTINUITY'; }));
+    const r1999 = api._ts1ValidateContinuity('B19', mkCandles(12, { closes: [100, 100, 100, 100, 100, 100, 1999, 1999, 1999, 1999, 1999, 1999] }), POLICY);
+    check('ratio 19.99 no candidate', r1999.length === 0);
+    const rInv = api._ts1ValidateContinuity('BI', mkCandles(12, { closes: [2000, 2000, 2000, 2000, 2000, 2000, 100, 100, 100, 100, 100, 100] }), POLICY);
+    check('ratio exactly 1/20 confirms', rInv.some(function (e) { return e.code === 'SERIES_UNIT_DISCONTINUITY'; }));
+    // Edge candidates per 2026-08-11 ruling (a): evaluate what exists
+    const leftEdge = api._ts1ValidateContinuity('LE', mkCandles(8, { closes: [100, 10250, 10250, 10250, 10250, 10250, 10250, 10250] }), POLICY);
+    check('left-edge break confirms (evaluate-what-exists)',
+      leftEdge.some(function (e) { return e.code === 'SERIES_UNIT_DISCONTINUITY'; }));
+    const rightEdge = api._ts1ValidateContinuity('RE', mkCandles(8, { closes: [100, 100, 100, 100, 100, 100, 100, 10250] }), POLICY);
+    check('right-edge break confirms (evaluate-what-exists)',
+      rightEdge.some(function (e) { return e.code === 'SERIES_UNIT_DISCONTINUITY'; }));
+  })();
+
+  // ── F14/F15: golden vector, correlation, RS interval boundary ───────────
+  (function () {
+    const gv = [
+      { date: '2026-08-05', open: 10, high: 10.5, low: 9.9, close: 10.25, volume: 1000 },
+      { date: '2026-08-06', open: 10.25, high: 10.6, low: 10.1, close: 10.5, volume: 1234.5678 },
+      { date: '2026-08-07', open: 10.5, high: 11, low: 10.4, close: 10.75, volume: null }
+    ];
+    const EXPECT_F = 'v1|GV|US|2026-08-07|3|2026-08-05,10,10.5,9.9,10.25,1000|2026-08-06,10.25,10.6,10.1,10.5,1234.5678|2026-08-07,10.5,11,10.4,10.75,null';
+    const F = api._ts1CanonicalString('GV', 'US', '2026-08-07', gv);
+    check('golden vector canonical string byte-exact', F === EXPECT_F);
+    check('golden vector FNV-1a digest', api._ts1Fnv1a(F) === 'df205fd9');
+    check('symbol with reserved delimiter fails closed pre-fingerprint',
+      api._ts1CanonicalString('BAD|SYM', 'US', '2026-08-07', gv) === null &&
+      api._ts1CanonicalString('BAD,SYM', 'US', '2026-08-07', gv) === null);
+    check('market outside closed enum fails', api._ts1CanonicalString('GV', 'UK', '2026-08-07', gv) === null);
+    // Correlation: valid pair / wrong ticker / wrong session
+    const cA = mkCandles(30), cB = mkCandles(30, { closes: Array(30).fill(55) });
+    const okRes = run(snapFor('CA', 'US', cA), cA);
+    check('correlation valid pair scored', typeof okRes.score === 'number');
+    const wrongTicker = run(snapFor('CB', 'US', cB), cA);
+    check('wrong-ticker series -> SNAPSHOT_SERIES_MISMATCH + null',
+      wrongTicker.score === null && wrongTicker.reasonCodes.indexOf('SNAPSHOT_SERIES_MISMATCH') !== -1);
+    check('wrong-ticker coverage metadata returned', wrongTicker.components.length === 4);
+    const wrongSession = run(snapFor('CA', 'US', cA), cA.slice(0, 29));
+    check('wrong-session series -> mismatch + null',
+      wrongSession.score === null && wrongSession.reasonCodes.indexOf('SNAPSHOT_SERIES_MISMATCH') !== -1);
+    check('fingerprint deterministic across runs',
+      api._ts1Fnv1a(api._ts1CanonicalString('CA', 'US', cA[29].date, cA)) ===
+      api._ts1Fnv1a(api._ts1CanonicalString('CA', 'US', cA[29].date, cA)));
+    // RS interval boundary: 63 paired closes -> null; 64 -> 63 intervals
+    function series(sym, n, riser) {
+      const closes = [];
+      for (let i = 0; i < n; i++) closes.push(riser ? 100 + i * (10 / (n - 1)) : 100);
+      return { symbol: sym, candles: mkCandles(n, { closes: closes }), provenance: { adjustedBasis: 'explicit' } };
+    }
+    const h63 = series('H', 63, true), b63 = series('B', 63, false);
+    const h63hold = { symbol: 'H', market: 'US', candles: h63.candles, dataAsOf: h63.candles[62].date, provenance: h63.provenance };
+    check('63 paired closes -> rs null', api._ts1RsValue(h63hold, b63, POLICY).value === null);
+    const h64 = series('H', 64, true), b64 = series('B', 64, false);
+    const h64hold = { symbol: 'H', market: 'US', candles: h64.candles, dataAsOf: h64.candles[63].date, provenance: h64.provenance };
+    const rs64 = api._ts1RsValue(h64hold, b64, POLICY);
+    check('64 paired closes -> rs over exactly 63 intervals (+10pp)', approx(rs64.value, 10, 1e-6));
+  })();
+
+  // ── F16: calendar predicate, transition boundary, sessions, ages ────────
+  (function () {
+    const US = POLICY.calendar.US, TASE = POLICY.calendar.TASE;
+    check('US 2026-07-03 holiday false', api._ts1IsTradingSession('2026-07-03', US) === false);
+    check('US 2026-06-19 holiday false', api._ts1IsTradingSession('2026-06-19', US) === false);
+    check('US 2026-08-07 Friday true', api._ts1IsTradingSession('2026-08-07', US) === true);
+    check('US 2026-08-08 Saturday false', api._ts1IsTradingSession('2026-08-08', US) === false);
+    check('US outside coverage null (before)', api._ts1IsTradingSession('2024-12-31', US) === null);
+    check('US outside coverage null (after)', api._ts1IsTradingSession('2028-01-03', US) === null);
+    // TASE transition boundary (ratified fixture)
+    check('TASE 2025-12-28 Sunday old-era true', api._ts1IsTradingSession('2025-12-28', TASE) === true);
+    check('TASE 2025-12-26 Friday old-era false', api._ts1IsTradingSession('2025-12-26', TASE) === false);
+    check('TASE 2026-01-01 session', api._ts1IsTradingSession('2026-01-01', TASE) === true);
+    check('TASE 2026-01-02 non-session', api._ts1IsTradingSession('2026-01-02', TASE) === false);
+    check('TASE 2026-01-04 non-session', api._ts1IsTradingSession('2026-01-04', TASE) === false);
+    check('TASE 2026-01-05 session', api._ts1IsTradingSession('2026-01-05', TASE) === true);
+    check('TASE 2026-10-27 election closure', api._ts1IsTradingSession('2026-10-27', TASE) === false);
+    check('TASE 2026-04-21 closure', api._ts1IsTradingSession('2026-04-21', TASE) === false);
+    // Session completion (injected clocks)
+    check('TASE in-progress Monday 17:00 local incomplete',
+      api._ts1SessionCompleted('2026-08-10', TASE, '2026-08-10T14:00:00Z') === false);
+    check('TASE Monday 17:45 local complete',
+      api._ts1SessionCompleted('2026-08-10', TASE, '2026-08-10T14:45:00Z') === true);
+    check('US Monday 15:00 ET incomplete',
+      api._ts1SessionCompleted('2026-08-10', US, '2026-08-10T19:00:00Z') === false);
+    check('US Monday 16:05 ET complete',
+      api._ts1SessionCompleted('2026-08-10', US, '2026-08-10T20:05:00Z') === true);
+    check('US early close 2026-11-27 13:30 EST complete',
+      api._ts1SessionCompleted('2026-11-27', US, '2026-11-27T18:30:00Z') === true);
+    check('US early close 2026-11-27 12:30 EST incomplete',
+      api._ts1SessionCompleted('2026-11-27', US, '2026-11-27T17:30:00Z') === false);
+    check('TASE interim 2026-09-28 14:45 local complete',
+      api._ts1SessionCompleted('2026-09-28', TASE, '2026-09-28T11:45:00Z') === true);
+    check('TASE interim 2026-09-28 14:00 local incomplete',
+      api._ts1SessionCompleted('2026-09-28', TASE, '2026-09-28T11:00:00Z') === false);
+    // ageSessions
+    check('age 0 while Monday in progress', api._ts1AgeSessions('2026-08-07', US, '2026-08-10T19:00:00Z') === 0);
+    check('age 1 after Monday close', api._ts1AgeSessions('2026-08-07', US, '2026-08-10T20:05:00Z') === 1);
+    check('age 2 across July-4 holiday weekend', api._ts1AgeSessions('2026-07-01', US, '2026-07-07T00:30:00Z') === 2);
+    check('age null when window exits coverage', api._ts1AgeSessions('2027-12-30', US, '2028-01-04T12:00:00Z') === null);
+    // Policy validity (caller-side, rev-2 §3.13) against shipped constant
+    check('weights sum to 1', approx(POLICY.componentTables.rs.weights.spy + POLICY.componentTables.rs.weights.qqq + POLICY.componentTables.rs.weights.sector, 1));
+    check('component maxPoints sum 100',
+      POLICY.componentTables.sma.maxPoints + POLICY.componentTables.rs.maxPoints +
+      POLICY.componentTables.high52w.maxPoints + POLICY.componentTables.volume.maxPoints === 100);
+    check('agedMax <= staleMax', POLICY.freshness.agedMaxSessions <= POLICY.freshness.staleMaxSessions);
+    check('continuity params 20/5', POLICY.continuity.unitBreakRatio === 20 && POLICY.continuity.persistenceWindow === 5);
+    check('TASE weekRules adjacent at transition',
+      POLICY.calendar.TASE.weekRules[0].to === '2026-01-03' && POLICY.calendar.TASE.weekRules[1].from === '2026-01-04');
+    function monotonic(bands, field, increasing) {
+      for (let i = 1; i < bands.length; i++) {
+        if (increasing ? bands[i][field] < bands[i - 1][field] : bands[i][field] > bands[i - 1][field]) return false;
+      }
+      return true;
+    }
+    check('rs bands monotonic', monotonic(POLICY.componentTables.rs.bands, 'fraction', true));
+    check('high52w bands monotonic', monotonic(POLICY.componentTables.high52w.bands, 'points', false));
+    check('volume bands monotonic', monotonic(POLICY.componentTables.volume.bands, 'points', true));
+  })();
+
+  // ── F-normalizer: session exclusion, phantom bars, A4 volume family ─────
+  (function () {
+    // TASE phantom bar on official closure + in-progress bar + era rules
+    const bars = [
+      { date: '2025-12-26', open: 100, high: 101, low: 99, close: 100, volume: 500 },   // old-era Friday: non-session
+      { date: '2025-12-28', open: 100, high: 101, low: 99, close: 100, volume: 500 },   // old-era Sunday: session
+      { date: '2026-04-20', open: 100, high: 101, low: 99, close: 100, volume: 500 },
+      { date: '2026-04-21', open: 100, high: 100, low: 100, close: 100, volume: 0 },    // phantom on official closure
+      { date: '2026-04-23', open: 100, high: 101, low: 99, close: 100, volume: 500 },
+      { date: '2026-08-10', open: 100, high: 101, low: 99, close: 100, volume: 500 }    // in-progress Monday
+    ];
+    const raw = { symbol: 'TP.TA', market: 'TASE', marketBasis: 'provider-meta', currency: 'ILA',
+      provider: 'yahoo', adjustedBasis: 'explicit', bars: bars };
+    const norm = api._ts1NormalizeCandles(raw, '2026-08-10T14:00:00Z', POLICY);
+    check('normalizer ok', norm.ok === true);
+    const kept = norm.series.candles.map(function (c) { return c.date; }).join(',');
+    check('phantom + non-session + in-progress excluded; Sunday-era kept',
+      kept === '2025-12-28,2026-04-20,2026-04-23');
+    const norm2 = api._ts1NormalizeCandles(raw, '2026-08-10T14:45:00Z', POLICY);
+    check('same bar kept after session close',
+      norm2.series.candles[norm2.series.candles.length - 1].date === '2026-08-10');
+    // A4 volume five-case family (US sessions)
+    const vbars = [
+      { date: '2026-07-27', open: 10, high: 11, low: 9, close: 10, volume: 1000 },
+      { date: '2026-07-28', open: 10, high: 11, low: 9, close: 10, volume: 1234.5 },
+      { date: '2026-07-29', open: 10, high: 11, low: 9, close: 10, volume: 0 },
+      { date: '2026-07-30', open: 10, high: 11, low: 9, close: 10, volume: -5 },
+      { date: '2026-07-31', open: 10, high: 11, low: 9, close: 10, volume: NaN },
+      { date: '2026-08-03', open: 10, high: 11, low: 9, close: 10, volume: null }
+    ];
+    const vraw = { symbol: 'VF', market: 'US', marketBasis: 'provider-meta', currency: 'USD',
+      provider: 'polygon', adjustedBasis: 'explicit', bars: vbars };
+    const vnorm = api._ts1NormalizeCandles(vraw, COMPUTED_AT, POLICY);
+    const vols = vnorm.series.candles.map(function (c) { return c.volume; });
+    check('volume family: int kept', vols[0] === 1000);
+    check('volume family: fractional kept', vols[1] === 1234.5);
+    check('volume family: zero kept as 0', vols[2] === 0);
+    check('volume family: negative -> null', vols[3] === null);
+    check('volume family: NaN -> null', vols[4] === null);
+    check('volume family: null -> null', vols[5] === null);
+  })();
+
+  // ── F7/F8/F9/F10: freshness, D4, short history, provenance ─────────────
+  (function () {
+    for (const [age, tier, numeric] of [[0, 'fresh', true], [1, 'aged', true], [5, 'aged', true], [6, 'stale-unusable', false]]) {
+      const res = run(snapFor('FR', 'US', STD, { ageSessions: age }), STD);
+      check('freshness age ' + age + ' tier ' + tier, res.freshness.tier === tier);
+      check('freshness age ' + age + ' score', numeric ? typeof res.score === 'number' : res.score === null);
+      check('freshness age ' + age + ' stale flag', res.freshness.stale === (tier !== 'fresh'));
+      if (tier === 'aged') check('freshness age ' + age + ' DATA_AGED', res.reasonCodes.indexOf('DATA_AGED') !== -1);
+      if (tier === 'stale-unusable') check('freshness age ' + age + ' DATA_STALE_UNUSABLE', res.reasonCodes.indexOf('DATA_STALE_UNUSABLE') !== -1);
+    }
+    const noAge = run(snapFor('FR', 'US', STD, { ageSessions: null }), STD);
+    check('R4 missing ageSessions -> stale-unusable + null + missingFields',
+      noAge.score === null && noAge.freshness.tier === 'stale-unusable' && noAge.missingFields.indexOf('ageSessions') !== -1);
+    const badTs = run(snapFor('FR', 'US', STD, { snapshotAsOf: 'not-a-date' }), STD);
+    check('R4 malformed snapshotAsOf fails closed', badTs.score === null && badTs.missingFields.indexOf('snapshotAsOf') !== -1);
+    // snapshotAsOf ownership fixtures (builder-only invariant)
+    const holding = { symbol: 'OW', market: 'US', candles: STD, dataAsOf: STD[29].date,
+      provenance: { currency: 'USD', provider: 'polygon', adjustedBasis: 'explicit', marketBasis: 'provider-meta' } };
+    const snapNormal = api._ts1BuildSnapshot(holding, {}, POLICY, COMPUTED_AT);
+    check('builder stamps snapshotAsOf === computedAt', snapNormal.snapshotAsOf === COMPUTED_AT);
+    const badHold = Object.assign({}, holding, { provenance: { adjustedBasis: 'unknown' } });
+    const snapFail = api._ts1BuildSnapshot(badHold, {}, POLICY, COMPUTED_AT);
+    check('builder stamps snapshotAsOf on fail-closed path too', snapFail.snapshotAsOf === COMPUTED_AT);
+    const divergent = run(snapFor('OW', 'US', STD, { snapshotAsOf: '2026-08-09T00:00:00.000Z' }), STD);
+    check('scorer does NOT mismatch on divergent-but-parseable snapshotAsOf (builder-owned)',
+      divergent.reasonCodes.indexOf('SNAPSHOT_SERIES_MISMATCH') === -1);
+    check('scorer carries divergent snapshotAsOf verbatim', divergent.freshness.snapshotAsOf === '2026-08-09T00:00:00.000Z');
+    // D4: zero excluded from windows, code emitted
+    const zeroVols = VOL_SURGE.slice(); zeroVols[27] = 0;
+    const zc = mkCandles(30, { volumes: zeroVols });
+    const zres = run(snapFor('ZV', 'US', zc), zc);
+    check('D4 zero -> VOLUME_AMBIGUOUS_ZERO', zres.reasonCodes.indexOf('VOLUME_AMBIGUOUS_ZERO') !== -1);
+    check('D4 zero excluded but V still available (29 valid obs)', comp(zres, 'volume').available === true);
+    const fewVols = mkCandles(30, { volumes: Array(30).fill(null).map(function (_, i) { return i < 20 ? 1000 : null; }) });
+    const fres = run(snapFor('FV', 'US', fewVols), fewVols);
+    check('20 volume obs -> V unavailable', comp(fres, 'volume').available === false &&
+      comp(fres, 'volume').missingFields.indexOf('volumeObs') !== -1);
+    // Short history: sma200 null (199-candle case) and ATR at 14/15
+    const short = run(snapFor('SH', 'US', STD, { sma200: null }), STD);
+    check('sma200 missing -> S unavailable -> null', short.score === null &&
+      short.reasonCodes.indexOf('SMA_COMPONENT_UNAVAILABLE') !== -1);
+    const c14 = mkCandles(14);
+    const a14 = run(snapFor('AT', 'US', c14), c14);
+    check('14 candles -> ATR_UNAVAILABLE + A unavailable',
+      a14.reasonCodes.indexOf('ATR_UNAVAILABLE') !== -1 && comp(a14, 'high52w').available === false);
+    const c15 = mkCandles(15);
+    const a15 = run(snapFor('AT', 'US', c15), c15);
+    check('15 candles -> ATR computed, A available', comp(a15, 'high52w').available === true);
+    // Provenance fail-closed end-to-end
+    const resFail = api.scoreTickerTech(snapFail, STD, COMPUTED_AT, POLICY);
+    check('unknown adjustedBasis -> fail closed + code',
+      resFail.score === null && resFail.reasonCodes.indexOf('SERIES_PROVENANCE_UNESTABLISHED') !== -1 &&
+      resFail.availablePoints === 0);
+    // NO_SNAPSHOT / NO_VALID_CANDLES
+    const noSnap = api.scoreTickerTech(null, STD, COMPUTED_AT, POLICY);
+    check('NO_SNAPSHOT', noSnap.score === null && noSnap.reasonCodes.indexOf('NO_SNAPSHOT') !== -1);
+    const noCandles = run(snapFor('NC', 'US', STD), []);
+    check('NO_VALID_CANDLES, no mismatch noise', noCandles.score === null &&
+      noCandles.reasonCodes.indexOf('NO_VALID_CANDLES') !== -1 &&
+      noCandles.reasonCodes.indexOf('SNAPSHOT_SERIES_MISMATCH') === -1);
+  })();
+
+  // ── F11/F13: determinism, invariance, isolation scans ───────────────────
+  (function () {
+    const s1 = snapFor('DT', 'US', STD), s2 = snapFor('DT', 'US', STD);
+    const r1 = run(s1, STD), r2 = run(s2, STD);
+    check('byte-identical determinism', JSON.stringify(r1) === JSON.stringify(r2));
+    check('reasonCodes sorted', JSON.stringify(r1.reasonCodes) === JSON.stringify(r1.reasonCodes.slice().sort()));
+    check('missingFields sorted', JSON.stringify(r1.missingFields) === JSON.stringify(r1.missingFields.slice().sort()));
+    check('component order fixed S,R,A,V', r1.components.map(function (c) { return c.id; }).join(',') === 'sma,rs,high52w,volume');
+    const p2 = clonePolicy(); p2.thresholds.rsMinPairedCloses = 999;
+    check('scorer invariant under rsMinPairedCloses mutation (S1-R6)',
+      JSON.stringify(run(snapFor('DT', 'US', STD), STD, p2)) === JSON.stringify(r1));
+    // Isolation: target-source scans with positive controls
+    const scorerSrc = extractFunctionSource(content, 'scoreTickerTech');
+    const forbidden = [/\bfetch\s*\(/, /localStorage/, /document\./, /Date\.now/, /Math\.random/, /GATE_OFF/];
+    const control = 'fetch( localStorage document.x Date.now Math.random GATE_OFF';
+    for (const pat of forbidden) {
+      check('positive control fires: ' + pat.source, pat.test(control));
+      check('scorer source clean of ' + pat.source, !pat.test(scorerSrc));
+    }
+    const callCount = content.split('runTechScoreV1(').length - 1;
+    check('runTechScoreV1 structurally uncalled (comment + definition only)', callCount === 2);
+    check('no GATE_OFF in any scorer fixture output', [r1, r2].every(function (r) {
+      return r.reasonCodes.indexOf('GATE_OFF') === -1;
+    }));
+  })();
+
+  if (okCount === total) {
+    pass(total + ' technical-score assertion(s) passed');
+  }
+}
+
 async function main() {
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
@@ -2779,6 +3285,7 @@ async function main() {
   phaseMoneyMath();
   phaseReconciliation();
   phaseNeedsAttention();
+  phaseTechScore();
 
   console.log('\n=== Summary ===');
 
