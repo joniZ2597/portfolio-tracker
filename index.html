@@ -2152,6 +2152,196 @@ async function runTechScoreV1(symbol) {
 
 // ═══ end SCORE-V1-S1 technical score ══════════════════════════════════
 
+// ═══ P-5 RESEARCH-ON-DEMAND — STEP 1: pure sourcing validator (P5-3 §11 step 1) ═══
+//
+// Promoted from the ratified P5-1/P5-2/P5-3 contracts + LX-1 validator
+// findings under the 2026-08-11 owner promotion rulings:
+//   1. direction labels OUT of MVP — model `direction` (and every other
+//      unapproved model field) is dropped; `summary` is the ONLY
+//      model-authored field.
+//   2. publication date: strict ISO date / T-separated ISO-8601 date-time
+//      only; source `date`, fallback `published_date`; `last_updated` is
+//      NEVER a publication date.
+//   3. an item whose matched search-result entry has no usable title is
+//      REJECTED with reason `missing-title` (promotion change vs LX-1).
+// Match = exact normalized-URL equality against `search_results` only;
+// host-only agreement grants nothing. On match, URL/title/date/publisher
+// come from the matched search-result entry, never the model.
+// Rejection order pinned: malformed → unmatched → duplicate → missing-date
+// → missing-title (an entry missing both date and title reports
+// missing-date). Counts carry exactly eight keys. `scoringImpact = none` is
+// structural: no score/rating/ranking/confidence value exists anywhere.
+//
+// Pure functions only — no DOM, no network, no storage, no clock, nothing
+// invokes them yet (step 2+ adds context/packet/UI under their own GO).
+
+function _p5NormalizeUrl(url) {
+  if (typeof url !== 'string') return null;
+  var trimmed = url.trim();
+  if (trimmed === '') return null;
+  var u;
+  try { u = new URL(trimmed); } catch (e) { return null; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  // WHATWG URL already canonicalizes: lowercase scheme/host, punycode,
+  // default-port strip, space → %20. Percent-encoding case and query order
+  // are deliberately NOT unified and path stays case-sensitive — exactness
+  // biases to false-reject, never false-accept.
+  var host = u.hostname;
+  if (host.indexOf('www.') === 0) host = host.slice(4);
+  if (host === '') return null;
+  var path = u.pathname;
+  if (path.length > 1 && path.charAt(path.length - 1) === '/') path = path.slice(0, -1);
+  var port = u.port ? ':' + u.port : '';
+  return u.protocol + '//' + host + port + path + u.search; // fragment + userinfo dropped
+}
+
+function _p5DomainFromUrl(normUrl) {
+  if (typeof normUrl !== 'string') return null;
+  var u;
+  try { u = new URL(normUrl); } catch (e) { return null; }
+  return u.hostname || null;
+}
+
+function _p5UsableTitle(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  if (typeof entry.title !== 'string') return null;
+  var t = entry.title.trim();
+  return t === '' ? null : t;
+}
+
+// ISO date or ISO-8601 date-time only, real-calendar validated, truncated to
+// YYYY-MM-DD. Sources: `date` then `published_date`. `last_updated` is
+// deliberately absent from the candidate list (update ≠ publication).
+// Accepted forms, exactly:
+//   YYYY-MM-DD
+//   YYYY-MM-DDTHH:MM[:SS[.fff]][Z|±HH:MM]   (T separator only; time ranges
+//                                            validated; anything else rejects)
+// Space-separated or trailing-garbage pseudo-datetimes are REJECTED — the
+// safe (false-reject) direction.
+function _p5UsableDate(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  function realDate(y, mo, d) {
+    if (mo < 1 || mo > 12 || d < 1) return false;
+    var lens = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    var leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+    return d <= (mo === 2 && leap ? 29 : lens[mo - 1]);
+  }
+  var ISO_RE = /^(\d{4})-(\d{2})-(\d{2})(?:T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)?)?$/;
+  var candidates = [entry.date, entry.published_date];
+  for (var i = 0; i < candidates.length; i++) {
+    var v = candidates[i];
+    if (typeof v !== 'string') continue;
+    var m = v.trim().match(ISO_RE);
+    if (!m) continue;
+    if (!realDate(parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10))) continue;
+    return m[1] + '-' + m[2] + '-' + m[3];
+  }
+  return null;
+}
+
+// Normalized-URL → search-result-entry index. First occurrence wins;
+// unindexable entries and internal collisions are counted and listed, never
+// silently dropped (honesty rule applied to the index side). Bare-string
+// citation-style entries index URL-only — no metadata is fabricated for
+// them, so a match against one naturally fails the missing-date rule.
+function _p5IndexSearchResults(searchResults) {
+  var out = { index: {}, searchResultsCount: 0, unindexable: [], collisions: [] };
+  if (!Array.isArray(searchResults)) return out;
+  out.searchResultsCount = searchResults.length;
+  for (var i = 0; i < searchResults.length; i++) {
+    var raw = searchResults[i];
+    var entry;
+    if (typeof raw === 'string') entry = { url: raw };
+    else if (raw && typeof raw === 'object') entry = raw;
+    else { out.unindexable.push({ index: i, reason: 'not-object-or-string' }); continue; }
+    var rawUrl = typeof entry.url === 'string' ? entry.url : null;
+    var norm = rawUrl === null ? null : _p5NormalizeUrl(rawUrl);
+    if (norm === null) { out.unindexable.push({ index: i, reason: 'unusable-url' }); continue; }
+    if (Object.prototype.hasOwnProperty.call(out.index, norm)) {
+      out.collisions.push({ index: i, normUrl: norm });
+      continue;
+    }
+    out.index[norm] = { url: rawUrl, normUrl: norm, title: _p5UsableTitle(entry), date: _p5UsableDate(entry) };
+  }
+  return out;
+}
+
+// The core validator. Returns { accepted[], rejected[], counts } with the
+// eight-key counts contract; accepted/rejected are strictly ascending by
+// inputIndex; duplicates are judged against ACCEPTED items only, so
+// re-citing a rejected URL re-fails with its original reason.
+function _p5ValidateItems(modelItems, indexObj) {
+  var counts = {
+    returned: 0, accepted: 0,
+    rejectedMalformed: 0, rejectedUnmatched: 0, rejectedDuplicate: 0,
+    rejectedMissingDate: 0, rejectedMissingTitle: 0,
+    searchResultsCount: (indexObj && typeof indexObj.searchResultsCount === 'number') ? indexObj.searchResultsCount : 0
+  };
+  var accepted = [];
+  var rejected = [];
+  var items = Array.isArray(modelItems) ? modelItems : [];
+  counts.returned = items.length;
+  var idx = (indexObj && indexObj.index) ? indexObj.index : {};
+  var seenAccepted = {};
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    var srcUrl = (item && typeof item === 'object' && typeof item.sourceUrl === 'string') ? item.sourceUrl : null;
+    var norm = srcUrl === null ? null : _p5NormalizeUrl(srcUrl);
+    if (norm === null) {
+      counts.rejectedMalformed += 1;
+      rejected.push({ inputIndex: i, reason: 'malformed' });
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(idx, norm)) {
+      counts.rejectedUnmatched += 1;
+      rejected.push({ inputIndex: i, reason: 'unmatched', normUrl: norm });
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(seenAccepted, norm)) {
+      counts.rejectedDuplicate += 1;
+      rejected.push({ inputIndex: i, reason: 'duplicate', normUrl: norm });
+      continue;
+    }
+    var entry = idx[norm];
+    if (entry.date === null) {
+      counts.rejectedMissingDate += 1;
+      rejected.push({ inputIndex: i, reason: 'missing-date', normUrl: norm });
+      continue;
+    }
+    if (entry.title === null) {
+      counts.rejectedMissingTitle += 1;
+      rejected.push({ inputIndex: i, reason: 'missing-title', normUrl: norm });
+      continue;
+    }
+    var summary = (typeof item.summary === 'string' && item.summary.trim() !== '') ? item.summary.trim() : null;
+    seenAccepted[norm] = true;
+    counts.accepted += 1;
+    accepted.push({
+      inputIndex: i,
+      url: entry.url, normUrl: norm,
+      title: entry.title, date: entry.date,
+      publisher: _p5DomainFromUrl(norm),
+      summary: summary, summaryOrigin: 'model'
+      // model direction and every other unapproved model field dropped here
+    });
+  }
+  return { accepted: accepted, rejected: rejected, counts: counts };
+}
+
+// Sole constructor of the future call-2 (synthesis) input. Zero accepted
+// evidence ⇒ null ⇒ no synthesis, structurally.
+function _p5SynthesisPayload(accepted) {
+  if (!Array.isArray(accepted) || accepted.length === 0) return null;
+  var items = [];
+  for (var i = 0; i < accepted.length; i++) {
+    var a = accepted[i];
+    items.push({ title: a.title, date: a.date, url: a.url, summary: a.summary });
+  }
+  return { itemCount: items.length, items: items };
+}
+
+// ═══ end P-5 sourcing validator (step 1) ══════════════════════════════
+
 // ═══ services/research-evidence-client.js — inlined (EG-20E-2A) ═══════
 // Verbatim copy of the committed services/research-evidence-client.js (dd566bd),
 // minus the leading 'use strict' directive (a no-op mid-script). The dual-export
