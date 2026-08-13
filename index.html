@@ -2455,6 +2455,15 @@ function _p5BuildPacket(args) {
     if (!newsOk) {
       packet.sections.synthesis = { state: 'suppressed', reason: 'news-not-ok', text: null, derivedFromAccepted: false };
       packet.discardedProvidedSynthesis = true;
+    } else if (providedSynthesis.state === 'failed' &&
+               typeof providedSynthesis.reason === 'string' && providedSynthesis.reason !== '') {
+      // Step 4: a call-2 transport/parse/attribution failure is a FAILURE, not
+      // "no text was produced". Checked before the usable-text branch, which
+      // would otherwise mislabel it suppressed/empty-synthesis-text. The reason
+      // is propagated VERBATIM — this builder never mints a reason of its own.
+      // Nothing is discarded on this path, so no discarded marker is set.
+      packet.sections.synthesis = { state: 'failed', reason: providedSynthesis.reason,
+        text: null, derivedFromAccepted: false };
     } else if (usableText === null) {
       // 'done' requires usable non-empty derived text — never an empty shell.
       packet.sections.synthesis = { state: 'suppressed', reason: 'empty-synthesis-text', text: null, derivedFromAccepted: false };
@@ -2533,7 +2542,11 @@ function _p5RenderPacket(packet, mountEl) {
       link.target = '_blank';
       link.rel = 'noopener';
       row.appendChild(link);
-      row.appendChild(el('div', 'p5-news-meta', (it.date || '') + ' · ' + (it.publisher || '')));
+      // J4: the date is the SOURCE PAGE's search-metadata date, never the event
+      // date — labelled explicitly so the UI cannot read as a publication date.
+      // The [N] id matches the call-2 attribution markers.
+      row.appendChild(el('div', 'p5-news-meta', '[' + (ni + 1) + '] source metadata date ' +
+        (it.date || 'unknown') + ' · ' + (it.publisher || '')));
       if (it.summary !== null) row.appendChild(el('div', 'p5-news-summary', it.summary + ' (model summary)'));
       nBox.appendChild(row);
     }
@@ -2550,8 +2563,17 @@ function _p5RenderPacket(packet, mountEl) {
   var s2 = packet.sections.synthesis;
   var sBox = el('div', 'p5-section-synthesis');
   sBox.appendChild(el('div', 'pf-summary-lbl', 'Synthesis'));
-  sBox.appendChild(el('div', 'pf-guidance',
+  sBox.appendChild(el('div', s2 && s2.state === 'failed' ? 'dq-warn' : 'pf-guidance',
     'Synthesis: ' + (s2 ? s2.state : 'unknown') + (s2 && s2.reason ? ' — ' + s2.reason : '')));
+  if (s2 && s2.state === 'done' && typeof s2.text === 'string' && s2.text.trim() !== '') {
+    sBox.appendChild(el('div', 'p5-synthesis-text', s2.text));
+    // App-authored, never model-authored: the model is never shown the counts,
+    // so it cannot claim coverage — and cannot edit this line away either.
+    var accN = (packet.counts && typeof packet.counts.accepted === 'number') ? packet.counts.accepted : 0;
+    sBox.appendChild(el('div', 'pf-guidance',
+      'Synthesis covers the ' + accN + ' accepted items only. Rejected items and sources never ' +
+      'retrieved are not represented. Dates are source metadata dates, not event dates.'));
+  }
   root.appendChild(sBox);
   mountEl.appendChild(root);
 }
@@ -2686,7 +2708,278 @@ async function _p5RunResearch(symbol, mountEl, nowMs) {
   }
   packet = _p5BuildPacket({ asOf: asOf, context: ctx, news: news, synthesis: null });
   _p5RenderPacket(packet, mountEl);
+
+  // Step 4 call-2. Fires ONLY on done-with-accepted; every other path keeps its
+  // existing suppression and performs ZERO synthesis fetches. Single-shot.
+  if (news.state !== 'done') return packet;
+  var synthesis = await _p5RunSynthesis(ctx, news.accepted);
+  if (synthesis === null) return packet;   // zero accepted ⇒ payload null ⇒ no call
+  packet = _p5BuildPacket({ asOf: asOf, context: ctx, news: news, synthesis: synthesis });
+  _p5RenderPacket(packet, mountEl);
   return packet;
+}
+
+// ── Step 4 (P5-3 §12): call-2 synthesis — anthropic-proxy → attribution ────
+// Owner rulings J1-J8 + two contract corrections 2026-08-14: J1 model pinned
+// explicitly (never the proxy default) · J2 _p5SynthesisPayload UNCHANGED —
+// the sourceMetadataDate rename is presentation-only, applied at the
+// serializer · J3 counts / search_results totals / coverage denominators are
+// NEVER sent, so a completeness claim is structurally impossible rather than
+// merely forbidden · J4 renderer relabels the item date visibly · J5 no new
+// gate (console-only, no automatic invocation) · J6 no UI trigger · J8
+// max_tokens 700. Correction 1: a small deterministic portfolioContext keeps
+// the P-5 differentiator ("given what I hold, at my cost basis, at this
+// weight") using Step-2 truth semantics only — unavailable stays null with a
+// reason, never zero, never inferred. Correction 2: accepted items carry
+// deterministic 1-based ids and factual claims must reference them;
+// out-of-range or wholly absent references FAIL, never silently repaired.
+// DELIBERATE DEPARTURE from the only in-repo Anthropic call site (L4856): no
+// assistant prefill and no string reconstruction — that path's substring
+// repair is exactly what G1 forbids. Parse discipline mirrors
+// _p5ParseModelItems; the transport envelope mirrors _p5RequestItems.
+
+var P5_CALL2_MODEL      = 'claude-sonnet-4-5';   // J1 — pinned, never inherited
+var P5_CALL2_MAX_TOKENS = 700;                   // J8
+var P5_CALL2_TIMEOUT_MS = 28000;                 // > proxy 25s and Netlify's 26s ceiling, so a real 504 surfaces
+
+// Narrow, high-precision backstop. The prompt is the primary control; this
+// only catches unambiguous recommendation formats. Deliberately NOT a broad
+// keyword scan — an evidence summary may legitimately contain "buy".
+var P5_PROHIBITED_PATTERNS = [
+  /\brating:/i,
+  /\bprice target\b/i,
+  /\bPT:\s*\$/i,
+  /\bbuy\s*\/\s*neutral\s*\/\s*sell\b/i
+];
+
+// Correction 1. Pure projection of the Step-2 context — no new data source,
+// no localStorage read, no recomputation. "Where valid" is mapped onto the
+// existing committed flags rather than a new rule: driftFlag means the
+// computed native P/L and the owner's manualPlPct disagree by >0.5pp and
+// ratioFlag means the cost ratio is implausible, so emitting that number
+// would contradict the app's own assessment. Every ILS-converted figure is
+// excluded by construction, which is what makes "no historical FX
+// reconstruction" structural rather than instructional.
+function _p5PortfolioContext(ctx) {
+  var out = {
+    symbol: (ctx && typeof ctx.symbol === 'string') ? ctx.symbol : null,
+    positionValue: null,
+    costBasis: null,
+    plPct: null, plUnavailableReason: 'cost-basis-not-recorded',
+    weightPct: null, weightUnavailableReason: 'reporting-incomplete'
+  };
+  if (!ctx || ctx.found !== true || ctx.corrupt === true) return out;
+  var h  = ctx.holding || {};
+  var pl = ctx.pl || {};
+  var currencyOk = typeof h.currency === 'string' && h.currency !== '';
+  if (_pfIsFiniteNum(h.positionSize) && currencyOk) {
+    out.positionValue = { amount: h.positionSize, currency: h.currency };
+  }
+  if (pl.costBasisValid === true && _pfIsFiniteNum(h.costBasis) && currencyOk) {
+    out.costBasis = { amount: h.costBasis, currency: h.currency };
+  }
+  if (pl.currencyKnown !== true)                          out.plUnavailableReason = 'currency-not-recorded';
+  else if (pl.costBasisValid !== true)                    out.plUnavailableReason = 'cost-basis-not-recorded';
+  else if (pl.driftFlag === true || pl.ratioFlag === true) out.plUnavailableReason = 'recorded-values-disagree';
+  else {
+    // Ruling A: the vocabulary is CLOSED at three values. Reaching here with a
+    // non-finite plPctNativePct is impossible for a valid normalized holding —
+    // _pfNormalizeHoldingEntry requires positionSize > 0 for any non-corrupt
+    // entry and this function returns early on corrupt/not-found, so
+    // positionSizeValid is always true and nativeAvailable reduces to
+    // (currencyKnown && costBasisValid), which the two guards above already
+    // cover exhaustively. It is therefore left UNCLASSIFIED rather than given a
+    // new vocabulary value or a semantically wrong existing one: the resulting
+    // null/null pair occurs in no reachable state and is the signature to raise
+    // as a data-integrity defect for review.
+    out.plPct = _pfIsFiniteNum(pl.plPctNativePct) ? pl.plPctNativePct : null;
+    out.plUnavailableReason = null;
+  }
+  if (ctx.weight && _pfIsFiniteNum(ctx.weight.pct)) {
+    out.weightPct = ctx.weight.pct; out.weightUnavailableReason = null;
+  } else if (ctx.weight && typeof ctx.weight.unavailableReason === 'string') {
+    out.weightUnavailableReason = ctx.weight.unavailableReason;
+  }
+  return out;
+}
+
+// Fixed string, no interpolation. NOTE FOR QA: this intentionally contains
+// the words buy / sell / rating / sentiment AS PROHIBITIONS — a
+// forbidden-token scan pointed at this function would always self-fail. QA
+// asserts required clauses are PRESENT here, and runs forbidden-semantics
+// checks against model OUTPUT instead.
+function _p5Call2System() {
+  return [
+    'You are a research assistant summarizing already-verified evidence about one stock the reader owns.',
+    'Use ONLY the evidence items and portfolio context supplied in the user message. Add no facts, no outside knowledge, and no URLs.',
+    '',
+    'DATES:',
+    '- Each item carries a sourceMetadataDate. That is the date the SOURCE PAGE carries in search metadata. It is NOT the date of the event described.',
+    '- Never infer when something happened from sourceMetadataDate.',
+    '- Never describe an item as recent, new, old or stale on the basis of sourceMetadataDate.',
+    '- If an item\'s own text does not establish when something happened, say that the timing is unclear.',
+    '',
+    'COVERAGE:',
+    '- Never state or imply that these are all the available news items, or that coverage is complete or representative.',
+    '',
+    'PORTFOLIO CONTEXT:',
+    '- The portfolio context is a factual record of what the reader has recorded. Fields marked "not recorded" are unknown - never treat them as zero and never estimate them.',
+    '- You may explain why an evidence item is relevant to the recorded position, factually and descriptively.',
+    '- You must NOT produce: buy, sell or hold advice; position sizing or adjustment advice; price targets; conviction or confidence language; ratings; sentiment scores; directional calls; or any recommended action.',
+    '',
+    'ATTRIBUTION:',
+    '- Every factual claim drawn from the evidence must reference its item as [N], using the ids supplied below.',
+    '- Connective prose does not need a marker.',
+    '- Never use an id that is not in the supplied list.',
+    '',
+    'OUTPUT:',
+    '- Reply with raw JSON only: {"synthesis":"..."} - exactly one root key, a string value, no code fences, no prose outside the JSON.',
+    '- If the items support no factual statement, reply {"synthesis":""}.'
+  ].join('\n');
+}
+
+// J2: the payload contract is untouched; the sourceMetadataDate naming and
+// its disclaimer live HERE, at the presentation boundary. Item ids are 1-based
+// positions in payload.items — deterministic because accepted order is
+// validator order.
+function _p5Call2User(symbol, payload, portfolioContext) {
+  var pc = portfolioContext || {};
+  var lines = [];
+  lines.push('Stock: ' + (typeof symbol === 'string' && symbol !== '' ? symbol : 'unknown'));
+  lines.push('');
+  lines.push('PORTFOLIO CONTEXT (recorded facts only):');
+  lines.push('  recorded position value: ' + (pc.positionValue
+    ? (pc.positionValue.amount + ' ' + pc.positionValue.currency) : 'not recorded'));
+  lines.push('  recorded cost basis: ' + (pc.costBasis
+    ? (pc.costBasis.amount + ' ' + pc.costBasis.currency) : 'not recorded'));
+  lines.push('  recorded profit/loss: ' + (_pfIsFiniteNum(pc.plPct)
+    ? (pc.plPct.toFixed(2) + '%')
+    : ('not recorded (' + (pc.plUnavailableReason || 'unavailable') + ')')));
+  lines.push('  portfolio weight: ' + (_pfIsFiniteNum(pc.weightPct)
+    ? (pc.weightPct.toFixed(1) + '%')
+    : ('not recorded (' + (pc.weightUnavailableReason || 'unavailable') + ')')));
+  lines.push('');
+  lines.push('EVIDENCE ITEMS:');
+  var items = (payload && Array.isArray(payload.items)) ? payload.items : [];
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    lines.push('[' + (i + 1) + '] title: ' + String(it.title));
+    lines.push('    sourceMetadataDate: ' + String(it.date) + '   (date the SOURCE PAGE carries; NOT the event date)');
+    lines.push('    url: ' + String(it.url));
+    lines.push('    summary: ' + (it.summary === null || it.summary === undefined ? '(none)' : String(it.summary)) +
+               '   (written by the search model, not the publisher)');
+  }
+  return lines.join('\n');
+}
+
+// Pure parse, mirroring _p5ParseModelItems: bare {"synthesis":"..."} with
+// EXACTLY one root key, or one whole-content fenced wrapper around it. Never
+// substring extraction from prose, never repair.
+function _p5ParseSynthesis(content) {
+  if (typeof content !== 'string' || content.trim() === '') {
+    return { ok: false, reason: 'model-output-unparseable' };
+  }
+  var text = content.trim();
+  var fence = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/);
+  if (fence) text = fence[1].trim();
+  var parsed;
+  try { parsed = JSON.parse(text); } catch (e) {
+    return { ok: false, reason: 'model-output-unparseable' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, reason: 'model-output-unparseable' };
+  }
+  var keys = Object.keys(parsed);
+  if (keys.length !== 1 || keys[0] !== 'synthesis' || typeof parsed.synthesis !== 'string') {
+    return { ok: false, reason: 'model-output-unparseable' };
+  }
+  return { ok: true, text: parsed.synthesis };
+}
+
+// Correction 2. Pure, post-parse, NEVER repairs. Empty text is not an
+// attribution failure — it flows to the existing empty-synthesis-text
+// suppression. Full coverage is deliberately NOT required: the model may
+// legitimately leave a supplied item uncited.
+function _p5ValidateAttribution(text, itemCount) {
+  if (typeof text !== 'string' || text.trim() === '') return { ok: true };
+  var max = _pfIsFiniteNum(itemCount) ? itemCount : 0;
+  var re = /\[(\d+)\]/g;
+  var m, found = 0;
+  while ((m = re.exec(text)) !== null) {
+    found += 1;
+    var n = parseInt(m[1], 10);
+    if (!(n >= 1 && n <= max)) return { ok: false, reason: 'attribution-out-of-range' };
+  }
+  if (found === 0) return { ok: false, reason: 'attribution-missing' };
+  return { ok: true };
+}
+
+function _p5ProhibitedSemantics(text) {
+  if (typeof text !== 'string') return false;
+  for (var i = 0; i < P5_PROHIBITED_PATTERNS.length; i++) {
+    if (P5_PROHIBITED_PATTERNS[i].test(text)) return true;
+  }
+  return false;
+}
+
+// Single-shot call-2 adapter. Discriminated envelope, never throws, never
+// retries, never persists — same contract as _p5RequestItems.
+async function _p5RequestSynthesis(symbol, payload, portfolioContext) {
+  var res;
+  try {
+    res = await fetch('/.netlify/functions/anthropic-proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model:      P5_CALL2_MODEL,
+        max_tokens: P5_CALL2_MAX_TOKENS,
+        system:     _p5Call2System(),
+        messages:   [{ role: 'user', content: _p5Call2User(symbol, payload, portfolioContext) }]
+      }),
+      signal: AbortSignal.timeout(P5_CALL2_TIMEOUT_MS)
+    });
+  } catch (err) {
+    var isTimeout = !!(err && (err.name === 'TimeoutError' || err.name === 'AbortError'));
+    return { ok: false, reason: isTimeout ? 'timeout' : 'fetch-failed' };
+  }
+  if (!res.ok) return { ok: false, reason: 'http-' + res.status };
+  var data;
+  try { data = await res.json(); } catch (err2) { return { ok: false, reason: 'bad-json' }; }
+  var textContent = '';
+  if (data && Array.isArray(data.content)) {
+    for (var i = 0; i < data.content.length; i++) {
+      var block = data.content[i];
+      if (block && block.type === 'text' && typeof block.text === 'string') textContent += block.text;
+    }
+  }
+  if (textContent.trim() === '') return { ok: false, reason: 'empty-content' };
+  return { ok: true, content: textContent };
+}
+
+// Returns a synthesis SECTION (or null when there is structurally nothing to
+// synthesize, so the caller keeps its existing zero-accepted suppression).
+// Zero accepted ⇒ _p5SynthesisPayload null ⇒ ZERO fetches.
+async function _p5RunSynthesis(ctx, accepted) {
+  var payload = _p5SynthesisPayload(accepted);
+  if (payload === null) return null;
+  var reply = await _p5RequestSynthesis(ctx.symbol, payload, _p5PortfolioContext(ctx));
+  if (reply.ok !== true) {
+    return { state: 'failed', reason: reply.reason, text: null, derivedFromAccepted: false };
+  }
+  var parsed = _p5ParseSynthesis(reply.content);
+  if (parsed.ok !== true) {
+    return { state: 'failed', reason: parsed.reason, text: null, derivedFromAccepted: false };
+  }
+  if (_p5ProhibitedSemantics(parsed.text)) {
+    return { state: 'failed', reason: 'prohibited-semantics', text: null, derivedFromAccepted: false };
+  }
+  var attr = _p5ValidateAttribution(parsed.text, payload.itemCount);
+  if (attr.ok !== true) {
+    return { state: 'failed', reason: attr.reason, text: null, derivedFromAccepted: false };
+  }
+  // Empty-but-valid text intentionally flows on as 'done' with '' — the
+  // packet builder turns it into suppressed/empty-synthesis-text.
+  return { state: 'done', reason: null, text: parsed.text, derivedFromAccepted: true };
 }
 
 // ═══ end P-5 sourcing validator (step 1) ══════════════════════════════

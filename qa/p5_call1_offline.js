@@ -65,13 +65,19 @@ const FNS = ['_pfIsFiniteNum', '_pfFxRateValid', '_pfFxState', '_pfNormalizeHold
   '_p5NormalizeUrl', '_p5DomainFromUrl', '_p5UsableTitle', '_p5UsableDate',
   '_p5IndexSearchResults', '_p5ValidateItems', '_p5SynthesisPayload',
   '_p5CollectLocalContext', '_p5PacketStatus', '_p5BuildPacket', '_p5RenderPacket',
-  '_p5Call1Prompt', '_p5ParseModelItems', '_p5RequestItems', '_p5RunResearch'];
+  '_p5Call1Prompt', '_p5ParseModelItems', '_p5RequestItems',
+  // Step 4 dependency chain — _p5RunResearch now calls _p5RunSynthesis after a
+  // successful call-1. Extracted so this sandbox resolves; call-2 behaviour
+  // itself is covered by qa/p5_call2_offline.js, not here.
+  '_p5PortfolioContext', '_p5Call2System', '_p5Call2User', '_p5ParseSynthesis',
+  '_p5ValidateAttribution', '_p5ProhibitedSemantics', '_p5RequestSynthesis',
+  '_p5RunSynthesis', '_p5RunResearch'];
 const src = {};
 let missingExtract = [];
 for (const n of FNS) { src[n] = extractFunctionSource(content, n); if (!src[n]) missingExtract.push(n); }
 const strippedAll = FNS.map(function (n) { return src[n] || ''; }).join('\n')
   .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-const VARS = Array.from(new Set(strippedAll.match(/\bPF_[A-Z0-9_]+\b/g) || [])).sort();
+const VARS = Array.from(new Set(strippedAll.match(/\b(?:PF|P5)_[A-Z0-9_]+\b/g) || [])).sort();
 for (const n of VARS) { src[n] = extractVarSource(content, n); if (!src[n]) missingExtract.push('var ' + n); }
 src._pfRootCorrupted = extractVarSource(content, '_pfRootCorrupted') || 'var _pfRootCorrupted = false;';
 VARS.push('_pfRootCorrupted');
@@ -118,6 +124,17 @@ function stubFetch(scenario) {
   const calls = [];
   const fn = function (url, opts) {
     calls.push({ url: url, opts: opts });
+    // Step 4: call-2 now runs after a successful call-1. This suite is about
+    // call-1, so the anthropic leg gets a fixed valid reply and is excluded
+    // from the call-1 single-shot counters via _pplx().
+    if (String(url).indexOf('anthropic') !== -1) {
+      return Promise.resolve({
+        ok: true, status: 200,
+        json: function () {
+          return Promise.resolve({ content: [{ type: 'text', text: '{"synthesis":"S [1]."}' }] });
+        }
+      });
+    }
     if (scenario.throwName) {
       const e = new Error('stub');
       e.name = scenario.throwName;
@@ -134,6 +151,9 @@ function stubFetch(scenario) {
     });
   };
   fn._calls = calls;
+  fn._pplx = function () {
+    return calls.filter(function (c) { return String(c.url).indexOf('anthropic') === -1; });
+  };
   return fn;
 }
 
@@ -264,8 +284,11 @@ function firstIndexContaining(texts, needle) {
     check('success: news done', pk.sections.news.state === 'done');
     check('success: 1 accepted 1 unmatched', pk.counts.accepted === 1 && pk.counts.rejectedUnmatched === 1);
     check('success: asOf from injected clock', pk.asOf === iso(NOW_MS));
-    check('success: synthesis stays pending (call-2 not wired)', pk.sections.synthesis.state === 'pending');
-    check('success: packet partial (no synthesis yet)', pk.status === 'partial');
+    // Step 4: call-2 IS wired now, so the success path completes. Call-2's own
+    // contract lives in qa/p5_call2_offline.js; asserted here only far enough
+    // to prove call-1 hands off correctly.
+    check('success: synthesis done (call-2 wired)', pk.sections.synthesis.state === 'done');
+    check('success: packet complete', pk.status === 'complete');
     const texts = trailTexts(b.db);
     const iq = firstIndexContaining(texts, 'News: queued');
     const ic = firstIndexContaining(texts, 'News: collecting');
@@ -274,7 +297,8 @@ function firstIndexContaining(texts, needle) {
     const linkNode = b.db.created.find(function (n) { return n._tag === 'a' && n.href === 'https://ex.com/a'; });
     check('accepted item rendered as link to matched search URL', !!linkNode && linkNode.rel === 'noopener');
     check('counts footer rendered', firstIndexContaining(texts, '1 of 2 items accepted') !== -1);
-    check('single fetch on success', okStub._calls.length === 1);
+    check('single call-1 fetch on success (no retry)', okStub._pplx().length === 1);
+    check('success: exactly one call-2 fetch follows', okStub._calls.length === 2);
 
     // Zero accepted (all unmatched)
     const zStub = stubFetch({ body: okBody(JSON.stringify([{ sourceUrl: 'https://ex.com/nope', summary: 's' }]), SR_FIX) });
