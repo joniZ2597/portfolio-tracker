@@ -178,7 +178,8 @@ const OFFLINE_TESTS = [
   'qa/fund_facts_teardown_offline.js',
   'qa/fund_facts_read_client_test.js',
   'qa/p5_sourcing_validator_offline.js',
-  'qa/p5_packet_offline.js'
+  'qa/p5_packet_offline.js',
+  'qa/p5_call1_offline.js'
 ];
 
 const CLIENT_GATES = [

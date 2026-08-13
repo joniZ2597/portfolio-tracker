@@ -2524,6 +2524,28 @@ function _p5RenderPacket(packet, mountEl) {
   nBox.appendChild(el('div', 'pf-summary-lbl', 'Recent news'));
   nBox.appendChild(el('div', n && n.state === 'failed' ? 'dq-warn' : 'pf-guidance',
     'News: ' + (n ? n.state : 'unknown') + (n && n.reason ? ' — ' + n.reason : '')));
+  if (n && n.state === 'done') {
+    for (var ni = 0; ni < n.accepted.length; ni++) {
+      var it = n.accepted[ni];
+      var row = el('div', 'p5-news-item');
+      var link = el('a', 'p5-news-link', it.title);
+      link.href = it.url;               // exact matched search_results URL only
+      link.target = '_blank';
+      link.rel = 'noopener';
+      row.appendChild(link);
+      row.appendChild(el('div', 'p5-news-meta', (it.date || '') + ' · ' + (it.publisher || '')));
+      if (it.summary !== null) row.appendChild(el('div', 'p5-news-summary', it.summary + ' (model summary)'));
+      nBox.appendChild(row);
+    }
+    var nc = n.counts;
+    if (nc) {
+      nBox.appendChild(el('div', 'pf-guidance',
+        nc.accepted + ' of ' + nc.returned + ' items accepted · ' +
+        nc.rejectedUnmatched + ' unmatched · ' + nc.rejectedMalformed + ' malformed · ' +
+        nc.rejectedDuplicate + ' duplicate · ' + nc.rejectedMissingDate + ' missing-date · ' +
+        nc.rejectedMissingTitle + ' missing-title · ' + nc.searchResultsCount + ' search results'));
+    }
+  }
   root.appendChild(nBox);
   var s2 = packet.sections.synthesis;
   var sBox = el('div', 'p5-section-synthesis');
@@ -2532,6 +2554,139 @@ function _p5RenderPacket(packet, mountEl) {
     'Synthesis: ' + (s2 ? s2.state : 'unknown') + (s2 && s2.reason ? ' — ' + s2.reason : '')));
   root.appendChild(sBox);
   mountEl.appendChild(root);
+}
+
+// ── Step 3 (P5-3 §11): call-1 wiring — perplexity-proxy → validator → news ──
+// Owner rulings 2026-08-12: reuse the existing ungated perplexity-proxy (no
+// new gate; boundary re-reviewed when a user-facing trigger ships) · G1
+// exact parse acceptance (bare array | exactly {"items":[...]} | one
+// whole-content fenced wrapper around either; never substring extraction
+// from prose, never an object wrapper with extra root keys) · G2
+// search_results ABSENT/not-array ⇒ failed 'search-results-missing', but
+// EMPTY [] is a valid provider response that flows to validation · G3
+// sonar-pro, max_tokens 1200, single-shot, no retry · G4 console-only ·
+// local precondition failures (holding-not-found / holding-corrupt) render
+// a truthful terminal packet with ZERO network calls — never queued/pending.
+// citations are counted only — never provenance authority. The Step 1
+// validator remains the sole acceptance authority.
+
+function _p5Call1Prompt(symbol) {
+  return 'You are a research assistant. Find recent, materially relevant news items for the stock with ticker symbol "' + symbol + '".\n' +
+    'Respond with ONLY a JSON array - no prose, no markdown, no explanations.\n' +
+    'Each array element must be an object with exactly these two fields:\n' +
+    '  "sourceUrl": the exact URL of one source you actually used from your search results\n' +
+    '  "summary": one or two factual sentences describing the item\n' +
+    'Rules:\n' +
+    '- Maximum 8 items.\n' +
+    '- Do not include any other fields (no titles, dates, publishers, sentiment, direction, or scores).\n' +
+    '- Do not invent URLs. Only cite URLs from your actual search results.\n' +
+    '- If you found nothing relevant, respond with [].';
+}
+
+// Pure parse per G1. The fenced form must be the ENTIRE trimmed content; the
+// object form must be EXACTLY {"items":[...]} with no additional root keys.
+// Items pass verbatim to Step 1 validation — no field surgery here.
+function _p5ParseModelItems(content) {
+  if (typeof content !== 'string' || content.trim() === '') {
+    return { ok: false, reason: 'model-output-unparseable' };
+  }
+  var text = content.trim();
+  var fence = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/);
+  if (fence) text = fence[1].trim();
+  var parsed;
+  try { parsed = JSON.parse(text); } catch (e) {
+    return { ok: false, reason: 'model-output-unparseable' };
+  }
+  var items = null;
+  if (Array.isArray(parsed)) items = parsed;
+  else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
+           Object.keys(parsed).length === 1 && Array.isArray(parsed.items)) {
+    items = parsed.items;
+  }
+  if (items === null) return { ok: false, reason: 'model-output-unparseable' };
+  return { ok: true, items: items };
+}
+
+// Single-shot call-1 adapter (G3). Returns a discriminated envelope, never
+// throws, never retries, never persists. Both model content and provider
+// search_results are retained verbatim; citations are counted only.
+async function _p5RequestItems(symbol) {
+  var res;
+  try {
+    res = await fetch('/.netlify/functions/perplexity-proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sonar-pro',
+        messages: [{ role: 'user', content: _p5Call1Prompt(symbol) }],
+        max_tokens: 1200
+      }),
+      signal: AbortSignal.timeout(25000)
+    });
+  } catch (err) {
+    var isTimeout = !!(err && (err.name === 'TimeoutError' || err.name === 'AbortError'));
+    return { ok: false, reason: isTimeout ? 'timeout' : 'fetch-failed' };
+  }
+  if (!res.ok) return { ok: false, reason: 'http-' + res.status };
+  var data;
+  try { data = await res.json(); } catch (err2) { return { ok: false, reason: 'bad-json' }; }
+  var content = (data && data.choices && data.choices[0] && data.choices[0].message &&
+    typeof data.choices[0].message.content === 'string') ? data.choices[0].message.content : null;
+  if (content === null || content.trim() === '') return { ok: false, reason: 'empty-choices' };
+  var sr = data.search_results;
+  return {
+    ok: true,
+    content: content,
+    searchResults: Array.isArray(sr) ? sr : null,   // null = absent/not-array (G2); [] flows through
+    searchResultsCount: Array.isArray(sr) ? sr.length : 0,
+    citationsCount: Array.isArray(data.citations) ? data.citations.length : 0
+  };
+}
+
+// Console-only orchestrator (G4). Ratified state sequence for researchable
+// holdings: queued -> collecting -> done | failed. Local precondition
+// failures produce a terminal failed packet with zero network activity.
+async function _p5RunResearch(symbol, mountEl, nowMs) {
+  var clock = (typeof nowMs === 'number' && isFinite(nowMs)) ? nowMs : Date.now();
+  var asOf = new Date(clock).toISOString();
+  var ctx = _p5CollectLocalContext(symbol, clock);
+  if (ctx.found !== true || ctx.corrupt === true) {
+    var precondition = ctx.found !== true ? 'holding-not-found' : 'holding-corrupt';
+    var terminal = _p5BuildPacket({ asOf: asOf, context: ctx,
+      news: { state: 'failed', reason: precondition, accepted: [], rejected: [], counts: null },
+      synthesis: null });
+    _p5RenderPacket(terminal, mountEl);
+    return terminal;
+  }
+  var packet = _p5BuildPacket({ asOf: asOf, context: ctx, news: null, synthesis: null });
+  _p5RenderPacket(packet, mountEl);
+  packet = _p5BuildPacket({ asOf: asOf, context: ctx,
+    news: { state: 'collecting', reason: null, accepted: [], rejected: [], counts: null }, synthesis: null });
+  _p5RenderPacket(packet, mountEl);
+
+  var reply = await _p5RequestItems(ctx.symbol);
+  var news;
+  if (reply.ok !== true) {
+    news = { state: 'failed', reason: reply.reason, accepted: [], rejected: [], counts: null };
+  } else if (reply.searchResults === null) {
+    news = { state: 'failed', reason: 'search-results-missing', accepted: [], rejected: [], counts: null };
+  } else {
+    var parsed = _p5ParseModelItems(reply.content);
+    if (parsed.ok !== true) {
+      // Unparseable renders as a FAILED search, never as zero results;
+      // searchResultsCount survives (LX-1 honesty pin).
+      news = { state: 'failed', reason: 'model-output-unparseable', accepted: [], rejected: [],
+        counts: { returned: 0, accepted: 0, rejectedMalformed: 0, rejectedUnmatched: 0,
+                  rejectedDuplicate: 0, rejectedMissingDate: 0, rejectedMissingTitle: 0,
+                  searchResultsCount: reply.searchResultsCount } };
+    } else {
+      var validated = _p5ValidateItems(parsed.items, _p5IndexSearchResults(reply.searchResults));
+      news = { state: 'done', reason: null, accepted: validated.accepted, rejected: validated.rejected, counts: validated.counts };
+    }
+  }
+  packet = _p5BuildPacket({ asOf: asOf, context: ctx, news: news, synthesis: null });
+  _p5RenderPacket(packet, mountEl);
+  return packet;
 }
 
 // ═══ end P-5 sourcing validator (step 1) ══════════════════════════════
