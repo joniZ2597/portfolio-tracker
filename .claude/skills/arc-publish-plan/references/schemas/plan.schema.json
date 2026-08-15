@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "arc/plan.schema.json",
+  "title": "ARC published plan snapshot",
+  "description": "Immutable machine projection of an owner-approved execution plan. Written ONLY by /arc-publish-plan. Read-only for every worker.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["planId", "source", "sourceHash", "repoRef", "generatedAt", "mutexRegistry", "tasks"],
+  "properties": {
+    "planId": {
+      "description": "Immutable snapshot identifier. Doubles as the directory name under plans/.",
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$",
+      "maxLength": 96
+    },
+    "source": {
+      "description": "Repo-relative path of the source artifact. Validated against traversal at publish time (P-V12).",
+      "type": "string",
+      "pattern": "^\\.ai-reports/[A-Za-z0-9._/-]+\\.md$"
+    },
+    "sourceHash": {
+      "description": "SHA-256 of source.md as captured in this snapshot.",
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "repoRef": {
+      "description": "Full 40-character commit SHA the plan was authored against (P-V10).",
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "generatedAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "mutexRegistry": {
+      "description": "Closed registry. A task may not reference a class absent from this list (P-V5).",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/mutexClass" }
+    },
+    "safeParallelSets": {
+      "description": "Declared concurrency sets. Checked for mutex intersection at publish time (P-V9).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "taskIds"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "taskIds": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/taskId" }
+          }
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/task" }
+    }
+  },
+  "$defs": {
+    "taskId": {
+      "description": "Uppercase, filesystem-safe, must start and end alphanumeric. The leading-alphanumeric rule alone excludes the reserved __PUBLISH__ and __OWNER__ holder ids; the trailing rule excludes NTFS-hostile trailing dots and hyphens.",
+      "type": "string",
+      "pattern": "^[A-Z0-9]([A-Z0-9._-]*[A-Z0-9])?$",
+      "maxLength": 64,
+      "not": {
+        "enum": [
+          "CON", "PRN", "AUX", "NUL",
+          "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+          "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        ]
+      }
+    },
+    "lane": {
+      "description": "HERDR is deliberately absent. Herdr is a host/orchestrator, never an execution lane (contract principle 4, V-3).",
+      "type": "string",
+      "enum": ["MAIN", "LAB", "COWORK", "OWNER"]
+    },
+    "mutexClass": {
+      "description": "Canonical form retains the colon. Only the on-disk directory name substitutes __ for it, because : is illegal in an NTFS filename.",
+      "type": "string",
+      "enum": [
+        "AUTHORITY:published-plan",
+        "CODE:index-html",
+        "CODE:netlify-functions",
+        "DEPLOY:netlify",
+        "EXTERNAL:live-provider",
+        "QA:browser-runtime",
+        "RUNTIME:gates",
+        "RUNTIME:owner-profile"
+      ]
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "lane", "entryMode", "requiresOwnerGo", "closeCondition"],
+      "properties": {
+        "id": { "$ref": "#/$defs/taskId" },
+        "lane": { "$ref": "#/$defs/lane" },
+        "entryMode": {
+          "description": "Routing is read from the snapshot only. A worker may never upgrade or downgrade this value.",
+          "type": "string",
+          "enum": ["DIRECT", "PLAN"]
+        },
+        "requiresOwnerGo": {
+          "description": "true means the worker claims into WAITING_OWNER_GO and stops without executing.",
+          "type": "boolean"
+        },
+        "mutexes": {
+          "type": "array",
+          "uniqueItems": true,
+          "default": [],
+          "items": { "$ref": "#/$defs/mutexClass" }
+        },
+        "dependsOn": {
+          "type": "array",
+          "uniqueItems": true,
+          "default": [],
+          "items": { "$ref": "#/$defs/taskId" }
+        },
+        "priority": {
+          "description": "Lower runs first. The worker selects the lowest-priority-number eligible task.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "closeCondition": { "type": "string", "minLength": 1 },
+        "stopCondition": {
+          "description": "Structurally non-empty when present. Literalness is enforced by P-V15, not by a length threshold: the ratified corpus shows legitimate conditions (9-375 chars) overlapping pointer-shaped values (8-18 chars), so no minLength separates them.",
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": { "type": "string" },
+        "mayParallelWith": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/taskId" }
+        },
+        "mustNotParallelWith": {
+          "description": "Must be symmetric (P-V8). Mutex classes are symmetric by construction and are the preferred expression.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/taskId" }
+        }
+      }
+    }
+  }
+}

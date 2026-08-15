@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "arc/current.schema.json",
+  "title": "ARC active plan pointer",
+  "description": "plans/current.json - the manifest naming the active snapshot. Written ONLY by /arc-publish-plan, via write-temp plus rename. The same field set, scoped to one snapshot, is reused verbatim as plans/<plan-id>/manifest.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["planId", "planHash", "source", "sourceHash", "ref", "publishedAt", "publishedBy"],
+  "properties": {
+    "planId": {
+      "description": "Directory name under plans/ holding the active snapshot.",
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$",
+      "maxLength": 96
+    },
+    "planHash": {
+      "description": "SHA-256 of plan.json bytes exactly as written. Every worker re-verifies this before acting (W-V3).",
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "source": {
+      "type": "string",
+      "pattern": "^\\.ai-reports/[A-Za-z0-9._/-]+\\.md$"
+    },
+    "sourceHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "ref": {
+      "description": "Commit SHA the snapshot was published against.",
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "publishedAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "publishedBy": {
+      "description": "Owner identity recorded at publish time. Advisory provenance, not an authorization token.",
+      "type": "string",
+      "minLength": 1
+    },
+    "supersedesPlanId": {
+      "description": "The planId this snapshot replaced, or null for the first publication.",
+      "type": ["string", "null"],
+      "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$",
+      "default": null
+    },
+    "staleSourceAcknowledged": {
+      "description": "true when the owner overrode P-V14 because CHECKPOINT.md was newer than the source artifact.",
+      "type": "boolean",
+      "default": false
+    },
+    "refMismatchAcknowledged": {
+      "description": "true when the owner overrode P-V10.",
+      "type": "boolean",
+      "default": false
+    },
+    "carriedOverClaims": {
+      "description": "Claims that were live against supersedesPlanId at publication. Recorded for audit ONLY. Publication never rewrites a live claim - silently retargeting one would be stale-claim stealing under another name.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["taskId", "planId", "state"],
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]([A-Z0-9._-]*[A-Z0-9])?$",
+            "maxLength": 64
+          },
+          "planId": {
+            "type": "string",
+            "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$",
+            "maxLength": 96
+          },
+          "state": {
+            "type": "string",
+            "enum": ["CLAIMED", "WAITING_OWNER_GO", "AUTHORIZED", "BLOCKED"]
+          }
+        }
+      }
+    }
+  }
+}

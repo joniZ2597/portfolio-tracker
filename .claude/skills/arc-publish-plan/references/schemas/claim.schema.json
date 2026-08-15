@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "arc/claim.schema.json",
+  "title": "ARC task claim",
+  "description": "claims/<TASK-ID>/claim.json - the durable record of one claimed task. Written by arc-worker for its OWN claim only, and by the owner during recovery. UNCLAIMED is not a value here: an unclaimed task is represented by the absence of the claim directory.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["taskId", "lane", "planId", "planHash", "conversationId", "startedAt", "mutexes", "state"],
+  "properties": {
+    "taskId": {
+      "description": "Must equal the containing directory name.",
+      "type": "string",
+      "pattern": "^[A-Z0-9]([A-Z0-9._-]*[A-Z0-9])?$",
+      "maxLength": 64
+    },
+    "lane": {
+      "type": "string",
+      "enum": ["MAIN", "LAB", "COWORK", "OWNER"]
+    },
+    "planId": {
+      "description": "Snapshot this claim was taken against. A mismatch with current.json fails closed to BLOCKED and is owner-recoverable only (W-V8).",
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$",
+      "maxLength": 96
+    },
+    "planHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "conversationId": {
+      "description": "Identifies the holding conversation. Advisory: a dead conversation still retains its mutexes, by design.",
+      "type": "string",
+      "minLength": 1
+    },
+    "startedAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "mutexes": {
+      "description": "Classes this claim holds, in canonical acquisition order. Sorting is computed on these unencoded strings, never on the encoded directory names.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "AUTHORITY:published-plan",
+          "CODE:index-html",
+          "CODE:netlify-functions",
+          "DEPLOY:netlify",
+          "EXTERNAL:live-provider",
+          "QA:browser-runtime",
+          "RUNTIME:gates",
+          "RUNTIME:owner-profile"
+        ]
+      }
+    },
+    "state": {
+      "description": "AUTHORIZED and ABANDONED are owner-written only. A worker refuses to emit either string under any condition.",
+      "type": "string",
+      "enum": ["CLAIMED", "WAITING_OWNER_GO", "AUTHORIZED", "BLOCKED", "COMPLETE", "ABANDONED"]
+    },
+    "stateHistory": {
+      "description": "Append-only transition log. Never rewritten, never truncated.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["state", "at", "by"],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": ["CLAIMED", "WAITING_OWNER_GO", "AUTHORIZED", "BLOCKED", "COMPLETE", "ABANDONED"]
+          },
+          "at": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+          },
+          "by": {
+            "type": "string",
+            "enum": ["worker", "owner"]
+          },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "reason": {
+      "description": "Required in practice when state is BLOCKED. Null otherwise.",
+      "type": ["string", "null"],
+      "default": null
+    },
+    "mutexesReleasedAt": {
+      "description": "Set after a COMPLETE claim releases its own classes. COMPLETE is written BEFORE release, so a crash between the two strands the mutexes rather than corrupting the audit trail.",
+      "type": ["string", "null"],
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "default": null
+    },
+    "resumeCount": {
+      "description": "Incremented by /arc-worker --resume. Non-zero means this claim outlived at least one conversation.",
+      "type": "integer",
+      "minimum": 0,
+      "default": 0
+    }
+  }
+}
