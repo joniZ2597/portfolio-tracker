@@ -2738,6 +2738,11 @@ async function _p5RunResearch(symbol, mountEl, nowMs) {
 // repair is exactly what G1 forbids. Parse discipline mirrors
 // _p5ParseModelItems; the transport envelope mirrors _p5RequestItems.
 
+// Client gate: window.PT_ENABLE_P5_CALL2_TOOL_USE_CLIENT === true (default OFF,
+// memory-only, never persisted, reset on every page load — R-2). When OFF, call-2
+// keeps the landed raw-JSON path byte-for-byte and sends no p5ToolUse flag. The
+// tool-use path additionally requires the server gate PT_ENABLE_P5_CALL2_TOOL_USE.
+var P5_CALL2_TOOL_NAME  = 'emit_synthesis';      // R-3 — proxy owns the definition; client matches by name only
 var P5_CALL2_MODEL      = 'claude-sonnet-4-5';   // J1 — pinned, never inherited
 var P5_CALL2_MAX_TOKENS = 700;                   // J8
 var P5_CALL2_TIMEOUT_MS = 28000;                 // > proxy 25s and Netlify's 26s ceiling, so a real 504 surfaces
@@ -2925,17 +2930,22 @@ function _p5ProhibitedSemantics(text) {
 // Single-shot call-2 adapter. Discriminated envelope, never throws, never
 // retries, never persists — same contract as _p5RequestItems.
 async function _p5RequestSynthesis(symbol, payload, portfolioContext) {
+  var toolUse = window.PT_ENABLE_P5_CALL2_TOOL_USE_CLIENT === true;
+  var reqBody = {
+    model:      P5_CALL2_MODEL,
+    max_tokens: P5_CALL2_MAX_TOKENS,
+    system:     _p5Call2System(),
+    messages:   [{ role: 'user', content: _p5Call2User(symbol, payload, portfolioContext) }]
+  };
+  // R-3: the ONLY new client-to-proxy field, and only when the client gate is ON.
+  // The client never sends tools, tool_choice, or any tool name/schema.
+  if (toolUse) reqBody.p5ToolUse = true;
   var res;
   try {
     res = await fetch('/.netlify/functions/anthropic-proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model:      P5_CALL2_MODEL,
-        max_tokens: P5_CALL2_MAX_TOKENS,
-        system:     _p5Call2System(),
-        messages:   [{ role: 'user', content: _p5Call2User(symbol, payload, portfolioContext) }]
-      }),
+      body: JSON.stringify(reqBody),
       signal: AbortSignal.timeout(P5_CALL2_TIMEOUT_MS)
     });
   } catch (err) {
@@ -2945,6 +2955,33 @@ async function _p5RequestSynthesis(symbol, payload, portfolioContext) {
   if (!res.ok) return { ok: false, reason: 'http-' + res.status };
   var data;
   try { data = await res.json(); } catch (err2) { return { ok: false, reason: 'bad-json' }; }
+  if (toolUse) {
+    // Tool-use extraction (R-1/R-3/R-4). Read ONLY the matching tool_use block's
+    // input.synthesis. All four non-happy outcomes fail closed on the SAME ratified
+    // reason — no new vocabulary, no retry, no repair, and NO fallback to the
+    // legacy text/JSON parser.
+    if (data && data.stop_reason === 'max_tokens') {
+      return { ok: false, reason: 'model-output-unparseable' };   // R-4 (3) truncated tool input
+    }
+    var found = [];
+    if (data && Array.isArray(data.content)) {
+      for (var t = 0; t < data.content.length; t++) {
+        var tb = data.content[t];
+        if (tb && tb.type === 'tool_use' && tb.name === P5_CALL2_TOOL_NAME) found.push(tb);
+      }
+    }
+    if (found.length === 0) {
+      return { ok: false, reason: 'model-output-unparseable' };   // R-4 (1) no matching block
+    }
+    if (found.length > 1) {
+      return { ok: false, reason: 'model-output-unparseable' };   // R-4 (4) more than one match
+    }
+    var tin = found[0].input;
+    if (!tin || typeof tin.synthesis !== 'string') {
+      return { ok: false, reason: 'model-output-unparseable' };   // R-4 (2) missing / non-string
+    }
+    return { ok: true, synthesis: tin.synthesis };
+  }
   var textContent = '';
   if (data && Array.isArray(data.content)) {
     for (var i = 0; i < data.content.length; i++) {
@@ -2966,7 +3003,13 @@ async function _p5RunSynthesis(ctx, accepted) {
   if (reply.ok !== true) {
     return { state: 'failed', reason: reply.reason, text: null, derivedFromAccepted: false };
   }
-  var parsed = _p5ParseSynthesis(reply.content);
+  // Tool-use path returns an already-structured string: _p5ParseSynthesis is
+  // bypassed (the tool schema replaced the raw-JSON contract). Legacy path is
+  // unchanged. Everything downstream — prohibited semantics, attribution — runs
+  // identically for both.
+  var parsed = (typeof reply.synthesis === 'string')
+    ? { ok: true, text: reply.synthesis }
+    : _p5ParseSynthesis(reply.content);
   if (parsed.ok !== true) {
     return { state: 'failed', reason: parsed.reason, text: null, derivedFromAccepted: false };
   }

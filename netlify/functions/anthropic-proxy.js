@@ -14,6 +14,15 @@
  *   Returns { ok: true, model, tokens } on success.
  *   Returns { ok: false, status: 'no_key' } when env var is absent.
  *   Returns { ok: false, status: 'auth_failed' | 'unreachable' } on error.
+ *
+ * P-5 Call-2 tool-use capability gate (D-2 / R-2, default OFF):
+ *   PT_ENABLE_P5_CALL2_TOOL_USE must equal "true". When unset or != "true" the
+ *   tool-use path is inert and the upstream payload is byte-identical to the
+ *   legacy four-field shape. This is a CAPABILITY gate, not an endpoint-dormancy
+ *   gate: the function keeps serving every existing caller unchanged when OFF.
+ *   Injection additionally requires the caller to send body.p5ToolUse === true
+ *   (R-3). The proxy owns the tool literal and tool_choice; clients never send
+ *   tools, tool_choice, or any schema. disable_parallel_tool_use is absent (D-3).
  */
 
 'use strict';
@@ -22,6 +31,22 @@ const ANTHROPIC_URL     = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const TIMEOUT_MS        = 25000; // reduced from 30s - stay under Netlify 26s function limit
 const MAX_BODY_BYTES    = 65536; // 64 KB - covers system prompt + stock context + pplxData JSON
+
+// -- P-5 Call-2 tool definition (proxy-owned, R-3) ------------------------------
+// The client cannot supply or alter this. No `strict` key anywhere (C-2:
+// non-strict tool use). input_schema declares exactly one property (C-4).
+const P5_CALL2_TOOL_NAME = 'emit_synthesis';
+const P5_CALL2_TOOL = {
+  name: P5_CALL2_TOOL_NAME,
+  description: 'Return the synthesis text derived from the accepted evidence items.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      synthesis: { type: 'string', description: 'The synthesis text. Empty string if the items support no factual statement.' }
+    },
+    required: ['synthesis']
+  }
+};
 
 // -- Entry point ---------------------------------------------------------------
 exports.handler = async function (event) {
@@ -67,6 +92,15 @@ exports.handler = async function (event) {
     messages:   body.messages,
   };
   if (typeof body.system === 'string') payload.system = body.system;
+
+  // P-5 Call-2 tool-use injection - capability gate first, before any upstream I/O.
+  // Requires BOTH the server env gate AND the caller's narrow boolean selector.
+  const p5ToolUseOn =
+    process.env.PT_ENABLE_P5_CALL2_TOOL_USE !== 'true' ? false : body.p5ToolUse === true;
+  if (p5ToolUseOn) {
+    payload.tools       = [P5_CALL2_TOOL];
+    payload.tool_choice = { type: 'tool', name: P5_CALL2_TOOL_NAME };
+  }
 
   const t0 = Date.now();
   try {

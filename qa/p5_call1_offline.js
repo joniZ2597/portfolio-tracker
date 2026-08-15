@@ -157,15 +157,21 @@ function stubFetch(scenario) {
   return fn;
 }
 
-function buildApi(lsSeed, fetchStub, docBundle) {
+function buildApi(lsSeed, fetchStub, docBundle, windowStub) {
   const body = VARS.map(n => src[n]).join('\n') + '\n' + FNS.map(n => src[n]).join('\n') +
     '\nreturn { ' + FNS.map(n => n + ': ' + n).join(', ') + ' };';
   // eslint-disable-next-line no-new-func
-  const factory = new Function('localStorage', 'document', 'console', 'fetch', 'AbortSignal', '"use strict";\n' + body);
+  const factory = new Function('localStorage', 'document', 'console', 'fetch', 'AbortSignal', 'window', '"use strict";\n' + body);
   const ls = makeLs(lsSeed);
   const db = docBundle || makeDoc();
   const quiet = { log: function () {}, warn: function () {}, error: function () {} };
-  return { api: factory(ls, db.doc, quiet, fetchStub || stubFetch({ body: {} }), AbortSignal), ls: ls, db: db };
+  // window stub: gates are memory-only globals. Default {} means every client gate
+  // reads undefined === OFF, which is the required default-off posture.
+  const win = windowStub || {};
+  return {
+    api: factory(ls, db.doc, quiet, fetchStub || stubFetch({ body: {} }), AbortSignal, win),
+    ls: ls, db: db, window: win
+  };
 }
 
 const NOW_MS = Date.parse('2026-08-12T12:00:00.000Z');

@@ -194,7 +194,8 @@ const CLIENT_GATES = [
   'PT_ENABLE_QUERY_SPLIT_DEEPDIVE',
   'PT_ENABLE_SEC_EVIDENCE_STORE_CLIENT',
   'PT_ENABLE_FUND_FACTS_READ_CLIENT',
-  'PT_ENABLE_TECH_SCORE'
+  'PT_ENABLE_TECH_SCORE',
+  'PT_ENABLE_P5_CALL2_TOOL_USE_CLIENT'
 ];
 
 const SERVER_GATES_DIRECT = [
@@ -217,6 +218,13 @@ const SERVER_GATES_DIRECT = [
   {
     file: 'netlify/functions/sec-evidence-store.js',
     name: 'PT_ENABLE_SEC_EVIDENCE_STORE_SERVER'
+  },
+  // Capability gate, not an endpoint-dormancy gate: when OFF the function keeps
+  // serving all existing callers unchanged and only the P-5 Call-2 tool-use
+  // injection is suppressed. Same strict !== 'true' literal form as the rest.
+  {
+    file: 'netlify/functions/anthropic-proxy.js',
+    name: 'PT_ENABLE_P5_CALL2_TOOL_USE'
   }
 ];
 
@@ -424,7 +432,7 @@ function checkServerGates() {
   }
 
   if (ok) {
-    pass('5 server gate(s) + 1 sub-gate are strict string checks against true');
+    pass(SERVER_GATES_DIRECT.length + ' server gate(s) + 1 sub-gate are strict string checks against true');
   }
 }
 

@@ -147,15 +147,21 @@ function routerFetch(routes) {
   return fn;
 }
 
-function buildApi(lsSeed, fetchStub, docBundle) {
+function buildApi(lsSeed, fetchStub, docBundle, windowStub) {
   const body = VARS.map(n => src[n]).join('\n') + '\n' + FNS.map(n => src[n]).join('\n') +
     '\nreturn { ' + FNS.map(n => n + ': ' + n).join(', ') + ' };';
   // eslint-disable-next-line no-new-func
-  const factory = new Function('localStorage', 'document', 'console', 'fetch', 'AbortSignal', '"use strict";\n' + body);
+  const factory = new Function('localStorage', 'document', 'console', 'fetch', 'AbortSignal', 'window', '"use strict";\n' + body);
   const ls = makeLs(lsSeed);
   const db = docBundle || makeDoc();
   const quiet = { log: function () {}, warn: function () {}, error: function () {} };
-  return { api: factory(ls, db.doc, quiet, fetchStub || routerFetch({}), AbortSignal), ls: ls, db: db };
+  // window stub: gates are memory-only globals. Default {} means every client gate
+  // reads undefined === OFF, which is the required default-off posture.
+  const win = windowStub || {};
+  return {
+    api: factory(ls, db.doc, quiet, fetchStub || routerFetch({}), AbortSignal, win),
+    ls: ls, db: db, window: win
+  };
 }
 
 const NOW_MS = Date.parse('2026-08-12T12:00:00.000Z');
@@ -696,6 +702,206 @@ function anyText(db, needle) {
     check('call-2 failure renders NO limitation line', !anyText(b5.db, 'Synthesis covers the'));
     check('call-2 failure: still exactly 1 anthropic call (no retry)', f5._count('anthropic') === 1);
     check('call-2 failure: ZERO localStorage writes', b5.ls._writes.length === 0);
+  })();
+
+  // ── P-5 Call-2 tool use: server gate, client gate, extraction (R-1…R-4) ───
+  await (async function () {
+    const proxy = require(path.resolve(__dirname, '..', 'netlify', 'functions', 'anthropic-proxy.js'));
+    const LEGACY_KEYS = JSON.stringify(['max_tokens', 'messages', 'model', 'system']);
+    const R4 = 'model-output-unparseable';
+
+    // Ambient state captured BEFORE any server case. Never assume a hard-coded
+    // starting value: the suite must restore whatever it actually found.
+    const AMBIENT_GATE_PRESENT =
+      Object.prototype.hasOwnProperty.call(process.env, 'PT_ENABLE_P5_CALL2_TOOL_USE');
+    const AMBIENT_GATE_VALUE = process.env.PT_ENABLE_P5_CALL2_TOOL_USE;
+    const AMBIENT_FETCH = globalThis.fetch;
+
+    // Server: drive the REAL handler. process.env and globalThis.fetch are saved
+    // and restored per case. The captured upstream payload is what R-1 defines as
+    // "the request" for AC-2 / AC-3 / AC-4.
+    async function callProxy(gate, body) {
+      const savedGatePresent =
+        Object.prototype.hasOwnProperty.call(process.env, 'PT_ENABLE_P5_CALL2_TOOL_USE');
+      const savedGate = process.env.PT_ENABLE_P5_CALL2_TOOL_USE;
+      const savedKeyPresent =
+        Object.prototype.hasOwnProperty.call(process.env, 'ANTHROPIC_API_KEY');
+      const savedKey = process.env.ANTHROPIC_API_KEY;
+      const savedFetch = globalThis.fetch;
+      const savedLog = console.log;
+      let captured = null;
+      try {
+        if (gate === undefined) delete process.env.PT_ENABLE_P5_CALL2_TOOL_USE;
+        else process.env.PT_ENABLE_P5_CALL2_TOOL_USE = gate;
+        process.env.ANTHROPIC_API_KEY = 'qa-offline-not-a-real-key';
+        console.log = function () {};
+        globalThis.fetch = function (url, opts) {
+          captured = { url: String(url), payload: JSON.parse(opts.body) };
+          return Promise.resolve({
+            ok: true, status: 200,
+            json: function () { return Promise.resolve({ content: [] }); },
+            text: function () { return Promise.resolve(''); }
+          });
+        };
+        await proxy.handler({ httpMethod: 'POST', body: JSON.stringify(body) });
+      } finally {
+        console.log = savedLog;
+        globalThis.fetch = savedFetch;
+        if (!savedGatePresent) delete process.env.PT_ENABLE_P5_CALL2_TOOL_USE;
+        else process.env.PT_ENABLE_P5_CALL2_TOOL_USE = savedGate;
+        if (!savedKeyPresent) delete process.env.ANTHROPIC_API_KEY;
+        else process.env.ANTHROPIC_API_KEY = savedKey;
+      }
+      return captured;
+    }
+
+    const baseBody = {
+      model: 'claude-sonnet-4-5', max_tokens: 700, system: 'sys',
+      messages: [{ role: 'user', content: 'u' }]
+    };
+
+    // QA1 — server gate OFF (unset) + selector => no injection
+    const c1 = await callProxy(undefined, Object.assign({}, baseBody, { p5ToolUse: true }));
+    check('QA1 server gate OFF: no tools upstream', c1 !== null && c1.payload.tools === undefined);
+    check('QA1 server gate OFF: no tool_choice upstream', c1 !== null && c1.payload.tool_choice === undefined);
+    check('QA1 server gate OFF: upstream payload is the legacy 4-field shape',
+      c1 !== null && JSON.stringify(Object.keys(c1.payload).sort()) === LEGACY_KEYS);
+    check('QA1 server gate OFF: p5ToolUse never forwarded upstream', c1 !== null && c1.payload.p5ToolUse === undefined);
+
+    const c1b = await callProxy('false', Object.assign({}, baseBody, { p5ToolUse: true }));
+    check("QA1b server gate 'false': no injection", c1b !== null && c1b.payload.tools === undefined);
+
+    // QA2 — server gate ON + selector => exact proxy-owned tool literal
+    const c2 = await callProxy('true', Object.assign({}, baseBody, { p5ToolUse: true }));
+    const tool = c2 && c2.payload.tools && c2.payload.tools[0];
+    check('QA2 server gate ON: exactly one tool injected',
+      c2 !== null && Array.isArray(c2.payload.tools) && c2.payload.tools.length === 1);
+    check('QA2 no "strict" key anywhere in the upstream payload (C-2)',
+      c2 !== null && JSON.stringify(c2.payload).indexOf('"strict"') === -1);
+    check('QA2 input_schema has exactly one property (C-4)',
+      !!tool && Object.keys(tool.input_schema.properties).length === 1);
+    check('QA2 the property is synthesis:string (C-4)',
+      !!tool && tool.input_schema.properties.synthesis.type === 'string');
+    check('QA2 input_schema requires synthesis',
+      !!tool && JSON.stringify(tool.input_schema.required) === JSON.stringify(['synthesis']));
+    check('QA2 tool_choice forces the declared tool by name (AC-3)',
+      !!tool && c2.payload.tool_choice.type === 'tool' && c2.payload.tool_choice.name === tool.name);
+    check('QA2 disable_parallel_tool_use ABSENT (D-3 still open)',
+      c2 !== null && c2.payload.tool_choice.disable_parallel_tool_use === undefined);
+    check('QA2 p5ToolUse still not forwarded upstream', c2 !== null && c2.payload.p5ToolUse === undefined);
+
+    // QA3 — gate ON without the selector => every other caller unaffected
+    const c3 = await callProxy('true', baseBody);
+    check('QA3 gate ON, no selector: no injection (other callers unchanged)',
+      c3 !== null && c3.payload.tools === undefined && c3.payload.tool_choice === undefined);
+    check('QA3 gate ON, no selector: legacy 4-field shape',
+      c3 !== null && JSON.stringify(Object.keys(c3.payload).sort()) === LEGACY_KEYS);
+    const c3b = await callProxy('true', Object.assign({}, baseBody, { p5ToolUse: 'true' }));
+    check('QA3b truthy-but-not-true selector: no injection (strict === true)',
+      c3b !== null && c3b.payload.tools === undefined);
+
+    check('server cases restored PT_ENABLE_P5_CALL2_TOOL_USE to its ambient value/presence',
+      Object.prototype.hasOwnProperty.call(process.env, 'PT_ENABLE_P5_CALL2_TOOL_USE') === AMBIENT_GATE_PRESENT &&
+      process.env.PT_ENABLE_P5_CALL2_TOOL_USE === AMBIENT_GATE_VALUE);
+    check('server cases restored globalThis.fetch to the exact original reference',
+      globalThis.fetch === AMBIENT_FETCH);
+
+    // ---- client side ----
+    const ON = function () { return { PT_ENABLE_P5_CALL2_TOOL_USE_CLIENT: true }; };
+    function toolBody(s) {
+      return { content: [{ type: 'tool_use', name: 'emit_synthesis', input: { synthesis: s } }] };
+    }
+
+    // QA5 — client gate OFF preserves the landed raw-JSON path byte-for-byte
+    const fOff = routerFetch({ anthropic: { body: anthropicBody(synthJson('Alpha [1].')) } });
+    const bOff = buildApi({}, fOff);
+    const rOff = await bOff.api._p5RunSynthesis(mkCtx(), ACCEPTED2);
+    const sentOff = JSON.parse(fOff._calls[0].opts.body);
+    check('QA5 client gate OFF: no p5ToolUse in outbound body', sentOff.p5ToolUse === undefined);
+    check('QA5 client gate OFF: outbound body still exactly the 4 legacy keys',
+      JSON.stringify(Object.keys(sentOff).sort()) === LEGACY_KEYS);
+    check('QA5 client gate OFF: raw-JSON path still yields done',
+      rOff.state === 'done' && rOff.derivedFromAccepted === true);
+
+    // QA6/QA7 — client gate ON: emission + extraction
+    const fOn = routerFetch({ anthropic: { body: toolBody('Alpha [1].') } });
+    const bOn = buildApi({}, fOn, null, ON());
+    const rOn = await bOn.api._p5RunSynthesis(mkCtx(), ACCEPTED2);
+    const sentOn = JSON.parse(fOn._calls[0].opts.body);
+    check('QA6 client gate ON: outbound body carries p5ToolUse true', sentOn.p5ToolUse === true);
+    check('QA6 client gate ON: client sends NO tools (R-3)', sentOn.tools === undefined);
+    check('QA6 client gate ON: client sends NO tool_choice (R-3)', sentOn.tool_choice === undefined);
+    check('QA7 happy path: done from tool_use.input.synthesis',
+      rOn.state === 'done' && rOn.text === 'Alpha [1].' && rOn.derivedFromAccepted === true);
+    check('QA7 happy path: exactly one request', fOn._count('anthropic') === 1);
+    check('QA7 happy path: ZERO localStorage writes', bOn.ls._writes.length === 0);
+
+    // QA8..QA11 — the four R-4 outcomes, kept SEPARATE per the ruling
+    async function toolFail(body) {
+      const f = routerFetch({ anthropic: { body: body } });
+      const b = buildApi({}, f, null, ON());
+      const r = await b.api._p5RunSynthesis(mkCtx(), ACCEPTED2);
+      return { r: r, f: f, b: b };
+    }
+
+    const k1 = await toolFail({ content: [{ type: 'text', text: synthJson('Alpha [1].') }] });
+    check('QA8 R-4(1) no matching tool_use block => failed/' + R4,
+      k1.r.state === 'failed' && k1.r.reason === R4 && k1.r.text === null && k1.r.derivedFromAccepted === false);
+    check('QA8 R-4(1) NO fallback to the legacy parser despite valid JSON text', k1.r.state !== 'done');
+    check('QA8 R-4(1) exactly one request (no retry)', k1.f._count('anthropic') === 1);
+
+    const k2 = await toolFail({ content: [{ type: 'tool_use', name: 'emit_synthesis', input: { synthesis: 42 } }] });
+    check('QA9 R-4(2) input.synthesis non-string => failed/' + R4,
+      k2.r.state === 'failed' && k2.r.reason === R4 && k2.r.text === null && k2.r.derivedFromAccepted === false);
+    check('QA9 R-4(2) exactly one request (no retry)', k2.f._count('anthropic') === 1);
+    const k2b = await toolFail({ content: [{ type: 'tool_use', name: 'emit_synthesis', input: {} }] });
+    check('QA9b R-4(2) input.synthesis missing => failed/' + R4,
+      k2b.r.state === 'failed' && k2b.r.reason === R4);
+
+    const k3 = await toolFail({ stop_reason: 'max_tokens',
+      content: [{ type: 'tool_use', name: 'emit_synthesis', input: { synthesis: 'trunc [1].' } }] });
+    check('QA10 R-4(3) stop_reason max_tokens => failed/' + R4,
+      k3.r.state === 'failed' && k3.r.reason === R4 && k3.r.text === null && k3.r.derivedFromAccepted === false);
+    check('QA10 R-4(3) truncation wins even with a well-formed block', k3.r.state !== 'done');
+    check('QA10 R-4(3) exactly one request (no retry)', k3.f._count('anthropic') === 1);
+
+    const k4 = await toolFail({ content: [
+      { type: 'tool_use', name: 'emit_synthesis', input: { synthesis: 'A [1].' } },
+      { type: 'tool_use', name: 'emit_synthesis', input: { synthesis: 'B [1].' } }
+    ] });
+    check('QA11 R-4(4) more than one matching block => failed/' + R4,
+      k4.r.state === 'failed' && k4.r.reason === R4 && k4.r.text === null && k4.r.derivedFromAccepted === false);
+    check('QA11 R-4(4) no arbitrary first-block selection', k4.r.state !== 'done');
+    check('QA11 R-4(4) exactly one request (no retry)', k4.f._count('anthropic') === 1);
+
+    check('QA12 R-4 introduces NO new reason vocabulary',
+      [k1.r.reason, k2.r.reason, k2b.r.reason, k3.r.reason, k4.r.reason]
+        .every(function (x) { return x === R4; }));
+
+    // QA14 — downstream validators still run on the tool-use path
+    const kAttr = await toolFail(toolBody('No citation here.'));
+    check('QA14 tool-use path still enforces attribution',
+      kAttr.r.state === 'failed' && kAttr.r.reason === 'attribution-missing');
+    // 'buy' alone is deliberately NOT prohibited (see the benign-prose controls
+    // above); use a token that actually matches P5_PROHIBITED_PATTERNS.
+    const kProh = await toolFail(toolBody('Rating: Buy [1].'));
+    check('QA14 tool-use path still enforces prohibited semantics',
+      kProh.r.state === 'failed' && kProh.r.reason === 'prohibited-semantics');
+
+    // QA15 — zero accepted under gate ON => zero fetches
+    const fZero = routerFetch({});
+    const bZero = buildApi({}, fZero, null, ON());
+    check('QA15 gate ON + zero accepted => null section and ZERO fetches',
+      (await bZero.api._p5RunSynthesis(mkCtx(), [])) === null && fZero._calls.length === 0);
+
+    // QA16 — pt_* byte identity across a tool-use run
+    const SEED = { pt_holdings: JSON.stringify([{ symbol: 'AAA', positionSize: 1 }]) };
+    const beforeSeed = JSON.stringify(SEED);
+    const fB = routerFetch({ anthropic: { body: toolBody('Alpha [1].') } });
+    const bB = buildApi(SEED, fB, null, ON());
+    await bB.api._p5RunSynthesis(mkCtx(), ACCEPTED2);
+    check('QA16 tool-use run: ZERO localStorage writes', bB.ls._writes.length === 0);
+    check('QA16 tool-use run: pt_* seed bytes unchanged', JSON.stringify(SEED) === beforeSeed);
   })();
 
   // ── Purity / isolation scans on the new surface ──────────────────────────
