@@ -2388,7 +2388,7 @@ function _p5CollectLocalContext(symbol, nowMs) {
     baselineAt: typeof h.baselineAt === 'string' ? h.baselineAt : null,
     baselineAgeDays: ageDays
   };
-  ctx.pl = _pfHoldingPl(h, fxCache);
+  ctx.pl = _pfHoldingPl(h, fxCache, nowMs);
   var eodEntry = _pfEodLoadCache()[sym];
   if (eodEntry && typeof eodEntry === 'object') {
     ctx.market.present = true;
@@ -2399,7 +2399,7 @@ function _p5CollectLocalContext(symbol, nowMs) {
   // guard + _pfHoldingIlsValue over the unified allocation denominator.
   var sub = _pfComputeHoldingsSubtotals(holdings);
   var reporting = _pfComputePortfolioReporting(sub.usdSubtotal, sub.ilsSubtotal,
-    sub.unknownCurrencyCount, sub.hasCorrupt, sub.corruptCount, _pfCashLoad(), fxCache);
+    sub.unknownCurrencyCount, sub.hasCorrupt, sub.corruptCount, _pfCashLoad(), fxCache, nowMs);
   if (!reporting.completeness) ctx.weight.unavailableReason = 'reporting-incomplete';
   else if (!(reporting.allocationDenominatorValue > 0)) ctx.weight.unavailableReason = 'denominator-zero';
   else {
@@ -8186,8 +8186,8 @@ function _pfComputeHoldingsSubtotals(holdings) {
   return out;
 }
 
-function _pfComputePortfolioReporting(usdSubtotal, ilsSubtotal, unknownCurrencyCount, hasCorrupt, corruptCount, cashState, fxCache) {
-  var fxState = _pfFxState(fxCache);
+function _pfComputePortfolioReporting(usdSubtotal, ilsSubtotal, unknownCurrencyCount, hasCorrupt, corruptCount, cashState, fxCache, nowMs) {
+  var fxState = _pfFxState(fxCache, nowMs);
   var fxUsableForTotal = fxState === 'fresh' || fxState === 'aged-but-valid';
   var completeness = cashState.state === 'recorded'
     && unknownCurrencyCount === 0
@@ -8283,7 +8283,7 @@ function _pfEffectiveCostIls(h) {
 // unknown currency does not guarantee positionSize and costBasis share a
 // unit, and unit-identity is exactly what makes the ratio valid (P-3 scope
 // §4) — manualPlPct may still render as the existing broker-recorded field.
-function _pfHoldingPl(h, fxCache) {
+function _pfHoldingPl(h, fxCache, nowMs) {
   var currencyKnown     = h.currency === 'USD' || h.currency === 'ILS';
   var costBasisNum      = Number(h.costBasis);
   var costBasisValid    = _pfIsFiniteNum(costBasisNum) && costBasisNum > 0;
@@ -8322,7 +8322,7 @@ function _pfHoldingPl(h, fxCache) {
     result.ilsAvailable = result.costIlsAvailable;
     if (result.ilsAvailable) result.valueIls = positionSizeNum;
   } else { // USD
-    var fxState = _pfFxState(fxCache);
+    var fxState = _pfFxState(fxCache, nowMs);
     result.fxUsable    = fxState === 'fresh' || fxState === 'aged-but-valid';
     result.ilsAvailable = result.costIlsAvailable && result.fxUsable;
     if (result.ilsAvailable) result.valueIls = positionSizeNum * fxCache.rate;
