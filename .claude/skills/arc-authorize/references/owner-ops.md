@@ -50,9 +50,27 @@ Run this first, always. Every other operation below depends on knowing the curre
 
 ## 3. RELEASE
 
-Removes a finished claim so the task returns to `UNCLAIMED` and can be claimed again.
+Removes a **stopped** claim so the task returns to `UNCLAIMED` and can be claimed again.
 
-**Precondition:** state is `COMPLETE`, `BLOCKED`, or `ABANDONED`. Never release a live claim.
+**Precondition:** state is `BLOCKED` or `ABANDONED`. Never release a live claim.
+
+**`COMPLETE` is not a legal RELEASE source (owner ruling 2026-08-20, R-M; analysis:
+`.ai-reports/handoffs/2026-08-16_arc-v1-completion-durability-ruling.MAIN.md`).** A retained
+`COMPLETE` claim is the runtime's *only* record that the task finished, and worker
+dependency resolution reads exactly that record (`arc-worker/references/runtime-contract.md`
+§5.1). Releasing it makes every task that `dependsOn` it permanently and silently
+unselectable — the worker reports `IDLE`, which is indistinguishable from having nothing to
+do. `COMPLETE` claims are retained by design: they **are** the completion ledger, not
+clutter (~1 KB per task).
+
+To deliberately make a completed task runnable again, withdraw the completion on the record
+first — the capability is preserved, it just cannot be silent:
+
+```
+COMPLETE --[OWNER ABANDON, section 5]--> ABANDONED --[OWNER RELEASE, here]--> UNCLAIMED
+```
+
+**Procedure** — for a `BLOCKED` or `ABANDONED` claim only:
 
 ```bash
 TASK=<TASK-ID>
@@ -189,7 +207,7 @@ assumption. This applies directly to the LX-2 through LX-5 rows.
 | Residue | Meaning | Recovery |
 |---|---|---|
 | Claim directory with no `claim.json` | INCOMPLETE-CLAIM — the conversation died between the claim `mkdir` and the first write | Confirm no `holder.json` anywhere names this task; release any that do; then `rmdir` the claim directory |
-| `COMPLETE` claim whose mutexes are still held | Crash during release. The write-then-release ordering makes this outcome deliberate | RELEASE (section 3) |
+| `COMPLETE` claim whose mutexes are still held | Crash during release. The write-then-release ordering makes this outcome deliberate | Release the **mutexes only** (section 3 step 2) and **retain the claim directory**; stamp `mutexesReleasedAt`. Full RELEASE is illegal from `COMPLETE` |
 | `authorized.json` present while state reads `WAITING_OWNER_GO` | Crash between the two authorization writes | Re-run `/arc-authorize <TASK-ID>`; it is repair-capable and completes the transition |
 | State reads `AUTHORIZED` with no `authorized.json` | Forgery or corruption. A worker must never produce this | **Stop.** Investigate before any recovery — this is the one residue implying the authorization boundary was crossed |
 | `plans/.staging-<id>/` directory | A publish was interrupted before the rename | `current.json` never pointed at it. Delete the staging directory |
@@ -224,10 +242,14 @@ CLAIMED | AUTHORIZED ---------------------> COMPLETE     (worker)
 <any of the 6 persisted states> --[OWNER]--> ABANDONED
 
 BLOCKED -------------[OWNER ONLY]---------> CLAIMED | AUTHORIZED    (RESUME)
-COMPLETE | BLOCKED | ABANDONED --[OWNER]--> UNCLAIMED               (RELEASE)
+BLOCKED | ABANDONED -------------[OWNER]--> UNCLAIMED               (RELEASE)
 ```
 
 Anything not listed is illegal and fails closed to `BLOCKED`.
+
+`COMPLETE` is **terminal-durable** (owner ruling 2026-08-20, R-M): its only outgoing transition is
+the owner-only `COMPLETE -> ABANDONED`. It is deliberately **not** a RELEASE source — see
+section 3.
 
 `AUTHORIZED` and `ABANDONED` are writable only through an owner-invoked path. A worker may
 never write either one, under any condition.

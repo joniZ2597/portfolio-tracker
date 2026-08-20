@@ -107,7 +107,7 @@ CLAIMED | AUTHORIZED ---------------------> COMPLETE  (worker)
 <any of the 6 persisted states> --[OWNER]-> ABANDONED
 
 BLOCKED -------------[OWNER ONLY]---------> CLAIMED | AUTHORIZED   (RESUME)
-COMPLETE | BLOCKED | ABANDONED --[OWNER]--> UNCLAIMED              (RELEASE)
+BLOCKED | ABANDONED -------------[OWNER]--> UNCLAIMED              (RELEASE)
 ```
 
 Every transition not listed is **illegal and fails closed to `BLOCKED`**.
@@ -115,8 +115,49 @@ Every transition not listed is **illegal and fails closed to `BLOCKED`**.
 `ABANDONED` is **not reachable from `UNCLAIMED`** (owner ruling 2026-08-15) — there is no
 `claim.json` to write to, so there is nothing on disk to abandon.
 
+`COMPLETE` is **terminal-durable** (owner ruling 2026-08-20, R-M): its only outgoing
+transition is the owner-only `COMPLETE -> ABANDONED`. It is deliberately **not** a RELEASE
+source, because the `COMPLETE` claim is the only durable record of completion and §5.1 below
+resolves dependencies from exactly that record. The deliberate re-run path is preserved as
+`COMPLETE -> ABANDONED -> RELEASE -> UNCLAIMED`. Retention is of the **record**, never of the
+**resources**: mutex release at `COMPLETE` is unchanged.
+
 **A worker may never write `AUTHORIZED` or `ABANDONED`.** This is the single most
 important rule in the model and the one with the weakest technical enforcement.
+
+## 5.1 Dependency resolution
+
+Stated explicitly here rather than left inferred from `arc-worker/SKILL.md` step 4:
+
+```
+depSatisfied(D)  <=>  claims/<D>/claim.json  exists
+                      AND parses
+                      AND .state == "COMPLETE"
+```
+
+Every other case — directory absent, unparseable, or **any** other state — is **not
+satisfied**. Fail-closed, with no state that is true but unobservable:
+
+| Observation | Meaning | Dependency |
+|---|---|---|
+| dir present, `state: COMPLETE` | done, durably | **satisfied** |
+| dir present, any other state | in flight / stopped / withdrawn | not satisfied |
+| dir absent | never ran, **or** deliberately withdrawn via ABANDON+RELEASE | not satisfied |
+
+**The dependency claim's `planId` is NOT consulted, deliberately.** Requiring
+`planId == current` would re-strand a whole chain on the next replacement publication, since
+a dependency completed under one plan keeps that `planId` forever. **Completion is a fact
+about the task, not about the plan version.** This rests on a recorded assumption: a task id
+means the same thing across plans.
+
+> **Named non-conflict with §7.** That table's row *"Claim `planId` is not the current
+> `planId` -> BLOCKED"* is **not** contradicted here. A worker reads **its own** claim as
+> *authority* and **a dependency's** claim as *evidence*, and only the former is plan-pinned.
+> Acting under stale terms is the hazard §7 prevents; reading another task's terminal record
+> to answer "did this finish?" grants no authority and carries no such hazard.
+
+An INCOMPLETE-CLAIM directory (no `claim.json`) fails the "exists AND parses" clause, so
+owner-ops §8 residue cleanup remains correct and safe.
 
 ## 6. Worker write allowlist
 

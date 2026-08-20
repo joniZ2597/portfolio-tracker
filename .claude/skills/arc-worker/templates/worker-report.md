@@ -74,8 +74,12 @@ having begun it.
 ones. Name the three owner options: RELEASE, RESUME, ABANDON.
 
 **COMPLETE** — evidence against the published `closeCondition`, confirmation that each
-released mutex was verified as this task's before release, and `mutexesReleasedAt`. The
-claim persists as `COMPLETE` for audit until the owner issues RELEASE.
+released mutex was verified as this task's before release, and `mutexesReleasedAt`.
+Mutexes are released at completion, but the **claim is retained**: `COMPLETE` is the
+durable completion record and is **not** owner-RELEASEd (owner ruling 2026-08-20, R-M). Worker
+dependency resolution reads exactly that record, so releasing it would silently strand
+every dependent task. Deliberate re-run remains
+`COMPLETE -> ABANDONED -> RELEASE -> UNCLAIMED`.
 
 **STOPPED on contention** — the blocking class and its holder. Make clear the task is
 still `UNCLAIMED` and that nothing was written; the next attempt is a fresh claim, not a
