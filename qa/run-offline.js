@@ -148,6 +148,22 @@ function extractVarSource(content, name) {
   return content.slice(start, semi + 1);
 }
 
+// Same as extractVarSource for a top-level `const name = ...;` declaration.
+// Used by the score-contract phase to pull the _SR_*_TIER sets that
+// _srGroupResults depends on, so the sandbox runs the real current values.
+function extractConstSource(content, name) {
+  const sig = 'const ' + name;
+  const start = content.indexOf(sig);
+  if (start === -1) {
+    return null;
+  }
+  const semi = content.indexOf(';', start);
+  if (semi === -1) {
+    return null;
+  }
+  return content.slice(start, semi + 1);
+}
+
 const OFFLINE_TESTS = [
   'qa/research_evidence_contract_test.js',
   'qa/research_evidence_mock_provider_test.js',
@@ -3297,6 +3313,231 @@ function phaseTechScore() {
   }
 }
 
+// ── Phase 13 — Score contract (LX-4 Slice A) ────────────────────────────────
+// Owner ruling 2026-08-21: sentiment_score is a finite number in [0,100]; 0 is
+// a valid score, not a sentinel; anything else is MISSING. Consumers must never
+// render, rank, or average a missing score as 50, and must never represent a
+// missing score as numeric 0 — not even for visual fill width. Every
+// expectation below is hand-authored against the ruled contract, never
+// captured from output. Display/ranking only; the :5451 scoring-chain site is
+// Slice B and is documented here by a labelled characterization pin only.
+function phaseScoreContract() {
+  header('Phase 13 - Score contract (LX-4 Slice A)');
+
+  const content = read('index.html');
+  if (content === null) {
+    fail('score-contract', 'index.html is missing');
+    return;
+  }
+
+  const HELPERS = [
+    '_ptScoreNorm', '_ptScoreText', '_ptScoreCmp', '_ptScoreAvg',
+    '_ptScoreStates', '_ptScoreFillHtml', '_ptScoreDial'
+  ];
+  const REAL_FNS = ['_srGroupResults', 'enforceScoreConsistency', '_isValidScanResult'];
+  let api;
+  let pieces;
+  try {
+    pieces = {
+      bullTier: extractConstSource(content, '_SR_BULLISH_TIER'),
+      bearTier: extractConstSource(content, '_SR_BEARISH_TIER')
+    };
+    HELPERS.concat(REAL_FNS).forEach(function (n) { pieces[n] = extractFunctionSource(content, n); });
+    const missingPieces = Object.keys(pieces).filter(function (k) { return !pieces[k]; });
+    if (missingPieces.length > 0) {
+      fail('score-contract', 'could not extract from index.html: ' + missingPieces.join(', '));
+      return;
+    }
+    const ALL = HELPERS.concat(REAL_FNS);
+    // eslint-disable-next-line no-new-func
+    const factory = new Function(
+      pieces.bullTier + '\n' + pieces.bearTier + '\n' +
+      ALL.map(function (n) { return pieces[n]; }).join('\n') +
+      '\nreturn { ' + ALL.map(function (n) { return n + ': ' + n; }).join(', ') + ' };'
+    );
+    api = factory();
+  } catch (e) {
+    fail('score-contract', 'factory build error: ' + e.message);
+    return;
+  }
+
+  let total = 0;
+  let okCount = 0;
+  function check(name, cond) {
+    total += 1;
+    if (cond) { okCount += 1; } else { fail('score-contract', 'assertion failed: ' + name); }
+  }
+
+  const norm = api._ptScoreNorm, text = api._ptScoreText, cmp = api._ptScoreCmp,
+        avg = api._ptScoreAvg, states = api._ptScoreStates, fillHtml = api._ptScoreFillHtml,
+        dial = api._ptScoreDial;
+  const MISSING_FORMS = [null, undefined, NaN, '', '50', '72', 'null', ' 50 ', true, false, {}, [], -5, -1, 101, 999, Infinity, -Infinity];
+  const it = function (ss, extra) { return Object.assign({ sentiment_score: ss }, extra || {}); };
+
+  // ── norm ──
+  (function () {
+    check('norm(0) === 0 (genuine zero is a real score)', norm(0) === 0);
+    check('norm(50) === 50', norm(50) === 50);
+    check('norm(72) === 72', norm(72) === 72);
+    check('norm(100) === 100', norm(100) === 100);
+    check('norm(62.5) === 62.5 (fractional valid score preserved)', norm(62.5) === 62.5);
+    MISSING_FORMS.forEach(function (v) {
+      check('norm(' + (typeof v === 'string' ? JSON.stringify(v) : String(v)) + ') === null', norm(v) === null);
+    });
+    check('strings are never parsed into numbers ("50" -> null)', norm('50') === null && norm('72') === null);
+    check('norm never returns a negative number for any input', MISSING_FORMS.concat([0, 1, 50]).every(function (v) { const r = norm(v); return r === null || r >= 0; }));
+  })();
+
+  // ── text ──
+  (function () {
+    check('text(0) === "0"', text(0) === '0');
+    check('text(50) === "50"', text(50) === '50');
+    check('text(62.5) === "62.5"', text(62.5) === '62.5');
+    check('text(null) === "—"', text(null) === '—');
+    check('text("72") === "—" (string is missing, not parsed)', text('72') === '—');
+    check('text(undefined) === "—"', text(undefined) === '—');
+  })();
+
+  // ── states: today's exact ladders for valid scores; explicit missing state for null ──
+  (function () {
+    const s0 = states(0), s50 = states(50), s72 = states(72), sN = states(null);
+    check('states(0): HIGH RISK / neg', s0.riskState === 'HIGH RISK' && s0.riskCls === 'neg');
+    check('states(0): LAGGING / neg', s0.rs === 'LAGGING' && s0.rsCls === 'neg');
+    check('states(0): LIMITED / neg, fill neg, missing false', s0.reward === 'LIMITED' && s0.rewardCls === 'neg' && s0.fillCls === 'neg' && s0.missing === false);
+    check('states(50): MODERATE / neutral-v', s50.riskState === 'MODERATE' && s50.riskCls === 'neutral-v');
+    check('states(50): IN LINE / neutral-v', s50.rs === 'IN LINE' && s50.rsCls === 'neutral-v');
+    check('states(50): MODERATE reward / neutral-v, fill warn', s50.reward === 'MODERATE' && s50.rewardCls === 'neutral-v' && s50.fillCls === 'warn');
+    check('states(72): LOW RISK / pos', s72.riskState === 'LOW RISK' && s72.riskCls === 'pos');
+    check('states(72): OUTPERFORM / pos', s72.rs === 'OUTPERFORM' && s72.rsCls === 'pos');
+    check('states(72): HIGH reward / pos, fill pos', s72.reward === 'HIGH' && s72.rewardCls === 'pos' && s72.fillCls === 'pos');
+    // boundary pins — today's thresholds, byte-for-byte semantics
+    check('risk boundaries 65/64/48/47/36/35', states(65).riskState === 'LOW RISK' && states(64).riskState === 'MODERATE' && states(48).riskState === 'MODERATE' && states(47).riskState === 'WATCH' && states(36).riskState === 'WATCH' && states(35).riskState === 'HIGH RISK');
+    check('riskCls boundaries 47 -> warn, 35 -> neg', states(47).riskCls === 'warn' && states(35).riskCls === 'neg');
+    check('rs boundaries 65/64/50/49/38/37', states(65).rs === 'OUTPERFORM' && states(64).rs === 'IN LINE' && states(50).rs === 'IN LINE' && states(49).rs === 'UNDERPERFORM' && states(38).rs === 'UNDERPERFORM' && states(37).rs === 'LAGGING');
+    check('rsCls boundaries 49 -> warn, 37 -> neg', states(49).rsCls === 'warn' && states(37).rsCls === 'neg');
+    check('reward boundaries 65/64/48/47', states(65).reward === 'HIGH' && states(64).reward === 'MODERATE' && states(48).reward === 'MODERATE' && states(47).reward === 'LIMITED');
+    check('fill boundaries 65 pos / 64 warn / 40 warn / 39 neg', states(65).fillCls === 'pos' && states(64).fillCls === 'warn' && states(40).fillCls === 'warn' && states(39).fillCls === 'neg');
+    check('states(null): missing true', sN.missing === true);
+    check('states(null): all labels are "—" (never MODERATE / IN LINE)', sN.riskState === '—' && sN.rs === '—' && sN.reward === '—');
+    check('states(null): all classes neutral-v, fill class empty', sN.riskCls === 'neutral-v' && sN.rsCls === 'neutral-v' && sN.rewardCls === 'neutral-v' && sN.fillCls === '');
+    check('states("50") equals states(null) (string is missing)', JSON.stringify(states('50')) === JSON.stringify(sN));
+  })();
+
+  // ── visual — r2 proofs: 0 and missing are distinguishable; missing is never numeric 0 ──
+  (function () {
+    const f0 = fillHtml(0), fN = fillHtml(null), d0 = dial(0, 'c'), dN = dial(null, 'c');
+    // (1) text
+    check('visual(1): text(0) === "0" and text(null) === "—"', text(0) === '0' && text(null) === '—');
+    // (2) distinguishable
+    check('visual(2): fillHtml(0) renders a real zero-width fill', f0 === '<div class="sr-score-fill neg" style="width:0%"></div>');
+    check('visual(2): fillHtml(null) renders no fill element at all', fN === '');
+    check('visual(2): dial(0) is the normal dial at 0%', d0.cls === 'at-dial' && d0.style === 'background:conic-gradient(c 0 0%,var(--border2) 0% 100%)' && d0.numColor === 'c');
+    check('visual(2): dial(null) is the dedicated no-score dial', dN.cls === 'at-dial no-score' && dN.style === '' && dN.numColor === 'var(--text3)');
+    check('visual(2): 0 and null differ on text, fill, dial class and missing flag', text(0) !== text(null) && f0 !== fN && d0.cls !== dN.cls && states(0).missing !== states(null).missing);
+    // (3) missing never produces a numeric zero
+    check('visual(3): fillHtml(null) contains no width and no digit', fN.indexOf('width:') === -1 && !/\d/.test(fN));
+    check('visual(3): dial(null).style contains no percentage', dN.style.indexOf('%') === -1);
+    check('visual(3): text(null) contains no digit', !/\d/.test(text(null)));
+    check('visual(3): norm(null) !== 0 and norm(undefined) !== 0', norm(null) !== 0 && norm(undefined) !== 0);
+    check('visual(3): every missing form yields empty fill and no-score dial', MISSING_FORMS.every(function (v) { return fillHtml(v) === '' && dial(v, 'c').cls === 'at-dial no-score'; }));
+    // (4) valid visuals unchanged
+    check('visual(4): fillHtml(72) = width:72% pos', fillHtml(72) === '<div class="sr-score-fill pos" style="width:72%"></div>');
+    check('visual(4): fillHtml(50) = width:50% warn', fillHtml(50) === '<div class="sr-score-fill warn" style="width:50%"></div>');
+    check('visual(4): fillHtml(39) = width:39% neg', fillHtml(39) === '<div class="sr-score-fill neg" style="width:39%"></div>');
+    check('visual(4): dial(72) style byte-exact vs the existing template', dial(72, 'var(--green2)').style === 'background:conic-gradient(var(--green2) 0 72%,var(--border2) 72% 100%)');
+  })();
+
+  // ── cmp ──
+  (function () {
+    const src = [it(50, { id: 'a' }), it(0, { id: 'b' }), it(null, { id: 'c' }), it(49, { id: 'd' }), it(51, { id: 'e' }), it(undefined, { id: 'f' }), it('70', { id: 'g' })];
+    const order = src.slice().sort(cmp).map(function (r) { return r.id; }).join(',');
+    check('cmp ordering [50,0,null,49,51,undefined,"70"] -> 51,50,49,0, then missing in stable input order', order === 'e,a,d,b,c,f,g');
+    check('auto-select picks the highest valid numeric score (51)', src.slice().sort(cmp)[0].id === 'e');
+    let zeroNeverOutranks = true;
+    for (let k = 1; k <= 49; k += 1) { if (!(cmp(it(0), it(k)) > 0)) { zeroNeverOutranks = false; } }
+    check('0 never outranks any of 1..49', zeroNeverOutranks);
+    check('cmp(0, null) < 0 (genuine zero ranks above missing)', cmp(it(0), it(null)) < 0);
+    check('cmp(null, undefined) === 0 (missing forms tie)', cmp(it(null), it(undefined)) === 0);
+    check('cmp("70", "50") === 0 (strings are missing, not compared numerically)', cmp(it('70'), it('50')) === 0);
+    const forms = [0, 50, 100, null, undefined, NaN, '', '70', true, {}, -5, 101];
+    check('cmp never returns NaN for any pair of forms', forms.every(function (x) { return forms.every(function (y) { return !Number.isNaN(cmp(it(x), it(y))); }); }));
+    check('cmp is antisymmetric on numeric pairs', cmp(it(10), it(20)) === -cmp(it(20), it(10)));
+    check('_aiUnavailable synthetic 50 sorts exactly as 50', cmp(it(50, { _aiUnavailable: true }), it(50)) === 0 && cmp(it(50, { _aiUnavailable: true }), it(49)) < 0 && cmp(it(50, { _aiUnavailable: true }), it(51)) > 0);
+    const allMissing = [it(null, { id: 'x' }), it('70', { id: 'y' }), it(undefined, { id: 'z' })];
+    check('all-missing input keeps stable input order (first stays first)', allMissing.slice().sort(cmp).map(function (r) { return r.id; }).join(',') === 'x,y,z');
+  })();
+
+  // ── avg ──
+  (function () {
+    check('avg([0,100]) === 50', avg([it(0), it(100)]) === 50);
+    check('avg([null,null]) === null (not 50)', avg([it(null), it(null)]) === null);
+    check('avg([0,null]) === 0 (not 25, not 50)', avg([it(0), it(null)]) === 0);
+    check('avg([40,40,0,0]) === 20 (today: 45 MIXED -> contract: RISK-OFF)', avg([it(40), it(40), it(0), it(0)]) === 20);
+    check('avg([]) === null', avg([]) === null);
+    check('avg(["50",72]) === 72 (string excluded, not parsed)', avg([it('50'), it(72)]) === 72);
+    check('avg([0]) === 0', avg([it(0)]) === 0);
+    check('avg rounds like today (Math.round)', avg([it(62.5), it(63.5)]) === 63);
+    check('avg(undefined/non-array) === null', avg(undefined) === null && avg(null) === null);
+  })();
+
+  // ── _srGroupResults (the real function) ──
+  (function () {
+    const S = 'This summary is long enough for any renderer and carries no rating line at all.';
+    const src = [
+      { ticker: 'A', sentiment_score: 0,    technical_setup: 'support_test',    rating: 'Neutral', summary: S },
+      { ticker: 'B', sentiment_score: 40,   technical_setup: 'support_test',    rating: 'Neutral', summary: S },
+      { ticker: 'C', sentiment_score: null, technical_setup: 'support_test',    rating: 'Neutral', summary: S },
+      { ticker: 'D', sentiment_score: 60,   technical_setup: 'healthy_uptrend', rating: 'Buy',     summary: S },
+      { ticker: 'E', sentiment_score: 60,   technical_setup: 'healthy_uptrend', rating: 'Sell',    summary: S },
+      { ticker: 'F', sentiment_score: 60,   technical_setup: 'healthy_uptrend', rating: 'Neutral', summary: S },
+      { ticker: 'G', sentiment_score: null, technical_setup: 'healthy_uptrend', rating: 'Buy',     summary: S },
+      { ticker: 'H', sentiment_score: 0,    technical_setup: 'healthy_uptrend', rating: 'Buy',     summary: S }
+    ];
+    const groups = api._srGroupResults(src);
+    const ids = function (g) { return g.items.map(function (r) { return r.ticker; }).join(','); };
+    check('Strong Setup keeps the Buy -> Neutral -> Sell tie-break among equal scores', ids(groups[0]) === 'D,F,E');
+    check('missing-score bullish-setup item is NOT Strong Setup (tier gate needs a numeric >= 55)', groups[0].items.indexOf(src[6]) === -1 && groups[1].items.indexOf(src[6]) !== -1);
+    check('genuine-0 bullish-setup item is NOT Strong Setup and is not treated as 50', groups[0].items.indexOf(src[7]) === -1);
+    check('Watch: numeric first (40), then genuine zeros, then missing last — rating tie-break preserved within each tier (H,A and G,C)', ids(groups[1]) === 'B,H,A,G,C');
+    const w = groups[1].items;
+    check('genuine 0 sorts after every numeric item and before every missing item in its group', w.indexOf(src[0]) > w.indexOf(src[1]) && w.indexOf(src[0]) < w.indexOf(src[2]));
+  })();
+
+  // ── _aiUnavailable synthetic item ──
+  (function () {
+    const syn = { ticker: 'SYN', sentiment: 'neutral', sentiment_score: 50, _aiUnavailable: true };
+    check('_aiUnavailable synthetic 50 normalizes to 50 and renders "50"', norm(syn.sentiment_score) === 50 && text(syn.sentiment_score) === '50');
+    check('_aiUnavailable synthetic 50 derives MODERATE / IN LINE like any 50', states(syn.sentiment_score).riskState === 'MODERATE' && states(syn.sentiment_score).rs === 'IN LINE');
+  })();
+
+  // ── SLICE-B characterization pin ──────────────────────────────────────────
+  // Documents the :5451 defect as it behaves TODAY. It is NOT a Slice A change
+  // and :5451 is not modified here. This check is EXPECTED TO FLIP only when
+  // Slice B is separately authorized and enforceScoreConsistency is guarded.
+  (function () {
+    const BULLISH_CTX = JSON.stringify('raised PT and upgrade to buy, earnings beat expectations');
+    const VALID_SUMMARY = 'This is a valid synthetic summary body used purely for offline pin fixtures and exceeds fifty characters.';
+    const noScore = { ticker: 'ZZZ', sentiment: 'neutral', summary: VALID_SUMMARY, _verifiedChangePct: 1.2 };
+    const out = api.enforceScoreConsistency([noScore], BULLISH_CTX);
+    check('SLICE-B PIN (current behaviour; flips only when Slice B guards :5451): a result with NO sentiment_score + bullish context + numeric _verifiedChangePct is boosted to sentiment_score 72 and _isValidScanResult accepts it',
+      out[0].sentiment_score === 72 && api._isValidScanResult(out[0]) === true);
+  })();
+
+  // ── structural + containment ──
+  (function () {
+    const survivors = (content.match(/sentiment_score\s*\|\|\s*50/g) || []).length;
+    check('exactly one `sentiment_score || 50` remains in index.html (the :5451 Slice-B site)', survivors === 1);
+    check('the remaining one is inside enforceScoreConsistency', /sentiment_score\s*\|\|\s*50/.test(pieces.enforceScoreConsistency));
+    const helperSrc = HELPERS.map(function (n) { return pieces[n]; }).join('\n');
+    check('helpers touch no storage, network or DOM', ['localStorage', 'sessionStorage', 'fetch(', 'document', 'window.', 'pt_'].every(function (t) { return helperSrc.indexOf(t) === -1; }));
+    check('helpers contain no numeric fallback (`?? 0`, `|| 0`, `?? 50`, `|| 50`)', !/(\?\?|\|\|)\s*(0|50)\b/.test(helperSrc));
+  })();
+
+  if (okCount === total) {
+    pass(total + ' score-contract assertion(s) passed');
+  }
+}
+
 async function main() {
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
@@ -3313,6 +3554,7 @@ async function main() {
   phaseReconciliation();
   phaseNeedsAttention();
   phaseTechScore();
+  phaseScoreContract();
 
   console.log('\n=== Summary ===');
 

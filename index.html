@@ -324,6 +324,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .at-dial-row{display:flex;align-items:center;gap:14px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border2)}
 .at-dial{width:44px;height:44px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;position:relative}
 .at-dial::after{content:"";position:absolute;inset:5px;border-radius:50%;background:var(--card)}
+.at-dial.no-score{background:transparent;border:1px dashed var(--border2)}
 .at-dial-num{position:relative;z-index:1;font-family:var(--mono);font-size:13px;font-weight:700}
 .at-dial-lbl{font-family:var(--mono);font-size:9px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--text3)}
 .at-dial-val{font-family:var(--sans);font-size:18px;font-weight:600}
@@ -5936,6 +5937,57 @@ let _srMode = 'ranked'; // session-only; resets on reload
 const _SR_BULLISH_TIER = new Set(['healthy_uptrend', 'healthy_uptrend_near_ath', 'pullback_in_uptrend']);
 const _SR_BEARISH_TIER = new Set(['breakdown_risk', 'below_key_mas']);
 
+// ── LX-4 Slice A: sentiment_score consumer contract (owner ruling 2026-08-21) ──
+// sentiment_score is a finite number in [0,100]; 0 is a valid score, not a
+// sentinel; anything else is MISSING. Display/ranking only — pure functions,
+// no DOM, no storage. Missing is never rendered, ranked or averaged as 50, and
+// is never represented as numeric 0 (not even for fill width). Strings are
+// never parsed. The scoring-chain site in enforceScoreConsistency is Slice B
+// and is not touched by these helpers.
+function _ptScoreNorm(v) {
+  return (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100) ? v : null;
+}
+function _ptScoreText(v) {
+  const s = _ptScoreNorm(v);
+  return s === null ? '—' : String(s);
+}
+function _ptScoreCmp(a, b) {
+  // Descending on the normalized score; missing sorts after every numeric
+  // score (including 0) via a comparator-only sentinel that is never rendered.
+  const sa = _ptScoreNorm(a && a.sentiment_score), sb = _ptScoreNorm(b && b.sentiment_score);
+  return (sb === null ? -1 : sb) - (sa === null ? -1 : sa);
+}
+function _ptScoreAvg(results) {
+  if (!Array.isArray(results)) return null;
+  const vals = [];
+  for (const r of results) { const s = _ptScoreNorm(r && r.sentiment_score); if (s !== null) vals.push(s); }
+  return vals.length ? Math.round(vals.reduce((x, y) => x + y, 0) / vals.length) : null;
+}
+function _ptScoreStates(v) {
+  const s = _ptScoreNorm(v);
+  if (s === null) return { missing: true, riskState: '—', riskCls: 'neutral-v', rs: '—', rsCls: 'neutral-v', reward: '—', rewardCls: 'neutral-v', fillCls: '' };
+  return {
+    missing:   false,
+    riskState: s >= 65 ? 'LOW RISK' : s >= 48 ? 'MODERATE' : s <= 35 ? 'HIGH RISK' : 'WATCH',
+    riskCls:   s >= 65 ? 'pos' : s >= 48 ? 'neutral-v' : s <= 35 ? 'neg' : 'warn',
+    rs:        s >= 65 ? 'OUTPERFORM' : s >= 50 ? 'IN LINE' : s >= 38 ? 'UNDERPERFORM' : 'LAGGING',
+    rsCls:     s >= 65 ? 'pos' : s >= 50 ? 'neutral-v' : s >= 38 ? 'warn' : 'neg',
+    reward:    s >= 65 ? 'HIGH' : s >= 48 ? 'MODERATE' : 'LIMITED',
+    rewardCls: s >= 65 ? 'pos' : s >= 48 ? 'neutral-v' : 'neg',
+    fillCls:   s >= 65 ? 'pos' : s >= 40 ? 'warn' : 'neg'
+  };
+}
+function _ptScoreFillHtml(v) {
+  const s = _ptScoreNorm(v);
+  if (s === null) return '';
+  return `<div class="sr-score-fill ${_ptScoreStates(s).fillCls}" style="width:${s}%"></div>`;
+}
+function _ptScoreDial(v, color) {
+  const s = _ptScoreNorm(v);
+  if (s === null) return { cls: 'at-dial no-score', style: '', numColor: 'var(--text3)' };
+  return { cls: 'at-dial', style: `background:conic-gradient(${color} 0 ${s}%,var(--border2) ${s}% 100%)`, numColor: color };
+}
+
 function _srGroupResults(source) {
   const rRank = r => {
     const m = (r.summary || '').match(/Rating:\s*(Buy|Neutral|Sell)/i);
@@ -5943,7 +5995,7 @@ function _srGroupResults(source) {
     return v.toLowerCase() === 'buy' ? 0 : v.toLowerCase() === 'sell' ? 2 : 1;
   };
   const items = source.slice().sort((a, b) => {
-    const d = (b.sentiment_score || 50) - (a.sentiment_score || 50);
+    const d = _ptScoreCmp(a, b);
     return d !== 0 ? d : rRank(a) - rRank(b);
   });
   // display order: Strong Setup → Watch → Extended / ATH → Caution
@@ -5954,9 +6006,9 @@ function _srGroupResults(source) {
     { name: 'Caution',        items: [] },
   ];
   items.forEach(r => {
-    const sc = r.sentiment_score || 50;
+    const sc = _ptScoreNorm(r.sentiment_score);
     const ts = r.technical_setup || '';
-    if (_SR_BULLISH_TIER.has(ts) && sc >= 55)  groups[0].items.push(r);
+    if (_SR_BULLISH_TIER.has(ts) && sc !== null && sc >= 55)  groups[0].items.push(r);
     else if (ts === 'extended_near_ath')         groups[2].items.push(r);
     else if (_SR_BEARISH_TIER.has(ts))           groups[3].items.push(r);
     else                                          groups[1].items.push(r);
@@ -5984,7 +6036,7 @@ function _srRenderGrouped(source, tbody) {
     if (!g.items.length) return;
     rows.push(`<tr class="sr-group-hdr"><td colspan="6">${_crEsc(g.name)}<span class="sr-group-count">${g.items.length}</span></td></tr>`);
     g.items.forEach(r => {
-      const score  = r.sentiment_score || 50;
+      const score  = _ptScoreNorm(r.sentiment_score);
       const chg    = typeof r._verifiedChangePct === 'number' ? r._verifiedChangePct : null;
       const chgStr = chg !== null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
       const chgCls = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
@@ -5997,7 +6049,7 @@ function _srRenderGrouped(source, tbody) {
       rows.push(`<tr data-ticker="${sym}">
         <td class="sr-sym">${sym}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
-        <td class="r sr-score"><span>${score}</span><div class="sr-score-track"><div class="sr-score-fill ${score>=65?'pos':score>=40?'warn':'neg'}" style="width:${score}%"></div></div></td>
+        <td class="r sr-score"><span>${_ptScoreText(score)}</span><div class="sr-score-track">${_ptScoreFillHtml(score)}</div></td>
         <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>
         <td class="sr-setup ${setupCls}">${setupLbl}</td>
         <td class="r sr-chg ${chgCls}">${chgStr}</td>
@@ -6162,9 +6214,7 @@ function openScanResultsOverlay() {
     below_key_mas:            ['BEARISH',  'neg'],
   };
 
-  const sorted = source.slice().sort((a, b) =>
-    (b.sentiment_score || 50) - (a.sentiment_score || 50)
-  );
+  const sorted = source.slice().sort(_ptScoreCmp);
 
   if (countEl) countEl.textContent = sorted.length + ' ticker' + (sorted.length !== 1 ? 's' : '');
 
@@ -6183,7 +6233,7 @@ function openScanResultsOverlay() {
     tbody.innerHTML = '<tr><td colspan="7" class="sr-empty">No scan results yet. Run a scan to see ranked results.</td></tr>';
   } else {
     tbody.innerHTML = sorted.map((r, i) => {
-      const score  = r.sentiment_score || 50;
+      const score  = _ptScoreNorm(r.sentiment_score);
       const chg    = typeof r._verifiedChangePct === 'number' ? r._verifiedChangePct : null;
       const chgStr = chg !== null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
       const chgCls = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
@@ -6198,7 +6248,7 @@ function openScanResultsOverlay() {
         <td class="r sr-rank">${i + 1}</td>
         <td class="sr-sym">${sym}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
-        <td class="r sr-score"><span>${score}</span><div class="sr-score-track"><div class="sr-score-fill ${score>=65?'pos':score>=40?'warn':'neg'}" style="width:${score}%"></div></div></td>
+        <td class="r sr-score"><span>${_ptScoreText(score)}</span><div class="sr-score-track">${_ptScoreFillHtml(score)}</div></td>
         <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>
         <td class="sr-setup ${setupCls}">${setupLbl}</td>
         <td class="r sr-chg ${chgCls}">${chgStr}</td>
@@ -6721,11 +6771,11 @@ function renderResults(allResults, dateStr, sourceTag) {
   // Portfolio summary in regime bar
   const rb = document.getElementById('regimeBar');
   if (rb) {
-    const avg = allResults.length ? Math.round(allResults.reduce((s,r)=>s+(r.sentiment_score||50),0)/allResults.length) : 50;
-    const [rLbl,rCls] = avg>=65?['RISK-ON','on']:avg<=40?['RISK-OFF','off']:['MIXED','mix'];
+    const avg = _ptScoreAvg(allResults); // valid numeric scores only (0 included); null when none — never 50
+    const [rLbl,rCls] = avg===null?['—','inf']:avg>=65?['RISK-ON','on']:avg<=40?['RISK-OFF','off']:['MIXED','mix'];
     document.getElementById('mktState').textContent = rLbl;
     document.getElementById('mktState').className = 'sidebar-regime ' + rCls;
-    document.getElementById('avgScore').textContent = avg + ' / 100';
+    document.getElementById('avgScore').textContent = avg===null ? '—' : avg + ' / 100';
   }
 
   // Render Pulse sidebar rows (Phase 2a: replaces renderSidebar)
@@ -6746,7 +6796,7 @@ function renderResults(allResults, dateStr, sourceTag) {
     // (prevents unrelated batch completions from triggering tech refreshes)
   } else {
     // No active ticker — auto-select first by score
-    const first = [...allResults].sort((a,b) => (b.sentiment_score||50) - (a.sentiment_score||50))[0];
+    const first = [...allResults].sort(_ptScoreCmp)[0];
     if (first) selectTicker(first.ticker);
   }
 }
@@ -6879,7 +6929,7 @@ function renderMainPanel(item) {
   const panel = document.getElementById('mainPanel');
   if (!panel) return;
 
-  const score = item.sentiment_score || 50;
+  const score = _ptScoreNorm(item.sentiment_score); // null = missing (never 50, never 0)
   const sent  = item.sentiment==='positive'?'positive':item.sentiment==='negative'?'negative':'neutral';
   let chg   = typeof item._verifiedChangePct==='number' ? item._verifiedChangePct : null;
   let price = item._verifiedPrice ? `$${item._verifiedPrice.toFixed(2)}` : '—';
@@ -6912,10 +6962,11 @@ function renderMainPanel(item) {
   const [phase,phCls]=_tfMap[item.technical_setup]||['NEUTRAL','neutral-v'];
 
   // State values
-  const riskState = score>=65?'LOW RISK':score>=48?'MODERATE':score<=35?'HIGH RISK':'WATCH';
-  const riskCls   = score>=65?'pos':score>=48?'neutral-v':score<=35?'neg':'warn';
-  const rs        = score>=65?'OUTPERFORM':score>=50?'IN LINE':score>=38?'UNDERPERFORM':'LAGGING';
-  const rsCls     = score>=65?'pos':score>=50?'neutral-v':score>=38?'warn':'neg';
+  const _scoreSt  = _ptScoreStates(score); // missing -> explicit '—' states, never MODERATE / IN LINE
+  const riskState = _scoreSt.riskState;
+  const riskCls   = _scoreSt.riskCls;
+  const rs        = _scoreSt.rs;
+  const rsCls     = _scoreSt.rsCls;
   const cat       = (sl.includes('earnings beat')||sl.includes('upgrade')||sl.includes('hbm')||sl.includes('ai demand'))?'CATALYST PRESENT':
                     (sl.includes('downgrade')||sl.includes('earnings miss'))?'NEGATIVE EVENT':
                     (sl.includes('no verified')||sl.includes('limited catalyst'))?'NO CATALYST':'MONITORING';
@@ -7221,8 +7272,9 @@ function renderMainPanel(item) {
   const _tsAssessHtml = _tsAssess ? `<div class="ts-assess">${_tsAssess}</div>` : '';
 
   const _dialColor = rCls === 'pos' ? 'var(--green2)' : rCls === 'neg' ? 'var(--red2)' : 'var(--blue2)';
+  const _dial      = _ptScoreDial(score, _dialColor); // missing -> dashed no-score dial, no numeric fill
   const _dialHtml  = (item.action || actionable)
-    ? `<div class="at-dial-row"><div class="at-dial" style="background:conic-gradient(${_dialColor} 0 ${score}%,var(--border2) ${score}% 100%)"><span class="at-dial-num" style="color:${_dialColor}">${score}</span></div><div><div class="at-dial-lbl">Score</div><div class="at-dial-val ${rCls}">${rating}</div></div></div>`
+    ? `<div class="at-dial-row"><div class="${_dial.cls}" style="${_dial.style}"><span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span></div><div><div class="at-dial-lbl">Score</div><div class="at-dial-val ${rCls}">${rating}</div></div></div>`
     : '';
 
   const _crn = item._crNudge;
@@ -7450,7 +7502,7 @@ function renderMainPanel(item) {
         <div class="pc-card-title">Key Levels <span class="ts-chevron">${_klCardCollapsed ? '▶' : '▼'}</span></div>
         ${hasData ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
           <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val ${riskCls}">${riskState.replace(' RISK','')}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val ${score>=65?'pos':score>=48?'neutral-v':'neg'}">${score>=65?'HIGH':score>=48?'MODERATE':'LIMITED'}</span></div>
+          <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val ${_scoreSt.rewardCls}">${_scoreSt.reward}</span></div>
         </div>` : `<div class="rr-table" style="margin-top:8px">
           <div class="rr-row"><span class="rr-lbl">Risk Level</span><span class="rr-val neutral-v">Limited confidence</span></div>
           <div class="rr-row"><span class="rr-lbl">Reward Potential</span><span class="rr-val warn">Research-only</span></div>
