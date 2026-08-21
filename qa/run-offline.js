@@ -196,7 +196,8 @@ const OFFLINE_TESTS = [
   'qa/p5_sourcing_validator_offline.js',
   'qa/p5_packet_offline.js',
   'qa/p5_call1_offline.js',
-  'qa/p5_call2_offline.js'
+  'qa/p5_call2_offline.js',
+  'qa/arc_execution_profiles_offline.js'
 ];
 
 const CLIENT_GATES = [

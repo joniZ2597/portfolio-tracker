@@ -1,0 +1,740 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "arc/execution-profile.schema.json",
+  "title": "ARC execution profile (V1.2 P-A)",
+  "description": "One named execution profile from the committed library at references/execution-profiles/. Authored ONLY in that library (no inline or ad-hoc profiles); referenced from a plan source by id; resolved and embedded into a snapshot by the publisher (P-B, not yet active); consumed by workers from the snapshot only (P-C, not yet active). Mode values are prompting policy, never authority: what a worker may touch is fixed by scope, capabilities, tools, boundaries and the runtime write allowlist, identically in every mode. Owner amendment r2.1 (2026-08-21): MAIN lane never AUTO in any phase; no boundary is grantable; gate / live-provider / pt_* / git / runtime / deploy / env / production actions occur only in MANUAL phases; git-stage is its own boundary.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "profileId",
+    "version",
+    "appliesToLane",
+    "scope",
+    "capabilities",
+    "tools",
+    "skills",
+    "phases",
+    "approvalBoundaries",
+    "verification",
+    "triggers",
+    "cleanup"
+  ],
+  "properties": {
+    "profileId": {
+      "description": "Library id. Equals the file name without .json. Unique case-folded.",
+      "type": "string",
+      "pattern": "^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$",
+      "maxLength": 32
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "libraryHash": {
+      "description": "sha256 of the library file bytes (CR stripped). Publisher-owned: written only when a profile is embedded into a snapshot (P-B). NEVER present in a library file.",
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "appliesToLane": {
+      "$ref": "#/$defs/lane"
+    },
+    "requiresOwnerGo": {
+      "description": "Must be true when any phase carries a grant; the publisher (P-B) additionally forces task.requiresOwnerGo to match.",
+      "type": "boolean"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "worktree",
+        "pinnedRef",
+        "writes",
+        "readOnly",
+        "forbidden"
+      ],
+      "properties": {
+        "worktree": {
+          "type": "string",
+          "pattern": "^([a-z0-9.-]+|none)$"
+        },
+        "pinnedRef": {
+          "description": "PLAN_REPO_REF resolves to plan.repoRef at claim time; otherwise a 40-hex commit.",
+          "type": "string",
+          "pattern": "^(PLAN_REPO_REF|[a-f0-9]{40})$"
+        },
+        "writes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pathString"
+          }
+        },
+        "readOnly": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "forbidden": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "network",
+        "browser",
+        "git",
+        "deploy",
+        "gates",
+        "ownerProfile"
+      ],
+      "properties": {
+        "network": {
+          "$ref": "#/$defs/cap_network"
+        },
+        "browser": {
+          "$ref": "#/$defs/cap_browser"
+        },
+        "git": {
+          "$ref": "#/$defs/cap_git"
+        },
+        "deploy": {
+          "$ref": "#/$defs/cap_deploy"
+        },
+        "gates": {
+          "$ref": "#/$defs/cap_gates"
+        },
+        "ownerProfile": {
+          "$ref": "#/$defs/cap_ownerProfile"
+        }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowed",
+        "forbidden"
+      ],
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "forbidden": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "skills": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "demandOnly",
+        "ownerInvokedOnly"
+      ],
+      "properties": {
+        "required": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Each must be bound to a phase and must NOT be disable-model-invocation unless that phase has entryGate OWNER_TYPES_SKILL (P-V26, P-B)."
+        },
+        "demandOnly": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ownerInvokedOnly": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "phases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/phase"
+      }
+    },
+    "approvalBoundaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inside",
+        "outside"
+      ],
+      "properties": {
+        "inside": {
+          "description": "V1.2: a profile may pre-authorize NO boundary. Every boundary crossing is a MANUAL owner act.",
+          "type": "array",
+          "maxItems": 0,
+          "items": {
+            "$ref": "#/$defs/boundary"
+          }
+        },
+        "outside": {
+          "description": "The declaration is total: every boundary name must be listed.",
+          "type": "array",
+          "uniqueItems": true,
+          "minItems": 11,
+          "items": {
+            "$ref": "#/$defs/boundary"
+          }
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "suites",
+        "selfTest",
+        "evidence",
+        "proofStyle"
+      ],
+      "properties": {
+        "suites": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "selfTest": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "proofStyle": {
+          "type": "string"
+        }
+      }
+    },
+    "triggers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/trigger"
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scratch",
+        "sandbox",
+        "gates",
+        "mutexes",
+        "handoff",
+        "checkpoint",
+        "conversation"
+      ],
+      "properties": {
+        "scratch": {
+          "type": "string"
+        },
+        "sandbox": {
+          "type": "string"
+        },
+        "gates": {
+          "type": "string"
+        },
+        "mutexes": {
+          "type": "string"
+        },
+        "handoff": {
+          "type": "string"
+        },
+        "checkpoint": {
+          "type": "string"
+        },
+        "conversation": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "description": "r2.1 ruling 1: MAIN lane never AUTO in any phase (ceiling or recommendation).",
+      "if": {
+        "properties": {
+          "appliesToLane": {
+            "const": "MAIN"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "phases": {
+            "items": {
+              "properties": {
+                "modeCeiling": {
+                  "enum": [
+                    "MANUAL",
+                    "ACCEPT_EDITS"
+                  ]
+                },
+                "recommendedMode": {
+                  "enum": [
+                    "MANUAL",
+                    "ACCEPT_EDITS"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "OWNER lane is informational and entirely MANUAL.",
+      "if": {
+        "properties": {
+          "appliesToLane": {
+            "const": "OWNER"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "phases": {
+            "items": {
+              "properties": {
+                "modeCeiling": {
+                  "const": "MANUAL"
+                },
+                "recommendedMode": {
+                  "const": "MANUAL"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Any grant requires a MAIN profile with requiresOwnerGo true.",
+      "if": {
+        "properties": {
+          "phases": {
+            "contains": {
+              "required": [
+                "grant"
+              ]
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "requiresOwnerGo"
+        ],
+        "properties": {
+          "requiresOwnerGo": {
+            "const": true
+          },
+          "appliesToLane": {
+            "const": "MAIN"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "mode": {
+      "description": "Ordered MANUAL < ACCEPT_EDITS < AUTO. A prompting policy, never an authority.",
+      "type": "string",
+      "enum": [
+        "MANUAL",
+        "ACCEPT_EDITS",
+        "AUTO"
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "PLAN",
+        "IMPLEMENT",
+        "VERIFY",
+        "REPORT",
+        "TERMINAL"
+      ]
+    },
+    "entryGate": {
+      "type": "string",
+      "enum": [
+        "NONE",
+        "AUTHORIZED_JSON",
+        "OWNER_TYPES_SKILL",
+        "OWNER_TYPED_LITERAL"
+      ]
+    },
+    "lane": {
+      "type": "string",
+      "enum": [
+        "MAIN",
+        "LAB",
+        "COWORK",
+        "OWNER"
+      ]
+    },
+    "boundary": {
+      "description": "The closed boundary vocabulary (eleven names; r2.1 ruling 4 added git-stage as its own boundary).",
+      "type": "string",
+      "enum": [
+        "git-stage",
+        "git-commit",
+        "git-push",
+        "deploy",
+        "env-change",
+        "gate-toggle",
+        "live-external-call",
+        "pt-write",
+        "runtime-mutation-other-claim",
+        "scope-expansion",
+        "production"
+      ]
+    },
+    "nonGrantableBoundary": {
+      "description": "r2.1 ruling 3: every boundary is MANUAL and non-grantable. Identical to boundary by design.",
+      "type": "string",
+      "enum": [
+        "git-stage",
+        "git-commit",
+        "git-push",
+        "deploy",
+        "env-change",
+        "gate-toggle",
+        "live-external-call",
+        "pt-write",
+        "runtime-mutation-other-claim",
+        "scope-expansion",
+        "production"
+      ]
+    },
+    "workerAction": {
+      "description": "Boundary actions a worker phase may DECLARE it performs - always in a MANUAL phase. git-push, deploy, env-change, production, runtime-mutation-other-claim and scope-expansion are never worker actions.",
+      "type": "string",
+      "enum": [
+        "git-stage",
+        "git-commit",
+        "gate-toggle",
+        "live-external-call",
+        "pt-write"
+      ]
+    },
+    "cap_network": {
+      "type": "string",
+      "enum": [
+        "none",
+        "public-read",
+        "live-provider"
+      ]
+    },
+    "cap_browser": {
+      "type": "string",
+      "enum": [
+        "none",
+        "isolated-profile",
+        "owner-profile"
+      ]
+    },
+    "cap_git": {
+      "description": "push is never a worker capability.",
+      "type": "string",
+      "enum": [
+        "read-only",
+        "stage",
+        "commit"
+      ]
+    },
+    "cap_deploy": {
+      "description": "Always none for workers.",
+      "type": "string",
+      "const": "none"
+    },
+    "cap_gates": {
+      "type": "string",
+      "enum": [
+        "none",
+        "toggle-with-repark"
+      ]
+    },
+    "cap_ownerProfile": {
+      "type": "string",
+      "enum": [
+        "none",
+        "read",
+        "write"
+      ]
+    },
+    "triggerOn": {
+      "type": "string",
+      "enum": [
+        "containment-breach",
+        "live-call-needed",
+        "target-surface-changed",
+        "two-failed-attempts",
+        "mode-exceeds-ceiling",
+        "automation-increase-needed",
+        "newer-artifact-observed",
+        "dependency-false",
+        "scope-growth",
+        "new-failure-class"
+      ]
+    },
+    "triggerAction": {
+      "type": "string",
+      "enum": [
+        "STOP",
+        "BLOCKED",
+        "STOP-before-write",
+        "STOP-request-MODE-literal",
+        "REPORT-stay-on-snapshot",
+        "ESCALATE-OWNER"
+      ]
+    },
+    "pathString": {
+      "description": "Exactly one placeholder is permitted, {TASK_ID}, substituted deterministically by the worker at claim time.",
+      "type": "string",
+      "pattern": "^[^{}]*(\\{TASK_ID\\}[^{}]*)*$"
+    },
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "toMode",
+        "paths",
+        "mutexClass"
+      ],
+      "properties": {
+        "toMode": {
+          "type": "string",
+          "const": "ACCEPT_EDITS"
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/pathString"
+              },
+              {
+                "not": {
+                  "pattern": "^(\\.git/|\\.netlify/|netlify\\.toml$|\\.env)|pt_"
+                }
+              }
+            ]
+          }
+        },
+        "mutexClass": {
+          "type": "string",
+          "enum": [
+            "CODE:index-html",
+            "CODE:netlify-functions"
+          ]
+        }
+      },
+      "description": "Bounded MAIN ACCEPT_EDITS grant (owner ruling 2026-08-21, retained under r2.1): IMPLEMENT phase only, named code paths only (subset of scope.writes; never .git/, .netlify/, netlify.toml, .env*, pt_), a CODE:* class the task row must hold, requiresOwnerGo forced true. Never AUTO. Never co-located with any action."
+    },
+    "phase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "recommendedMode",
+        "modeCeiling",
+        "entryGate",
+        "writes",
+        "exit"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9-]*$"
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "recommendedMode": {
+          "description": "Operator ergonomics: the preferred mode. Must be <= modeCeiling. Stricter is always legal.",
+          "$ref": "#/$defs/mode"
+        },
+        "modeCeiling": {
+          "description": "Safety: the highest mode under which the phase may perform a write. Above it is STOP-before-write.",
+          "$ref": "#/$defs/mode"
+        },
+        "entryGate": {
+          "$ref": "#/$defs/entryGate"
+        },
+        "writes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pathString"
+          }
+        },
+        "exit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actions": {
+          "description": "Boundary actions this phase performs. Non-empty actions force modeCeiling MANUAL.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/workerAction"
+          }
+        },
+        "grant": {
+          "$ref": "#/$defs/grant"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "modeCeiling": {
+                "const": "MANUAL"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "recommendedMode": {
+                "const": "MANUAL"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "modeCeiling": {
+                "const": "ACCEPT_EDITS"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "recommendedMode": {
+                "enum": [
+                  "MANUAL",
+                  "ACCEPT_EDITS"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "modeCeiling": {
+                "const": "AUTO"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "const": "VERIFY"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "TERMINAL"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "modeCeiling": {
+                "const": "MANUAL"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "actions"
+            ],
+            "properties": {
+              "actions": {
+                "minItems": 1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "modeCeiling": {
+                "const": "MANUAL"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "grant"
+            ]
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "const": "IMPLEMENT"
+              },
+              "modeCeiling": {
+                "const": "ACCEPT_EDITS"
+              },
+              "actions": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "on",
+        "action"
+      ],
+      "properties": {
+        "on": {
+          "$ref": "#/$defs/triggerOn"
+        },
+        "action": {
+          "$ref": "#/$defs/triggerAction"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

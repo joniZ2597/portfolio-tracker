@@ -1,0 +1,180 @@
+{
+  "profileId": "MAIN-GATED-LIVE-QA",
+  "version": 1,
+  "appliesToLane": "MAIN",
+  "scope": {
+    "worktree": "branch-dev",
+    "pinnedRef": "PLAN_REPO_REF",
+    "writes": [
+      ".ai-reports/handoffs/*.MAIN.md"
+    ],
+    "readOnly": [
+      "**"
+    ],
+    "forbidden": [
+      ".git/arc-runtime/** (except own claim + own mutex holders)",
+      ".netlify/**",
+      "netlify.toml",
+      ".env*",
+      "pt_*"
+    ]
+  },
+  "capabilities": {
+    "network": "live-provider",
+    "browser": "isolated-profile",
+    "git": "read-only",
+    "deploy": "none",
+    "gates": "toggle-with-repark",
+    "ownerProfile": "none"
+  },
+  "tools": {
+    "allowed": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash",
+      "Write",
+      "Edit"
+    ],
+    "forbidden": [
+      "mcp__claude_ai_Netlify__*",
+      "WebFetch",
+      "WebSearch",
+      "Bash(netlify *)",
+      "Bash(git push*)",
+      "Bash(git commit*)"
+    ]
+  },
+  "skills": {
+    "required": [],
+    "demandOnly": [
+      "browser-integrity-qa"
+    ],
+    "ownerInvokedOnly": [
+      "browser-integrity-qa"
+    ]
+  },
+  "phases": [
+    {
+      "id": "SETUP",
+      "kind": "IMPLEMENT",
+      "recommendedMode": "MANUAL",
+      "modeCeiling": "MANUAL",
+      "entryGate": "AUTHORIZED_JSON",
+      "writes": [],
+      "exit": "gates toggled ON under owner approval; pt_* baseline captured",
+      "actions": [
+        "gate-toggle"
+      ]
+    },
+    {
+      "id": "VERIFY",
+      "kind": "VERIFY",
+      "recommendedMode": "MANUAL",
+      "modeCeiling": "MANUAL",
+      "entryGate": "NONE",
+      "writes": [],
+      "exit": "live path verified end to end; every live call owner-approved; no pt_* mutation",
+      "actions": [
+        "live-external-call",
+        "gate-toggle"
+      ]
+    },
+    {
+      "id": "REPARK",
+      "kind": "IMPLEMENT",
+      "recommendedMode": "MANUAL",
+      "modeCeiling": "MANUAL",
+      "entryGate": "NONE",
+      "writes": [],
+      "exit": "every gate re-parked OFF and asserted OFF",
+      "actions": [
+        "gate-toggle"
+      ]
+    },
+    {
+      "id": "HANDOFF",
+      "kind": "REPORT",
+      "recommendedMode": "ACCEPT_EDITS",
+      "modeCeiling": "ACCEPT_EDITS",
+      "entryGate": "NONE",
+      "writes": [
+        ".ai-reports/handoffs/*.MAIN.md"
+      ],
+      "exit": "handoff registered; gate states and call counts recorded"
+    },
+    {
+      "id": "CLOSE",
+      "kind": "TERMINAL",
+      "recommendedMode": "MANUAL",
+      "modeCeiling": "MANUAL",
+      "entryGate": "NONE",
+      "writes": [
+        "claims/{TASK_ID}/claim.json"
+      ],
+      "exit": "COMPLETE written; own mutexes released (claim-protocol section 7)"
+    }
+  ],
+  "approvalBoundaries": {
+    "inside": [],
+    "outside": [
+      "git-stage",
+      "git-commit",
+      "git-push",
+      "deploy",
+      "env-change",
+      "gate-toggle",
+      "live-external-call",
+      "pt-write",
+      "runtime-mutation-other-claim",
+      "scope-expansion",
+      "production"
+    ]
+  },
+  "verification": {
+    "suites": [],
+    "selfTest": "per-call approval; call counter; gate state asserted before and after",
+    "evidence": "handoff + network evidence",
+    "proofStyle": "counts-not-claims"
+  },
+  "triggers": [
+    {
+      "on": "containment-breach",
+      "action": "STOP"
+    },
+    {
+      "on": "target-surface-changed",
+      "action": "BLOCKED"
+    },
+    {
+      "on": "two-failed-attempts",
+      "action": "BLOCKED",
+      "reason": "entry-mode-insufficient"
+    },
+    {
+      "on": "mode-exceeds-ceiling",
+      "action": "STOP-before-write"
+    },
+    {
+      "on": "automation-increase-needed",
+      "action": "STOP-request-MODE-literal"
+    },
+    {
+      "on": "newer-artifact-observed",
+      "action": "REPORT-stay-on-snapshot"
+    },
+    {
+      "on": "new-failure-class",
+      "action": "ESCALATE-OWNER"
+    }
+  ],
+  "cleanup": {
+    "scratch": "scratchpad only, deleted",
+    "sandbox": "n/a",
+    "gates": "re-parked OFF and asserted OFF before COMPLETE",
+    "mutexes": "release own classes at COMPLETE (claim-protocol section 7)",
+    "handoff": "required",
+    "checkpoint": "owner note",
+    "conversation": "retire after report (Policy v3 section D)"
+  }
+}

@@ -57,6 +57,11 @@
         }
       }
     },
+    "executionProfiles": {
+      "description": "OPTIONAL (V1.2 P-A). Publisher-owned embedded snapshot field: the execution profiles resolved from the committed library (references/execution-profiles/) and embedded, hash-pinned, at publish time. Written ONLY by P-B resolution - never authored in a source. Absent in every legacy snapshot; its absence never invalidates a plan.",
+      "type": "object",
+      "additionalProperties": { "$ref": "execution-profile.schema.json" }
+    },
     "tasks": {
       "type": "array",
       "minItems": 1,
@@ -146,6 +151,11 @@
           "type": "array",
           "uniqueItems": true,
           "items": { "$ref": "#/$defs/taskId" }
+        },
+        "executionProfile": {
+          "description": "OPTIONAL (V1.2 P-A). Library reference id - the ONLY authoring surface for execution profiles. Resolved against references/execution-profiles/<id>.json and embedded into executionProfiles by the publisher (P-B, not yet active).",
+          "type": "string",
+          "pattern": "^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$"
         }
       }
     }

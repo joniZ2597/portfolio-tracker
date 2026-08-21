@@ -1,0 +1,135 @@
+{
+  "profileId": "COWORK-REGISTER",
+  "version": 1,
+  "appliesToLane": "COWORK",
+  "scope": {
+    "worktree": "branch-dev",
+    "pinnedRef": "PLAN_REPO_REF",
+    "writes": [
+      ".ai-reports/handoffs/*.COWORK.md"
+    ],
+    "readOnly": [
+      "**"
+    ],
+    "forbidden": [
+      "index.html",
+      "netlify/**",
+      "qa/**",
+      ".claude/**",
+      ".git/arc-runtime/** (except own claim + own mutex holders)",
+      ".netlify/**",
+      "pt_*"
+    ]
+  },
+  "capabilities": {
+    "network": "none",
+    "browser": "none",
+    "git": "read-only",
+    "deploy": "none",
+    "gates": "none",
+    "ownerProfile": "none"
+  },
+  "tools": {
+    "allowed": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Write"
+    ],
+    "forbidden": [
+      "mcp__claude_ai_Netlify__*",
+      "WebFetch",
+      "WebSearch",
+      "Bash(netlify *)",
+      "Bash(git push*)",
+      "Bash(git commit*)"
+    ]
+  },
+  "skills": {
+    "required": [],
+    "demandOnly": [],
+    "ownerInvokedOnly": []
+  },
+  "phases": [
+    {
+      "id": "AUTHOR",
+      "kind": "REPORT",
+      "recommendedMode": "ACCEPT_EDITS",
+      "modeCeiling": "ACCEPT_EDITS",
+      "entryGate": "NONE",
+      "writes": [
+        ".ai-reports/handoffs/*.COWORK.md"
+      ],
+      "exit": "handoff registered; verified findings recorded; no execution started"
+    },
+    {
+      "id": "CLOSE",
+      "kind": "TERMINAL",
+      "recommendedMode": "MANUAL",
+      "modeCeiling": "MANUAL",
+      "entryGate": "NONE",
+      "writes": [
+        "claims/{TASK_ID}/claim.json"
+      ],
+      "exit": "COMPLETE written; own mutexes released (claim-protocol section 7)"
+    }
+  ],
+  "approvalBoundaries": {
+    "inside": [],
+    "outside": [
+      "git-stage",
+      "git-commit",
+      "git-push",
+      "deploy",
+      "env-change",
+      "gate-toggle",
+      "live-external-call",
+      "pt-write",
+      "runtime-mutation-other-claim",
+      "scope-expansion",
+      "production"
+    ]
+  },
+  "verification": {
+    "suites": [],
+    "selfTest": "findings cross-checked against the sources they cite",
+    "evidence": "handoff",
+    "proofStyle": "cited-not-asserted"
+  },
+  "triggers": [
+    {
+      "on": "containment-breach",
+      "action": "STOP"
+    },
+    {
+      "on": "target-surface-changed",
+      "action": "BLOCKED"
+    },
+    {
+      "on": "two-failed-attempts",
+      "action": "BLOCKED",
+      "reason": "entry-mode-insufficient"
+    },
+    {
+      "on": "mode-exceeds-ceiling",
+      "action": "STOP-before-write"
+    },
+    {
+      "on": "automation-increase-needed",
+      "action": "STOP-request-MODE-literal"
+    },
+    {
+      "on": "newer-artifact-observed",
+      "action": "REPORT-stay-on-snapshot"
+    }
+  ],
+  "cleanup": {
+    "scratch": "scratchpad only, deleted",
+    "sandbox": "n/a",
+    "gates": "n/a",
+    "mutexes": "release own classes at COMPLETE (claim-protocol section 7)",
+    "handoff": "required",
+    "checkpoint": "owner note",
+    "conversation": "retire after report (Policy v3 section D)"
+  }
+}

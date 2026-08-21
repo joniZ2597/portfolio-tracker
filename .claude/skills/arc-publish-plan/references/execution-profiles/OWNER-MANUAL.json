@@ -1,0 +1,110 @@
+{
+  "profileId": "OWNER-MANUAL",
+  "version": 1,
+  "appliesToLane": "OWNER",
+  "scope": {
+    "worktree": "none",
+    "pinnedRef": "PLAN_REPO_REF",
+    "writes": [],
+    "readOnly": [
+      "**"
+    ],
+    "forbidden": [
+      ".git/arc-runtime/**",
+      "pt_*"
+    ]
+  },
+  "capabilities": {
+    "network": "none",
+    "browser": "owner-profile",
+    "git": "read-only",
+    "deploy": "none",
+    "gates": "none",
+    "ownerProfile": "read"
+  },
+  "tools": {
+    "allowed": [],
+    "forbidden": [
+      "mcp__claude_ai_Netlify__*",
+      "WebFetch",
+      "WebSearch",
+      "Bash(netlify *)",
+      "Bash(git push*)",
+      "Bash(git commit*)"
+    ]
+  },
+  "skills": {
+    "required": [],
+    "demandOnly": [],
+    "ownerInvokedOnly": []
+  },
+  "phases": [
+    {
+      "id": "OWNER",
+      "kind": "VERIFY",
+      "recommendedMode": "MANUAL",
+      "modeCeiling": "MANUAL",
+      "entryGate": "NONE",
+      "writes": [],
+      "exit": "owner performs the task by hand; not workable by /arc-worker"
+    }
+  ],
+  "approvalBoundaries": {
+    "inside": [],
+    "outside": [
+      "git-stage",
+      "git-commit",
+      "git-push",
+      "deploy",
+      "env-change",
+      "gate-toggle",
+      "live-external-call",
+      "pt-write",
+      "runtime-mutation-other-claim",
+      "scope-expansion",
+      "production"
+    ]
+  },
+  "verification": {
+    "suites": [],
+    "selfTest": "n/a (owner act)",
+    "evidence": "CHECKPOINT note",
+    "proofStyle": "owner-attested"
+  },
+  "triggers": [
+    {
+      "on": "containment-breach",
+      "action": "STOP"
+    },
+    {
+      "on": "target-surface-changed",
+      "action": "BLOCKED"
+    },
+    {
+      "on": "two-failed-attempts",
+      "action": "BLOCKED",
+      "reason": "entry-mode-insufficient"
+    },
+    {
+      "on": "mode-exceeds-ceiling",
+      "action": "STOP-before-write"
+    },
+    {
+      "on": "automation-increase-needed",
+      "action": "STOP-request-MODE-literal"
+    },
+    {
+      "on": "newer-artifact-observed",
+      "action": "REPORT-stay-on-snapshot"
+    }
+  ],
+  "cleanup": {
+    "scratch": "scratchpad only, deleted",
+    "sandbox": "n/a",
+    "gates": "n/a",
+    "mutexes": "owner-lane ACQUIRE/RELEASE per owner-ops section 6",
+    "handoff": "CHECKPOINT note",
+    "checkpoint": "owner note",
+    "conversation": "retire after report (Policy v3 section D)"
+  }
+}

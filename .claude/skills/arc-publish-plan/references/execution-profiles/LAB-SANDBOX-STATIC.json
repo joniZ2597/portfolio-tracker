@@ -1,0 +1,168 @@
+{
+  "profileId": "LAB-SANDBOX-STATIC",
+  "version": 1,
+  "appliesToLane": "LAB",
+  "scope": {
+    "worktree": "portfolio-tracker-test-lab",
+    "pinnedRef": "PLAN_REPO_REF",
+    "writes": [
+      "<worktree>/lab-{TASK_ID}/**",
+      ".ai-reports/handoffs/*.LAB.md"
+    ],
+    "readOnly": [
+      "<worktree>/**",
+      "git show <pinnedRef>:**"
+    ],
+    "forbidden": [
+      "branch-dev:index.html",
+      "branch-dev:netlify/**",
+      ".netlify/**",
+      ".git/arc-runtime/** (except own claim + own mutex holders)",
+      "pt_*"
+    ]
+  },
+  "capabilities": {
+    "network": "none",
+    "browser": "none",
+    "git": "read-only",
+    "deploy": "none",
+    "gates": "none",
+    "ownerProfile": "none"
+  },
+  "tools": {
+    "allowed": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash",
+      "Write",
+      "Edit"
+    ],
+    "forbidden": [
+      "mcp__claude_ai_Netlify__*",
+      "WebFetch",
+      "WebSearch",
+      "Bash(netlify *)",
+      "Bash(git push*)",
+      "Bash(git commit*)"
+    ]
+  },
+  "skills": {
+    "required": [],
+    "demandOnly": [
+      "lab-planner"
+    ],
+    "ownerInvokedOnly": [
+      "lab-planner"
+    ]
+  },
+  "phases": [
+    {
+      "id": "BUILD",
+      "kind": "IMPLEMENT",
+      "recommendedMode": "ACCEPT_EDITS",
+      "modeCeiling": "ACCEPT_EDITS",
+      "entryGate": "NONE",
+      "writes": [
+        "<worktree>/lab-{TASK_ID}/**"
+      ],
+      "exit": "harness green on its own hand-authored fixtures"
+    },
+    {
+      "id": "RUN",
+      "kind": "VERIFY",
+      "recommendedMode": "AUTO",
+      "modeCeiling": "AUTO",
+      "entryGate": "NONE",
+      "writes": [
+        "<worktree>/lab-{TASK_ID}/out/**"
+      ],
+      "exit": "scan complete; counts recorded"
+    },
+    {
+      "id": "HANDOFF",
+      "kind": "REPORT",
+      "recommendedMode": "ACCEPT_EDITS",
+      "modeCeiling": "ACCEPT_EDITS",
+      "entryGate": "NONE",
+      "writes": [
+        ".ai-reports/handoffs/*.LAB.md"
+      ],
+      "exit": "handoff registered; closeCondition evidence present"
+    },
+    {
+      "id": "CLOSE",
+      "kind": "TERMINAL",
+      "recommendedMode": "MANUAL",
+      "modeCeiling": "MANUAL",
+      "entryGate": "NONE",
+      "writes": [
+        "claims/{TASK_ID}/claim.json"
+      ],
+      "exit": "COMPLETE written; own mutexes released (claim-protocol section 7)"
+    }
+  ],
+  "approvalBoundaries": {
+    "inside": [],
+    "outside": [
+      "git-stage",
+      "git-commit",
+      "git-push",
+      "deploy",
+      "env-change",
+      "gate-toggle",
+      "live-external-call",
+      "pt-write",
+      "runtime-mutation-other-claim",
+      "scope-expansion",
+      "production"
+    ]
+  },
+  "verification": {
+    "suites": [],
+    "selfTest": "asserts against hand-authored fixtures; counts printed",
+    "evidence": "handoff + sandbox artifacts",
+    "proofStyle": "counts-not-claims"
+  },
+  "triggers": [
+    {
+      "on": "containment-breach",
+      "action": "STOP"
+    },
+    {
+      "on": "target-surface-changed",
+      "action": "BLOCKED"
+    },
+    {
+      "on": "two-failed-attempts",
+      "action": "BLOCKED",
+      "reason": "entry-mode-insufficient"
+    },
+    {
+      "on": "mode-exceeds-ceiling",
+      "action": "STOP-before-write"
+    },
+    {
+      "on": "automation-increase-needed",
+      "action": "STOP-request-MODE-literal"
+    },
+    {
+      "on": "newer-artifact-observed",
+      "action": "REPORT-stay-on-snapshot"
+    },
+    {
+      "on": "live-call-needed",
+      "action": "BLOCKED",
+      "reason": "needs EXTERNAL:live-provider - not in row"
+    }
+  ],
+  "cleanup": {
+    "scratch": "scratchpad only, deleted",
+    "sandbox": "retain untracked in worktree",
+    "gates": "n/a",
+    "mutexes": "release own classes at COMPLETE (claim-protocol section 7)",
+    "handoff": "required",
+    "checkpoint": "owner note",
+    "conversation": "retire after report (Policy v3 section D)"
+  }
+}
