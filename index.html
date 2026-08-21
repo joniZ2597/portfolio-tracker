@@ -5449,12 +5449,17 @@ function enforceScoreConsistency(results, newsContext) {
   const bearishCount = tierOneBearish.filter(s => ctxLower.includes(s)).length;
 
   return results.map(item => {
-    const score = item.sentiment_score || 50;
+    const score = item.sentiment_score;
     const chgPct = item._changePct || 0;
     // Terminal-chain integrity: a synthetic/AI-failure fallback item must
     // never be rewritten into a fabricated bullish score — its honest
     // neutral/50 fallback state is the correct final state.
     if (item._aiUnavailable === true) { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (AI unavailable — synthetic fallback item)`); return item; }
+    // LX-4 Slice B: a score that is not a finite number in [0,100] is MISSING. It must
+    // never become 50 and never qualify for the boost — the item passes through
+    // unchanged and the persistence gate (_isValidScanResult, same predicate) rejects
+    // it like any other malformed result. Strings are never parsed.
+    if (typeof score !== 'number' || !(score >= 0 && score <= 100)) { console.log(`[PT] enforceScore: skipping boost for ${item.ticker} (no valid numeric score)`); return item; }
     // Terminal-chain integrity: _changePct above is coerced to 0 when
     // market data is missing, which would otherwise silently defeat the
     // down-day guard on an unknown-price day. _verifiedChangePct is set by

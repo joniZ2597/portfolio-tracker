@@ -3334,7 +3334,7 @@ function phaseScoreContract() {
     '_ptScoreNorm', '_ptScoreText', '_ptScoreCmp', '_ptScoreAvg',
     '_ptScoreStates', '_ptScoreFillHtml', '_ptScoreDial'
   ];
-  const REAL_FNS = ['_srGroupResults', 'enforceScoreConsistency', '_isValidScanResult'];
+  const REAL_FNS = ['_srGroupResults', 'enforceScoreConsistency', '_isValidScanResult', 'mergeResultsByTicker'];
   let api;
   let pieces;
   try {
@@ -3510,24 +3510,68 @@ function phaseScoreContract() {
     check('_aiUnavailable synthetic 50 derives MODERATE / IN LINE like any 50', states(syn.sentiment_score).riskState === 'MODERATE' && states(syn.sentiment_score).rs === 'IN LINE');
   })();
 
-  // ── SLICE-B characterization pin ──────────────────────────────────────────
-  // Documents the :5451 defect as it behaves TODAY. It is NOT a Slice A change
-  // and :5451 is not modified here. This check is EXPECTED TO FLIP only when
-  // Slice B is separately authorized and enforceScoreConsistency is guarded.
+  // ── SLICE-B contract (owner GO 2026-08-21) — enforceScoreConsistency ──────
+  // Missing/invalid sentiment_score: the item passes through UNCHANGED (same
+  // reference), never becomes 50, never becomes boost-eligible, and the
+  // persistence gate rejects it. Valid scores keep today's boost rule exactly.
+  // The former characterization pin (missing -> 72) is flipped here by design.
   (function () {
     const BULLISH_CTX = JSON.stringify('raised PT and upgrade to buy, earnings beat expectations');
+    const NEUTRAL_CTX = JSON.stringify('no notable analyst activity');
     const VALID_SUMMARY = 'This is a valid synthetic summary body used purely for offline pin fixtures and exceeds fifty characters.';
-    const noScore = { ticker: 'ZZZ', sentiment: 'neutral', summary: VALID_SUMMARY, _verifiedChangePct: 1.2 };
-    const out = api.enforceScoreConsistency([noScore], BULLISH_CTX);
-    check('SLICE-B PIN (current behaviour; flips only when Slice B guards :5451): a result with NO sentiment_score + bullish context + numeric _verifiedChangePct is boosted to sentiment_score 72 and _isValidScanResult accepts it',
-      out[0].sentiment_score === 72 && api._isValidScanResult(out[0]) === true);
+    const base = function (overrides) { return Object.assign({ ticker: 'ZZZ', sentiment: 'neutral', summary: VALID_SUMMARY, _verifiedChangePct: 1.2 }, overrides || {}); };
+    const run = function (item, ctx) { return api.enforceScoreConsistency([item], ctx === undefined ? BULLISH_CTX : ctx)[0]; };
+    // flipped pin
+    const noScore = base(); const outNoScore = run(noScore);
+    check('SLICE-B (flipped pin): NO sentiment_score + bullish context + verified data -> item returned unchanged, NOT boosted to 72', outNoScore === noScore && !('sentiment_score' in outNoScore) && outNoScore.sentiment === 'neutral');
+    check('SLICE-B (flipped pin): that item is rejected by _isValidScanResult', api._isValidScanResult(outNoScore) === false);
+    // valid 0
+    const z = run(base({ sentiment_score: 0 }));
+    check('valid 0 + bullish qualifying context -> existing boost rule still fires (0 -> 72, positive)', z.sentiment_score === 72 && z.sentiment === 'positive');
+    check('valid 0 + neutral context -> stays 0', run(base({ sentiment_score: 0 }), NEUTRAL_CTX).sentiment_score === 0);
+    check('valid 0 + down day -> stays 0', run(base({ sentiment_score: 0, _changePct: -5 })).sentiment_score === 0);
+    check('valid 0 + extended_near_ath -> stays 0', run(base({ sentiment_score: 0, technical_setup: 'extended_near_ath' })).sentiment_score === 0);
+    check('valid 0 + below_key_mas -> stays 0', run(base({ sentiment_score: 0, technical_setup: 'below_key_mas' })).sentiment_score === 0);
+    const zNoData = base({ sentiment_score: 0 }); delete zNoData._verifiedChangePct;
+    check('valid 0 + no verified market data -> stays 0', run(zNoData).sentiment_score === 0);
+    // valid range
+    check('valid 1 / 64 / 62.5 remain boost-eligible under the existing rule', [1, 64, 62.5].every(function (s) { return run(base({ sentiment_score: s })).sentiment_score === 72; }));
+    check('valid 65 / 72 / 100 remain unchanged (not < 65)', [65, 72, 100].every(function (s) { const it = base({ sentiment_score: s }); const o = run(it); return o === it && o.sentiment_score === s; }));
+    // invalid / missing matrix
+    const INVALID = [null, undefined, NaN, '', '50', '72', 'null', true, false, {}, [], -5, 101, 999, Infinity, -Infinity];
+    const label = function (v) { return typeof v === 'string' ? JSON.stringify(v) : (Array.isArray(v) ? '[]' : (v && typeof v === 'object') ? '{}' : String(v)); };
+    INVALID.forEach(function (v) {
+      const it = base({ sentiment_score: v }); const o = run(it);
+      check('invalid ' + label(v) + ' -> same reference, sentiment_score unchanged, sentiment unchanged, never 50/72, gate rejects',
+        o === it && Object.is(o.sentiment_score, v) && o.sentiment === 'neutral' && o.sentiment_score !== 50 && o.sentiment_score !== 72 && api._isValidScanResult(o) === false);
+    });
+    const absent = base(); const oAbsent = run(absent);
+    check('absent property -> same reference, still absent, gate rejects', oAbsent === absent && !('sentiment_score' in oAbsent) && api._isValidScanResult(oAbsent) === false);
+    // _aiUnavailable
+    const syn = base({ _aiUnavailable: true, sentiment_score: 50 }); const oSyn = run(syn);
+    check('_aiUnavailable synthetic 50 -> unchanged and immune to the boost', oSyn === syn && oSyn.sentiment_score === 50 && oSyn.sentiment === 'neutral');
+    const synBad = base({ _aiUnavailable: true, sentiment_score: undefined }); const oSynBad = run(synBad);
+    check('_aiUnavailable with invalid/missing score -> unchanged by this function', oSynBad === synBad && oSynBad.sentiment_score === undefined);
+    // persistence boundary
+    const prev = [{ ticker: 'GOOG', sentiment_score: 60, summary: VALID_SUMMARY, sentiment: 'neutral' }]; const prevSnap = JSON.stringify(prev);
+    const batch = api.enforceScoreConsistency([base({ ticker: 'MIS' }), base({ ticker: 'ZER', sentiment_score: 0 }), base({ ticker: 'FIF', sentiment_score: 55 }), base({ ticker: 'HI9', sentiment_score: 90 })], NEUTRAL_CTX);
+    const admitted = batch.filter(api._isValidScanResult); const merged = api.mergeResultsByTicker(prev, admitted); const ids = merged.map(function (r) { return r.ticker; });
+    check('persistence boundary: malformed score excluded by _isValidScanResult; valid 0 / 55 / 90 admitted', ids.indexOf('MIS') === -1 && ids.indexOf('ZER') !== -1 && ids.indexOf('FIF') !== -1 && ids.indexOf('HI9') !== -1);
+    check('persistence boundary: admitted valid 0 persists as 0, not 50', merged.find(function (r) { return r.ticker === 'ZER'; }).sentiment_score === 0);
+    check('persistence boundary: prior persisted input byte-stable', JSON.stringify(prev) === prevSnap && merged.some(function (r) { return r.ticker === 'GOOG' && r.sentiment_score === 60; }));
+    // guard/gate equivalence: the function never boosts what the gate would reject
+    const ALL = INVALID.concat([0, 1, 50, 64, 65, 72, 100, 62.5]);
+    check('guard/gate equivalence: a boosted output implies the input score was gate-valid', ALL.every(function (v) { const it = base({ sentiment_score: v }); const o = run(it); return o === it || api._isValidScanResult(it); }));
   })();
 
   // ── structural + containment ──
   (function () {
     const survivors = (content.match(/sentiment_score\s*\|\|\s*50/g) || []).length;
-    check('exactly one `sentiment_score || 50` remains in index.html (the :5451 Slice-B site)', survivors === 1);
-    check('the remaining one is inside enforceScoreConsistency', /sentiment_score\s*\|\|\s*50/.test(pieces.enforceScoreConsistency));
+    check('no `sentiment_score || 50` remains anywhere in index.html (Slice B closed)', survivors === 0);
+    check('enforceScoreConsistency has no _ptScore* dependency (no display/scoring coupling)', pieces.enforceScoreConsistency.indexOf('_ptScore') === -1);
+    check('enforceScoreConsistency reads item.sentiment_score directly (no fallback operator on it)', /const score = item\.sentiment_score;/.test(pieces.enforceScoreConsistency) && !/sentiment_score\s*(\|\||\?\?)/.test(pieces.enforceScoreConsistency));
+    const HELPER_SHA_PRE_SLICE_B = 'bae7dc6369e4282e3ec44a48902060edec60c9c16eadaeb6c450f70ebf0aaae5';
+    check('the seven Slice A helper sources are byte-identical to the pre-Slice-B working tree', require('crypto').createHash('sha256').update(HELPERS.map(function (n) { return pieces[n]; }).join('\n').replace(/\r/g, '')).digest('hex') === HELPER_SHA_PRE_SLICE_B);
     const helperSrc = HELPERS.map(function (n) { return pieces[n]; }).join('\n');
     check('helpers touch no storage, network or DOM', ['localStorage', 'sessionStorage', 'fetch(', 'document', 'window.', 'pt_'].every(function (t) { return helperSrc.indexOf(t) === -1; }));
     check('helpers contain no numeric fallback (`?? 0`, `|| 0`, `?? 50`, `|| 50`)', !/(\?\?|\|\|)\s*(0|50)\b/.test(helperSrc));
