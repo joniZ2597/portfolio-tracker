@@ -545,7 +545,30 @@ try {
     } else check('seed CORE-STREAM/arc.json present', false);
     if (fs.existsSync(epPath)) {
       const ep = JSON.parse(stripCR(fs.readFileSync(epPath, 'utf8')));
-      check('seed EP-PILOT/arc.json validates; arcId == directory; IDEA; implementationAllowed false; promotion/execution null', ok(ep) && ep.arcId === 'EP-PILOT' && ep.state === 'IDEA' && ep.implementationAllowed === false && ep.promotion === null && ep.execution === null && historyConsistent(ep).ok);
+      // EP-PILOT is LIVE and mutable: the B7 pilot advances it IDEA -> ... -> EXECUTING -> CLOSED by
+      // design, so no single lifecycle state may be pinned here. ok() remains the authoritative
+      // schema / state-conditional validator and historyConsistent() the authoritative transition
+      // validator; neither is mirrored below. The only additions are CROSS-FIELD relations the schema
+      // cannot express - it validates each value's shape, never that one field matches another.
+      // Today's planId / revision / hashes are deliberately not encoded.
+      const execXref = (a) => {
+        if (a.state !== 'EXECUTING') return true;                        // every other state: ok() + historyConsistent() decide
+        if (!isObj(a.execution)) return false;                           // (ok() already requires it; guard the reads below)
+        const want = a.arcId === GRANDFATHER
+          ? { p: 'plans/current.json', c: 'claims/' }
+          : { p: 'plans/arcs/' + a.arcId + '/current.json', c: 'arc-claims/' + a.arcId + '/' };
+        if (a.execution.pointer !== want.p || a.execution.claimsRoot !== want.c) return false;
+        if (!isObj(a.promotion)) return a.arcId === GRANDFATHER;         // CORE-STREAM promotion is null (D-4)
+        const rev = a.planning.revisions.find((x) => x.rev === a.promotion.rev);
+        return !!rev && rev.sourceHash === a.promotion.sourceHash;       // promotion pins a real revision (PR-1)
+      };
+      check('seed EP-PILOT/arc.json: arcId == directory, schema-valid, state in the committed lifecycle, legal history; and when EXECUTING, execution.pointer/claimsRoot derive from arcId and promotion pins a real planning revision (state=' + ep.state + ')',
+        ok(ep) && ep.arcId === 'EP-PILOT' && STATES.includes(ep.state) && historyConsistent(ep).ok && execXref(ep));
+      check('EP-PILOT IDEA-seed semantics preserved as a regression proof on a SYNTHETIC fixture (never the mutable live file): a valid IDEA seed passes, and the same seed with implementationAllowed true is REJECTED',
+        (() => { const s = mkArc({ arcId: 'EP-PILOT', title: 'Execution Profile pilot' });
+          return ok(s) && s.state === 'IDEA' && s.implementationAllowed === false && s.authority === null
+            && s.promotion === null && s.execution === null && historyConsistent(s).ok
+            && !ok(mkArc({ arcId: 'EP-PILOT', implementationAllowed: true })); })());
     } else check('seed EP-PILOT/arc.json present', false);
     check('seed registry consistent (arcId == dir, no case-folded duplicates)', registryConsistent(fs.readdirSync(seedsDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => ({ dir: e.name, arc: fs.existsSync(path.join(seedsDir, e.name, 'arc.json')) ? JSON.parse(stripCR(fs.readFileSync(path.join(seedsDir, e.name, 'arc.json'), 'utf8'))) : null }))).ok);
     check('seed: no plans/arcs/CORE-STREAM or arc-claims/CORE-STREAM exists in the live runtime', !fs.existsSync(path.join(liveRuntime, 'plans', 'arcs', 'CORE-STREAM')) && !fs.existsSync(path.join(liveRuntime, 'arc-claims', 'CORE-STREAM')));

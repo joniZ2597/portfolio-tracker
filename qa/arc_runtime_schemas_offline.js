@@ -210,6 +210,9 @@ console.log('ARC runtime schemas + topology contract (P-E0, B4) - structural pro
 const liveRuntime = abs(REL.runtime);
 const liveExists = fs.existsSync(liveRuntime);
 const liveBefore = liveExists ? treeHash(liveRuntime) : null;
+// Bootstrap-aware: B7 is explicitly allowed to create these (Gate A owner bootstrap); B4 is not.
+// Record whatever their presence is BEFORE this suite runs, and require it unchanged afterwards.
+const liveArcDirsBefore = liveExists ? [fs.existsSync(path.join(liveRuntime, 'arc-claims')), fs.existsSync(path.join(liveRuntime, 'plans', 'arcs'))].join(',') : null;
 const legacyHashBefore = {};
 if (liveExists) for (const f of LEGACY_BYTE_SET) { const p = path.join(liveRuntime, f); legacyHashBefore[f] = fs.existsSync(p) ? sha256(fs.readFileSync(p)) : null; }
 
@@ -270,7 +273,7 @@ try {
       try { const o = JSON.parse(stripCR(fs.readFileSync(path.join(liveRuntime, f), 'utf8'))); const v = viol('plan', o); console.log('  (info) ' + f + ' under plan.schema: ' + (v.length ? 'violations ' + v.slice(0, 3).join('; ') : 'valid')); } catch (e) { console.log('  (info) ' + f + ' unreadable'); }
     }
     check('RS-13 LEGACY_BYTE_SET count == 12 and every file present (N-1)', LEGACY_BYTE_SET.length === 12 && LEGACY_BYTE_SET.every((f) => legacyHashBefore[f] !== null));
-    check('RS-12 live runtime has no arc-claims/ and no plans/arcs/ (B4 creates nothing)', !fs.existsSync(path.join(liveRuntime, 'arc-claims')) && !fs.existsSync(path.join(liveRuntime, 'plans', 'arcs')));
+    check('RS-12 live-runtime pre-snapshot captured before any temp-tree work, so the closing "creates nothing" proof cannot pass vacuously', /^[a-f0-9]{64}$/.test(String(liveBefore)) && liveArcDirsBefore !== null);
     check('RS-12 live runtime root completeness is exactly plans + claims + mutex', ROOT_TRIPLE.every((d) => fs.existsSync(path.join(liveRuntime, d))));
   }
 
@@ -466,7 +469,7 @@ try {
 section('RS-12 / RS-13 / RS-14 closing proofs');
 if (liveExists) {
   check('RS-12 live runtime tree hash unchanged by this suite', treeHash(liveRuntime) === liveBefore);
-  check('RS-12 live runtime still has no arc-claims/ and no plans/arcs/ after the suite', !fs.existsSync(path.join(liveRuntime, 'arc-claims')) && !fs.existsSync(path.join(liveRuntime, 'plans', 'arcs')));
+  check('RS-12 arc-claims/ and plans/arcs/ presence unchanged by this suite (B4 creates nothing; whether B7 has bootstrapped them is not the concern of this suite)', [fs.existsSync(path.join(liveRuntime, 'arc-claims')), fs.existsSync(path.join(liveRuntime, 'plans', 'arcs'))].join(',') === liveArcDirsBefore);
   check('RS-13 all 12 LEGACY_BYTE_SET hashes identical before/after', LEGACY_BYTE_SET.every((f) => { const p = path.join(liveRuntime, f); return fs.existsSync(p) && sha256(fs.readFileSync(p)) === legacyHashBefore[f]; }));
 }
 check('RS-14 every temp tree removed', tempDirs.every((d) => !fs.existsSync(d)));
