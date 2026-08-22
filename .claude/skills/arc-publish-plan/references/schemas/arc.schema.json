@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "arc/arc.schema.json",
+  "title": "ARC registry entry",
+  "description": ".ai-reports/arcs/<ARC-ID>/arc.json - one registry entry per ARC (Multi-ARC V1.1 Increment 1, batch B3). Planning-side, git-excluded, hand-written by the planning lane and the owner (parse-modify-serialize + write-temp + rename); the publisher becomes the sole writer of `execution` and state EXECUTING from P-E (B5). The registry is an index of authority, never the authority: CHECKPOINT.md stays the project-state record, the published snapshot stays the only execution authority, and workers never read this file. The registry indexes claim roots, it never isolates claims - isolation is structural, in arc-claims/<ARC-ID>/. No execution policy lives here: no profile, mode, scope or tool field of any kind, and no task-id prefix field (D-26).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["arcId", "title", "state", "owner", "planningLane", "implementationAllowed", "authority", "dependencies", "planning", "promotion", "execution", "history"],
+  "properties": {
+    "arcId": {
+      "description": "Must equal the containing directory name, case-exact (never normalized). CORE-STREAM is the single grandfathered index entry for the legacy stream and is never a runtime arcId.",
+      "$ref": "#/$defs/arcId"
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "state": { "$ref": "#/$defs/state" },
+    "owner": {
+      "description": "Who rules (constant \"owner\" in this project). planningLane says who authors.",
+      "type": "string",
+      "minLength": 1
+    },
+    "planningLane": { "$ref": "#/$defs/lane" },
+    "implementationAllowed": {
+      "description": "Owner-written only. true exactly in READY and EXECUTING (enforced below).",
+      "type": "boolean"
+    },
+    "authority": {
+      "description": "The ratified defining artifact the arc executes under. null only at IDEA / DISCOVERY; required from PLANNING onward (an arc past PLANNING without it is an orphan).",
+      "oneOf": [ { "type": "null" }, { "$ref": "#/$defs/authority" } ]
+    },
+    "dependencies": {
+      "description": "Cross-arc ordering, checked at promotion (PR-5) and publish (P-V20), never by workers. task-precondition is evidence-anchored, never claim-anchored.",
+      "type": "array",
+      "default": [],
+      "items": { "$ref": "#/$defs/dependency" }
+    },
+    "planning": { "$ref": "#/$defs/planning" },
+    "promotion": {
+      "description": "Owner-written only; the only thing that makes READY real. null until PR-7. For the CORE-STREAM grandfather entry it is permanently null: a promotion object on CORE-STREAM is refused (D-4).",
+      "oneOf": [ { "type": "null" }, { "$ref": "#/$defs/promotion" } ]
+    },
+    "execution": {
+      "description": "Publisher-written after the pointer swap (P-E); hand-seeded only for CORE-STREAM. Documentary index of the runtime - no runtime path ever reads it.",
+      "oneOf": [ { "type": "null" }, { "$ref": "#/$defs/execution" } ]
+    },
+    "history": {
+      "description": "Append-only transition log; first entry IDEA (CORE-STREAM: the honest EXECUTING bootstrap); last entry equals state.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/historyEntry" }
+    },
+    "successorArcId": {
+      "description": "Optional string | null. Present and non-null exactly when state is SUPERSEDED: the arc this one merged into. Absent or null otherwise (O-4).",
+      "oneOf": [ { "type": "null" }, { "$ref": "#/$defs/arcId" } ]
+    },
+    "heldFrom": {
+      "description": "Optional string | null. Present and non-null exactly when state is HOLD: the state HOLD returns to (stored, never derived). Absent or null otherwise (O-4).",
+      "oneOf": [ { "type": "null" }, { "$ref": "#/$defs/heldFrom" } ]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "enum": ["PLANNING", "REVIEWED", "READY", "EXECUTING", "CLOSED"] } }, "required": ["state"] },
+      "then": { "properties": { "authority": { "$ref": "#/$defs/authority" } } }
+    },
+    {
+      "if": { "properties": { "state": { "enum": ["READY", "EXECUTING"] } }, "required": ["state"] },
+      "then": { "properties": { "implementationAllowed": { "const": true } } },
+      "else": { "properties": { "implementationAllowed": { "const": false } } }
+    },
+    {
+      "if": { "properties": { "state": { "const": "READY" } }, "required": ["state"] },
+      "then": { "properties": { "promotion": { "$ref": "#/$defs/promotion" } } }
+    },
+    {
+      "if": { "properties": { "state": { "const": "EXECUTING" } }, "required": ["state"] },
+      "then": { "properties": { "execution": { "$ref": "#/$defs/execution" } } }
+    },
+    {
+      "if": { "properties": { "state": { "const": "EXECUTING" }, "arcId": { "not": { "const": "CORE-STREAM" } } }, "required": ["state", "arcId"] },
+      "then": { "properties": { "promotion": { "$ref": "#/$defs/promotion" } } }
+    },
+    {
+      "if": { "properties": { "arcId": { "const": "CORE-STREAM" } }, "required": ["arcId"] },
+      "then": { "properties": { "promotion": { "const": null } } }
+    },
+    {
+      "if": { "properties": { "state": { "const": "SUPERSEDED" } }, "required": ["state"] },
+      "then": { "required": ["successorArcId"], "properties": { "successorArcId": { "$ref": "#/$defs/arcId" } } },
+      "else": { "properties": { "successorArcId": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "state": { "const": "HOLD" } }, "required": ["state"] },
+      "then": { "required": ["heldFrom"], "properties": { "heldFrom": { "$ref": "#/$defs/heldFrom" } } },
+      "else": { "properties": { "heldFrom": { "type": "null" } } }
+    }
+  ],
+  "$defs": {
+    "arcId": {
+      "description": "OPTIONAL (B4, P-E0). ARC identity. Absent in every legacy record; present in every ARC-scoped record and equal to the ARC it belongs to - the publisher's ARC literal for a snapshot, its manifest and plans/arcs/<ARC-ID>/current.json (three-way equality), the arc-claims/<ARC-ID>/ directory for claims, tokens and the holders taken for that ARC. Never inferred from a task-id prefix, a filename or a slug. The reserved Windows device-name guard applies uniformly (N-3). The schema validates shape only; namespace rules live in scripts/lib/runtime-identity.js.",
+      "type": "string",
+      "pattern": "^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$",
+      "maxLength": 24,
+      "not": {
+        "enum": [
+          "CON", "PRN", "AUX", "NUL",
+          "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+          "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        ]
+      }
+    },
+    "state": {
+      "description": "The ten lifecycle states in fixed order (registry-contract.md section 3). CLOSED, CANCELLED and SUPERSEDED are terminal.",
+      "type": "string",
+      "enum": ["IDEA", "DISCOVERY", "PLANNING", "REVIEWED", "READY", "EXECUTING", "CLOSED", "HOLD", "CANCELLED", "SUPERSEDED"]
+    },
+    "heldFrom": {
+      "description": "The states HOLD may return to.",
+      "type": "string",
+      "enum": ["DISCOVERY", "PLANNING", "REVIEWED", "READY"]
+    },
+    "lane": {
+      "type": "string",
+      "enum": ["MAIN", "LAB", "COWORK", "OWNER"]
+    },
+    "taskId": {
+      "type": "string",
+      "pattern": "^[A-Z0-9]([A-Z0-9._-]*[A-Z0-9])?$",
+      "maxLength": 64,
+      "not": {
+        "enum": [
+          "CON", "PRN", "AUX", "NUL",
+          "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+          "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        ]
+      }
+    },
+    "planId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$",
+      "maxLength": 96,
+      "not": { "enum": ["arcs"] }
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "instant": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "artifact": { "type": "string", "pattern": "^\\.ai-reports/[A-Za-z0-9._/-]+\\.md$" },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "artifact", "ratifiedAt"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["ratified-contract", "publication-source", "owner-ruling"] },
+        "artifact": { "$ref": "#/$defs/artifact" },
+        "ratifiedAt": { "$ref": "#/$defs/date" }
+      }
+    },
+    "dependency": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "arcId", "atLeast"],
+          "properties": {
+            "kind": { "const": "arc-state" },
+            "arcId": { "$ref": "#/$defs/arcId" },
+            "atLeast": { "$ref": "#/$defs/state" },
+            "note": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "stream", "taskId", "evidence", "attestedBy", "attestedAt"],
+          "properties": {
+            "kind": { "const": "task-precondition" },
+            "stream": { "type": "string", "enum": ["legacy", "arc"] },
+            "arcId": { "$ref": "#/$defs/arcId" },
+            "taskId": { "$ref": "#/$defs/taskId" },
+            "evidence": {
+              "description": "Durable artifact that survives every claim-directory operation - the primary evidence; a surviving claim.json only corroborates.",
+              "$ref": "#/$defs/artifact"
+            },
+            "attestedBy": { "type": ["string", "null"], "minLength": 1 },
+            "attestedAt": { "type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" }
+          },
+          "if": { "properties": { "stream": { "const": "arc" } }, "required": ["stream"] },
+          "then": { "required": ["arcId"] },
+          "else": { "not": { "required": ["arcId"] } }
+        }
+      ]
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "reviewer", "verdict", "at"],
+      "properties": {
+        "artifact": { "$ref": "#/$defs/artifact" },
+        "reviewer": { "type": "string", "minLength": 1 },
+        "verdict": { "type": "string", "enum": ["PASS", "PASS-WITH-CONDITIONS", "FAIL"] },
+        "at": { "$ref": "#/$defs/date" }
+      }
+    },
+    "revision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rev", "source", "sourceHash", "status", "reviews"],
+      "properties": {
+        "rev": { "type": "integer", "minimum": 1 },
+        "source": { "$ref": "#/$defs/artifact" },
+        "sourceHash": { "$ref": "#/$defs/sha256" },
+        "status": { "type": "string", "enum": ["DRAFT", "REVIEWED", "PROMOTED", "PUBLISHED", "SUPERSEDED", "WITHDRAWN"] },
+        "reviews": { "type": "array", "default": [], "items": { "$ref": "#/$defs/review" } }
+      }
+    },
+    "lease": {
+      "description": "Advisory only - which lane/conversation is authoring now. Never a lock.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lane", "conversationId", "since"],
+      "properties": {
+        "lane": { "$ref": "#/$defs/lane" },
+        "conversationId": { "type": "string", "minLength": 1 },
+        "since": { "$ref": "#/$defs/instant" }
+      }
+    },
+    "planning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currentRevision", "revisions", "lease"],
+      "properties": {
+        "currentRevision": { "description": "0 while no revision exists; otherwise the rev being worked (1-based, <= revisions.length).", "type": "integer", "minimum": 0 },
+        "revisions": { "description": "Append-only, 1-based, contiguous.", "type": "array", "default": [], "items": { "$ref": "#/$defs/revision" } },
+        "lease": { "oneOf": [ { "type": "null" }, { "$ref": "#/$defs/lease" } ] }
+      }
+    },
+    "waiver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule", "reason"],
+      "properties": {
+        "rule": { "type": "string", "pattern": "^PR-[1-7]$" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rev", "sourceHash", "rulingAt", "rulingBy", "note", "waivers"],
+      "properties": {
+        "rev": { "type": "integer", "minimum": 1 },
+        "sourceHash": { "description": "Pins the exact bytes of the promoted revision (PR-1).", "$ref": "#/$defs/sha256" },
+        "rulingAt": { "$ref": "#/$defs/instant" },
+        "rulingBy": { "type": "string", "minLength": 1 },
+        "note": { "type": "string" },
+        "waivers": { "type": "array", "default": [], "items": { "$ref": "#/$defs/waiver" } }
+      }
+    },
+    "execution": {
+      "description": "Documentary index of the published state (r3 K8). claimsRoot is an index entry only - no runtime path ever reads it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["planId", "planHash", "pointer", "claimsRoot", "publishedAt"],
+      "properties": {
+        "planId": { "$ref": "#/$defs/planId" },
+        "planHash": { "$ref": "#/$defs/sha256" },
+        "pointer": {
+          "description": "plans/current.json for the legacy stream index entry (CORE-STREAM), or plans/arcs/<ARC-ID>/current.json for an ARC. plans/arcs/CORE-STREAM/ never exists.",
+          "type": "string",
+          "pattern": "^plans/(current\\.json|arcs/[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?/current\\.json)$",
+          "not": { "pattern": "^plans/arcs/CORE-STREAM/" }
+        },
+        "claimsRoot": {
+          "description": "claims/ for the legacy stream index entry, or arc-claims/<ARC-ID>/ for an ARC. arc-claims/CORE-STREAM/ never exists.",
+          "type": "string",
+          "pattern": "^(claims/|arc-claims/[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?/)$",
+          "not": { "pattern": "^arc-claims/CORE-STREAM/" }
+        },
+        "publishedAt": { "$ref": "#/$defs/instant" }
+      }
+    },
+    "historyEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "at", "by"],
+      "properties": {
+        "state": { "$ref": "#/$defs/state" },
+        "at": { "$ref": "#/$defs/instant" },
+        "by": { "type": "string", "enum": ["owner", "publisher", "MAIN", "LAB", "COWORK"] },
+        "note": { "type": "string" }
+      }
+    }
+  }
+}

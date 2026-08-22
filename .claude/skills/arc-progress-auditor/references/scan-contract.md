@@ -14,6 +14,25 @@ Relative to `--root` (default: repo root):
 | `.ai-reports/handoffs/README.local.md` | **Source of the filename + header contract below.** Read it first; if it disagrees with this file, the README wins and this file is stale (report that as a finding) |
 | `CHECKPOINT.md` | Authoritative project state record |
 | `PORTFOLIO_ENDGAME_QUEUE.md` | Local-only work queue |
+| `.ai-reports/arcs/<ARC-ID>/arc.json` | ARC registry entries (Multi-ARC V1.1 Increment 1, B3). **Reference material for arc attribution only** — see the carve-outs below |
+
+**ARC registry carve-outs (B3 — binding, so the auditor does not regress).**
+
+- **Documentary root.** The registry root is `<--root>/.ai-reports/arcs/` and is reference
+  material only: it is **never rendered as audit rows** and never counted as a scanned artifact
+  (`templates/arc-audit.md` is unchanged). The auditor has no `Bash` and therefore cannot resolve
+  the main worktree; when auditing from a linked worktree the owner passes `--root <main worktree>`
+  — the auditor cannot detect a wrong root itself. `STRAY-REGISTRY` is a `/arc-registry status`
+  flag, **not an auditor flag**.
+- **Absent root is informational.** `.ai-reports/arcs/` missing ⇒ one line,
+  `registry not bootstrapped`, and the audit continues. It is **never a stop condition** (the
+  pre-bootstrap state and every linked worktree look exactly like this).
+- **Registry entries are a separate scan class.** `arc.json` files are JSON: no `# HANDOFF`
+  header, no `- From:`, no `Status:`. They are **excluded from the header-normalization
+  denominator** and from the >20% abort; they never count as handoffs.
+- **What the auditor may take from an entry:** `arcId`, `state`, `authority.artifact` (for the
+  orphan rule in §8) and `planning.revisions[].source` (to match handoffs to an arc). Nothing in
+  an entry is authority over a handoff, over CHECKPOINT, or over any runtime fact.
 
 **Not evidence.** Codebase Memory MCP (unreliable/stale by standing ruling), git
 history, chat transcripts, agent memory, and dashboards are never authoritative
@@ -51,6 +70,7 @@ Header block, first ~14 lines of each handoff:
     - Status: <status string>
     - Consumes: <prior filename(s)> | none
     - Companion: <filename>            (optional)
+    - Arc: <ARC-ID>                    (optional — registry arc identity for attribution, §8)
     - Verification level: repo-verified | live-verified | product-reasoning (unverified)
 
 **Parsing rules — both learned from real misparses; do not skip.**
@@ -131,6 +151,24 @@ Never drop a qualifier silently.
 
 ## 8. Arc attribution
 
-Derive the arc from the task slug prefix (`p5-…` → P-5, `sc-t2…` → SC, `hs-1…` →
-HS-1, `c1-s4…` → C1). When the slug carries no recognizable arc key, attribute to
-`UNATTRIBUTED` and flag it — do not guess from the title.
+Two sources, fixed precedence (owner ruling O-1, 2026-08-22):
+
+1. **`- Arc: <ARC-ID>` header — wins** for grouping when present (a registry `arcId`,
+   `^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$`, case-exact).
+2. **Slug prefix — fallback heuristic** when the header is absent (`p5-…` → P-5, `sc-t2…` → SC,
+   `hs-1…` → HS-1, `c1-s4…` → C1). When the slug carries no recognizable arc key, attribute to
+   `UNATTRIBUTED` and flag it — do not guess from the title.
+
+When both are present and **disagree**, group by `- Arc:` and raise a **normalization flag** for
+owner ruling — never a silent reclassification (SKILL.md standing rule).
+
+**Neither source is runtime authority.** Slug-prefix attribution **never identifies a runtime
+ARC**, and neither does the header: the publisher takes `arcId` only from its typed `--arc`
+literal. The two `--arc` flags are **filters over different identity spaces**:
+`/arc-progress-auditor --arc <name>` filters this attribution (heuristic, handoff-side);
+`/arc-registry status --arc <ARC-ID>` filters registry `arcId` values (exact). The values are
+not interchangeable and neither routes anything.
+
+**Orphan rule (registry-aware).** A registry entry whose `state` is past `PLANNING` with
+`authority.artifact` null is an orphan — approved work with no defining artifact — and is
+reported under §3 Orphans exactly like approved work with no successor artifact.

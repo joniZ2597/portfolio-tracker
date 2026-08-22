@@ -200,7 +200,8 @@ const OFFLINE_TESTS = [
   'qa/arc_execution_profiles_offline.js',
   'qa/arc_publish_profiles_offline.js',
   'qa/arc_worker_handshake_offline.js',
-  'qa/arc_runtime_schemas_offline.js'
+  'qa/arc_runtime_schemas_offline.js',
+  'qa/arc_registry_offline.js'
 ];
 
 const CLIENT_GATES = [
