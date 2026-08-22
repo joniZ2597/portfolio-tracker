@@ -17,11 +17,22 @@
  * K3 libraryHash = sha256(JSON.stringify(obj − libraryHash, null, 2) + '\n') ≡ sha256 of the
  * CR-stripped library file. Rule wording for P-V23(d) and P-V24 follows the owner's ratified
  * text of 2026-08-22 (see references/plan-validation.md).
+ *
+ * Multi-ARC (P-E publisher side, batch B5, BLK-1): `arcId` is an optional top-level plan field that
+ * originates ONLY from the publisher's typed `--arc` literal (P-V16); `runtimeChecks` selects exactly
+ * one namespace — legacy (`plans/current.json`, `claims/`) or `--arc` (`plans/arcs/<ARC-ID>/`,
+ * `arc-claims/<ARC-ID>/`) — and never reads the other (P-V13 per namespace, P-V19 arc-claim integrity);
+ * `registryChecks` reads `.ai-reports/arcs/<ARC-ID>/arc.json` (P-V17) and its stream-aware
+ * dependencies (P-V20). Every identity decision is delegated to lib/runtime-identity.js (N-2) — the
+ * rules are never re-implemented here. The root-completeness invariant stays exactly
+ * plans/ + claims/ + mutex/; the ARC roots plans/arcs/ + arc-claims/ are owner-bootstrap and are
+ * never created by any function in this file. P-V18 is RETIRED (number reserved, never reused).
  */
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const identity = require('./runtime-identity.js');
 
 // ── vocabulary (mirrors execution-profile.schema.json and plan.schema.json) ──
 const MODES = ['MANUAL', 'ACCEPT_EDITS', 'AUTO'];
@@ -68,9 +79,16 @@ const ISO_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/;
 const RESERVED_TASK_IDS = ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
   'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'];
 const RESERVED_PLAN_IDS = ['arcs'];
+// CORE-STREAM is the registry's grandfathered index entry for the legacy stream (registry-contract.md
+// section 2): valid for `/arc-registry status --arc`, NEVER a runtime `--arc` selector (P-V16 refuses it).
+const RESERVED_RUNTIME_ARC_IDS = ['CORE-STREAM'];
+const ARC_STATES_PROGRESSIVE = ['IDEA', 'DISCOVERY', 'PLANNING', 'REVIEWED', 'READY', 'EXECUTING', 'CLOSED'];
+const ARC_STATES = ARC_STATES_PROGRESSIVE.concat(['HOLD', 'CANCELLED', 'SUPERSEDED']);
+const ARC_ADMITTING_STATES = ['READY', 'EXECUTING'];   // P-V17: the only registry states that admit a publication
+const READY_DECAY_DAYS = 7;                            // registry-contract.md section 7 (D-10): STALE-READY, override --acknowledge-stale-promotion
 const LIVE_STATES = ['CLAIMED', 'WAITING_OWNER_GO', 'AUTHORIZED', 'BLOCKED'];
 const PLAN_TOP_REQUIRED = ['planId', 'source', 'sourceHash', 'repoRef', 'generatedAt', 'mutexRegistry', 'tasks'];
-const PLAN_TOP_OPTIONAL = ['safeParallelSets', 'executionProfiles'];
+const PLAN_TOP_OPTIONAL = ['safeParallelSets', 'executionProfiles', 'arcId'];
 const TASK_REQUIRED = ['id', 'lane', 'entryMode', 'requiresOwnerGo', 'closeCondition'];
 const TASK_OPTIONAL = ['mutexes', 'dependsOn', 'priority', 'stopCondition', 'notes', 'mayParallelWith', 'mustNotParallelWith', 'executionProfile'];
 // P-V25 / P-V23 code surfaces: the special CODE mutex mapping. Used ONLY for class resolution
@@ -83,13 +101,18 @@ const NEVER_WRITABLE = [/^\.git\//, /^\.netlify\//, /^netlify\.toml$/, /^\.env/,
 const RUNTIME_WRITE_RE = /^(claims\/|arc-claims\/|mutex\/|\.git\/arc-runtime\/)/;
 const AI_REPORTS_RE = /^\.ai-reports\//;
 const SANDBOX_RE = /^<worktree>\//;
-const RULE_ORDER = ['P-V1', 'P-V2', 'P-V3', 'P-V4', 'P-V5', 'P-V6', 'P-V7', 'P-V8', 'P-V9', 'P-V11', 'P-V13', 'P-V15', 'P-V21', 'P-V22', 'P-V23', 'P-V24', 'P-V25', 'P-V26'];
+// P-V18 is RETIRED (D-25): the number is reserved and never reused; it is absent from the rule table.
+const RULE_ORDER = ['P-V1', 'P-V2', 'P-V3', 'P-V4', 'P-V5', 'P-V6', 'P-V7', 'P-V8', 'P-V9', 'P-V11', 'P-V13', 'P-V15', 'P-V16', 'P-V17', 'P-V19', 'P-V20', 'P-V21', 'P-V22', 'P-V23', 'P-V24', 'P-V25', 'P-V26'];
+// rules settled against the runtime / registry (runtimeChecks, registryChecks), never by planCheck alone
+const EXTERNAL_RULES = ['P-V13', 'P-V17', 'P-V19', 'P-V20'];
 const RULE_LABEL = {
   'P-V1': 'task fields complete', 'P-V2': 'ids unique / normalized / fs-safe', 'P-V3': 'lanes valid, HERDR absent',
   'P-V4': 'entryMode in {DIRECT, PLAN}', 'P-V5': 'mutex classes in registry', 'P-V6': 'dependencies resolve',
   'P-V7': 'no dependency cycles', 'P-V8': 'mustNotParallelWith symmetric', 'P-V9': 'no parallel-set mutex conflict',
   'P-V11': 'planId not reserved / not already published', 'P-V13': 'no live claims against outgoing plan',
-  'P-V15': 'conditions literal, never pointers', 'P-V21': 'profiles present and resolvable',
+  'P-V15': 'conditions literal, never pointers', 'P-V16': 'arcId from the --arc literal only',
+  'P-V17': 'registry entry admits publication', 'P-V19': 'ARC claim namespace integrity',
+  'P-V20': 'registry dependencies satisfied', 'P-V21': 'profiles present and resolvable',
   'P-V22': 'profile lane matches task lane', 'P-V23': 'mode ceilings and recommendations',
   'P-V24': 'entry-mode agreement', 'P-V25': 'scope <-> mutex coverage', 'P-V26': 'required skills invocable'
 };
@@ -499,6 +522,17 @@ function planCheck(plan, opts) {
       if (r) add('P-V15', { task: t.id, field: f, value: t[f], message: 'task ' + t.id + ' ' + f + ' is a reference, not a condition (' + r + '): "' + t[f] + '"' });
     }
   });
+  // P-V16 — arcId originates ONLY from the publisher's typed --arc literal (B5). With a literal: the
+  // literal is a valid ARC id (runtime-identity.js), not the reserved registry identity CORE-STREAM,
+  // and plan.arcId (when the proposed plan already carries one) equals it exactly — the resolver
+  // declares it otherwise. Without a literal: the plan carries no arcId (legacy publication).
+  // Task ids are unique within the plan only (P-V2); no cross-arc rule exists (P-V18 retired, D-25).
+  const arcLiteral = opts.arcId === undefined || opts.arcId === null ? null : opts.arcId;
+  if (arcLiteral !== null) {
+    if (typeof arcLiteral !== 'string' || !identity.isValidArcId(arcLiteral)) add('P-V16', { field: 'arcId', value: arcLiteral, message: '--arc "' + String(arcLiteral) + '" is not a valid ARC id (' + identity.ARC_ID_RE + ', <= ' + identity.ARC_ID_MAX + ' chars, not a reserved device name); a case variant is refused, never normalized' });
+    else if (RESERVED_RUNTIME_ARC_IDS.includes(arcLiteral)) add('P-V16', { field: 'arcId', value: arcLiteral, message: '--arc "' + arcLiteral + '" is the registry index entry for the legacy stream, never a runtime arcId; the legacy stream is reached only by the no-flag invocation' });
+    else if ('arcId' in plan && plan.arcId !== arcLiteral) add('P-V16', { field: 'arcId', value: plan.arcId, message: 'proposed plan carries arcId "' + String(plan.arcId) + '" but the --arc literal is "' + arcLiteral + '" (arcId originates only from the literal)' });
+  } else if ('arcId' in plan) add('P-V16', { field: 'arcId', value: plan.arcId, message: 'proposed plan carries arcId "' + String(plan.arcId) + '" but no --arc was given (arcId originates only from the --arc literal; a legacy publication carries none)' });
 
   // P-V21…P-V26 — execution profiles
   if (requireProfiles) {
@@ -599,7 +633,7 @@ function planCheck(plan, opts) {
 
   function finish() {
     for (const r of RULE_ORDER) {
-      if (r === 'P-V13') continue;
+      if (EXTERNAL_RULES.includes(r)) continue;
       res.rules[r] = res.violations.some((v) => v.rule === r) ? 'REFUSED' : 'PASS';
     }
     res.ok = res.violations.length === 0;
@@ -607,8 +641,18 @@ function planCheck(plan, opts) {
   }
 }
 
-// ── resolution: embed the referenced profiles (K2) ───────────────────────────
-function resolveProfiles(plan, library) {
+// ── resolution: embed the referenced profiles (K2); declare arcId from the literal (K9) ──────
+// Output key order: every proposed key in its original order, with `executionProfiles` and — for an
+// ARC publication — `arcId` inserted immediately before `tasks` (plan.schema.json property order).
+// Without opts.arcId the output is byte-identical to the B1 resolver (legacy publications). The
+// optional third argument extends the B1 signature; the return shape { plan, text, profilesUsed }
+// is unchanged (B2 consumers) — for an ARC publication the arcId is carried by `plan.arcId`.
+function resolveProfiles(plan, library, opts) {
+  opts = opts || {};
+  const arcId = opts.arcId === undefined || opts.arcId === null ? null : opts.arcId;
+  if (arcId !== null && (!identity.isValidArcId(arcId) || RESERVED_RUNTIME_ARC_IDS.includes(arcId))) throw new Error('resolveProfiles: invalid runtime arcId ' + String(arcId));
+  if (arcId === null && 'arcId' in plan) throw new Error('resolveProfiles: plan carries arcId but no literal was given (P-V16)');
+  if (arcId !== null && 'arcId' in plan && plan.arcId !== arcId) throw new Error('resolveProfiles: plan.arcId ' + String(plan.arcId) + ' != literal ' + arcId + ' (P-V16)');
   const ids = Array.from(new Set(plan.tasks.map((t) => t.executionProfile))).sort();
   const embedded = {};
   for (const id of ids) {
@@ -618,34 +662,65 @@ function resolveProfiles(plan, library) {
   }
   const out = {};
   for (const k of Object.keys(plan)) {
-    if (k === 'executionProfiles') continue;
-    if (k === 'tasks') out.executionProfiles = embedded;
+    if (k === 'executionProfiles' || k === 'arcId') continue;
+    if (k === 'tasks') { out.executionProfiles = embedded; if (arcId !== null) out.arcId = arcId; }
     out[k] = plan[k];
   }
   if (!('executionProfiles' in out)) out.executionProfiles = embedded;
+  if (arcId !== null && !('arcId' in out)) out.arcId = arcId;
   return { plan: out, text: canonicalize(out), profilesUsed: ids };
 }
 
-// ── runtime checks (read-only): P-V11 existence, P-V13 live-claim scan ──────
+// ── runtime checks (read-only): P-V11 existence, P-V13 live-claim scan, P-V19 arc-claim integrity ──
+// Namespace selection (K15, X-2): without opts.arcId the legacy stream only — `plans/current.json` +
+// `claims/`; with opts.arcId that ARC only — `plans/arcs/<ARC-ID>/current.json` + `arc-claims/<ARC-ID>/`.
+// The opposite claim/pointer namespace is never SCANNED, while the legacy plans/claims/mutex
+// root-completeness triple is still checked for every invocation by frozen contract. The ARC roots
+// plans/arcs/ + arc-claims/ are owner-bootstrap — absent ⇒ throw, never created here. The result
+// shape { violations, warnings, rules, liveClaims, outgoingPlanId } is the B1 contract (B2 consumers).
 function runtimeChecks(root, plan, opts) {
   opts = opts || {};
+  const arcId = opts.arcId === undefined || opts.arcId === null ? null : opts.arcId;
+  if (arcId !== null && (typeof arcId !== 'string' || !identity.isValidArcId(arcId) || RESERVED_RUNTIME_ARC_IDS.includes(arcId))) throw new Error('runtimeChecks: invalid runtime arcId ' + String(arcId) + ' (P-V16 refuses it before any namespace read)');
   const res = { violations: [], warnings: [], rules: {}, liveClaims: [], outgoingPlanId: null };
   if (!root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) throw new Error('runtime root not found: ' + root);
   for (const d of ['plans', 'claims', 'mutex']) if (!fs.existsSync(path.join(root, d)) || !fs.statSync(path.join(root, d)).isDirectory()) throw new Error('runtime root incomplete (missing ' + d + '/): ' + root);
+  if (arcId !== null) for (const d of ['plans/arcs', 'arc-claims']) if (!fs.existsSync(path.join(root, d)) || !fs.statSync(path.join(root, d)).isDirectory()) throw new Error('runtime ARC roots absent (missing ' + d + '/): owner bootstrap per bootstrap.md section 4a; the publisher never creates them: ' + root);
   const add = (rule, message, extra) => res.violations.push(Object.assign({ rule, task: null, phase: null, field: null, value: null }, extra || {}, { message: rule + ' REFUSED - ' + message }));
   const pid = String(plan.planId);
   if (fs.existsSync(path.join(root, 'plans', pid))) add('P-V11', 'plans/' + pid + ' already exists; snapshots are immutable', { field: 'planId', value: pid });
   if (fs.existsSync(path.join(root, 'plans', '.staging-' + pid))) add('P-V11', 'plans/.staging-' + pid + ' exists from an interrupted run; report it for owner disposition', { field: 'planId', value: pid });
   res.rules['P-V11'] = res.violations.some((v) => v.rule === 'P-V11') ? 'REFUSED' : 'PASS';
-  const cur = path.join(root, 'plans', 'current.json');
+  // exactly one pointer and one claims root for this invocation (locals; never part of the result)
+  const pointerRel = arcId === null ? 'plans/current.json' : 'plans/arcs/' + arcId + '/current.json';
+  const claimsRel = arcId === null ? 'claims' : 'arc-claims/' + arcId;
+  const cur = path.join(root, pointerRel);
+  const claimsDir = path.join(root, claimsRel);
+  const containerExists = fs.existsSync(claimsDir) && fs.statSync(claimsDir).isDirectory();
   let outgoing = null;
   if (fs.existsSync(cur)) {
     try { const j = JSON.parse(stripCR(fs.readFileSync(cur, 'utf8'))); if (j && typeof j.planId === 'string') outgoing = j.planId; } catch (_) { outgoing = null; }
   }
   res.outgoingPlanId = outgoing;
-  if (outgoing) {
-    for (const dir of fs.readdirSync(path.join(root, 'claims')).sort()) {
-      const file = path.join(root, 'claims', dir, 'claim.json');
+  // P-V19 (ARC only) — every claim directory in the selected ARC namespace parses and matches its path
+  // identity (claim.arcId == <ARC-ID>, claim.taskId == directory) per runtime-identity.js claimMatchesPath.
+  if (arcId !== null && containerExists) {
+    for (const dir of fs.readdirSync(claimsDir).sort()) {
+      const rel = claimsRel + '/' + dir + '/claim.json';
+      if (!fs.statSync(path.join(claimsDir, dir)).isDirectory()) { add('P-V19', claimsRel + '/' + dir + ' is not a claim directory (stray entry in the ARC claim namespace)', { value: dir }); continue; }
+      const file = path.join(claimsDir, dir, 'claim.json');
+      if (!fs.existsSync(file)) { add('P-V19', claimsRel + '/' + dir + '/ has no claim.json (residue; clear it via owner-ops section 8 before publishing)', { value: dir }); continue; }
+      let c = null;
+      try { c = JSON.parse(stripCR(fs.readFileSync(file, 'utf8'))); } catch (e) { add('P-V19', rel + ' cannot be parsed (' + e.message + ')', { value: dir }); continue; }
+      const m = identity.claimMatchesPath(c, rel);
+      if (m.verdict !== 'MATCH') add('P-V19', rel + ' identity ' + m.verdict + ': ' + m.reasons.join('; '), { value: dir });
+    }
+  }
+  if (arcId !== null) res.rules['P-V19'] = res.violations.some((v) => v.rule === 'P-V19') ? 'REFUSED' : 'PASS';
+  // P-V13 — live claims against the outgoing plan, in the selected namespace only
+  if (outgoing && containerExists) {
+    for (const dir of fs.readdirSync(claimsDir).sort()) {
+      const file = path.join(claimsDir, dir, 'claim.json');
       if (!fs.existsSync(file)) continue;
       let c = null;
       try { c = JSON.parse(stripCR(fs.readFileSync(file, 'utf8'))); } catch (_) { continue; }
@@ -658,6 +733,122 @@ function runtimeChecks(root, plan, opts) {
     else add('P-V13', res.liveClaims.length + ' live claim(s) against plan ' + outgoing + ': ' + list, { value: outgoing });
   }
   if (!res.rules['P-V13']) res.rules['P-V13'] = res.violations.some((v) => v.rule === 'P-V13') ? 'REFUSED' : 'PASS';
+  return res;
+}
+
+// ── registry checks (read-only): P-V17 entry admits publication, P-V20 dependencies (B5) ────
+// registryRoot = <repo>/.ai-reports/arcs. Reads ONLY .ai-reports/arcs/<ARC-ID>/arc.json (P-V17), the
+// specifically named dependency entries / claim namespaces (P-V20) and the evidence artifacts under
+// <repo>. Never writes; the step-10b write-back is a protocol act after the pointer swap (K10).
+// P-V20 identity spaces: an `arc-state` dependency addresses a REGISTRY identity/state, so CORE-STREAM is
+// a valid target there; a `task-precondition` with stream "arc" addresses a RUNTIME ARC namespace, so
+// CORE-STREAM is refused and arc-claims/CORE-STREAM/... is never constructed or inspected.
+function stateAtLeast(state, atLeast) {
+  if (state === atLeast) return true;
+  const a = ARC_STATES_PROGRESSIVE.indexOf(state), b = ARC_STATES_PROGRESSIVE.indexOf(atLeast);
+  return a !== -1 && b !== -1 && a >= b;
+}
+function registryChecks(registryRoot, plan, opts) {
+  opts = opts || {};
+  const arcId = opts.arcId;
+  if (typeof arcId !== 'string' || !identity.isValidArcId(arcId) || RESERVED_RUNTIME_ARC_IDS.includes(arcId)) throw new Error('registryChecks: invalid runtime arcId ' + String(arcId) + ' (P-V16 refuses it before any registry read)');
+  if (!opts.runtimeRoot) throw new Error('registryChecks: runtimeRoot is required (P-V20 claim corroboration)');
+  if (!Buffer.isBuffer(opts.sourceBytes)) throw new Error('registryChecks: sourceBytes (Buffer) is required (P-V17 pins the publication source bytes)');
+  if (!ISO_RE.test(String(opts.nowIso))) throw new Error('registryChecks: nowIso must be an ISO UTC instant');
+  const res = { violations: [], warnings: [], rules: {}, entry: null, entryPath: null, stale: null, dependencies: [] };
+  const add = (rule, message, extra) => res.violations.push(Object.assign({ rule, task: null, phase: null, field: null, value: null }, extra || {}, { message: rule + ' REFUSED - ' + message }));
+  const short = (h) => String(h).slice(0, 12) + '...';
+  const sourceHash = sha256(opts.sourceBytes);
+  const repoRoot = path.resolve(registryRoot, '..', '..');
+  const relEntry = '.ai-reports/arcs/' + arcId + '/arc.json';
+  // P-V17
+  let entry = null;
+  if (!fs.existsSync(registryRoot) || !fs.statSync(registryRoot).isDirectory()) add('P-V17', 'registry root absent: ' + registryRoot + ' (registry not bootstrapped; nothing admits a publication)');
+  else if (!fs.readdirSync(registryRoot).includes(arcId)) add('P-V17', 'no registry entry directory "' + arcId + '" under ' + registryRoot + ' (case-exact; a case variant is never normalized)', { value: arcId });
+  else {
+    const file = path.join(registryRoot, arcId, 'arc.json');
+    res.entryPath = file;
+    if (!fs.existsSync(file)) add('P-V17', relEntry + ' is missing');
+    else { try { entry = JSON.parse(stripCR(fs.readFileSync(file, 'utf8'))); } catch (e) { add('P-V17', relEntry + ' cannot be parsed (' + e.message + ')'); } }
+  }
+  if (entry !== null && !isObj(entry)) { add('P-V17', relEntry + ' is not a JSON object'); entry = null; }
+  if (entry !== null) {
+    res.entry = entry;
+    if (entry.arcId !== arcId) add('P-V17', relEntry + ' arcId "' + String(entry.arcId) + '" != the --arc literal "' + arcId + '"', { value: entry.arcId });
+    if (!ARC_ADMITTING_STATES.includes(entry.state)) add('P-V17', relEntry + ' state ' + String(entry.state) + ' admits no publication (READY or EXECUTING required; PROMOTE is an owner act)', { value: entry.state });
+    if (entry.implementationAllowed !== true) add('P-V17', relEntry + ' implementationAllowed is ' + String(entry.implementationAllowed) + ' (owner-written; must be true)', { value: entry.implementationAllowed });
+    const promo = entry.promotion;
+    if (!isObj(promo)) add('P-V17', relEntry + ' promotion is ' + (promo === null ? 'null' : typeof promo) + ' (PR-7 not ruled; nothing may be published)');
+    else {
+      if (promo.sourceHash !== sourceHash) add('P-V17', relEntry + ' promotion.sourceHash ' + short(promo.sourceHash) + ' does not pin the publication source bytes (' + short(sourceHash) + '); promotion pins bytes, not a filename', { value: promo.sourceHash });
+      if (plan.sourceHash !== sourceHash) add('P-V17', 'proposed plan sourceHash ' + short(plan.sourceHash) + ' != the publication source bytes ' + short(sourceHash), { field: 'sourceHash', value: plan.sourceHash });
+      const revs = isObj(entry.planning) && Array.isArray(entry.planning.revisions) ? entry.planning.revisions : [];
+      const rev = revs.find((r) => isObj(r) && r.rev === promo.rev);
+      if (!rev) add('P-V17', relEntry + ' promotion.rev ' + String(promo.rev) + ' has no planning.revisions entry', { value: promo.rev });
+      else {
+        if (rev.source !== plan.source) add('P-V17', relEntry + ' promoted revision ' + promo.rev + ' names source ' + String(rev.source) + ' but the publication source is ' + String(plan.source), { value: rev.source });
+        if (rev.sourceHash !== promo.sourceHash) add('P-V17', relEntry + ' revision ' + promo.rev + ' sourceHash ' + short(rev.sourceHash) + ' != promotion.sourceHash ' + short(promo.sourceHash), { value: rev.sourceHash });
+      }
+      if (entry.state === 'READY') {
+        if (!ISO_RE.test(String(promo.rulingAt))) add('P-V17', relEntry + ' promotion.rulingAt is not an ISO UTC instant', { value: promo.rulingAt });
+        else {
+          const ageDays = (Date.parse(opts.nowIso) - Date.parse(promo.rulingAt)) / 86400000;
+          if (ageDays > READY_DECAY_DAYS) {
+            res.stale = { rulingAt: promo.rulingAt, ageDays: Math.floor(ageDays) };
+            if (opts.acknowledgeStalePromotion) res.warnings.push({ rule: 'P-V17', task: null, message: 'P-V17 WARN - STALE-READY: promotion.rulingAt ' + promo.rulingAt + ' is ' + Math.floor(ageDays) + ' days old (READY decay ' + READY_DECAY_DAYS + ' days) acknowledged (--acknowledge-stale-promotion); recorded in the registry write-back history note' });
+            else add('P-V17', 'STALE-READY: ' + relEntry + ' promotion.rulingAt ' + promo.rulingAt + ' is ' + Math.floor(ageDays) + ' days old (READY decay ' + READY_DECAY_DAYS + ' days); re-promote, or re-run with --acknowledge-stale-promotion', { value: promo.rulingAt });
+          }
+        }
+      }
+    }
+  }
+  res.rules['P-V17'] = res.violations.some((v) => v.rule === 'P-V17') ? 'REFUSED' : (res.stale && opts.acknowledgeStalePromotion ? 'OVERRIDDEN' : 'PASS');
+  // P-V20 — stream-aware: each dependency reads ONLY the namespace it names
+  const deps = entry !== null && Array.isArray(entry.dependencies) ? entry.dependencies : [];
+  deps.forEach((d, i) => {
+    const where = 'dependencies[' + i + ']';
+    const rec = { index: i, kind: isObj(d) ? d.kind : null, verdict: 'REFUSED', detail: '' };
+    res.dependencies.push(rec);
+    const fail = (msg, extra) => { rec.detail = msg; add('P-V20', where + ' ' + msg, extra); };
+    if (!isObj(d)) return fail('is not an object');
+    if (d.kind === 'arc-state') {
+      // registry identity/state: CORE-STREAM is a valid target here (it is a registry entry)
+      if (!identity.isValidArcId(d.arcId)) return fail('arc-state arcId invalid: ' + String(d.arcId));
+      if (!ARC_STATES.includes(d.atLeast)) return fail('arc-state atLeast invalid: ' + String(d.atLeast));
+      const depFile = path.join(registryRoot, d.arcId, 'arc.json');
+      if (!fs.existsSync(registryRoot) || !fs.readdirSync(registryRoot).includes(d.arcId) || !fs.existsSync(depFile)) return fail('arc-state ' + d.arcId + ': no registry entry (.ai-reports/arcs/' + d.arcId + '/arc.json absent)', { value: d.arcId });
+      let dep = null;
+      try { dep = JSON.parse(stripCR(fs.readFileSync(depFile, 'utf8'))); } catch (e) { return fail('arc-state ' + d.arcId + ': arc.json cannot be parsed'); }
+      const state = isObj(dep) ? dep.state : undefined;
+      if (!stateAtLeast(state, d.atLeast)) return fail('arc-state ' + d.arcId + ' is ' + String(state) + ', required at least ' + d.atLeast, { value: state });
+      rec.verdict = 'PASS'; rec.detail = d.arcId + ' ' + state + ' satisfies atLeast ' + d.atLeast;
+      return undefined;
+    }
+    if (d.kind === 'task-precondition') {
+      if (d.stream !== 'legacy' && d.stream !== 'arc') return fail('task-precondition stream invalid: ' + String(d.stream));
+      if (!identity.isValidTaskId(d.taskId)) return fail('task-precondition taskId invalid: ' + String(d.taskId));
+      // stream "arc" names a RUNTIME ARC namespace: CORE-STREAM is refused (legacy registry identity, never arc-claims/CORE-STREAM/)
+      if (d.stream === 'arc' && (!identity.isValidArcId(d.arcId) || RESERVED_RUNTIME_ARC_IDS.includes(d.arcId))) return fail('task-precondition stream arc needs a valid runtime arcId (' + String(d.arcId) + ' is ' + (RESERVED_RUNTIME_ARC_IDS.includes(d.arcId) ? 'the legacy registry identity, never a runtime ARC namespace' : 'invalid') + ')', { value: d.arcId });
+      if (d.stream === 'legacy' && 'arcId' in d) return fail('task-precondition stream legacy must not carry arcId');
+      if (typeof d.evidence !== 'string' || !SOURCE_RE.test(d.evidence)) return fail('task-precondition evidence is not a repo-relative .ai-reports artifact');
+      if (!fs.existsSync(path.join(repoRoot, d.evidence))) return fail('task-precondition ' + d.taskId + ': evidence artifact ' + d.evidence + ' does not exist (evidence-anchored, never claim-anchored)', { value: d.evidence });
+      if (typeof d.attestedBy !== 'string' || !d.attestedBy || !ISO_RE.test(String(d.attestedAt))) return fail('task-precondition ' + d.taskId + ' is not owner-attested (attestedBy / attestedAt)');
+      const rel = d.stream === 'legacy' ? 'claims/' + d.taskId + '/claim.json' : 'arc-claims/' + d.arcId + '/' + d.taskId + '/claim.json';
+      const file = path.join(opts.runtimeRoot, rel);
+      if (fs.existsSync(file)) {
+        let c = null;
+        try { c = JSON.parse(stripCR(fs.readFileSync(file, 'utf8'))); } catch (e) { return fail('surviving ' + rel + ' cannot be parsed'); }
+        const m = identity.claimMatchesPath(c, rel);
+        if (m.verdict !== 'MATCH') return fail('surviving ' + rel + ' identity ' + m.verdict + ': ' + m.reasons.join('; '));
+        if (c.state !== 'COMPLETE') return fail('surviving ' + rel + ' state ' + String(c.state) + ' contradicts the precondition (only COMPLETE corroborates)', { value: c.state });
+        rec.detail = rel + ' COMPLETE corroborates';
+      } else rec.detail = 'no surviving claim under ' + rel + '; evidence + attestation carry it';
+      rec.verdict = 'PASS';
+      return undefined;
+    }
+    return fail('unknown dependency kind ' + String(d.kind));
+  });
+  res.rules['P-V20'] = res.violations.some((v) => v.rule === 'P-V20') ? 'REFUSED' : 'PASS';
   return res;
 }
 
@@ -697,7 +888,8 @@ function renderValidation(rules, violations, notes) {
 module.exports = {
   MODES, RANK, MODE_ABBR, KINDS, GATES, LANES, ENTRY_MODES, BOUNDARIES, WORKER_ACTIONS, CAP, TRIGGER_ON, TRIGGER_ACTION, GRANT_MUTEX,
   MUTEX_REGISTRY, PROFILE_ID_RE, TASK_ID_RE, PLAN_ID_RE, RESERVED_TASK_IDS, RESERVED_PLAN_IDS, LIVE_STATES, RULE_ORDER, RULE_LABEL, CODE_SURFACES,
+  RESERVED_RUNTIME_ARC_IDS, ARC_STATES, ARC_STATES_PROGRESSIVE, ARC_ADMITTING_STATES, READY_DECAY_DAYS, EXTERNAL_RULES,
   stripCR, sha256, canonicalize, libraryHash, embedProfile, withoutLibraryHash, validateProfile,
   loadLibrary, libraryFromObjects, readSkillFrontmatter, sourceAuthorsProfiles, codeClassFor, deriveLockouts, renderLadder, requiredClasses,
-  pointerReason, planCheck, resolveProfiles, runtimeChecks, renderProfilesSection, renderTaskProfileLines, renderValidation
+  pointerReason, planCheck, resolveProfiles, runtimeChecks, registryChecks, stateAtLeast, renderProfilesSection, renderTaskProfileLines, renderValidation
 };

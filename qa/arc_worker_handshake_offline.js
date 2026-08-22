@@ -48,14 +48,10 @@ const REL = {
     pbQa: 'qa/arc_publish_profiles_offline.js',
     runner: 'qa/run-offline.js'
   },
+  // B5 (P-E publisher, 2026-08-22) owns the publisher docs, resolve-profiles.js and profile-contract.js;
+  // their HEAD-identity pins were removed here mechanically (same pattern as R-B4-2). The B2 consumer
+  // contract on the library (exports + return shapes) stays asserted by the handshake groups below.
   forbidden: [
-    '.claude/skills/arc-publish-plan/SKILL.md',
-    '.claude/skills/arc-publish-plan/references/plan-validation.md',
-    '.claude/skills/arc-publish-plan/references/publish-protocol.md',
-    '.claude/skills/arc-publish-plan/templates/plan-projection.md',
-    '.claude/skills/arc-publish-plan/templates/publish-report.md',
-    '.claude/skills/arc-publish-plan/scripts/resolve-profiles.js',
-    '.claude/skills/arc-publish-plan/scripts/lib/profile-contract.js',
     '.claude/skills/arc-publish-plan/references/schemas/execution-profile.schema.json',
     '.claude/skills/arc-authorize/references/owner-ops.md',
     'netlify.toml'

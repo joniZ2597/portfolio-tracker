@@ -19,6 +19,13 @@ allowed-tools: Read, Grep, Glob, Bash
 Owner-invoked only (`/arc-registry status`). Not model-invocable. Contract:
 `references/registry-contract.md` (binding). Render shape: `templates/status-report.md`.
 
+**Write-back reference (B5, P-E).** From B5 the **publisher** — `/arc-publish-plan <src> --arc
+<ARC-ID>`, step 10b of `arc-publish-plan/references/publish-protocol.md`, after the pointer swap —
+is the sole machine writer of `execution{}` and of the state `EXECUTING` (plus one appended
+`history` entry, `by: publisher`); a failed write-back is reported by the publisher as `DRIFT`
+and surfaces here as the `DRIFT` flag (contract section 9), never repaired here. This skill still
+NEVER writes: `execution` is rendered, cross-checked and flagged only.
+
 ## Invocation
 
     /arc-registry status [--arc <ARC-ID>]

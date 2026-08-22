@@ -45,17 +45,15 @@ const REL = {
     runner: 'qa/run-offline.js',
     handshakeQa: 'qa/arc_worker_handshake_offline.js'
   },
+  // B5 (P-E publisher, 2026-08-22) owns arc-publish-plan/SKILL.md, plan-validation.md, publish-protocol.md,
+  // profile-contract.js and resolve-profiles.js; their HEAD-identity pins were removed here mechanically
+  // (same pattern as R-B4-2). Worker / authorize surfaces stay pinned until B6.
   forbidden: [
     '.claude/skills/arc-worker/SKILL.md',
     '.claude/skills/arc-authorize/SKILL.md',
-    '.claude/skills/arc-publish-plan/SKILL.md',
     '.claude/skills/arc-worker/references/claim-protocol.md',
     '.claude/skills/arc-worker/references/execution-profile.md',
     '.claude/skills/arc-authorize/references/owner-ops.md',
-    '.claude/skills/arc-publish-plan/references/plan-validation.md',
-    '.claude/skills/arc-publish-plan/references/publish-protocol.md',
-    '.claude/skills/arc-publish-plan/scripts/lib/profile-contract.js',
-    '.claude/skills/arc-publish-plan/scripts/resolve-profiles.js',
     '.claude/skills/arc-publish-plan/references/schemas/execution-profile.schema.json',
     '.claude/skills/arc-publish-plan/references/execution-profiles/COWORK-REGISTER.json',
     '.claude/skills/arc-publish-plan/references/execution-profiles/LAB-SANDBOX-STATIC.json',

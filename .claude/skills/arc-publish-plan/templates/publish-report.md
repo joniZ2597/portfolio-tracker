@@ -15,12 +15,19 @@ sourceHash    <sha256>
 ref           <40-char SHA>
 publishedAt   <ISO>          publishedBy  <owner>
 supersedes    <prior planId | none>
+arc           <ARC-ID> (plan.json · manifest.json · current.json all carry arcId <ARC-ID>; arcIdTriple ARC)
+              | none - legacy stream (no arcId written anywhere; arcIdTriple LEGACY)
+claims root   arc-claims/<ARC-ID>/ | claims/
+container     arc-claims/<ARC-ID>/ created | already present  |  n/a (legacy stream)
 
 snapshot      <ROOT>/plans/<plan-id>/
                 plan.json      <n> bytes
                 source.md      <n> bytes
                 manifest.json  <n> bytes
-current.json  -> <plan-id>     (atomic replace committed)
+pointer       plans/arcs/<ARC-ID>/current.json | plans/current.json  -> <plan-id>   (atomic replace committed)
+registry write-back   OK - .ai-reports/arcs/<ARC-ID>/arc.json state EXECUTING, execution.planId <plan-id>
+                      | DRIFT - <reason>; runtime pointer NOT rolled back; owner repair (registry-contract.md section 9)
+                      | n/a (legacy stream)
 
 ----------------------------------------------------------------
 TASKS PUBLISHED  <n>
@@ -40,10 +47,12 @@ PROFILES EMBEDDED  <n>
 <or: none - legacy snapshot; P-V21 refuses this for every new publication>
 
 ----------------------------------------------------------------
-VALIDATION   P-V1 ... P-V15 · P-V21 ... P-V26   <n> PASS · <n> OVERRIDDEN · 0 REFUSED
-             (a published plan has no REFUSED rule; OVERRIDDEN rules are listed below)
+VALIDATION   P-V1 ... P-V17 · P-V19 ... P-V26   <n> PASS · <n> OVERRIDDEN · <n> N/A · 0 REFUSED
+             (a published plan has no REFUSED rule; OVERRIDDEN rules are listed below;
+              N/A only for P-V17 / P-V19 / P-V20 on a legacy publication; P-V18 retired, no row)
 ----------------------------------------------------------------
-OVERRIDES    <none | list, each also recorded in current.json>
+OVERRIDES    <none | list, each also recorded in current.json;
+              --acknowledge-stale-promotion is recorded in the registry history note>
 LOCK-OUTS    <none | <TASK-ID>: <surface> (<class> not held)>
 
 ----------------------------------------------------------------
@@ -58,8 +67,8 @@ CARRIED-OVER CLAIMS  <n>
 ----------------------------------------------------------------
 MUTEX STATE
 ----------------------------------------------------------------
-AUTHORITY:published-plan   released
-<other classes currently held, with holder taskId, or: none held>
+AUTHORITY:published-plan   released   (holder was {__PUBLISH__, arcId <ARC-ID>} | {__PUBLISH__, no arcId})
+<other classes currently held, with holder (arcId ?? legacy, taskId), or: none held>
 
 ================================================================
 PUBLICATION IS NOT AUTHORIZATION.
@@ -92,6 +101,15 @@ equals `planHash` by construction — step 8 refuses otherwise — so the report
 **Mutex state is printed at publish time** because it is the cheapest moment to notice a
 stranded class from a dead conversation — before anyone tries to claim against the new plan
 and gets an unexplained refusal.
+
+**The `arc` line restates the three-way identity** (X-3): for an ARC publication `plan.json`,
+`manifest.json` and `plans/arcs/<ARC-ID>/current.json` carry one equal `arcId`, asserted by
+`runtime-identity.js arcIdTriple` before the swap; a legacy publication writes none. `claims root`
+and `container` say which namespace the publication reaches and whether step 9b created it.
+
+**A `DRIFT` write-back is reported, never repaired here.** The runtime commit point (step 10)
+stands; the registry index is the owner's to reconcile (registry-contract.md section 9). A report
+that rolled the pointer back to "fix" the index would destroy a valid publication.
 
 **On refusal, this template is not used.** Report the P-V rule id, the offending value, the
 source location, and the single corrective action. Do not emit a partial publish report;

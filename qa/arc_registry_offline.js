@@ -50,9 +50,10 @@ const REL = {
     '.claude/skills/arc-worker/SKILL.md', '.claude/skills/arc-worker/references/claim-protocol.md', '.claude/skills/arc-worker/references/runtime-contract.md',
     '.claude/skills/arc-worker/references/execution-profile.md', '.claude/skills/arc-worker/templates/worker-report.md', '.claude/skills/arc-worker/scripts/phase-gate.js',
     '.claude/skills/arc-authorize/SKILL.md', '.claude/skills/arc-authorize/references/owner-ops.md', '.claude/skills/arc-authorize/templates/authorize-report.md',
-    '.claude/skills/arc-publish-plan/SKILL.md', '.claude/skills/arc-publish-plan/references/bootstrap.md', '.claude/skills/arc-publish-plan/references/plan-validation.md',
-    '.claude/skills/arc-publish-plan/references/publish-protocol.md', '.claude/skills/arc-publish-plan/templates/plan-projection.md', '.claude/skills/arc-publish-plan/templates/publish-report.md',
-    '.claude/skills/arc-publish-plan/scripts/resolve-profiles.js', '.claude/skills/arc-publish-plan/scripts/lib/profile-contract.js', '.claude/skills/arc-publish-plan/scripts/lib/runtime-identity.js',
+    // B5 (P-E publisher, 2026-08-22) owns arc-publish-plan/SKILL.md, plan-validation.md, publish-protocol.md, plan-projection.md,
+    // publish-report.md, resolve-profiles.js and profile-contract.js; their HEAD-identity pins were removed mechanically (R-B4-2 pattern).
+    '.claude/skills/arc-publish-plan/references/bootstrap.md',
+    '.claude/skills/arc-publish-plan/scripts/lib/runtime-identity.js',
     SCHEMA_DIR + '/plan.schema.json', SCHEMA_DIR + '/current.schema.json', SCHEMA_DIR + '/claim.schema.json', SCHEMA_DIR + '/authorized.schema.json', SCHEMA_DIR + '/holder.schema.json', SCHEMA_DIR + '/execution-profile.schema.json',
     '.claude/skills/arc-publish-plan/references/execution-profiles/README.md',
     '.claude/skills/arc-progress-auditor/SKILL.md', '.claude/skills/arc-progress-auditor/templates/arc-audit.md',
@@ -454,11 +455,14 @@ try {
     check('D5-c arc-registry skill tree carries no write verb against the runtime or arc.json (no mkdir/rm/mv/cp/tee/redirect-to-file lines)', skillTree.every(exists) && !/^[^#\n]*\b(mkdir|rmdir|rm|mv|cp|tee)\b[^\n]*(\$ROOT|\$ARCS|arc\.json|arc-runtime)/m.test(skillText) && !/^[^\n]*>\s*"?\$(ROOT|ARCS)/m.test(skillText) && !/^[^\n]*>>\s*"?\$(ROOT|ARCS)/m.test(skillText));
     const fm = exists(REL.skill) ? stripCR(readText(REL.skill)).split('\n').slice(0, 8).join('\n') : '';
     check('D5-d arc-registry/SKILL.md frontmatter: disable-model-invocation true; allowed-tools Read, Grep, Glob, Bash - no Write/Edit', /^disable-model-invocation:\s*true$/m.test(fm) && /^allowed-tools:\s*Read, Grep, Glob, Bash$/m.test(fm));
-    const readers = ['.claude/skills/arc-worker', '.claude/skills/arc-publish-plan', '.claude/skills/arc-authorize'];
+    // From B5 (P-E) the publisher READS the registry (P-V17 / P-V20) and is its sole machine writer of execution{} + EXECUTING
+    // (contract sections 0 and 5), so arc-publish-plan/** legitimately names .ai-reports/arcs; the invariant this assert guards is
+    // "workers never read the registry" - worker and authorize surfaces stay covered (narrowed mechanically, 2026-08-22).
+    const readers = ['.claude/skills/arc-worker', '.claude/skills/arc-authorize'];
     const mentions = [];
     // arc.schema.json is the registry's own shape definition, placed in the shared schemas dir by D-3; it names its location and is not a reader.
     for (const d of readers) (function walk(dir) { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) walk(p); else if (e.name !== 'arc.schema.json' && /\.ai-reports\/arcs/.test(fs.readFileSync(p, 'utf8'))) mentions.push(path.relative(ROOT, p)); } })(abs(d));
-    check('D5-e worker / publisher / authorize behaviour files never mention .ai-reports/arcs (workers never read the registry; arc.schema.json excluded as the registry\'s own shape) (' + (mentions.join(', ') || 'none') + ')', mentions.length === 0);
+    check('D5-e worker / authorize behaviour files never mention .ai-reports/arcs (workers never read the registry; the publisher reads it for P-V17 / P-V20 and writes execution{} back at step 10b from B5) (' + (mentions.join(', ') || 'none') + ')', mentions.length === 0);
     check('D5 schema fixtures never produce runtime paths: arc.json has no field naming a claim directory to create', !!S && !/mkdir/.test(stripCR(readText(REL.schema))));
   }
 

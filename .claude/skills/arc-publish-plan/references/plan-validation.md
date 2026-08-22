@@ -1,31 +1,38 @@
-# Plan Validation — P-V1 through P-V15, P-V21 through P-V26
+# Plan Validation — P-V1 through P-V17, P-V19 through P-V26
 
 Binding reference for `/arc-publish-plan`. Every rule below is checked before anything is
 written. **Refusal is atomic: on any failure, nothing is created, nothing is renamed, and
-`current.json` is untouched.**
+the pointer (`plans/current.json` or `plans/arcs/<ARC-ID>/current.json`) is untouched.**
 
 Rules are numbered so a review can be mechanical. When reporting a refusal, quote the rule
-id and the exact offending value — never a paraphrase. P-V16 … P-V20 are reserved for
-Increment 2 (`--arc`).
+id and the exact offending value — never a paraphrase. P-V16, P-V17, P-V19 and P-V20 are the
+Multi-ARC rules (P-E, `--arc`); **P-V18 is RETIRED** — the number is reserved and never reused
+(D-25): cross-ARC task-id uniqueness is not a rule, duplicate task ids across ARCs are legal.
 
 ## Ordering
 
 P-V12 and P-V14 run **before** the mutex is acquired, so a bad path or a stale source costs
-nothing. P-V1 … P-V9, P-V15 and P-V21 … P-V26 are **computed by the resolver at step 5,
-before the owner types `CONFIRM`** (`scripts/resolve-profiles.js` →
+nothing; the `--arc` literal itself is judged before the mutex too (P-V16, `publish-protocol.md`
+namespace block). P-V1 … P-V9, P-V15, P-V16 and P-V21 … P-V26 are **computed by the resolver at
+step 5, before the owner types `CONFIRM`** (`scripts/resolve-profiles.js` →
 `scripts/lib/profile-contract.js planCheck`), so the projection prints their results, the
 PROFILES section and any P-V25 lock-out. With `--runtime-root` the resolver also performs,
-**read-only and before `CONFIRM`**, the P-V11 existence check and the P-V13 live-claim scan.
-`CONFIRM` is requested **only after** the full projection and every validation result have
-been shown; a refusal at step 5 ends the run before any `CONFIRM` prompt. P-V10, P-V11 and
-P-V13 are settled authoritatively against git and the runtime after `CONFIRM` (steps 6–7),
-where the step-5 results are recorded alongside them.
+**read-only and before `CONFIRM`**, the P-V11 existence check and the P-V13 live-claim scan
+(`runtimeChecks`); with `--arc` it additionally performs P-V19 (`runtimeChecks`) and, through
+`--registry-root`, P-V17 and P-V20 (`registryChecks`). `CONFIRM` is requested **only after** the
+full projection and every validation result have been shown; a refusal at step 5 ends the run
+before any `CONFIRM` prompt. P-V10 (git), P-V11, P-V13, P-V19 (runtime) and P-V17, P-V20
+(registry) are settled authoritatively after `CONFIRM` (steps 6–7, through the same committed
+library functions), where the step-5 results are recorded alongside them.
 
 | Phase | Rules |
 |---|---|
-| Pre-mutex | P-V12, P-V14, main-worktree assert (`publish-protocol.md` step 0) |
-| Step 5 — resolver, **before `CONFIRM`** | P-V1 … P-V9, P-V15, P-V21 … P-V26 (computed and printed); P-V11 existence + P-V13 scan read-only when `--runtime-root` is given |
-| Post-`CONFIRM` (steps 6–7, authoritative) | P-V10, P-V11, P-V13; step-5 results recorded |
+| Pre-mutex | P-V12, P-V14, main-worktree assert (`publish-protocol.md` step 0); the `--arc` literal (P-V16: valid id, not `CORE-STREAM`, never normalized) |
+| Step 5 — resolver, **before `CONFIRM`** | P-V1 … P-V9, P-V15, P-V16, P-V21 … P-V26 (computed and printed); P-V11 existence + P-V13 scan read-only when `--runtime-root` is given; P-V17, P-V19, P-V20 read-only when `--arc` is given |
+| Post-`CONFIRM` (steps 6–7, authoritative) | P-V10, P-V11, P-V13, P-V17, P-V19, P-V20; step-5 results recorded |
+
+Without `--arc` the ARC-only rules P-V17, P-V19 and P-V20 print `N/A (no --arc; legacy stream)`
+— never `PASS` and never `REFUSED` — and P-V16 passes exactly when the plan carries no `arcId`.
 
 ---
 
@@ -195,8 +202,18 @@ Runs **before** the mutex is acquired, so a bad path costs nothing.
 
 Live states are `CLAIMED`, `WAITING_OWNER_GO`, `AUTHORIZED`, and `BLOCKED`.
 
-**Detect:** read every `claims/*/claim.json`; collect those whose `planId` equals the
-outgoing `current.json.planId` and whose state is live.
+**Detect:** read every claim in **the selected namespace only** and collect those whose
+`planId` equals the outgoing pointer's `planId` and whose state is live:
+
+| Invocation | Outgoing pointer | Claims scanned | Never read |
+|---|---|---|---|
+| no `--arc` (legacy stream) | `plans/current.json` | `claims/*/claim.json` | `arc-claims/`, `plans/arcs/` |
+| `--arc <ARC-ID>` | `plans/arcs/<ARC-ID>/current.json` | `arc-claims/<ARC-ID>/*/claim.json` | `claims/`, `plans/current.json`, every other `arc-claims/<OTHER>/` |
+
+A live claim in another ARC, or in the legacy stream, is invisible to an ARC publication — and
+vice versa (K15). A missing pointer (first publication of an ARC) means no outgoing plan and no
+scan. A `COMPLETE` claim against the outgoing plan never refuses: later generations of the same
+ARC keep the ledger (runtime-contract.md section 5.1).
 
 **Override:** `--acknowledge-live-claims`. With it, each is copied into
 `carriedOverClaims[]` and `claim.json` is **left byte-unchanged**.
@@ -271,6 +288,107 @@ mechanical failure, the print blocks the semantic one.
 **Known consequence.** The 2026-08-15 v2 source carries three stop conditions of the form
 ``as `LX-2` `` (LX-3, LX-4, LX-5), which pattern **c** rejects. Any replacement source must
 expand them into literal text. This is the rule working, not a false positive.
+
+---
+
+## P-V16 · `arcId` is declared from the `--arc` literal, and only from it
+
+The ARC identity of a publication originates **only** in the typed `--arc <ARC-ID>` literal
+(r3 T17): never from a task-id prefix, a filename, a slug, or the documentary `- Arc:` header.
+
+**With `--arc`:** the literal must match `^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$`, be at most 24
+characters, not be a Windows reserved device name (`runtime-identity.js isValidArcId`, N-3) and
+not be `CORE-STREAM` — the registry's grandfathered *index entry* for the legacy stream, valid
+for `/arc-registry status --arc` and never a runtime `arcId` (registry-contract.md section 2).
+A case variant (`arc-a`, `Arc-A`) is **refused, never normalized**. The resolver declares
+`plan.arcId` equal to the literal (written after `executionProfiles`, before `tasks`); a proposed
+plan that already carries the same value is accepted, any other value is refused. Task ids need
+be **unique within the plan only** (P-V2, case-folded) — there is no cross-ARC check: the same
+`taskId` may exist in the legacy stream and in several ARCs as distinct identities
+`(arcId ?? null, taskId)` (D-25, P-V18 retired).
+
+**Without `--arc`:** the plan must carry no `arcId`. The legacy publication's `plan.json` bytes are
+identical to a B1 publication (no field is added).
+
+**Detect:** `profile-contract.js planCheck(plan, { arcId })`; the literal is also judged before
+the mutex in `publish-protocol.md` (namespace block).
+
+**Reject:** `P-V16 REFUSED - --arc "<value>" is not a valid ARC id (...); a case variant is refused, never normalized` ·
+`P-V16 REFUSED - --arc "CORE-STREAM" is the registry index entry for the legacy stream, never a runtime arcId` ·
+`P-V16 REFUSED - proposed plan carries arcId "<a>" but the --arc literal is "<b>"` ·
+`P-V16 REFUSED - proposed plan carries arcId "<a>" but no --arc was given`
+
+## P-V17 · The registry entry admits this publication
+
+**Detect** (`profile-contract.js registryChecks`, `--registry-root`, default
+`<repo>/.ai-reports/arcs`) — `.ai-reports/arcs/<ARC-ID>/arc.json`, where `<ARC-ID>` is found
+**case-exact in the directory listing** (a case-variant directory is never normalized):
+
+1. the entry exists and parses, and its `arcId` equals the literal;
+2. `state` is `READY` or `EXECUTING` (`EXECUTING` = the republish of a later revision of the same
+   arc, registry-contract.md section 3); every other state — `IDEA`, `PLANNING`, `REVIEWED`,
+   `HOLD`, `CLOSED`, … — admits no publication, and `PROMOTE` stays an owner act;
+3. `implementationAllowed == true`;
+4. `promotion` is non-null and **pins the publication source**: `promotion.sourceHash` equals the
+   sha256 of the source bytes being published, the proposed `plan.sourceHash` equals the same
+   value, and `planning.revisions[rev == promotion.rev]` names `plan.source` with that hash —
+   promotion pins bytes, not a filename (PR-1);
+5. READY decay (D-10, registry-contract.md section 7): at `READY`, a `promotion.rulingAt` older
+   than 7 days is `STALE-READY` and refuses unless `--acknowledge-stale-promotion` is passed.
+
+**Override:** `--acknowledge-stale-promotion` (clause 5 only), printed as `OVERRIDDEN` and
+durably recorded in the registry write-back `history` note at step 10b — the manifest field set
+is fixed by `current.schema.json` and carries no slot for it.
+
+**Reject:** `P-V17 REFUSED - .ai-reports/arcs/<ARC-ID>/arc.json state <S> admits no publication (READY or EXECUTING required; PROMOTE is an owner act)` ·
+`P-V17 REFUSED - ... promotion.sourceHash <a> does not pin the publication source bytes (<b>); promotion pins bytes, not a filename` ·
+`P-V17 REFUSED - STALE-READY: ... promotion.rulingAt <t> is <n> days old (READY decay 7 days); re-promote, or re-run with --acknowledge-stale-promotion` ·
+`P-V17 REFUSED - no registry entry directory "<ARC-ID>" ... (case-exact; a case variant is never normalized)` ·
+`P-V17 REFUSED - registry root absent: ... (registry not bootstrapped)`
+
+## P-V18 · RETIRED
+
+The number is **reserved and never reused** (D-25). The rule that once lived here — cross-ARC
+task-id uniqueness — is not a rule: isolation is structural (`arc-claims/<ARC-ID>/`), duplicate
+task ids across namespaces are legal, and read-only views report them only as
+`DUPLICATE-ID-INFO`. P-V18 has no row in the rule table, the projection or the publish report.
+
+## P-V19 · ARC claim-namespace integrity
+
+With `--arc <ARC-ID>`, every entry under `arc-claims/<ARC-ID>/` — **the selected namespace only**
+— must be a directory whose `claim.json` parses and matches its path identity:
+`runtime-identity.js claimMatchesPath(record, "arc-claims/<ARC-ID>/<T>/claim.json")` returns
+`MATCH` (`claim.arcId == <ARC-ID>` and `claim.taskId == <T>`). A residue directory without a
+`claim.json` refuses (clear it via owner-ops section 8 before publishing). A container that does
+not exist yet (first publication of the arc) passes with zero claims. Other ARCs' namespaces and
+the legacy `claims/` are never read. Not applicable without `--arc` (`N/A`).
+
+**Detect:** `profile-contract.js runtimeChecks(root, plan, { arcId })`.
+
+**Reject:** `P-V19 REFUSED - arc-claims/<ARC-ID>/<T>/claim.json identity MISMATCH: record.arcId <X> != directory <ARC-ID>` ·
+`P-V19 REFUSED - arc-claims/<ARC-ID>/<T>/claim.json cannot be parsed (...)` ·
+`P-V19 REFUSED - arc-claims/<ARC-ID>/<T>/ has no claim.json (residue; clear it via owner-ops section 8 before publishing)`
+
+## P-V20 · Registry dependencies are satisfied (stream-aware)
+
+Every `arc.json.dependencies[]` entry of the selected arc is resolved at publish time
+(registry-contract.md section 4; PR-5 semantics); **workers never evaluate these**.
+
+| Kind | Reads exactly | Satisfied when |
+|---|---|---|
+| `arc-state {arcId, atLeast}` | `.ai-reports/arcs/<arcId>/arc.json` — a **registry** identity, so `CORE-STREAM` is a valid target | `state == atLeast`, or both are progressive (`IDEA < DISCOVERY < PLANNING < REVIEWED < READY < EXECUTING < CLOSED`) and `state >= atLeast`; `HOLD`, `CANCELLED`, `SUPERSEDED` never satisfy a progressive `atLeast` |
+| `task-precondition {stream, arcId?, taskId, evidence, attestedBy, attestedAt}` | the evidence artifact under the repo, and the surviving claim in **one** namespace — `claims/<taskId>/claim.json` for `stream: legacy`, `arc-claims/<arcId>/<taskId>/claim.json` for `stream: arc` (a **runtime** namespace, so `CORE-STREAM` is refused and `arc-claims/CORE-STREAM/` is never constructed) | the evidence artifact exists; `attestedBy` / `attestedAt` are set (owner attestation, PR-5); the surviving claim, if any, matches its path identity and is `COMPLETE` — any other state contradicts; absence is not a failure (evidence-anchored, never claim-anchored) |
+
+The other namespace is never read for a precondition: a `COMPLETE` `claims/T` cannot rescue an
+`ABANDONED` `arc-claims/ARC-B/T`, and an `ABANDONED` `arc-claims/ARC-B/T` is invisible to a
+legacy precondition on `T`.
+
+**Detect:** `profile-contract.js registryChecks` (with `--runtime-root` for the claim read).
+
+**Reject:** `P-V20 REFUSED - dependencies[<i>] arc-state <ARC> is <state>, required at least <atLeast>` ·
+`P-V20 REFUSED - dependencies[<i>] surviving <path> state <S> contradicts the precondition (only COMPLETE corroborates)` ·
+`P-V20 REFUSED - dependencies[<i>] task-precondition <T>: evidence artifact <path> does not exist (evidence-anchored, never claim-anchored)` ·
+`P-V20 REFUSED - dependencies[<i>] task-precondition <T> is not owner-attested (attestedBy / attestedAt)`
 
 ---
 
@@ -385,6 +503,6 @@ On any refusal, report: the rule id, the exact offending value, the file and sec
 from, and the single corrective action. Then stop.
 
 **Never** offer to publish "with the problem noted", never adjust the projection to make a
-rule pass, and never proceed on a partial validation. Most of these twenty-one rules protect
-an approval or concurrency boundary; passing one by accommodation removes the boundary
-entirely.
+rule pass, and never proceed on a partial validation. Most of these twenty-five rules protect
+an approval, identity or concurrency boundary; passing one by accommodation removes the
+boundary entirely.

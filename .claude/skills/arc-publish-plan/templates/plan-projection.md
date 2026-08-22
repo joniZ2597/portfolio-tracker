@@ -33,6 +33,10 @@ source mtime  <ISO>          CHECKPOINT.md mtime  <ISO>   [P-V14: PASS | OVERRID
 repoRef       <40-char SHA>  HEAD  <40-char SHA>          [P-V10: PASS | OVERRIDDEN]
 planId        <plan-id>                                   [P-V11: not present, not reserved]
 supersedes    <prior planId | none>
+arc           <ARC-ID | none - legacy stream>              [P-V16: PASS]   (from the typed --arc literal only)
+registry      .ai-reports/arcs/<ARC-ID>/arc.json  state <READY | EXECUTING>  promotion r<N>  [P-V17: PASS | OVERRIDDEN | N/A]
+pointer       plans/arcs/<ARC-ID>/current.json | plans/current.json
+claims root   arc-claims/<ARC-ID>/ | claims/              [P-V19: PASS | N/A]  [P-V20: PASS | N/A]
 RESOLVER      scripts/resolve-profiles.js <sha256> · lib/profile-contract.js <sha256> · library <n> profiles
 projectionHash <sha256 of the resolved plan.json bytes that step 8 stages verbatim>
 
@@ -90,6 +94,10 @@ P-V12 source path repo-relative ............... PASS
 P-V13 no live claims against outgoing plan .... PASS
 P-V14 source not older than CHECKPOINT ........ PASS
 P-V15 conditions literal, never pointers ...... PASS
+P-V16 arcId from the --arc literal only ....... PASS
+P-V17 registry entry admits publication ....... PASS | OVERRIDDEN | N/A (no --arc)
+P-V19 ARC claim namespace integrity ........... PASS | N/A (no --arc)
+P-V20 registry dependencies satisfied ......... PASS | N/A (no --arc)
 P-V21 profiles present and resolvable ......... PASS
 P-V22 profile lane matches task lane .......... PASS
 P-V23 mode ceilings and recommendations ....... PASS
@@ -100,12 +108,13 @@ P-V26 required skills invocable ............... PASS
 OVERRIDES IN EFFECT
 ----------------------------------------------------------------
 <none | --acknowledge-stale-source | --acknowledge-live-claims
-      | --allow-ref-mismatch>
-Each override is written into current.json. An override that is not
+      | --allow-ref-mismatch | --acknowledge-stale-promotion>
+Each override is written into current.json (--acknowledge-stale-promotion:
+into the registry write-back history note). An override that is not
 durably recorded is indistinguishable from a check that never ran.
 ================================================================
-Nothing has been written. plans/current.json still points at
-<prior planId | nothing>.
+Nothing has been written. <plans/current.json | plans/arcs/<ARC-ID>/current.json>
+still points at <prior planId | nothing>.
 
 Type CONFIRM to publish. Any other response cancels.
 ================================================================
@@ -118,13 +127,23 @@ Type CONFIRM to publish. Any other response cancels.
 **Overrides are printed even when none are active.** An empty overrides block is evidence
 the run was clean; omitting the block when empty makes its absence ambiguous.
 
-**Validation lines print `PASS`, `OVERRIDDEN`, or `REFUSED`.** A refusal ends the run at
-that line — do not print a full table with one failure buried inside it, and never print a
-projection whose validation block contains a `REFUSED` alongside a `CONFIRM` prompt.
+**Validation lines print `PASS`, `OVERRIDDEN`, or `REFUSED`** — and, for the ARC-only rules
+P-V17 / P-V19 / P-V20 on a legacy (no `--arc`) publication, `N/A (no --arc)`. A refusal ends the
+run at that line — do not print a full table with one failure buried inside it, and never print a
+projection whose validation block contains a `REFUSED` alongside a `CONFIRM` prompt. P-V18 is
+retired (number reserved) and has no row.
+
+**The `arc` line is the identity review.** It prints the typed `--arc` literal (or `none - legacy
+stream`), the registry entry it was checked against, the pointer that will be swapped and the
+claims root that will be scanned — so the owner can see which namespace the publication touches
+before confirming. `CORE-STREAM` never appears here: it is a registry index entry, never a
+runtime arc.
 
 **`--dry-run` replaces the closing block** with
-`DRY RUN — nothing written, no mutex taken, no CONFIRM accepted. plans/current.json still points at <prior planId | nothing>.`
-and never prints the `Type CONFIRM` line — a dry run cannot be confirmed into a publish.
+`DRY RUN — nothing written, no mutex taken, no CONFIRM accepted. <plans/current.json | plans/arcs/<ARC-ID>/current.json> still points at <prior planId | nothing>.`
+— the legacy pointer only when no `--arc` was given, the selected ARC's pointer only with
+`--arc <ARC-ID>`; the other pointer is never inspected — and never prints the `Type CONFIRM`
+line — a dry run cannot be confirmed into a publish.
 
 **PROFILES are printed in full, once per distinct id.** The embedded object is the binding
 execution policy for every task that names it; a summary or a library path is not a review
