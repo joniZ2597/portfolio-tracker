@@ -48,8 +48,13 @@ repository exists as of 2026-08-15.
         └── holder.json              { taskId, lane, acquiredAt, arcId? }   (holder.schema.json)
 ```
 
-**Namespaces (topology contract, B4 / P-E0; the behaviour that selects a namespace follows in
-P-E).** The legacy stream (`plans/current.json`, `claims/<TASK-ID>/`) and the ARC namespace
+**Namespaces (topology contract, B4 / P-E0; the behaviour that selects one is P-E — publisher in
+B5, worker / authorize / owner-ops in B6).** A worker, an authorization and every **mutating** owner
+operation select exactly one namespace per invocation, from an explicit literal —
+`--arc <ARC-ID>`, or its absence (worker / authorize) or `--legacy` (owner-ops) — and never fall
+back from one to the other, never search both to decide a target, and never read the one they did
+not select. Only read-only inspection (`owner-ops.md` section 2, `/arc-registry status`) enumerates
+both. The legacy stream (`plans/current.json`, `claims/<TASK-ID>/`) and the ARC namespace
 (`plans/arcs/<ARC-ID>/current.json`, `arc-claims/<ARC-ID>/<TASK-ID>/`) are **sibling** trees: a
 `claims/*/` loop never sees an ARC claim, an `arc-claims/<ARC-ID>/*/` loop never sees a legacy one,
 and nothing ever reads across the two (K15). `plans/<plan-id>/` and `mutex/` are the only shared
@@ -129,6 +134,11 @@ A pre-claim mutex refusal is `outcome=STOPPED, taskState=UNCLAIMED` — the clai
 is removed and **no state is written at all**. Recording it as `BLOCKED` would be an
 illegal transition, since `UNCLAIMED -> BLOCKED` is not in the legal set.
 
+The **wrong-`--arc` resume** (section 7, D-6) uses that same vocabulary for the same reason:
+`outcome=STOPPED`, the task state on disk **unchanged**, nothing written and nothing released. The
+resumed claim belongs to a namespace this invocation did not select, so this invocation has no
+authority to record any transition on it — writing `BLOCKED` would assert one.
+
 ## 5. Legal transitions
 
 ```
@@ -165,8 +175,8 @@ important rule in the model and the one with the weakest technical enforcement.
 
 Stated explicitly here rather than left inferred from `arc-worker/SKILL.md` step 4. Resolution
 is **scoped to the namespace the worker operates in** — the legacy stream or one ARC — never
-cross-namespace, never cross-ARC (owner ruling 2026-08-21; the runtime selection of that
-namespace is P-E behaviour, B4 fixes only the rule):
+cross-namespace, never cross-ARC (owner ruling 2026-08-21; the rule is fixed in B4, the runtime
+selection and this resolution are implemented in `claim-protocol.md` section 1a, B6):
 
 ```
 legacy stream:  depSatisfied(D)         <=>  claims/<D>/claim.json                 exists
@@ -195,11 +205,12 @@ about the task, not about the plan version** — within its namespace: for an AR
 ARC's generations (`planId` changes, `arcId` does not). This rests on a recorded assumption: a
 task id means the same thing across plans of the same stream or ARC.
 
-> **Named non-conflict with §7.** That table's row *"Claim `planId` is not the current
-> `planId` -> BLOCKED"* is **not** contradicted here. A worker reads **its own** claim as
-> *authority* and **a dependency's** claim as *evidence*, and only the former is plan-pinned.
-> Acting under stale terms is the hazard §7 prevents; reading another task's terminal record
-> to answer "did this finish?" grants no authority and carries no such hazard.
+> **Named non-conflict with §7.** That table's row *"Claim `planId` / `planHash` is not the
+> current one of the selected namespace -> BLOCKED (`plan-not-current-for-arc`)"* is **not**
+> contradicted here. A worker reads **its own** claim as *authority* and **a dependency's** claim as
+> *evidence*, and only the former is plan-pinned. Acting under stale terms is the hazard §7
+> prevents; reading another task's terminal record to answer "did this finish?" grants no authority
+> and carries no such hazard.
 
 An INCOMPLETE-CLAIM directory (no `claim.json`) fails the "exists AND parses" clause, so
 owner-ops §8 residue cleanup remains correct and safe.
@@ -248,13 +259,27 @@ directory — is part of claiming and is permitted. Every other write is an unco
 Never written by a worker: `authorized.json` · anything under `plans/` · another task's
 claim · a mutex whose `holder.json` names a different owner pair `(arcId ?? null, taskId)` ·
 the runtime root or any root container (`claims/`, `arc-claims/`, `arc-claims/<ARC-ID>/`,
-`plans/arcs/`).
+`plans/arcs/`) · **anything at all in the namespace this invocation did not select.**
+
+The namespace is fixed once, from the literal, before the first read
+(`claim-protocol.md` "Namespace selection"). Release is legal only on an exact holder-pair match
+(section 3): at `COMPLETE` a worker **skips** a class it does not own and reports it retained, and
+on `--resume` a mismatched pair is `BLOCKED` with everything already held kept.
 
 ## 7. Fail-closed catalogue
 
 | Condition | Result |
 |---|---|
 | `git rev-parse` fails, or root absent/incomplete | IDLE |
+| `--arc` literal malformed, case-variant, or `CORE-STREAM` | IDLE — nothing read, nothing written; never normalized |
+| `--arc <ARC-ID>` with no `plans/arcs/<ARC-ID>/current.json` and no `retired-*.json` sibling | IDLE — `arc-not-published` |
+| `--arc <ARC-ID>` whose pointer was retired (only `retired-*.json` survives) | IDLE — `arc-retired` |
+| Pointer `arcId` != the `--arc` literal, or `plans/current.json` carrying an `arcId` (W-V13) | IDLE — `pointer-arc-mismatch` |
+| A claim record in the selected namespace whose identity is not its own directory (W-V14) | IDLE — `claim-arc-mismatch` |
+| ARC pointer present but `arc-claims/<ARC-ID>/` absent | IDLE — `arc-claims-container-missing`; a worker never creates a container |
+| Claim `planId` / `planHash` is not the current one **of the selected namespace** | BLOCKED — `plan-not-current-for-arc`; owner recovery only |
+| `--resume` on a claim whose identity is not the selected namespace (D-6) | **STOPPED**, no write, nothing released — the task state on disk is unchanged |
+| Mutex holder pair `(arcId ?? null, taskId)` mismatch on resume | BLOCKED, retaining what is held |
 | `current.json` missing or malformed | IDLE |
 | `plan.json` missing, or `planHash` mismatch | IDLE |
 | Lane not in {MAIN, LAB, COWORK} | IDLE |
@@ -265,8 +290,6 @@ the runtime root or any root container (`claims/`, `arc-claims/`, `arc-claims/<A
 | Unknown mutex class in the claimed row | BLOCKED |
 | Dependency unsatisfied or cyclic | BLOCKED |
 | `AUTHORIZED` with no valid `authorized.json` | BLOCKED — never repaired by a worker |
-| Claim `planId` is not the current `planId` | BLOCKED — owner recovery only |
-| Mutex holder mismatch on resume | BLOCKED, retaining what is held |
 | A newer `.ai-reports` artifact than the snapshot | **report it, stay on the snapshot** |
 | `profile-binding-missing` / `profile-hash-mismatch` (W-V10) before the claim | IDLE — nothing written |
 | `profile-binding-missing` / `profile-hash-mismatch` on `--resume` | BLOCKED |

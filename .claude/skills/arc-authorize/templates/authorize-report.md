@@ -8,7 +8,10 @@ ARC TASK AUTHORIZED
 ================================================================
 task          <TASK-ID>
 lane          MAIN
+arc           <ARC-ID>             | none - legacy stream
+claim root    arc-claims/<ARC-ID>/<TASK-ID>   | claims/<TASK-ID>   (legacy namespace)
 planId        <plan-id>            planHash <sha256>  verified: yes
+              from plans/arcs/<ARC-ID>/current.json | plans/current.json
 authorizedAt  <ISO>                authorizedBy <owner>
 note          <verbatim, or: none>
 
@@ -18,17 +21,20 @@ mode          normal | repair (completed an interrupted authorization)
 ----------------------------------------------------------------
 WRITES PERFORMED
 ----------------------------------------------------------------
-claims/<TASK-ID>/authorized.json     created   (sole writer)
-claims/<TASK-ID>/claim.json          state updated, stateHistory appended
+<claim root>/authorized.json         created   (sole writer; arcId iff --arc)
+<claim root>/claim.json              state updated, stateHistory appended
   Nothing else was written. No mutex was acquired or released.
-  No plan, snapshot, or other claim was touched.
+  No plan, snapshot, or other claim was touched, and the namespace this
+  invocation did not select was never read.
 
 ----------------------------------------------------------------
 MUTEXES HELD BY THIS CLAIM
 ----------------------------------------------------------------
-CODE:index-html          -> mutex/CODE__index-html
-EXTERNAL:live-provider   -> mutex/EXTERNAL__live-provider
+CODE:index-html          -> mutex/CODE__index-html          holder (<ARC-ID> | legacy, <TASK-ID>)
+EXTERNAL:live-provider   -> mutex/EXTERNAL__live-provider   holder (<ARC-ID> | legacy, <TASK-ID>)
   Held since the claim was taken. Unchanged by this authorization.
+  Classes are global: these are blocked for every other ARC and for the
+  legacy stream while this claim holds them.
 
 ----------------------------------------------------------------
 WHAT WAS AUTHORIZED
@@ -52,14 +58,17 @@ lock-out       netlify/functions/** (CODE:netlify-functions not held by <TASK-ID
 AUTHORIZED IS NOT RUNNING.
 
 Nothing executes until:
-    /arc-worker <LANE> --resume <TASK-ID>
+    /arc-worker <LANE> --resume <TASK-ID> [--arc <ARC-ID>]
 
-That worker re-verifies the token, the plan pinning, and every
-mutex before it does any work.
+with the SAME selector this grant was issued under. That worker
+re-verifies the claim's namespace identity, the token, the plan
+pinning, and every mutex holder pair before it does any work.
 
-This grant is pinned to plan <plan-id>. If the plan is republished,
-the authorization no longer applies and the claim needs owner
-recovery - not a re-grant against stale terms.
+This grant is pinned to plan <plan-id> in <arc <ARC-ID> | the legacy
+stream>. If that plan is republished, the authorization no longer
+applies and the claim needs owner recovery - not a re-grant against
+stale terms. It says nothing about the same <TASK-ID> in any other
+namespace.
 ================================================================
 ```
 
@@ -91,9 +100,14 @@ invocation was interrupted, which is worth knowing even though the outcome is id
 
 ## On refusal, this template is not used
 
-Report the rule id (`A-V1`…`A-V4`), the exact offending value, and the single corrective
+Report the rule id (`A-V1`…`A-V6`), the exact offending value, and the single corrective
 action. There is no partial authorization: either `authorized.json` exists and the claim
 reads `AUTHORIZED`, or neither is true.
+
+**Name the namespace in every refusal.** "UNCLAIMED" means unclaimed *here*; the same `TASK-ID` may
+well be claimed under another selector, and the corrective action is to retype the selector, not to
+re-run the same command. Never resolve the ambiguity by searching — say which namespace was looked
+in and stop.
 
 Never soften a refusal into a conditional grant. `A-V3` in particular — a claim pinned to
 a superseded plan — must go to owner recovery, because re-granting against terms that have

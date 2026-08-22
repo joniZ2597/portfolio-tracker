@@ -47,9 +47,10 @@ const REL = {
   handoffsReadme: '.ai-reports/handoffs/README.local.md',
   v3Source: '.ai-reports/handoffs/2026-08-15_parallel-arc-execution-plan-v3.COWORK.md',
   forbidden: [
-    '.claude/skills/arc-worker/SKILL.md', '.claude/skills/arc-worker/references/claim-protocol.md', '.claude/skills/arc-worker/references/runtime-contract.md',
-    '.claude/skills/arc-worker/references/execution-profile.md', '.claude/skills/arc-worker/templates/worker-report.md', '.claude/skills/arc-worker/scripts/phase-gate.js',
-    '.claude/skills/arc-authorize/SKILL.md', '.claude/skills/arc-authorize/references/owner-ops.md', '.claude/skills/arc-authorize/templates/authorize-report.md',
+    // B6 (P-E execution side, 2026-08-22) owns arc-worker/SKILL.md, claim-protocol.md, runtime-contract.md,
+    // worker-report.md, arc-authorize/SKILL.md, owner-ops.md and authorize-report.md; their HEAD-identity pins
+    // were removed mechanically (R-B4-2 pattern). D5-e below still proves those files never read the registry.
+    '.claude/skills/arc-worker/references/execution-profile.md', '.claude/skills/arc-worker/scripts/phase-gate.js',
     // B5 (P-E publisher, 2026-08-22) owns arc-publish-plan/SKILL.md, plan-validation.md, publish-protocol.md, plan-projection.md,
     // publish-report.md, resolve-profiles.js and profile-contract.js; their HEAD-identity pins were removed mechanically (R-B4-2 pattern).
     '.claude/skills/arc-publish-plan/references/bootstrap.md',

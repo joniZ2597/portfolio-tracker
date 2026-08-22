@@ -49,11 +49,10 @@ const REL = {
   // profile-contract.js and resolve-profiles.js; their HEAD-identity pins were removed here mechanically
   // (same pattern as R-B4-2). Worker / authorize surfaces stay pinned until B6.
   forbidden: [
-    '.claude/skills/arc-worker/SKILL.md',
-    '.claude/skills/arc-authorize/SKILL.md',
-    '.claude/skills/arc-worker/references/claim-protocol.md',
+    // B6 (P-E execution side, 2026-08-22) owns arc-worker/SKILL.md, claim-protocol.md, arc-authorize/SKILL.md
+    // and owner-ops.md; their HEAD-identity pins were removed mechanically (R-B4-2 pattern). The structural
+    // schema, topology and legacy-byte proofs of this suite are unaffected.
     '.claude/skills/arc-worker/references/execution-profile.md',
-    '.claude/skills/arc-authorize/references/owner-ops.md',
     '.claude/skills/arc-publish-plan/references/schemas/execution-profile.schema.json',
     '.claude/skills/arc-publish-plan/references/execution-profiles/COWORK-REGISTER.json',
     '.claude/skills/arc-publish-plan/references/execution-profiles/LAB-SANDBOX-STATIC.json',
@@ -430,9 +429,18 @@ try {
   check('docs runtime-contract §5.1 keeps the generation-durability rule: dependency planId is NOT consulted; own claim stays authority and plan-pinned', /planId.{0,20}NOT consulted/.test(sec51) && /authority/.test(sec51) && /evidence/.test(sec51));
   check('docs runtime-contract §6 two write shapes PER NAMESPACE: claims/<own TASK-ID>/claim.json and arc-claims/<ARC-ID>/<own TASK-ID>/claim.json + mutex holder; never both; never the container', /<ROOT>\/claims\/<own TASK-ID>\/claim\.json/.test(sec6) && /<ROOT>\/arc-claims\/<ARC-ID>\/<own TASK-ID>\/claim\.json/.test(sec6) && /<ROOT>\/mutex\/<own declared class>\/holder\.json/.test(sec6) && /namespace/i.test(sec6));
   check('docs runtime-contract §1 root completeness unchanged (plans/, claims/ and mutex/)', /`plans\/`, `claims\/` and `mutex\/`/.test(sec1) && !/arc-claims/.test(sec1));
-  check('docs runtime-contract: no section mentions --arc behaviour or a B5/B6 routing rule (topology only)', !/--arc\b/.test(sec2 + sec3 + sec51 + sec6));
+  // B6 (P-E execution side, 2026-08-22) implements the routing these B4 sections deliberately deferred.
+  // The invariant is now sharper, not weaker: the runtime selector is named ONLY in §2, and §3 / §5.1 / §6
+  // still state their rules namespace-generically, with no selector literal leaking into them.
+  check('docs runtime-contract §2 names the runtime selector contract (P-E routing) while §3 / §5.1 / §6 stay selector-free (topology stated generically)', /--arc <ARC-ID>/.test(sec2) && /--legacy/.test(sec2) && !/--arc\b/.test(sec3 + sec51 + sec6));
   const rcHead = gitShow(REL.docs.runtimeContract);
-  if (rcHead) for (const [label, re] of [['5.2', /^## 5\.2/], ['7', /^## 7\./], ['4', /^## 4\./], ['8', /^## 8\./], ['9', /^## 9\./]]) check('docs runtime-contract section ' + label + ' byte-identical to HEAD (B2 / untouched)', sectionOf(rc, re) !== null && sectionOf(rc, re) === sectionOf(rcHead, re));
+  // §4 and §7 are B6-owned from 2026-08-22 (the STOPPED vocabulary note and the ARC fail-closed rows);
+  // their HEAD-identity pins were removed mechanically and replaced by the content assertions below.
+  if (rcHead) for (const [label, re] of [['5.2', /^## 5\.2/], ['8', /^## 8\./], ['9', /^## 9\./]]) check('docs runtime-contract section ' + label + ' byte-identical to HEAD (B2 / untouched)', sectionOf(rc, re) !== null && sectionOf(rc, re) === sectionOf(rcHead, re));
+  const sec4 = sectionOf(rc, /^## 4\./) || '';
+  const sec7 = sectionOf(rc, /^## 7\./) || '';
+  check('docs runtime-contract §4 keeps the two vocabularies and adds the wrong-`--arc` resume as a STOPPED outcome with no state written', /Task state/.test(sec4) && /Worker outcome/.test(sec4) && /STOPPED/.test(sec4) && /UNCLAIMED/.test(sec4));
+  check('docs runtime-contract §7 carries every ARC fail-closed row', ['arc-not-published', 'arc-retired', 'pointer-arc-mismatch', 'claim-arc-mismatch', 'arc-claims-container-missing', 'plan-not-current-for-arc'].every((r) => new RegExp('`' + r + '`').test(sec7)));
   const bs = fs.existsSync(abs(REL.docs.bootstrap)) ? stripCR(readText(REL.docs.bootstrap)) : '';
   check('docs bootstrap.md: fresh bootstrap AND extending the existing legacy root documented separately', /fresh/i.test(bs) && /existing/i.test(bs) && /extend/i.test(bs));
   check('docs bootstrap.md: future owner bootstrap creates plans/arcs and arc-claims with plain mkdir (no mkdir -p command line)', /mkdir "\$ROOT\/plans\/arcs"/.test(bs) && /mkdir "\$ROOT\/arc-claims"/.test(bs) && !/^\s*(&&\s*)?mkdir -p/m.test(bs));

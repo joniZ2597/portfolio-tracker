@@ -50,11 +50,13 @@ const REL = {
     registrySkill: '.claude/skills/arc-registry/SKILL.md',
     runner: 'qa/run-offline.js'
   },
-  // B5 never touches these (B6 / B4 / B3 / library surfaces); byte-identical to HEAD
+  // B5 never touches these (B4 / B3 / library surfaces); byte-identical to HEAD.
+  // B6 (P-E execution side, 2026-08-22) owns arc-worker/SKILL.md, claim-protocol.md, runtime-contract.md,
+  // worker-report.md, arc-authorize/SKILL.md, owner-ops.md and authorize-report.md; their HEAD-identity pins
+  // were removed here mechanically (same pattern as R-B4-2 / the B5 narrowing). No assertion below is weakened:
+  // execution-profile.md and phase-gate.js stay pinned because B6 proved it needed neither.
   forbidden: [
-    '.claude/skills/arc-worker/SKILL.md', '.claude/skills/arc-worker/references/claim-protocol.md', '.claude/skills/arc-worker/references/runtime-contract.md',
-    '.claude/skills/arc-worker/references/execution-profile.md', '.claude/skills/arc-worker/templates/worker-report.md', '.claude/skills/arc-worker/scripts/phase-gate.js',
-    '.claude/skills/arc-authorize/SKILL.md', '.claude/skills/arc-authorize/references/owner-ops.md', '.claude/skills/arc-authorize/templates/authorize-report.md',
+    '.claude/skills/arc-worker/references/execution-profile.md', '.claude/skills/arc-worker/scripts/phase-gate.js',
     SKILL_DIR + '/references/bootstrap.md', SKILL_DIR + '/scripts/lib/runtime-identity.js', SKILL_DIR + '/references/execution-profiles/README.md',
     SCHEMA_DIR + '/plan.schema.json', SCHEMA_DIR + '/current.schema.json', SCHEMA_DIR + '/claim.schema.json', SCHEMA_DIR + '/authorized.schema.json',
     SCHEMA_DIR + '/holder.schema.json', SCHEMA_DIR + '/arc.schema.json', SCHEMA_DIR + '/execution-profile.schema.json',
@@ -516,6 +518,45 @@ try {
       check('EP-E7 step 10b write-back: state EXECUTING; execution{planId, planHash, pointer, claimsRoot, publishedAt} == the published values; history appended by publisher; arc.schema.json valid', marker(r1.stdout, 'WRITEBACK') !== null && /^OK/.test(marker(r1.stdout, 'WRITEBACK')) && arcJson.state === 'EXECUTING' && arcJson.implementationAllowed === true && isObj(arcJson.execution) && arcJson.execution.planId === 'arc-a-r1' && arcJson.execution.planHash === manifest.planHash && arcJson.execution.pointer === 'plans/arcs/ARC-A/current.json' && arcJson.execution.claimsRoot === 'arc-claims/ARC-A/' && arcJson.execution.publishedAt === manifest.publishedAt && arcJson.history[arcJson.history.length - 1].state === 'EXECUTING' && arcJson.history[arcJson.history.length - 1].by === 'publisher' && schemaOk('arc', arcJson) && (schemaViol('arc', arcJson).join('; ') || true));
       check('EP-E7 write-back touched only ARC-A/arc.json (EP-X byte-identical); parse-modify-serialize + temp + rename left no arc.json.tmp; promotion untouched', sha256(fs.readFileSync(path.join(s1.regDir, 'EP-X', 'arc.json'))) === epxBefore && !fs.existsSync(path.join(s1.regDir, 'ARC-A', 'arc.json.tmp')) && isObj(arcJson.promotion) && arcJson.promotion.rev === 1);
       check('EP-E12 end state: mutex/ empty, no .staging-*, scratch holds resolve.txt + plan.json whose hash is the published planHash', mutexEmpty(s1) && noStaging(s1) && fs.existsSync(path.join(s1.scratch, 'resolve.txt')) && sha256(fs.readFileSync(path.join(s1.scratch, 'plan.json'))) === manifest.planHash);
+
+      // ── EP-E14 (B6 cross-batch): the ARC this publisher just created is EXACTLY the one the
+      // worker resolves. The worker's own tagged blocks are executed against the same temp root,
+      // so the publisher/worker interface is proven by running both sides, never by comparing prose.
+      const cpRel = '.claude/skills/arc-worker/references/claim-protocol.md';
+      const cpText = exists(cpRel) ? stripCR(readText(cpRel)) : '';
+      const CPOPS = {}; { const re = /```bash\n# @op ([A-Za-z0-9-]+)[^\n]*\n([\s\S]*?)```/g; let mm; while ((mm = re.exec(cpText))) CPOPS[mm[1]] = mm[2]; }
+      const WSEQ = ['worker-prelude', 'worker-args', 'worker-namespace', 'step0-preconditions', 'step1-snapshot'];
+      check('EP-E14 claim-protocol.md carries the blocks a worker needs to resolve a freshly published ARC (' + WSEQ.filter((o) => !CPOPS[o]).join(', ') + ')', WSEQ.every((o) => !!CPOPS[o]));
+      if (WSEQ.every((o) => !!CPOPS[o])) {
+        // PTR / CLAIMS are emitted where the namespace is resolved; PLANID only after the snapshot loads,
+        // so a run that legitimately IDLEs later still proves which namespace it selected.
+        const wp = [];
+        for (const o of WSEQ) {
+          wp.push('# ---- ' + o); wp.push(CPOPS[o]);
+          if (o === 'worker-prelude') wp.push('IDENT="$QA_IDENT"');
+          if (o === 'worker-namespace') { wp.push('echo "::PTR::$PTR"'); wp.push('echo "::CLAIMS::$CLAIMS"'); }
+        }
+        wp.push('echo "::PLANID::$PLAN_ID"'); wp.push('echo "::WDONE::"');
+        const wrun = bash(wp.join('\n'), s1.dir, { QA_IDENT: fwd(abs(REL.identity)), LANE: 'MAIN', ARC: 'ARC-A', CONV: 'qa-x' });
+        const rel = (v) => (v || '').replace(fwd(s1.root) + '/', '');
+        check('EP-E14 a worker with --arc ARC-A resolves the publisher-created pointer, container and planId without any IDLE' + (wrun.status !== 0 ? ' - ' + wrun.out.slice(-500) : ''),
+          wrun.status === 0 && /::WDONE::/.test(wrun.stdout) && !/IDLE/.test(wrun.stdout) &&
+          rel(marker(wrun.stdout, 'PTR')) === 'plans/arcs/ARC-A/current.json' &&
+          rel(marker(wrun.stdout, 'CLAIMS')) === 'arc-claims/ARC-A' &&
+          marker(wrun.stdout, 'PLANID') === 'arc-a-r1');
+        check('EP-E14 those resolved paths are byte-equal to what step 10b wrote into the registry as execution.pointer and execution.claimsRoot',
+          rel(marker(wrun.stdout, 'PTR')) === rdJson(path.join(s1.regDir, 'ARC-A', 'arc.json')).execution.pointer &&
+          rel(marker(wrun.stdout, 'CLAIMS')) + '/' === rdJson(path.join(s1.regDir, 'ARC-A', 'arc.json')).execution.claimsRoot);
+        const wLegacy = bash(wp.join('\n'), s1.dir, { QA_IDENT: fwd(abs(REL.identity)), LANE: 'MAIN', ARC: '', CONV: 'qa-x' });
+        check('EP-E14 the same worker without --arc resolves the untouched legacy pointer and claims/ root, says the ARC pointers are not considered, and never reaches into the ARC namespace (this fixture has no legacy snapshot, so it then IDLEs - correctly)',
+          wLegacy.status === 0 && rel(marker(wLegacy.stdout, 'PTR')) === 'plans/current.json' && rel(marker(wLegacy.stdout, 'CLAIMS')) === 'claims' && /NOTICE[\s\S]*ARC-A/.test(wLegacy.stdout) && !/arc-claims/.test(wLegacy.stdout));
+        const wCore = bash(wp.join('\n'), s1.dir, { QA_IDENT: fwd(abs(REL.identity)), LANE: 'MAIN', ARC: 'CORE-STREAM', CONV: 'qa-x' });
+        check('EP-E14 CORE-STREAM is refused as a runtime selector on BOTH sides: P-V16 in the publisher and IDLE in the worker',
+          wCore.status === 0 && /IDLE/.test(wCore.stdout) && /CORE-STREAM/.test(wCore.stdout) && !/::WDONE::/.test(wCore.stdout));
+        check('EP-E14 the worker runs wrote nothing: the published ARC tree and the legacy tree are byte-identical afterwards',
+          sha256(fs.readFileSync(path.join(s1.root, 'plans', 'current.json'))) === legacyPtrBefore && treeHash(path.join(s1.root, 'claims')) === legacyClaimsBefore &&
+          fs.readdirSync(path.join(s1.root, 'arc-claims', 'ARC-A')).length === 0 && mutexEmpty(s1));
+      }
       check('S1 resolver projection (scratch resolve.txt) printed the ARC line, P-V16/17/19/20 PASS and the projectionHash == planHash', (() => { const t = fs.readFileSync(path.join(s1.scratch, 'resolve.txt'), 'utf8'); return /^ARC\s+ARC-A\b/m.test(t) && ['16', '17', '19', '20'].every((n) => new RegExp('^P-V' + n + '\\b.*PASS', 'm').test(t)) && new RegExp('^projectionHash\\s+' + manifest.planHash, 'm').test(t); })());
 
       // ── S2: republish r2 of the same arc (EXECUTING -> EXECUTING), COMPLETE claim retained, container idempotent ──

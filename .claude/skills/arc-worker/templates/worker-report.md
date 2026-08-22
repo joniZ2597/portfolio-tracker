@@ -12,8 +12,9 @@ pre-claim mutex refusal is `taskState UNCLAIMED` with `outcome STOPPED` — repo
 ARC WORKER REPORT
 ================================================================
 lane          MAIN
+arc           <ARC-ID>               | none - legacy stream
 task          <TASK-ID>              (or: none eligible)
-planId        <plan-id>
+planId        <plan-id>              from plans/arcs/<ARC-ID>/current.json | plans/current.json
 planHash      <sha256>               verified: yes
 conversation  <id>                   resumeCount <n>
 
@@ -23,6 +24,7 @@ worker outcome  IDLE | STOPPED
 entryMode     DIRECT | PLAN
 profile       <ID> v<n>  libraryHash <8>…  W-V10 verified   | none (legacy snapshot)
 claim root    claims/<TASK-ID>   (legacy namespace)
+              | arc-claims/<ARC-ID>/<TASK-ID>
 resumed       no | yes - prior acknowledgements not carried
 
 ----------------------------------------------------------------
@@ -32,14 +34,17 @@ acquired (canonical order)
   CODE:index-html          -> mutex/CODE__index-html
   QA:browser-runtime       -> mutex/QA__browser-runtime
 released      <list | none - RETAINED because state is BLOCKED>
-blocked on    <class, held by taskId>   (only on a contention stop)
+retained      <class - holder is not this owner pair>   (a COMPLETE release skips, never forces)
+blocked on    <class, held by (arcId ?? legacy, taskId)>   (only on a contention stop)
+  Classes are GLOBAL: a class held for another ARC, or for the legacy stream, blocks this task.
 
 ----------------------------------------------------------------
 WRITES PERFORMED
 ----------------------------------------------------------------
-claims/<TASK-ID>/claim.json
+claims/<TASK-ID>/claim.json          | arc-claims/<ARC-ID>/<TASK-ID>/claim.json
 mutex/<CLASS>/holder.json          x<n>
-  Both shapes are inside the allowlist. Nothing else was written.
+  Both shapes are inside the allowlist for the SELECTED namespace. Nothing else was
+  written, and the namespace this invocation did not select was never read.
 
 ----------------------------------------------------------------
 PHASES   (report-only; claim.json carries no mode field)
@@ -77,8 +82,15 @@ Recommended next step: <single next action, owner's to take>
 ## Per-outcome requirements
 
 **IDLE** — state the specific reason from the fail-closed catalogue: missing root, no
-`current.json`, hash mismatch, invalid lane, or no eligible task. Never report a bare
-"nothing to do"; each cause has a different fix.
+pointer, hash mismatch, invalid lane, no eligible task, or one of the ARC rows —
+`arc-not-published`, `arc-retired`, `pointer-arc-mismatch`, `claim-arc-mismatch`,
+`arc-claims-container-missing`, an invalid `--arc` literal. Never report a bare
+"nothing to do"; each cause has a different fix, and `arc-retired` and `arc-not-published` in
+particular call for opposite owner actions.
+
+**STOPPED on a wrong-`--arc` resume** — name the selector that was typed and the identity the claim
+actually carries, and state that **nothing was written and nothing was released**. Do not report it
+as `BLOCKED`: this invocation has no authority over a claim in a namespace it did not select.
 
 **WAITING_OWNER_GO** — say explicitly that execution has **not** started and that
 `/arc-authorize <TASK-ID>` is required. List the mutexes held, since they are reserved
@@ -89,7 +101,8 @@ having begun it.
 ones. Name the three owner options: RELEASE, RESUME, ABANDON.
 
 **COMPLETE** — evidence against the published `closeCondition`, confirmation that each
-released mutex was verified as this task's before release, and `mutexesReleasedAt`.
+released mutex was verified as this task's **owner pair** `(arcId ?? null, taskId)` before release,
+any class skipped because it was not, and `mutexesReleasedAt`.
 Mutexes are released at completion, but the **claim is retained**: `COMPLETE` is the
 durable completion record and is **not** owner-RELEASEd (owner ruling 2026-08-20, R-M). Worker
 dependency resolution reads exactly that record, so releasing it would silently strand

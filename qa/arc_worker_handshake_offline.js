@@ -51,9 +51,10 @@ const REL = {
   // B5 (P-E publisher, 2026-08-22) owns the publisher docs, resolve-profiles.js and profile-contract.js;
   // their HEAD-identity pins were removed here mechanically (same pattern as R-B4-2). The B2 consumer
   // contract on the library (exports + return shapes) stays asserted by the handshake groups below.
+  // B6 (P-E execution side, 2026-08-22) owns owner-ops.md; its HEAD-identity pin was removed mechanically
+  // (R-B4-2 pattern). The B2 handshake assertions below are unaffected.
   forbidden: [
     '.claude/skills/arc-publish-plan/references/schemas/execution-profile.schema.json',
-    '.claude/skills/arc-authorize/references/owner-ops.md',
     'netlify.toml'
   ]
 };
@@ -349,6 +350,25 @@ try {
     section('EP-C8 legacy snapshot (K5)');
     const bl = gate.bindProfile(legacyPlan, 'LX-2');
     check('EP-C8 legacy bindProfile -> legacy, profile none', bl.status === 'legacy' && bl.profile === null && /profile none \(legacy snapshot\)/.test(bl.reason));
+    // ── EP-C10 (B6, P-E execution side): the committed renderer already serves BOTH claim
+    // namespaces, which is why B6 changed neither phase-gate.js nor execution-profile.md.
+    section('EP-C17 phase-gate is claim-root-agnostic across namespaces (B6 conditional NOT used)');
+    const ARC_DIR = 'arc-claims/ARC-A/LX-2';
+    const sArc = runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD', '--claim-dir', ARC_DIR, '--worktree-path', cwdScratch], cwdScratch);
+    const sLeg = runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD', '--claim-dir', 'claims/LX-2', '--worktree-path', cwdScratch], cwdScratch);
+    check('EP-C17 --claim-dir arc-claims/<ARC-ID>/<TASK-ID> is accepted and heads the V1 allowlist', sArc.status === 0 && has(sArc.stdout, ARC_DIR + '/claim.json'));
+    check('EP-C17 the legacy claim line is marked "(legacy namespace)" and the ARC one is not', has(sLeg.stdout, 'claims/LX-2 (legacy namespace)') && !has(sArc.stdout, ARC_DIR + ' (legacy namespace)'));
+    check('EP-C17 only the claim path differs between the two namespaces: worktree, pinnedRef, write scope, read-only and forbidden lines are identical', (() => {
+      const pick = (s) => s.split('\n').filter((l) => /^(worktree|pinnedRef|write scope|read-only|forbidden|declared actions|scope STOP)/.test(l)).join('\n');
+      return sArc.status === 0 && sLeg.status === 0 && pick(sArc.stdout) === pick(sLeg.stdout) && pick(sArc.stdout).length > 0;
+    })());
+    check('EP-C17 a --claim-dir that does not end in the task id -> exit 3 usage; no namespace is ever inferred', runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD', '--claim-dir', 'arc-claims/ARC-A/OTHER', '--worktree-path', cwdScratch], cwdScratch).status === 3);
+    check('EP-C17 a single-segment --claim-dir -> exit 3 usage', runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD', '--claim-dir', 'LX-2', '--worktree-path', cwdScratch], cwdScratch).status === 3);
+    const ladderArc = runGate(['--plan', planAFile, '--task', 'LX-2', '--ladder', '--claim-dir', ARC_DIR], cwdScratch);
+    check('EP-C17 --ladder prints the ARC claim root, so /arc-authorize pastes the ladder of the namespace it actually grants in (A-V5 + A-V6)', ladderArc.status === 0 && has(ladderArc.stdout, ARC_DIR));
+    const entryArc = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'ACCEPT_EDITS', '--answered', '--claim-dir', ARC_DIR, '--worktree-path', cwdScratch], cwdScratch);
+    check('EP-C17 the PHASE ENTRY banner carries the ARC claim root and still CONTINUEs (mode policy is namespace-independent)', entryArc.status === 0 && has(entryArc.stdout, ARC_DIR) && has(entryArc.stdout, 'CONTINUE'));
+
     const l1 = runGate(['--plan', legacyFile, '--task', 'LX-2', '--ladder'], cwdScratch);
     check('EP-C8 CLI --ladder legacy -> exit 0 "profile none (legacy snapshot)"', l1.status === 0 && /profile none \(legacy snapshot\)/.test(l1.stdout));
     const l2 = runGate(['--plan', legacyFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'UNKNOWN'], cwdScratch);
@@ -577,6 +597,15 @@ try {
   check('wiring run-offline.js registers qa/arc_worker_handshake_offline.js', /'qa\/arc_worker_handshake_offline\.js'/.test(doc('runner')));
   check('wiring arc_execution_profiles_offline.js EP-V15 worker half flipped (workerActive, no HEAD-identical assert)', /workerActive/.test(doc('epQa')) && !/workerInactive/.test(doc('epQa')) && !/byte-identical to HEAD \(P-C inactive\)/.test(doc('epQa')));
   check('wiring arc_publish_profiles_offline.js B1 pre-P-C asserts flipped (R-1)', !/wiring no B2 artifact/.test(doc('pbQa')) && /phase-gate\.js/.test(doc('pbQa')));
+  // ── B6 (P-E execution side): the B2 surfaces this suite owns gained the namespace selector ──
+  check('docs B6 arc-worker/SKILL.md: --arc <ARC-ID> invocation and the ARC write-allowlist shape alongside the legacy shapes (never replacing them)',
+    /--arc <ARC-ID>/.test(ws) && /<ROOT>\/arc-claims\/<ARC-ID>\/<own TASK-ID>\/claim\.json/.test(ws));
+  check('docs B6 arc-worker/SKILL.md: W-V13 / W-V14 and the wrong-`--arc` resume as a STOPPED outcome, not BLOCKED', /W-V13/.test(ws) && /W-V14/.test(ws) && /STOPPED/.test(ws));
+  check('docs B6 claim-protocol.md: namespace selection block with both roots, and no fallback', /arc-claims\/\$ARC/.test(cp) && /plans\/arcs\/\$ARC\/current\.json/.test(cp) && /never/i.test(cp));
+  check('docs B6 claim-protocol.md still passes a resolved --claim-dir to phase-gate (single renderer, K7)', /--claim-dir/.test(cp));
+  check('docs B6 arc-authorize/SKILL.md: --arc selector and A-V6, legacy-only without the flag', /--arc <ARC-ID>/.test(as) && /A-V6/.test(as) && /arc-claims/.test(as));
+  check('docs B6 runtime-contract.md section 7 carries the six new ARC rows', ['arc-not-published', 'arc-retired', 'pointer-arc-mismatch', 'claim-arc-mismatch', 'arc-claims-container-missing', 'plan-not-current-for-arc'].every((r) => new RegExp('`' + r + '`').test(rc)));
+  check('wiring run-offline.js registers the B6 runtime-ops suite qa/arc_runtime_ops_offline.js', /'qa\/arc_runtime_ops_offline\.js'/.test(doc('runner')));
   // ── scope proofs: forbidden files byte-identical to HEAD ───────────────────
   section('scope: forbidden files unchanged');
   for (const f of REL.forbidden) {
