@@ -16,6 +16,10 @@ model-mediated, so it is printed in full every time.
   **If the projection omits either field for any task, the publish flow stops** — an omitted
   field cannot be reviewed, and this print is the only owner-facing check on a model-mediated
   join (see `references/plan-validation.md` P-V15).
+- Print every task's `profile` line (id + phase ladder `recommended/ceiling`), its `grant`
+  when the profile carries one, and every `P-V25 lock-out WARN`; print the PROFILES section
+  with each embedded profile in full. These lines come verbatim from the resolver output
+  (`scripts/resolve-profiles.js`), never re-typed.
 
 ---
 
@@ -27,8 +31,10 @@ source        .ai-reports/handoffs/<file>.md
 sourceHash    <sha256>
 source mtime  <ISO>          CHECKPOINT.md mtime  <ISO>   [P-V14: PASS | OVERRIDDEN]
 repoRef       <40-char SHA>  HEAD  <40-char SHA>          [P-V10: PASS | OVERRIDDEN]
-planId        <plan-id>                                   [P-V11: not present]
+planId        <plan-id>                                   [P-V11: not present, not reserved]
 supersedes    <prior planId | none>
+RESOLVER      scripts/resolve-profiles.js <sha256> · lib/profile-contract.js <sha256> · library <n> profiles
+projectionHash <sha256 of the resolved plan.json bytes that step 8 stages verbatim>
 
 mutexRegistry  8 classes, canonical order:
   AUTHORITY:published-plan   CODE:index-html         CODE:netlify-functions
@@ -48,9 +54,18 @@ TASKS (<n>)
     dependsOn        (none)
     closeCondition   <verbatim from source>
     stopCondition    <verbatim from source>
+    profile          MAIN-CODE-SLICE   phases  PLAN M/M → IMPLEMENT M/M → VERIFY A/A → HANDOFF A/A → CLOSE M/M
+    grant            <none | IMPLEMENT -> ACCEPT_EDITS paths index.html mutex CODE:index-html (requiresOwnerGo true)>
+    P-V25 lock-out WARN: netlify/functions/** (CODE:netlify-functions not held by <TASK-ID>)
 
 [2] <TASK-ID>                                    from: <section>
     ...
+----------------------------------------------------------------
+PROFILES (<n>)   one entry per distinct executionProfile id, printed in full
+----------------------------------------------------------------
+<PROFILE-ID>  v<version>  libraryHash <sha256>
+    { ...the embedded profile object, canonical JSON, never elided... }
+<PROFILE-ID>  ...
 ----------------------------------------------------------------
 SAFE PARALLEL SETS
 ----------------------------------------------------------------
@@ -74,6 +89,13 @@ P-V11 planId not already published ............ PASS
 P-V12 source path repo-relative ............... PASS
 P-V13 no live claims against outgoing plan .... PASS
 P-V14 source not older than CHECKPOINT ........ PASS
+P-V15 conditions literal, never pointers ...... PASS
+P-V21 profiles present and resolvable ......... PASS
+P-V22 profile lane matches task lane .......... PASS
+P-V23 mode ceilings and recommendations ....... PASS
+P-V24 entry-mode agreement .................... PASS
+P-V25 scope <-> mutex coverage ................ PASS   (<n> lock-out WARN)
+P-V26 required skills invocable ............... PASS
 ----------------------------------------------------------------
 OVERRIDES IN EFFECT
 ----------------------------------------------------------------
@@ -99,6 +121,20 @@ the run was clean; omitting the block when empty makes its absence ambiguous.
 **Validation lines print `PASS`, `OVERRIDDEN`, or `REFUSED`.** A refusal ends the run at
 that line — do not print a full table with one failure buried inside it, and never print a
 projection whose validation block contains a `REFUSED` alongside a `CONFIRM` prompt.
+
+**`--dry-run` replaces the closing block** with
+`DRY RUN — nothing written, no mutex taken, no CONFIRM accepted. plans/current.json still points at <prior planId | nothing>.`
+and never prints the `Type CONFIRM` line — a dry run cannot be confirmed into a publish.
+
+**PROFILES are printed in full, once per distinct id.** The embedded object is the binding
+execution policy for every task that names it; a summary or a library path is not a review
+surface. The `RESOLVER` line records which helper produced the bytes; `projectionHash` is the
+hash of exactly those bytes and must equal the staged `planHash` at step 8.
+
+**A P-V25 lock-out WARN is not a refusal.** It records that a code surface in the profile's
+scope is outside the task's effective write scope because the row does not hold its `CODE:*`
+class. The owner confirms the task with that surface removed; a task that needs the surface
+must hold the class — amend the source, never the projection.
 
 **A pointer-shaped condition is a refusal, not a rendering choice.** If a resolved value
 reads `per section 2.1`, `see §2.1`, ``as `LX-2` `` or similar, print it, name the task and

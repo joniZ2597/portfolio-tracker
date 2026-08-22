@@ -6,10 +6,15 @@ profile, `<PROFILE-ID>.json`, validated by `../schemas/execution-profile.schema.
 The contract itself — mode model, ceilings, boundaries, the Mode Transition Protocol — is
 written in `arc-worker/references/execution-profile.md`.
 
-**Increment status.** P-A defines and provides this library, the schema and the contract
-(working-tree implementation under QA; commit/push require their own owner authorization).
-**P-B (publisher resolution and embedding) and P-C (worker phase handshake) are not
-implemented**; nothing in `/arc-publish-plan` or `/arc-worker` reads this directory yet.
+**Increment status.** P-A (committed `a2fec4e`) defines and provides this library, the schema
+and the contract. **P-B (publisher resolution and embedding) is implemented in B1**
+(working-tree implementation under QA; commit/push require their own owner authorization):
+`/arc-publish-plan` resolves every task's `executionProfile` through
+`../../scripts/resolve-profiles.js` (library `../../scripts/lib/profile-contract.js`), embeds
+the referenced profiles hash-pinned into the snapshot, and enforces P-V21 … P-V26
+(`../plan-validation.md`); QA mirror `qa/arc_publish_profiles_offline.js`. **P-C (worker
+phase handshake) is not implemented**; nothing in `/arc-worker` reads this directory or the
+embedded copy yet.
 
 ## Rules
 
@@ -18,7 +23,7 @@ implemented**; nothing in `/arc-publish-plan` or `/arc-worker` reads this direct
 | Library-only | No inline or ad-hoc profiles. A plan source names a profile **by id** (its `executionProfile` column); that is the only authoring surface. Top-level `executionProfiles` in `plan.schema.json` is the **future publisher-owned embedded snapshot field** — written only by P-B resolution from this library, never authored. P-B must refuse any source that attempts to author it. |
 | Identity | File name `== profileId + '.json'`; ids match `^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$` (≤ 32) and are unique case-folded. |
 | Canonical serialization | UTF-8, LF, 2-space indent, schema key order, single trailing newline. `JSON.stringify(JSON.parse(file), null, 2) + '\n'` must reproduce the file byte-for-byte. |
-| `libraryHash` | `sha256` of the profile file bytes with `\r` stripped. Computed and embedded **by the publisher at resolution time (P-B)**; **never stored in a library file**. |
+| `libraryHash` | `sha256` of the profile file bytes with `\r` stripped ≡ `sha256(JSON.stringify(obj, null, 2) + '\n')`. Computed and embedded **by the publisher at resolution time** (`../../scripts/lib/profile-contract.js` `libraryHash()`, P-B); **never stored in a library file**. |
 | Mode ≠ authority | `recommendedMode` / `modeCeiling` are prompting policy. Scope, capabilities, tools, boundaries and the runtime write allowlist bind identically in every mode. |
 | r2.1 (owner, 2026-08-21) | MAIN lane never AUTO in any phase · no boundary is grantable (`inside` is always empty; `outside` lists all eleven) · gate / live-provider / `pt_*` / git / runtime / deploy / env / production actions occur only in MANUAL phases, declared per phase via `actions[]` · `git-stage` is its own boundary; `git-commit` is never overloaded. |
 | Change control | A new task shape ⇒ a new profile added here by a reviewed commit. Library files are immutable once a snapshot has embedded them (the embedded copy + `libraryHash` pin the bytes). |

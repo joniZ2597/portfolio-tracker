@@ -1,22 +1,31 @@
-# Plan Validation — P-V1 through P-V15
+# Plan Validation — P-V1 through P-V15, P-V21 through P-V26
 
 Binding reference for `/arc-publish-plan`. Every rule below is checked before anything is
 written. **Refusal is atomic: on any failure, nothing is created, nothing is renamed, and
 `current.json` is untouched.**
 
 Rules are numbered so a review can be mechanical. When reporting a refusal, quote the rule
-id and the exact offending value — never a paraphrase.
+id and the exact offending value — never a paraphrase. P-V16 … P-V20 are reserved for
+Increment 2 (`--arc`).
 
 ## Ordering
 
 P-V12 and P-V14 run **before** the mutex is acquired, so a bad path or a stale source costs
-nothing. P-V1 through P-V11, P-V13 and P-V15 run after the owner types `CONFIRM`, against the
-proposed projection.
+nothing. P-V1 … P-V9, P-V15 and P-V21 … P-V26 are **computed by the resolver at step 5,
+before the owner types `CONFIRM`** (`scripts/resolve-profiles.js` →
+`scripts/lib/profile-contract.js planCheck`), so the projection prints their results, the
+PROFILES section and any P-V25 lock-out. With `--runtime-root` the resolver also performs,
+**read-only and before `CONFIRM`**, the P-V11 existence check and the P-V13 live-claim scan.
+`CONFIRM` is requested **only after** the full projection and every validation result have
+been shown; a refusal at step 5 ends the run before any `CONFIRM` prompt. P-V10, P-V11 and
+P-V13 are settled authoritatively against git and the runtime after `CONFIRM` (steps 6–7),
+where the step-5 results are recorded alongside them.
 
 | Phase | Rules |
 |---|---|
-| Pre-mutex | P-V12, P-V14 |
-| Post-CONFIRM | P-V1 … P-V11, P-V13, P-V15 |
+| Pre-mutex | P-V12, P-V14, main-worktree assert (`publish-protocol.md` step 0) |
+| Step 5 — resolver, **before `CONFIRM`** | P-V1 … P-V9, P-V15, P-V21 … P-V26 (computed and printed); P-V11 existence + P-V13 scan read-only when `--runtime-root` is given |
+| Post-`CONFIRM` (steps 6–7, authoritative) | P-V10, P-V11, P-V13; step-5 results recorded |
 
 ---
 
@@ -162,6 +171,14 @@ Snapshots are immutable. A change is a new id, never an edit.
 A leftover staging directory means an earlier publish was interrupted. Do not reuse or
 overwrite it — report it for owner disposition.
 
+**Reserved ids.** `plans/arcs/` — the per-ARC pointer container of Increment 2 — shares the
+`plans/` namespace with snapshot directories, and `arcs` matches the `planId` pattern. `arcs`
+is therefore a reserved `planId`, refused explicitly with its own reason string rather than
+by the "already exists" check — the same treatment the task-id vocabulary gives
+`CON`/`PRN`/`AUX`/`NUL` and the `__` prefix.
+
+**Reject:** `P-V11 REFUSED - planId "arcs" is reserved for the plans/arcs/ pointer container`
+
 ## P-V12 · Source path is repo-relative, no traversal
 
 The path must match `^\.ai-reports/[A-Za-z0-9._/-]+\.md$` **after** normalization, and the
@@ -257,12 +274,117 @@ expand them into literal text. This is the rule working, not a false positive.
 
 ---
 
+## P-V21 · Every task names a resolvable library profile; profiles are never authored
+
+Every task must carry `executionProfile: "<ID>"` — a library id matching
+`^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$` (exact case, no folding) that exists as
+`references/execution-profiles/<ID>.json`. There is **no legacy exemption**: a publication
+with one profile-less row is refused (V1.2 ruling 1). The committed library is the **only**
+authoring surface (rulings 2/3): a source or proposed plan that carries `executionProfiles`
+(a fenced block, a table cell, or a top-level field) is refused, as is an inline object or a
+path in place of an id.
+
+**Detect** (step 5 — `scripts/resolve-profiles.js` → `scripts/lib/profile-contract.js`
+`planCheck`): for every task the id resolves; the library file is canonical (the `sha256` of
+the CR-stripped file equals `sha256(JSON.stringify(obj, null, 2) + '\n')` — a re-serialized
+or tampered file is refused); it carries no `libraryHash`; the object validates against
+`schemas/execution-profile.schema.json` (executable mirror `validateProfile`). The referenced
+profiles are then embedded as `plan.json.executionProfiles` — one entry per distinct id, keys
+sorted, each object carrying `libraryHash` after `version` (K2/K3). A worker re-derives the
+hash from the embedded bytes alone and never reads the library.
+
+**Reject:** `P-V21 REFUSED - task <id> executionProfile "<value>" is not in the committed library (exact id, no case folding)` ·
+`P-V21 REFUSED - task <id> names no executionProfile …` ·
+`P-V21 REFUSED - task <id> executionProfile must be a library id string, not an inline object` ·
+`P-V21 REFUSED - the plan carries an authored executionProfiles field …` ·
+`P-V21 REFUSED - the source authors executionProfiles (fenced block or table cell) …` ·
+`P-V21 REFUSED - library integrity: <file>: library file is not canonical …`
+
+## P-V22 · Profile lane matches the task lane
+
+`profile.appliesToLane` must equal `task.lane`. `appliesToLane` is a constraint, not a second
+lane declaration.
+
+**Reject:** `P-V22 REFUSED - task <id> lane <lane> does not match profile <ID> appliesToLane <lane>`
+
+## P-V23 · Mode ceilings and recommendations
+
+For every phase of the task's profile. A refusal names the task, phase, field and value.
+
+| | Rule |
+|---|---|
+| **(a)** | The ceiling never exceeds what the phase touches: a phase that writes a runtime path (`claims/…`, `arc-claims/…`, `mutex/…`, `.git/arc-runtime/…`) or declares `actions[]` must be `MANUAL`; a write under `.git/`, `.netlify/`, `netlify.toml`, `.env*` or `pt_*` is refused outright — never writable by a worker. |
+| **(b)** | `recommendedMode ≤ modeCeiling`. |
+| **(c)** | `AUTO` — as ceiling or recommendation — only on `kind: VERIFY`, with `capabilities.network: none` and every write under the sandbox (`<worktree>/…`). The MAIN lane is never `AUTO`, in any phase (r2.1 ruling 1). |
+| **(d)** | **MAIN grant boundary (ratified wording 2026-08-22, D-14).** A MAIN phase may use `ACCEPT_EDITS` **without a grant only when its writes are limited to no writes or `.ai-reports/**`**. If a MAIN phase above `MANUAL` writes anything outside `.ai-reports/**` — or carries a `grant` — the grant requirements must hold: `kind: IMPLEMENT`, `toMode: ACCEPT_EDITS`, `paths ⊆ scope.writes`, `mutexClass ∈ task.mutexes ∩ CODE:*`, and `task.requiresOwnerGo == true`. The CODE mutex mapping (`index.html` ⇒ `CODE:index-html`, `netlify/functions/**` ⇒ `CODE:netlify-functions`) serves class resolution under P-V25 and the grant-class check; it never narrows this boundary. |
+| **(e)** | `kind: TERMINAL` ⇒ ceiling `MANUAL`. |
+
+**Reject:** `P-V23 REFUSED - (<letter>) task <id> phase <PHASE> <what>` — for example
+`P-V23 REFUSED - (d) task G1-CLOCK-SEAM phase IMPLEMENT is ACCEPT_EDITS and writes outside .ai-reports/** (qa/**) without a grant`.
+
+## P-V24 · Entry-mode agreement (five clauses on `phases[0]`)
+
+| # | Clause |
+|---|---|
+| 1 | `task.entryMode == PLAN` **iff** `phases[0].kind == PLAN`, and a PLAN first phase has `modeCeiling == MANUAL`. |
+| 2 | `task.requiresOwnerGo == true` ⇒ `phases[0].entryGate == AUTHORIZED_JSON`. |
+| 3 | `task.requiresOwnerGo == false` ⇒ **no** phase may have `entryGate == AUTHORIZED_JSON`. |
+| 4 | At most one `AUTHORIZED_JSON` phase may exist, and if present it must be `phases[0]`. |
+| 5 | `profile.requiresOwnerGo == true` ⇒ `task.requiresOwnerGo == true`. |
+
+The gate sits on `phases[0]` because a `requiresOwnerGo` task is claimed into
+`WAITING_OWNER_GO` before its first phase runs; `MAIN-CODE-SLICE` gates its PLAN phase for
+exactly this reason (C-2 / D-7).
+
+**Reject:** `P-V24 REFUSED - (<n>) task <id> …` naming the task, phase, field and value.
+
+## P-V25 · Scope ↔ mutex coverage (hard capability classes; code surfaces lock out)
+
+**Hard — refused when the row lacks the class:**
+
+| Profile declares | Row must hold |
+|---|---|
+| `browser: isolated-profile` | `QA:browser-runtime` **and** `CODE:index-html` (build-stability rule, P-V5) |
+| `browser: owner-profile` | `RUNTIME:owner-profile` only (D-21 — not `QA:browser-runtime`) |
+| `ownerProfile: read` \| `write` | `RUNTIME:owner-profile` |
+| `gates: toggle-with-repark` / action `gate-toggle` | `RUNTIME:gates` |
+| `network: live-provider` / action `live-external-call` | `EXTERNAL:live-provider` |
+| action `pt-write` | `RUNTIME:owner-profile` |
+| any phase `grant` | its `mutexClass` |
+
+**Lock-out — restricts, never refuses (D-2):** a code surface in `scope.writes` or a phase's
+`writes` whose class the row does not hold (`index.html` ⇒ `CODE:index-html`,
+`netlify/functions/**` ⇒ `CODE:netlify-functions`) is **removed from the task's effective
+write scope** and printed in the projection as
+`P-V25 lock-out WARN: <surface> (<class> not held by <TASK>)`. The embedded profile bytes are
+untouched (the `libraryHash` stays valid); the worker re-derives the same set from the row and
+the embedded profile (`profile-contract.js deriveLockouts`, r3 §6 banner "write scope minus
+P-V25 lock-outs"). `G1-CLOCK-SEAM` under `MAIN-CODE-SLICE` therefore publishes with
+`netlify/functions/**` locked out instead of being refused (C-3).
+
+**Reject:** `P-V25 REFUSED - task <id> requires <class> (<why>) but the row does not hold it`
+
+## P-V26 · Required skills are invocable
+
+Every `skills.required` entry must exist as `.claude/skills/<name>/SKILL.md`. A required skill
+whose frontmatter is `disable-model-invocation: true` cannot be auto-invoked by a worker (D4
+ruling: owner-invoked skills are advisory), so it is refused unless a phase of the profile has
+`entryGate: OWNER_TYPES_SKILL`. `demandOnly` and `ownerInvokedOnly` skills are not checked —
+they are never auto-invoked by construction.
+
+**Detect:** the resolver reads the frontmatter block of each required skill.
+
+**Reject:** `P-V26 REFUSED - task <id> requires skill "<name>" (disable-model-invocation: true) but no phase has entryGate OWNER_TYPES_SKILL` ·
+`P-V26 REFUSED - task <id> requires skill "<name>", which does not exist under <skills root>`
+
+---
+
 ## Refusal reporting
 
 On any refusal, report: the rule id, the exact offending value, the file and section it came
 from, and the single corrective action. Then stop.
 
 **Never** offer to publish "with the problem noted", never adjust the projection to make a
-rule pass, and never proceed on a partial validation. Ten of these fifteen rules protect
+rule pass, and never proceed on a partial validation. Most of these twenty-one rules protect
 an approval or concurrency boundary; passing one by accommodation removes the boundary
 entirely.

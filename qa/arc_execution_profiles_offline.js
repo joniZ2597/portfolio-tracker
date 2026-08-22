@@ -3,7 +3,8 @@
 /*
  * qa/arc_execution_profiles_offline.js
  *
- * Execution Profile V1.2 — Increment P-A executable contract mirror (EP-V1 … EP-V15).
+ * Execution Profile V1.2 — Increment P-A executable contract mirror (EP-V1 … EP-V15;
+ * EP-V15 publisher half updated by P-B / B1: publisher surfaces active, worker surfaces inactive).
  * Pure Node, no network, no browser, no runtime write. Reads only:
  *   - .claude/skills/arc-publish-plan/references/schemas/execution-profile.schema.json
  *   - .claude/skills/arc-publish-plan/references/execution-profiles/*.json (+ README.md)
@@ -35,11 +36,15 @@ const REL = {
   libDir: '.claude/skills/arc-publish-plan/references/execution-profiles',
   contractDoc: '.claude/skills/arc-worker/references/execution-profile.md',
   v3Plan: '.git/arc-runtime/plans/parallel-arc-v3-2026-08-15/plan.json',
-  inactivity: [
+  publisherLib: '.claude/skills/arc-publish-plan/scripts/lib/profile-contract.js',
+  publisherCli: '.claude/skills/arc-publish-plan/scripts/resolve-profiles.js',
+  publisherActive: [
     '.claude/skills/arc-publish-plan/SKILL.md',
     '.claude/skills/arc-publish-plan/references/publish-protocol.md',
     '.claude/skills/arc-publish-plan/references/plan-validation.md',
-    '.claude/skills/arc-publish-plan/templates/plan-projection.md',
+    '.claude/skills/arc-publish-plan/templates/plan-projection.md'
+  ],
+  workerInactive: [
     '.claude/skills/arc-worker/SKILL.md',
     '.claude/skills/arc-worker/references/runtime-contract.md',
     '.claude/skills/arc-worker/references/claim-protocol.md',
@@ -406,9 +411,28 @@ if (planSchema) {
     console.log('  (v3 runtime snapshot absent - legacy snapshot check skipped; schema-level checks still apply)');
   }
 }
-for (const f of REL.inactivity) {
+// P-B (B1) is implemented: the publisher surfaces carry the profile vocabulary and the
+// committed helper scripts; the worker and authorize surfaces stay inactive until P-C (B2).
+for (const f of REL.publisherActive) {
   const t = fs.existsSync(abs(f)) ? readText(f) : '';
-  check('EP-V15 inactivity: ' + f + ' mentions no P-V21..26 / executionProfile', !/P-V2[1-6]\b|executionProfile/.test(t));
+  check('EP-V15 publisher active (P-B): ' + f + ' carries P-V21..26 / resolver vocabulary', /P-V2[1-6]\b/.test(t) && /executionProfile|resolve-profiles\.js|--dry-run/.test(t));
+}
+check('EP-V15 publisher active (P-B): SKILL.md documents --dry-run', /--dry-run/.test(readText('.claude/skills/arc-publish-plan/SKILL.md')));
+for (const f of REL.workerInactive) {
+  const t = fs.existsSync(abs(f)) ? readText(f) : '';
+  check('EP-V15 inactivity (P-C): ' + f + ' mentions no P-V21..26 / executionProfile', !/P-V2[1-6]\b|executionProfile/.test(t));
+}
+let pbLib = null;
+try { pbLib = require(abs(REL.publisherLib)); } catch (e) { console.log('  (P-B library not loadable: ' + e.message.split('\n')[0] + ')'); }
+check('EP-V15 P-B library profile-contract.js loads', !!pbLib);
+check('EP-V15 P-B resolver script resolve-profiles.js present', fs.existsSync(abs(REL.publisherCli)));
+if (pbLib) {
+  for (const fn of ['validateProfile', 'canonicalize', 'libraryHash', 'planCheck']) check('EP-V15 P-B library exports ' + fn, typeof pbLib[fn] === 'function');
+  for (const f of libFiles) {
+    const obj = JSON.parse(fs.readFileSync(abs(path.join(REL.libDir, f)), 'utf8').replace(/\r/g, ''));
+    check('EP-V15 P-B lib.validateProfile agrees with the mirror on ' + f, pbLib.validateProfile(obj).length === 0 && validateProfile(obj).length === 0);
+    check('EP-V15 P-B lib.libraryHash(' + f + ') == sha256(CR-stripped file) (K3)', pbLib.libraryHash(obj) === hashes[f]);
+  }
 }
 const headWorker = spawnSync('git', ['show', 'HEAD:.claude/skills/arc-worker/SKILL.md'], { cwd: ROOT, encoding: 'utf8' });
 check('EP-V15 arc-worker/SKILL.md byte-identical to HEAD (P-C inactive)', headWorker.status === 0 && headWorker.stdout.replace(/\r/g, '') === readText('.claude/skills/arc-worker/SKILL.md').replace(/\r/g, ''));

@@ -103,9 +103,10 @@ before relying on any signal.
 
 Profiles live **only** in the committed library; a plan source references one **by id** (`executionProfile`).
 Top-level `executionProfiles` in `plan.schema.json` is the **publisher-owned embedded snapshot field** (written
-by P-B resolution; never authored). Workers will consume the embedded copy **only**. The ARC registry
-(Increment 1) carries **no** execution policy. `libraryHash` = sha256 of the library file bytes (CR stripped),
-computed at resolution; never stored in the library.
+by P-B resolution — `arc-publish-plan/scripts/resolve-profiles.js`, **implemented in B1**; never authored).
+Workers will consume the embedded copy **only**. The ARC registry (Increment 1) carries **no** execution
+policy. `libraryHash` = sha256 of the library file bytes (CR stripped), computed at resolution
+(`arc-publish-plan/scripts/lib/profile-contract.js`); never stored in the library.
 
 ## 7. Validation map
 
@@ -113,7 +114,7 @@ computed at resolution; never stored in the library.
 |---|---|
 | Normative schema | `arc-publish-plan/references/schemas/execution-profile.schema.json` (closed enums, `if/then` invariants) |
 | Executable mirror (P-A) | `qa/arc_execution_profiles_offline.js` — EP-V1…EP-V15, with drift guards that read the enums and `required` arrays back out of the schema |
-| Publish-time rules (P-B, **not yet active**) | P-V21 profile present/resolvable (mandatory for every new publication) · P-V22 lane match · P-V23 ceilings/recommendations · P-V24 entry-mode agreement · P-V25 scope ↔ mutex coverage · P-V26 skill invocability |
+| Publish-time rules (P-B, **implemented B1** — `arc-publish-plan/scripts/lib/profile-contract.js` `planCheck`, run by `scripts/resolve-profiles.js`; QA `qa/arc_publish_profiles_offline.js`) | P-V21 profile present/resolvable (mandatory for every new publication) · P-V22 lane match · P-V23 ceilings/recommendations · P-V24 entry-mode agreement · P-V25 scope ↔ mutex coverage · P-V26 skill invocability — full text in `arc-publish-plan/references/plan-validation.md` |
 
 ## 8. Amendment r2.1 — owner rulings of 2026-08-21 (recorded so schema and governance record cannot drift)
 
