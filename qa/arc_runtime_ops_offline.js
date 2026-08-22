@@ -700,6 +700,95 @@ try {
       return done(acqL) && fs.existsSync(h) && !('arcId' in rdJson(h)) && schemaOk('holder', rdJson(h));
     })());
 
+    // ══ EP-R10 · the shipped worker ladder call sites pass the SELECTED claim root ═══════════
+    // B7 live-pilot finding: the real claim landed in arc-claims/EP-PILOT/LX-2 while the step-1b
+    // `--ladder` print rendered `claims/LX-2 (legacy namespace)`, because the call omitted
+    // --claim-dir. A-V5 pastes that same ladder into the authorization report, so a GO could be
+    // reviewed against a claim path the grant does not apply to.
+    //
+    // PROOF SPLIT - both halves executed, neither assumed:
+    //   EP-R10 (here)  the shipped WORKER blocks COMPUTE and PASS the selected claim root,
+    //                  byte-identical to the directory the same run actually creates.
+    //   EP-C17 (arc_worker_handshake_offline.js)  the RENDERER honours that --claim-dir, marks
+    //                  `(legacy namespace)` only for claims/, and never falls back.
+    //                  This suite only checks EP-C17 is PRESENT with its evidence; running it is a
+    //                  separate execution in the focused QA round, not something asserted here.
+    // This suite deliberately does NOT bind a profile: the ladder only renders its claim line for
+    // a bound snapshot, and binding is the B1-owned libraryHash rule. Binding + rendering are
+    // proven where they are owned (EP-C17); the call sites are proven here.
+    //
+    // DEFERRED TO B6.1 (not covered executably here, static coverage only):
+    //   - /arc-authorize A-V5: prose in the procedure list, not a tagged @op - nothing to execute.
+    //   - the resume-path re-bind ladder: the one UNTAGGED bash fence in claim-protocol.md.
+    section('EP-R10 shipped worker ladder call sites pass the selected claim root (B7 pilot finding)');
+    {
+      // ── supplemental static evidence (call-site text) ──
+      const cpLadder = claimText.split('\n').filter((l) => /^[^#|>]*node .*--ladder/.test(l));
+      check('EP-R10 (static) claim-protocol.md: every executable --ladder call passes --claim-dir (' + cpLadder.length + ' call site(s), incl. the untagged resume fence - B6.1 candidate)',
+        cpLadder.length >= 3 && cpLadder.every((l) => /--claim-dir/.test(l)));
+      const authTxt = exists(REL.docs.authorizeSkill) ? stripCR(readText(REL.docs.authorizeSkill)) : '';
+      const aIdx = authTxt.indexOf('--task <TASK-ID> --ladder');
+      check('EP-R10 (static) arc-authorize/SKILL.md A-V5 renders the ladder with --claim-dir of the selected claim root (executed argv proof deferred to B6.1: A-V5 is prose, not a tagged @op)',
+        aIdx !== -1 && /--claim-dir/.test(authTxt.slice(aIdx, aIdx + 160)));
+      check('EP-R10 (static) arc-authorize/SKILL.md states the renderer legacy default is never relied on for approval evidence', /never relied on here/.test(authTxt));
+
+      // ── strict cross-suite link: the renderer-side half must exist AND carry its evidence ──
+      const hs = exists('qa/arc_worker_handshake_offline.js') ? stripCR(readText('qa/arc_worker_handshake_offline.js')) : '';
+      const c17At = hs.indexOf("section('EP-C17");
+      const c17 = c17At === -1 ? '' : hs.slice(c17At, c17At + 4000);
+      check('EP-R10 renderer-side half is PRESENT in EP-C17 (handshake suite): section exists AND carries --claim-dir evidence for BOTH namespaces. This is a presence check only - EP-C17 must be EXECUTED separately in the focused run before final PASS',
+        c17At !== -1 && /--claim-dir/.test(c17) && /arc-claims\/ARC-A\/LX-2/.test(c17) && /legacy namespace/.test(c17));
+
+      // ── executed: the REAL blocks run verbatim; only GATE - a path variable this suite already
+      //    re-points by contract - points at an argv recorder, so the argv the block actually
+      //    passes is captured. The blocks themselves are unmodified.
+      const REC_SRC = "'use strict';\nconst fs=require('fs');\nfs.appendFileSync(process.env.QA_ARGV_LOG, JSON.stringify(process.argv.slice(2))+'\\n');\nconsole.log('worktree          none');\nprocess.exit(0);\n";
+      const SPEC = () => ({ snapshots: { 'arc-a-r1': { arcId: 'ARC-A' }, 'legacy-v3': {} }, legacyPointer: 'legacy-v3', arcPointers: { 'ARC-A': 'arc-a-r1' }, arcContainers: ['ARC-A'] });
+      const CLAIM_1B = ['worker-prelude', 'worker-args', 'worker-namespace', 'step0-preconditions', 'step1-snapshot', 'step1a-filter', 'step1b-bind-profile', 'step2-claim', 'step3-mutex', 'step4-rollback', 'step5-commit-claim'];
+      const PHASE_6A = ['worker-prelude', 'worker-args', 'worker-namespace', 'step0-preconditions', 'step1-snapshot', 'step6a-phase-entry'];
+      function record(label, seq, env) {
+        const repo = mkRepo(label, SPEC());
+        const rec = path.join(repo.dir, 'gate-argv-recorder.js');
+        fs.writeFileSync(rec, REC_SRC);
+        const log = path.join(repo.dir, 'argv.log');
+        const r = runOps(repo, CP, seq, Object.assign({ QA_GATE: fwd(rec), QA_ARGV_LOG: fwd(log) }, env));
+        let calls = []; try { calls = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch (e) { /* none recorded */ }
+        return { repo, r, calls };
+      }
+      const cdOf = (calls, flag) => { const c = calls.find((a) => a.indexOf(flag) !== -1); if (!c) return null; const i = c.indexOf('--claim-dir'); return i === -1 ? '(ABSENT)' : c[i + 1]; };
+
+      const a1 = record('r10arc', CLAIM_1B, { ARC: 'ARC-A' });
+      const l1 = record('r10leg', CLAIM_1B, { ARC: '' });
+      check('EP-R10 --arc ARC-A: the real step-1b block passes --claim-dir arc-claims/ARC-A/TASK-10 to the ladder' + tail(a1.r),
+        done(a1.r) && cdOf(a1.calls, '--ladder') === 'arc-claims/ARC-A/TASK-10');
+      check('EP-R10 no --arc: the same real step-1b block passes --claim-dir claims/TASK-10' + tail(l1.r),
+        done(l1.r) && cdOf(l1.calls, '--ladder') === 'claims/TASK-10');
+      check('EP-R10 the recorded ladder argv is the REAL committed call (--plan, --task TASK-10, --ladder all present)',
+        (() => { const c = a1.calls.find((x) => x.indexOf('--ladder') !== -1) || [];
+          return c.indexOf('--plan') !== -1 && c.indexOf('--task') !== -1 && c[c.indexOf('--task') + 1] === 'TASK-10'; })());
+      // displayed == real: the recorded claim-dir is byte-identical to the directory the SAME run created
+      const madeArc = fs.existsSync(path.join(a1.repo.arcClaims, 'ARC-A', 'TASK-10', 'claim.json')) ? 'arc-claims/ARC-A/TASK-10' : null;
+      const madeLeg = fs.existsSync(path.join(l1.repo.claims, 'TASK-10', 'claim.json')) ? 'claims/TASK-10' : null;
+      check('EP-R10 --arc ARC-A: the passed claim-dir is byte-identical to the claim directory this run actually created',
+        madeArc !== null && cdOf(a1.calls, '--ladder') === madeArc, 'passed=' + cdOf(a1.calls, '--ladder') + ' created=' + madeArc);
+      check('EP-R10 no --arc: the passed claim-dir is byte-identical to the claim directory this run actually created',
+        madeLeg !== null && cdOf(l1.calls, '--ladder') === madeLeg, 'passed=' + cdOf(l1.calls, '--ladder') + ' created=' + madeLeg);
+      check('EP-R10 the two namespaces never collapse: ARC != legacy, ARC starts arc-claims/, legacy starts claims/, neither inferred from the other',
+        cdOf(a1.calls, '--ladder') !== cdOf(l1.calls, '--ladder') && /^arc-claims\//.test(cdOf(a1.calls, '--ladder') || '') && /^claims\//.test(cdOf(l1.calls, '--ladder') || '') && !/^arc-claims\//.test(cdOf(l1.calls, '--ladder') || ''));
+      check('EP-R10 neither run fell through to the renderer legacy default by omission (--claim-dir present in both)',
+        cdOf(a1.calls, '--ladder') !== '(ABSENT)' && cdOf(l1.calls, '--ladder') !== '(ABSENT)');
+
+      // second executable call site: step 6a resolves the worktree from the ladder, then enters the phase
+      const a2 = record('r10arc6a', PHASE_6A, { ARC: 'ARC-A', TASK_ID: 'TASK-10', PHASE: 'BUILD', LAST_ACK: 'UNKNOWN' });
+      const l2 = record('r10leg6a', PHASE_6A, { ARC: '', TASK_ID: 'TASK-10', PHASE: 'BUILD', LAST_ACK: 'UNKNOWN' });
+      check('EP-R10 step 6a --arc ARC-A: the block RAN TO COMPLETION and the ladder AND --phase entry both carry arc-claims/ARC-A/TASK-10' + tail(a2.r),
+        done(a2.r) && cdOf(a2.calls, '--ladder') === 'arc-claims/ARC-A/TASK-10' && cdOf(a2.calls, '--phase') === 'arc-claims/ARC-A/TASK-10');
+      check('EP-R10 step 6a no --arc: the block RAN TO COMPLETION and the ladder AND --phase entry both carry claims/TASK-10' + tail(l2.r),
+        done(l2.r) && cdOf(l2.calls, '--ladder') === 'claims/TASK-10' && cdOf(l2.calls, '--phase') === 'claims/TASK-10');
+      check('EP-R10 step 6a: both runs completed and the ladder agrees with the phase entry within each run - one namespace per invocation, never two',
+        done(a2.r) && done(l2.r) && cdOf(a2.calls, '--ladder') === cdOf(a2.calls, '--phase') && cdOf(l2.calls, '--ladder') === cdOf(l2.calls, '--phase') && cdOf(a2.calls, '--phase') !== cdOf(l2.calls, '--phase'));
+    }
+
     // ══ EP-R9 · /arc-authorize resolves exactly one namespace from the literal ══════════════
     section('EP-R9 authorize namespace selector (frozen contract section 1, executed)');
     const authText = exists(REL.docs.authorizeSkill) ? stripCR(readText(REL.docs.authorizeSkill)) : '';

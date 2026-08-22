@@ -75,7 +75,8 @@ it. It reads no claim record and changes no decision.
     any existing record in this namespace not matching its own directory -> IDLE  [W-V14]
     none eligible                           -> IDLE
  5. SELECT exactly ONE - lowest priority number. Present it to the owner.
- 5a. BIND PROFILE (read-only): scripts/phase-gate.js --ladder          [W-V10]
+ 5a. BIND PROFILE (read-only): scripts/phase-gate.js --ladder --claim-dir  [W-V10]
+            the ladder renders the SELECTED namespace's claim root (A-V5 evidence)
             profile none (legacy snapshot)  -> V1 behaviour, no handshake
             profile-binding-missing |
             profile-hash-mismatch           -> IDLE, nothing written
@@ -132,7 +133,7 @@ sequences in `references/claim-protocol.md` sections 1b and 6a.
 
 | Step | Call | Result |
 |---|---|---|
-| BIND (step 5a — after SELECT, before CLAIM) | `node scripts/phase-gate.js --plan <plan.json> --task <T> --ladder` | `W-V10 verified` ⇒ CLAIM · `profile none (legacy snapshot)` ⇒ V1 behaviour, no handshake · `profile-binding-missing` / `profile-hash-mismatch` (exit 4) ⇒ **IDLE, nothing written** |
+| BIND (step 5a — after SELECT, before CLAIM) | `node scripts/phase-gate.js --plan <plan.json> --task <T> --ladder --claim-dir <the selected claim root>` | `W-V10 verified` ⇒ CLAIM · `profile none (legacy snapshot)` ⇒ V1 behaviour, no handshake · `profile-binding-missing` / `profile-hash-mismatch` (exit 4) ⇒ **IDLE, nothing written** |
 | PHASE ENTRY (every phase, before its first write) | `… --phase <ID> --last-ack <UNKNOWN\|MANUAL\|ACCEPT_EDITS\|AUTO> [--answered] [--resumed] [--claim-dir …] [--worktree-path …]` | exit 0 `CONTINUE` ⇒ work the phase · exit 2 (`HANDSHAKE-REQUIRED`, `STOP-request-MODE-literal`, `STOP-before-write`, `INVALID-PHASE`, `entry-gate-unsatisfied`) ⇒ **STOP**: print the banner, wait |
 | SCOPE (on demand) | `… --scope --phase <ID> [--claim-dir …] [--worktree-path …]` | the phase's write scope with placeholders substituted and P-V25 lock-outs removed, plus the V1 allowlist |
 

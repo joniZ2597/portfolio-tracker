@@ -65,6 +65,7 @@ A="$CLAIMS/$TASK_ID/authorized.json"
      else                                                     -> REFUSE     [A-V4]
 5a. Profile binding (P-C): node "$MAIN_WT/.claude/skills/arc-worker/scripts/phase-gate.js"
         --plan "$ROOT/plans/<planId>/plan.json" --task <TASK-ID> --ladder
+        --claim-dir "${CLAIMS#$ROOT/}/<TASK-ID>"
      exit 0 "W-V10 verified"                  -> paste the ladder into the report
      exit 0 "profile none (legacy snapshot)"  -> report "profile none", no refusal
      exit 4 (profile-binding-missing |
@@ -120,10 +121,13 @@ resources the task needs could be taken by someone else before it ever ran.
 
 **A-V5 makes the GO visibly cover the execution policy.** The ladder — recommended/ceiling
 per phase, any bounded `grant`, the P-V25 lock-outs — is printed by
-`arc-worker/scripts/phase-gate.js --ladder` from the profile embedded in the published
+`arc-worker/scripts/phase-gate.js --ladder --claim-dir <the selected claim root>` from the profile embedded in the published
 snapshot (`executionProfiles[row.executionProfile]`, hash-pinned by `planHash`); this skill
 is the single renderer's consumer (K7), never reads the profile library, and never
-re-renders the ladder by hand. `MAIN_WT` is `dirname(git rev-parse --path-format=absolute
+re-renders the ladder by hand. **The ladder is pasted as approval evidence, so it is rendered
+with `--claim-dir` set to the claim root of the selected namespace** — `claims/<TASK-ID>` without
+the flag, `arc-claims/<ARC-ID>/<TASK-ID>` under `--arc`. A GO must never display a claim path the
+grant does not apply to; the renderer's legacy default is never relied on here. `MAIN_WT` is `dirname(git rev-parse --path-format=absolute
 --git-common-dir)`. Mode is prompting policy, never authority: the GO authorizes the task
 row's terms, not a permission mode, and `authorized.json` is unchanged (`planHash` already
 pins the embedded profile).

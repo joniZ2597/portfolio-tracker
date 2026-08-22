@@ -178,7 +178,10 @@ An INCOMPLETE-CLAIM directory fails the exists-AND-parses clause, so residue nev
 
 ```bash
 # @op step1b-bind-profile
-node "$GATE" --plan "$PLAN" --task "$TASK_ID" --ladder; RC=$?
+# The ladder is approval evidence (A-V5 pastes it verbatim), so it must render the claim root of
+# the SELECTED namespace. Resolve it from $CLAIMS - never from the renderer's legacy default.
+CLAIM_DIR_REL="${CLAIMS#"$ROOT/"}/$TASK_ID"
+node "$GATE" --plan "$PLAN" --task "$TASK_ID" --ladder --claim-dir "$CLAIM_DIR_REL"; RC=$?
 case $RC in
   0) : ;;                                                  # W-V10 verified, or "profile none (legacy snapshot)"
   4) echo "IDLE - profile binding failed (profile-binding-missing | profile-hash-mismatch)"; exit 0 ;;
@@ -319,7 +322,8 @@ the claim was taken under; without it `/arc-authorize` would look in the legacy 
 # @op step6a-phase-entry
 # the worktree named by scope.worktree (printed by --ladder); phase-gate.js is git-free, so
 # the path is resolved here and passed in (D-16)
-WT_NAME=$(node "$GATE" --plan "$PLAN" --task "$TASK_ID" --ladder | sed -n 's/^worktree  *\([^ ]*\).*/\1/p')
+CLAIM_DIR_REL="${CLAIMS#"$ROOT/"}/$TASK_ID"   # the task's claim directory per runtime-contract.md section 2
+WT_NAME=$(node "$GATE" --plan "$PLAN" --task "$TASK_ID" --ladder --claim-dir "$CLAIM_DIR_REL" | sed -n 's/^worktree  *\([^ ]*\).*/\1/p')
 case "$WT_NAME" in
   none)       WT_PATH="" ;;
   branch-dev) WT_PATH="$MAIN_WT"
@@ -328,7 +332,6 @@ case "$WT_NAME" in
   *)          WT_PATH=$(git worktree list --porcelain | sed -n 's/^worktree //p' | grep "/$WT_NAME\$" | head -1)
               [ -n "$WT_PATH" ] || { echo "BLOCKED - linked worktree $WT_NAME not found"; exit 0; } ;;
 esac
-CLAIM_DIR_REL="${CLAIMS#"$ROOT/"}/$TASK_ID"   # the task's claim directory per runtime-contract.md section 2
 
 # LAST_ACK is UNKNOWN at the first entry of every conversation; ANSWERED is set only after
 # the operator's literal for THIS phase entry; RESUMED is set in a --resume conversation.
@@ -479,7 +482,9 @@ nothing, and leaves the task exactly as it was — the same vocabulary as the pr
 this invocation has no authority over.
 
 ```bash
-node "$GATE" --plan "$PLAN" --task "$TASK_ID" --ladder || { echo "BLOCKED - profile binding failed on resume"; exit 0; }
+CLAIM_DIR_REL="${CLAIM_DIR#"$ROOT/"}"         # the resumed claim, in the SELECTED namespace
+node "$GATE" --plan "$PLAN" --task "$TASK_ID" --ladder --claim-dir "$CLAIM_DIR_REL" \
+  || { echo "BLOCKED - profile binding failed on resume"; exit 0; }
 LAST_ACK=UNKNOWN; ANSWERED=; RESUMED=1        # prior acknowledgements not carried
 ```
 
