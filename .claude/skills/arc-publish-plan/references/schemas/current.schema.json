@@ -2,16 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "arc/current.schema.json",
   "title": "ARC active plan pointer",
-  "description": "plans/current.json - the manifest naming the active snapshot. Written ONLY by /arc-publish-plan, via write-temp plus rename. The same field set, scoped to one snapshot, is reused verbatim as plans/<plan-id>/manifest.json.",
+  "description": "plans/current.json - the manifest naming the active snapshot. Written ONLY by /arc-publish-plan, via write-temp plus rename. The same field set, scoped to one snapshot, is reused verbatim as plans/<plan-id>/manifest.json. An ARC publication (P-E) writes its ARC literal as arcId into both, so plans/arcs/<ARC-ID>/current.json and the snapshot's manifest.json carry the same arcId as plan.json (three-way equality, K9); legacy pointers and manifests without arcId remain valid and byte-unchanged.",
   "type": "object",
   "additionalProperties": false,
   "required": ["planId", "planHash", "source", "sourceHash", "ref", "publishedAt", "publishedBy"],
   "properties": {
     "planId": {
-      "description": "Directory name under plans/ holding the active snapshot.",
+      "description": "Directory name under plans/ holding the active snapshot. \"arcs\" is reserved for the plans/arcs/ pointer container (B4).",
       "type": "string",
       "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$",
-      "maxLength": 96
+      "maxLength": 96,
+      "not": { "enum": ["arcs"] }
     },
     "planHash": {
       "description": "SHA-256 of plan.json bytes exactly as written. Every worker re-verifies this before acting (W-V3).",
@@ -80,6 +81,25 @@
             "enum": ["CLAIMED", "WAITING_OWNER_GO", "AUTHORIZED", "BLOCKED"]
           }
         }
+      }
+    },
+    "arcId": {
+      "description": "OPTIONAL (B4, P-E0). Present, and equal to <ARC-ID>, in plans/arcs/<ARC-ID>/current.json and in the manifest.json of an ARC snapshot; absent in plans/current.json and in every legacy manifest.",
+      "$ref": "#/$defs/arcId"
+    }
+  },
+  "$defs": {
+    "arcId": {
+      "description": "OPTIONAL (B4, P-E0). ARC identity. Absent in every legacy record; present in every ARC-scoped record and equal to the ARC it belongs to - the publisher's ARC literal for a snapshot, its manifest and plans/arcs/<ARC-ID>/current.json (three-way equality), the arc-claims/<ARC-ID>/ directory for claims, tokens and the holders taken for that ARC. Never inferred from a task-id prefix, a filename or a slug. The reserved Windows device-name guard applies uniformly (N-3). The schema validates shape only; namespace rules live in scripts/lib/runtime-identity.js.",
+      "type": "string",
+      "pattern": "^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$",
+      "maxLength": 24,
+      "not": {
+        "enum": [
+          "CON", "PRN", "AUX", "NUL",
+          "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+          "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        ]
       }
     }
   }

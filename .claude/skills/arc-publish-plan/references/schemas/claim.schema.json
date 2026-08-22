@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "arc/claim.schema.json",
   "title": "ARC task claim",
-  "description": "claims/<TASK-ID>/claim.json - the durable record of one claimed task. Written by arc-worker for its OWN claim only, and by the owner during recovery. UNCLAIMED is not a value here: an unclaimed task is represented by the absence of the claim directory.",
+  "description": "claims/<TASK-ID>/claim.json (legacy stream) or arc-claims/<ARC-ID>/<TASK-ID>/claim.json (ARC namespace, B4 / P-E) - the durable record of one claimed task; claim identity is (arcId ?? null, taskId). Written by arc-worker for its OWN claim only, and by the owner during recovery. UNCLAIMED is not a value here: an unclaimed task is represented by the absence of the claim directory in its namespace.",
   "type": "object",
   "additionalProperties": false,
   "required": ["taskId", "lane", "planId", "planHash", "conversationId", "startedAt", "mutexes", "state"],
@@ -100,6 +100,25 @@
       "type": "integer",
       "minimum": 0,
       "default": 0
+    },
+    "arcId": {
+      "description": "OPTIONAL (B4, P-E0). Required in arc-claims/<ARC-ID>/<TASK-ID>/ records and must equal the directory <ARC-ID>; must be absent in claims/<TASK-ID>/ records. The schema validates shape only (D-23): the namespace rule is scripts/lib/runtime-identity.js claimMatchesPath, applied by every reader.",
+      "$ref": "#/$defs/arcId"
+    }
+  },
+  "$defs": {
+    "arcId": {
+      "description": "OPTIONAL (B4, P-E0). ARC identity. Absent in every legacy record; present in every ARC-scoped record and equal to the ARC it belongs to - the publisher's ARC literal for a snapshot, its manifest and plans/arcs/<ARC-ID>/current.json (three-way equality), the arc-claims/<ARC-ID>/ directory for claims, tokens and the holders taken for that ARC. Never inferred from a task-id prefix, a filename or a slug. The reserved Windows device-name guard applies uniformly (N-3). The schema validates shape only; namespace rules live in scripts/lib/runtime-identity.js.",
+      "type": "string",
+      "pattern": "^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$",
+      "maxLength": 24,
+      "not": {
+        "enum": [
+          "CON", "PRN", "AUX", "NUL",
+          "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+          "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        ]
+      }
     }
   }
 }

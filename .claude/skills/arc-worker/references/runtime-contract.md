@@ -28,21 +28,46 @@ repository exists as of 2026-08-15.
 ## 2. Layout
 
 ```
-<ROOT>/
+<ROOT>/                                  root completeness = exactly plans/ + claims/ + mutex/ (section 1)
 ├── plans/
-│   ├── current.json                 active plan manifest        [READ-ONLY to workers]
-│   └── <plan-id>/
-│       ├── plan.json                immutable, hash-pinned      [READ-ONLY to workers]
-│       ├── source.md                verbatim source copy        [READ-ONLY to workers]
-│       └── manifest.json            id, hashes, ref, provenance [READ-ONLY to workers]
+│   ├── current.json                 LEGACY singleton pointer    [READ-ONLY to workers; no arcId]
+│   ├── <plan-id>/
+│   │   ├── plan.json                immutable, hash-pinned      [READ-ONLY to workers; an ARC snapshot carries arcId]
+│   │   ├── source.md                verbatim source copy        [READ-ONLY to workers]
+│   │   └── manifest.json            id, hashes, ref, provenance [READ-ONLY to workers; same field set as current.json]
+│   └── arcs/<ARC-ID>/current.json   per-ARC pointer, arcId == <ARC-ID>    [P-E; container plans/arcs/ is owner-bootstrap]
 ├── claims/
-│   └── <TASK-ID>/
-│       ├── claim.json               written by the holding worker
+│   └── <TASK-ID>/                   LEGACY stream namespace - claim identity (null, <TASK-ID>)
+│       ├── claim.json               written by the holding worker          [no arcId]
 │       └── authorized.json          [OWNER-WRITTEN ONLY - never by a worker]
+├── arc-claims/                      ARC namespace root, SIBLING of claims/  [owner-bootstrap; P-E]
+│   └── <ARC-ID>/                    per-ARC container - created only by the publisher (step 9b, idempotent)
+│       └── <TASK-ID>/               claim identity (<ARC-ID>, <TASK-ID>); claim.json + authorized.json carry arcId == <ARC-ID>
 └── mutex/
-    └── <ENCODED-CLASS>/
-        └── holder.json              { taskId, lane, acquiredAt }
+    └── <ENCODED-CLASS>/             GLOBAL classes (section 3) - never namespaced by ARC
+        └── holder.json              { taskId, lane, acquiredAt, arcId? }   (holder.schema.json)
 ```
+
+**Namespaces (topology contract, B4 / P-E0; the behaviour that selects a namespace follows in
+P-E).** The legacy stream (`plans/current.json`, `claims/<TASK-ID>/`) and the ARC namespace
+(`plans/arcs/<ARC-ID>/current.json`, `arc-claims/<ARC-ID>/<TASK-ID>/`) are **sibling** trees: a
+`claims/*/` loop never sees an ARC claim, an `arc-claims/<ARC-ID>/*/` loop never sees a legacy one,
+and nothing ever reads across the two (K15). `plans/<plan-id>/` and `mutex/` are the only shared
+surfaces. Claim identity is structural — `(arcId ?? null, taskId)`, taken from the directory and
+checked against the record (`arc-publish-plan/scripts/lib/runtime-identity.js` `claimMatchesPath` /
+`authorizedMatchesPath`, schemas `claim.schema.json` / `authorized.schema.json`) — never from a
+task-id prefix, a filename or a slug; the same `taskId` may exist in `claims/` and in several ARCs
+as distinct identities. `arcs` is a reserved `planId` so the pointer container can never collide
+with a snapshot directory. Legacy records stay byte-unchanged and carry no `arcId`.
+
+**Who creates what (D-24).** The roots `plans/`, `claims/`, `mutex/` and, for ARC execution,
+`plans/arcs/` and `arc-claims/` are **owner-bootstrap-created**
+(`arc-publish-plan/references/bootstrap.md`); the publisher later creates only the per-ARC
+container `arc-claims/<ARC-ID>/` (publish step 9b, plain `mkdir`, EEXIST ignored, P-E); workers
+never create roots or containers — only their own claim directory and their own mutex directories.
+**Root completeness remains exactly `plans/` + `claims/` + `mutex/`** (section 1): `arc-claims/`
+and `plans/arcs/` are never required for the root to be complete; their absence is an ARC-level
+condition (P-E), not a missing root.
 
 ## 3. Mutex registry and encoding
 
@@ -78,6 +103,17 @@ unenforced.
 **Reserved holder ids.** `__PUBLISH__` (publish holding the authority class) and
 `__OWNER__` (owner holding a class for an OWNER-lane task). Publish validation rejects any
 task id beginning `__`, so a real task can never collide with either.
+
+**Holder record (B4 / P-E0, `holder.schema.json`).** `holder.json` is
+`{ taskId, lane, acquiredAt, arcId? }`. The owner of a held class is the **pair**
+`(arcId ?? null, taskId)`: a legacy holder carries no `arcId`; a holder taken for an ARC task, or by
+`__PUBLISH__` / `__OWNER__` acting for an ARC, carries `arcId` equal to that ARC. Release is legal
+**only on an exact pair match** (`arc-publish-plan/scripts/lib/runtime-identity.js`
+`holderOwnershipMatches`, K14): a legacy identity never owns an ARC holder with the same `taskId`,
+and an ARC identity never owns a legacy holder (D-28). **Mutex classes stay global** — the eight
+classes above are not namespaced by ARC; `CODE:index-html` held for `ARC-A/TASK-10` blocks
+`ARC-B/TASK-10` and the legacy `TASK-10` alike. The holder's `arcId` disambiguates the holder,
+never the class.
 
 ## 4. Two vocabularies — never conflated
 
@@ -127,28 +163,37 @@ important rule in the model and the one with the weakest technical enforcement.
 
 ## 5.1 Dependency resolution
 
-Stated explicitly here rather than left inferred from `arc-worker/SKILL.md` step 4:
+Stated explicitly here rather than left inferred from `arc-worker/SKILL.md` step 4. Resolution
+is **scoped to the namespace the worker operates in** — the legacy stream or one ARC — never
+cross-namespace, never cross-ARC (owner ruling 2026-08-21; the runtime selection of that
+namespace is P-E behaviour, B4 fixes only the rule):
 
 ```
-depSatisfied(D)  <=>  claims/<D>/claim.json  exists
-                      AND parses
-                      AND .state == "COMPLETE"
+legacy stream:  depSatisfied(D)         <=>  claims/<D>/claim.json                 exists
+                                             AND parses
+                                             AND .state == "COMPLETE"
+ARC <arcId>:    depSatisfied(arcId, D)  <=>  arc-claims/<arcId>/<D>/claim.json     exists
+                                             AND parses
+                                             AND .state == "COMPLETE"
 ```
 
-Every other case — directory absent, unparseable, or **any** other state — is **not
-satisfied**. Fail-closed, with no state that is true but unobservable:
+A COMPLETE `D` in another ARC, or in the legacy stream, never satisfies an ARC's dependency, and
+an ARC's COMPLETE `D` never satisfies the legacy stream's. Every other case — directory absent,
+unparseable, or **any** other state — is **not satisfied**. Fail-closed, with no state that is
+true but unobservable:
 
-| Observation | Meaning | Dependency |
+| Observation (in the selected namespace) | Meaning | Dependency |
 |---|---|---|
 | dir present, `state: COMPLETE` | done, durably | **satisfied** |
 | dir present, any other state | in flight / stopped / withdrawn | not satisfied |
-| dir absent | never ran, **or** deliberately withdrawn via ABANDON+RELEASE | not satisfied |
+| dir absent | never ran, **or** deliberately withdrawn via ABANDON+RELEASE, **or** completed only in another namespace | not satisfied |
 
 **The dependency claim's `planId` is NOT consulted, deliberately.** Requiring
 `planId == current` would re-strand a whole chain on the next replacement publication, since
 a dependency completed under one plan keeps that `planId` forever. **Completion is a fact
-about the task, not about the plan version.** This rests on a recorded assumption: a task id
-means the same thing across plans.
+about the task, not about the plan version** — within its namespace: for an ARC, across that
+ARC's generations (`planId` changes, `arcId` does not). This rests on a recorded assumption: a
+task id means the same thing across plans of the same stream or ARC.
 
 > **Named non-conflict with §7.** That table's row *"Claim `planId` is not the current
 > `planId` -> BLOCKED"* is **not** contradicted here. A worker reads **its own** claim as
@@ -186,16 +231,24 @@ and the handshake record is report-only (`claim.json` unchanged, ruling 5 / D-15
 
 ## 6. Worker write allowlist
 
+Exactly two path shapes **per namespace**; a worker operates in one namespace per invocation
+and never writes both:
+
 ```
-<ROOT>/claims/<own TASK-ID>/claim.json
-<ROOT>/mutex/<own declared class>/holder.json
+legacy stream:  <ROOT>/claims/<own TASK-ID>/claim.json
+                <ROOT>/mutex/<own declared class>/holder.json           (no arcId)
+
+ARC <ARC-ID>:   <ROOT>/arc-claims/<ARC-ID>/<own TASK-ID>/claim.json      (arcId == <ARC-ID>)   [P-E]
+                <ROOT>/mutex/<own declared class>/holder.json           (arcId == <ARC-ID>)   [P-E]
 ```
 
-Creating the two containing directories is part of claiming and is permitted. Every other
-write is an unconditional STOP.
+Creating the two containing directories — the own claim directory and the own mutex class
+directory — is part of claiming and is permitted. Every other write is an unconditional STOP.
 
 Never written by a worker: `authorized.json` · anything under `plans/` · another task's
-claim · a mutex whose `holder.json` names a different `taskId` · the runtime root.
+claim · a mutex whose `holder.json` names a different owner pair `(arcId ?? null, taskId)` ·
+the runtime root or any root container (`claims/`, `arc-claims/`, `arc-claims/<ARC-ID>/`,
+`plans/arcs/`).
 
 ## 7. Fail-closed catalogue
 

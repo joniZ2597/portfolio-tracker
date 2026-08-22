@@ -50,18 +50,13 @@ const REL = {
   },
   forbidden: [
     '.claude/skills/arc-publish-plan/SKILL.md',
-    '.claude/skills/arc-publish-plan/references/bootstrap.md',
     '.claude/skills/arc-publish-plan/references/plan-validation.md',
     '.claude/skills/arc-publish-plan/references/publish-protocol.md',
     '.claude/skills/arc-publish-plan/templates/plan-projection.md',
     '.claude/skills/arc-publish-plan/templates/publish-report.md',
     '.claude/skills/arc-publish-plan/scripts/resolve-profiles.js',
     '.claude/skills/arc-publish-plan/scripts/lib/profile-contract.js',
-    '.claude/skills/arc-publish-plan/references/schemas/authorized.schema.json',
-    '.claude/skills/arc-publish-plan/references/schemas/claim.schema.json',
-    '.claude/skills/arc-publish-plan/references/schemas/current.schema.json',
     '.claude/skills/arc-publish-plan/references/schemas/execution-profile.schema.json',
-    '.claude/skills/arc-publish-plan/references/schemas/plan.schema.json',
     '.claude/skills/arc-authorize/references/owner-ops.md',
     'netlify.toml'
   ]
@@ -560,12 +555,13 @@ try {
   check('docs runtime-contract.md: new section 5.2 profile consumption', /^## 5\.2/m.test(rc) && /executionProfiles/.test(rc) && /W-V10/.test(rc));
   for (const row of ['profile-binding-missing', 'profile-hash-mismatch', 'mode-exceeds-ceiling', 'unmapped-harness-mode', 'automation-increase-needed', 'entry-gate-unsatisfied', 'scope-expansion']) check('docs runtime-contract.md section 7 row ' + row, new RegExp('`' + row + '`').test(rc));
   check('docs runtime-contract.md section 7 carries no target-surface-changed row (deferred by owner ruling 2026-08-22)', !/`target-surface-changed`/.test(rc));
-  const rcHead = gitShow(REL.docs.runtimeContract);
-  if (rcHead) {
-    for (const [label, re] of [['2 Layout', /^## 2\. Layout/], ['3 Mutex registry', /^## 3\. Mutex registry/], ['5.1 Dependency resolution', /^## 5\.1 Dependency resolution/], ['6 Worker write allowlist', /^## 6\. Worker write allowlist/]]) {
-      check('docs runtime-contract.md section ' + label + ' byte-identical to HEAD (B4/B6 ownership)', sectionOf(rc, re) !== null && sectionOf(rc, re) === sectionOf(rcHead, re));
-    }
-  } else check('docs runtime-contract.md readable from HEAD', false);
+  // B4-owned sections (§2 / §3 / §5.1 / §6): structural presence + the contract lines P-C relies on
+  // (R-B4-1, 2026-08-22 - the former byte-identical-to-HEAD pins proved B2's scope, now committed).
+  for (const [label, re] of [['2 Layout', /^## 2\. Layout/], ['3 Mutex registry', /^## 3\. Mutex registry/], ['5.1 Dependency resolution', /^## 5\.1 Dependency resolution/], ['6 Worker write allowlist', /^## 6\. Worker write allowlist/]]) {
+    check('docs runtime-contract.md section ' + label + ' present (B4/B6-owned surface)', sectionOf(rc, re) !== null);
+  }
+  check('docs runtime-contract.md section 5.1 keeps "planId is NOT consulted" (own claim = authority; dependency = evidence)', /planId.{0,20}NOT consulted/.test(sectionOf(rc, /^## 5\.1 Dependency resolution/) || ''));
+  check('docs runtime-contract.md section 6 still names the legacy write shapes claims/<own TASK-ID>/claim.json + mutex/<own declared class>/holder.json', /<ROOT>\/claims\/<own TASK-ID>\/claim\.json/.test(sectionOf(rc, /^## 6\. Worker write allowlist/) || '') && /<ROOT>\/mutex\/<own declared class>\/holder\.json/.test(sectionOf(rc, /^## 6\. Worker write allowlist/) || ''));
   const ct = doc('contract');
   check('docs execution-profile.md header no longer says P-B/P-C not implemented', !/P-B[^\n]*not implemented/.test(ct) && !/P-C[^\n]*not implemented/.test(ct) && !/no worker reads a profile yet/.test(ct));
   check('docs execution-profile.md states P-C implemented in B2 and names phase-gate.js', /implemented in B2/.test(ct) && /phase-gate\.js/.test(ct));

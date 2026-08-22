@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "arc/authorized.schema.json",
   "title": "ARC owner authorization token",
-  "description": "claims/<TASK-ID>/authorized.json - the owner's execution grant. Written ONLY by /arc-authorize. Its presence is the authorization; claim.state AUTHORIZED without a valid file here fails closed to BLOCKED and is never repaired by a worker.",
+  "description": "claims/<TASK-ID>/authorized.json (legacy stream) or arc-claims/<ARC-ID>/<TASK-ID>/authorized.json (ARC namespace, B4 / P-E) - the owner's execution grant. Written ONLY by /arc-authorize. Its presence is the authorization; claim.state AUTHORIZED without a valid file here fails closed to BLOCKED and is never repaired by a worker.",
   "type": "object",
   "additionalProperties": false,
   "required": ["taskId", "planId", "planHash", "authorizedAt", "authorizedBy"],
@@ -39,6 +39,25 @@
     "ownerToken": {
       "description": "RESERVED, UNUSED IN V1. Contract R-1 records that nothing in the filesystem prevents a worker writing this file; allowed-tools is not runtime-enforced (execution-plan conflict X-9). The available mitigation is an owner-supplied value a worker cannot derive. It is deliberately not built in V1, and this field exists so adding it later requires no schema change.",
       "type": "string"
+    },
+    "arcId": {
+      "description": "OPTIONAL (B4, P-E0). Required in arc-claims/<ARC-ID>/<TASK-ID>/ records and must equal the directory <ARC-ID>; must be absent in claims/<TASK-ID>/ records. Shape only: the namespace rule is scripts/lib/runtime-identity.js authorizedMatchesPath, applied by every reader.",
+      "$ref": "#/$defs/arcId"
+    }
+  },
+  "$defs": {
+    "arcId": {
+      "description": "OPTIONAL (B4, P-E0). ARC identity. Absent in every legacy record; present in every ARC-scoped record and equal to the ARC it belongs to - the publisher's ARC literal for a snapshot, its manifest and plans/arcs/<ARC-ID>/current.json (three-way equality), the arc-claims/<ARC-ID>/ directory for claims, tokens and the holders taken for that ARC. Never inferred from a task-id prefix, a filename or a slug. The reserved Windows device-name guard applies uniformly (N-3). The schema validates shape only; namespace rules live in scripts/lib/runtime-identity.js.",
+      "type": "string",
+      "pattern": "^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$",
+      "maxLength": 24,
+      "not": {
+        "enum": [
+          "CON", "PRN", "AUX", "NUL",
+          "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+          "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        ]
+      }
     }
   }
 }

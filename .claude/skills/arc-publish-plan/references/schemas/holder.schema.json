@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "arc/holder.schema.json",
+  "title": "ARC mutex holder record",
+  "description": "mutex/<ENCODED-CLASS>/holder.json - who holds one global mutex class. Written by the acquiring worker (claim-protocol section 3), by /arc-publish-plan as __PUBLISH__ (publish-protocol) or by the owner as __OWNER__ (owner-ops section 6). The owner of a held class is the pair (arcId ?? null, taskId): a legacy holder carries no arcId; a holder taken for an ARC task, or by a reserved id acting for an ARC, carries arcId equal to that ARC. Release is legal only on an exact pair match (K14, D-28). Mutex classes stay global - the directory name is the class alone, never namespaced by ARC; the holder's arcId disambiguates the holder, never the class. Shape only (B4, P-E0): ownership is decided by scripts/lib/runtime-identity.js holderOwnershipMatches.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["taskId", "lane", "acquiredAt"],
+  "properties": {
+    "taskId": {
+      "description": "The holding task id, or one of the reserved holder ids __PUBLISH__ / __OWNER__ (publish validation rejects any task id beginning with __, so the two can never collide with a real task).",
+      "anyOf": [
+        { "$ref": "#/$defs/taskId" },
+        { "$ref": "#/$defs/reservedHolderId" }
+      ]
+    },
+    "lane": {
+      "description": "Lane of the holding worker; OWNER for the reserved holders.",
+      "type": "string",
+      "enum": ["MAIN", "LAB", "COWORK", "OWNER"]
+    },
+    "acquiredAt": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "arcId": {
+      "description": "OPTIONAL (B4, P-E0). Present only when the holder acts for an ARC (an arc-claims/<ARC-ID>/ task, or __PUBLISH__ / __OWNER__ acting for that ARC) and then equal to that ARC; absent for every legacy-stream holder. Never null.",
+      "$ref": "#/$defs/arcId"
+    }
+  },
+  "$defs": {
+    "taskId": {
+      "description": "Uppercase, filesystem-safe, must start and end alphanumeric; the reserved Windows device names are excluded (same rule as plan.schema.json).",
+      "type": "string",
+      "pattern": "^[A-Z0-9]([A-Z0-9._-]*[A-Z0-9])?$",
+      "maxLength": 64,
+      "not": {
+        "enum": [
+          "CON", "PRN", "AUX", "NUL",
+          "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+          "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        ]
+      }
+    },
+    "reservedHolderId": {
+      "description": "The two reserved holder ids (runtime-contract section 3).",
+      "type": "string",
+      "enum": ["__PUBLISH__", "__OWNER__"]
+    },
+    "arcId": {
+      "description": "OPTIONAL (B4, P-E0). ARC identity. Absent in every legacy record; present in every ARC-scoped record and equal to the ARC it belongs to - the publisher's ARC literal for a snapshot, its manifest and plans/arcs/<ARC-ID>/current.json (three-way equality), the arc-claims/<ARC-ID>/ directory for claims, tokens and the holders taken for that ARC. Never inferred from a task-id prefix, a filename or a slug. The reserved Windows device-name guard applies uniformly (N-3). The schema validates shape only; namespace rules live in scripts/lib/runtime-identity.js.",
+      "type": "string",
+      "pattern": "^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$",
+      "maxLength": 24,
+      "not": {
+        "enum": [
+          "CON", "PRN", "AUX", "NUL",
+          "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+          "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        ]
+      }
+    }
+  }
+}
