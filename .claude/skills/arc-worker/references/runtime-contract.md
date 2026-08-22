@@ -159,6 +159,31 @@ means the same thing across plans.
 An INCOMPLETE-CLAIM directory (no `claim.json`) fails the "exists AND parses" clause, so
 owner-ops §8 residue cleanup remains correct and safe.
 
+## 5.2 Profile consumption (P-C)
+
+A worker binds its task's execution profile from the published snapshot **only**
+(`arc-worker/scripts/phase-gate.js --ladder`, contract `execution-profile.md`):
+
+```
+profile(T)  =  plan.executionProfiles[ task(T).executionProfile ]                 (K4)
+W-V10       :  libraryHash(embedded - libraryHash) == embedded.libraryHash
+               AND key order profileId, version, libraryHash, ...
+               AND the embedded object validates (execution-profile.schema.json mirror)
+```
+
+| Snapshot state | Binding | Worker |
+|---|---|---|
+| no `executionProfiles` and the row names no `executionProfile` | `profile none (legacy snapshot)` | V1 behaviour — lane + mutexes + allowlist; **no handshake** (K5) |
+| map absent but the row references a profile · map present but the row names none · reference not a key (exact id, no case folding) | `profile-binding-missing` | before the claim ⇒ **IDLE**, nothing written; on `--resume` ⇒ **BLOCKED** |
+| key present but the hash, key order or shape fails W-V10 | `profile-hash-mismatch` | same dispositions |
+| bound | ladder printed; `--phase` at every phase entry; `--scope` on demand | CLAIM, then the Mode Transition Protocol handshake before the first write of every phase |
+
+The library directory, the registry and conversation text are never a profile source.
+`planHash` already pins the embedded bytes, so a W-V10 failure means the snapshot itself is
+inconsistent — owner disposition, never a worker repair. Mode is prompting policy, never
+authority: the two write shapes of section 6 bind identically under every acknowledged mode,
+and the handshake record is report-only (`claim.json` unchanged, ruling 5 / D-15).
+
 ## 6. Worker write allowlist
 
 ```
@@ -190,6 +215,13 @@ claim · a mutex whose `holder.json` names a different `taskId` · the runtime r
 | Claim `planId` is not the current `planId` | BLOCKED — owner recovery only |
 | Mutex holder mismatch on resume | BLOCKED, retaining what is held |
 | A newer `.ai-reports` artifact than the snapshot | **report it, stay on the snapshot** |
+| `profile-binding-missing` / `profile-hash-mismatch` (W-V10) before the claim | IDLE — nothing written |
+| `profile-binding-missing` / `profile-hash-mismatch` on `--resume` | BLOCKED |
+| `mode-exceeds-ceiling` — an acknowledged or signalled mode above the phase ceiling | STOP-before-write — wait for the appropriate operator `MODE` literal (≤ ceiling) |
+| `unmapped-harness-mode` — `plan`, `dontAsk` or `bypassPermissions` visibly active at a write | STOP-before-write — wait until the operator returns to a mapped harness mode, then re-evaluate |
+| `automation-increase-needed` — recommended mode above the acknowledged mode | STOP-request-MODE-literal — wait for the operator's literal |
+| `entry-gate-unsatisfied` — `AUTHORIZED_JSON` outside the `--resume` conversation | STOP — wait until the entry-gate / resume precondition is satisfied |
+| `scope-expansion` — a needed write outside the phase scope and the allowlist | BLOCKED, mutexes retained |
 
 ## 8. One task per conversation
 

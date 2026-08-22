@@ -1,6 +1,6 @@
 ---
 name: arc-authorize
-description: Owner-invoked authorization of a single claimed ARC task. Moves exactly one task from WAITING_OWNER_GO to AUTHORIZED by writing authorized.json and updating claim.json, after verifying the claim exists, is in the correct state, and is pinned to the current published plan. Sole writer of authorized.json. Repair-capable and idempotent. Never claims, never executes, never publishes, never abandons.
+description: Owner-invoked authorization of a single claimed ARC task. Moves exactly one task from WAITING_OWNER_GO to AUTHORIZED by writing authorized.json and updating claim.json, after verifying the claim exists, is in the correct state, and is pinned to the current published plan. Sole writer of authorized.json. Repair-capable and idempotent. Never claims, never executes, never publishes, never abandons. Prints the task's execution-profile ladder from the embedded snapshot (arc-worker/scripts/phase-gate.js --ladder, A-V5) so the GO visibly covers every phase, grant and lock-out.
 disable-model-invocation: true
 allowed-tools: Bash, Read, Write, Grep, Glob
 ---
@@ -46,6 +46,12 @@ A="$ROOT/claims/$TASK_ID/authorized.json"
      else                                                     -> REFUSE     [A-V3]
 5. The task's row in the published plan still declares requiresOwnerGo: true
      else                                                     -> REFUSE     [A-V4]
+5a. Profile binding (P-C): node "$MAIN_WT/.claude/skills/arc-worker/scripts/phase-gate.js"
+        --plan "$ROOT/plans/<planId>/plan.json" --task <TASK-ID> --ladder
+     exit 0 "W-V10 verified"                  -> paste the ladder into the report
+     exit 0 "profile none (legacy snapshot)"  -> report "profile none", no refusal
+     exit 4 (profile-binding-missing |
+             profile-hash-mismatch)            -> REFUSE     [A-V5]
 6. write authorized.json.tmp ; mv -f -> authorized.json
 7. write claim.json.tmp (state=AUTHORIZED, stateHistory appended) ; mv -f
 8. Emit the report from templates/authorize-report.md
@@ -69,6 +75,7 @@ token, which a worker treats as **forgery or corruption** and refuses outright.
 | A-V2 | State is not `WAITING_OWNER_GO` | `A-V2 REFUSED - <TASK-ID> is <state>, not WAITING_OWNER_GO` |
 | A-V3 | Claim pinned to a different plan | `A-V3 REFUSED - claim is against <planId>, current is <planId>` |
 | A-V4 | Plan row no longer requires owner GO | `A-V4 REFUSED - <TASK-ID> does not declare requiresOwnerGo` |
+| A-V5 | The task's embedded execution profile does not bind — `profile-binding-missing`, or `profile-hash-mismatch` under W-V10 (a legacy snapshot without `executionProfiles` is **not** a refusal) | `A-V5 REFUSED - <TASK-ID> profile binding <reason>` |
 | — | No claim directory | `REFUSED - <TASK-ID> is UNCLAIMED; there is nothing to authorize` |
 | — | `authorized.json` already present **and** state already `AUTHORIZED` | `REFUSED - already authorized at <ts>` |
 
@@ -79,6 +86,16 @@ answer is owner recovery (`owner-ops.md` section 9), never a re-grant against st
 **A-V2 is not a formality.** A task must be *claimed* before it can be authorized —
 authorizing an unclaimed task would grant permission with no reserved mutexes, so the
 resources the task needs could be taken by someone else before it ever ran.
+
+**A-V5 makes the GO visibly cover the execution policy.** The ladder — recommended/ceiling
+per phase, any bounded `grant`, the P-V25 lock-outs — is printed by
+`arc-worker/scripts/phase-gate.js --ladder` from the profile embedded in the published
+snapshot (`executionProfiles[row.executionProfile]`, hash-pinned by `planHash`); this skill
+is the single renderer's consumer (K7), never reads the profile library, and never
+re-renders the ladder by hand. `MAIN_WT` is `dirname(git rev-parse --path-format=absolute
+--git-common-dir)`. Mode is prompting policy, never authority: the GO authorizes the task
+row's terms, not a permission mode, and `authorized.json` is unchanged (`planHash` already
+pins the embedded profile).
 
 ## Repair mode
 

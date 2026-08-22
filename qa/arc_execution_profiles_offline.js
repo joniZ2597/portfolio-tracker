@@ -4,7 +4,7 @@
  * qa/arc_execution_profiles_offline.js
  *
  * Execution Profile V1.2 — Increment P-A executable contract mirror (EP-V1 … EP-V15;
- * EP-V15 publisher half updated by P-B / B1: publisher surfaces active, worker surfaces inactive).
+ * EP-V15 publisher half updated by P-B / B1, worker half by P-C / B2: both surface sets active).
  * Pure Node, no network, no browser, no runtime write. Reads only:
  *   - .claude/skills/arc-publish-plan/references/schemas/execution-profile.schema.json
  *   - .claude/skills/arc-publish-plan/references/execution-profiles/*.json (+ README.md)
@@ -44,7 +44,7 @@ const REL = {
     '.claude/skills/arc-publish-plan/references/plan-validation.md',
     '.claude/skills/arc-publish-plan/templates/plan-projection.md'
   ],
-  workerInactive: [
+  workerActive: [
     '.claude/skills/arc-worker/SKILL.md',
     '.claude/skills/arc-worker/references/runtime-contract.md',
     '.claude/skills/arc-worker/references/claim-protocol.md',
@@ -411,17 +411,19 @@ if (planSchema) {
     console.log('  (v3 runtime snapshot absent - legacy snapshot check skipped; schema-level checks still apply)');
   }
 }
-// P-B (B1) is implemented: the publisher surfaces carry the profile vocabulary and the
-// committed helper scripts; the worker and authorize surfaces stay inactive until P-C (B2).
+// P-B (B1) and P-C (B2) are implemented: the publisher surfaces carry the profile vocabulary and
+// the committed helper scripts; the worker and authorize surfaces carry the profile binding,
+// phase handshake and ladder-print vocabulary (arc-worker/scripts/phase-gate.js).
 for (const f of REL.publisherActive) {
   const t = fs.existsSync(abs(f)) ? readText(f) : '';
   check('EP-V15 publisher active (P-B): ' + f + ' carries P-V21..26 / resolver vocabulary', /P-V2[1-6]\b/.test(t) && /executionProfile|resolve-profiles\.js|--dry-run/.test(t));
 }
 check('EP-V15 publisher active (P-B): SKILL.md documents --dry-run', /--dry-run/.test(readText('.claude/skills/arc-publish-plan/SKILL.md')));
-for (const f of REL.workerInactive) {
+for (const f of REL.workerActive) {
   const t = fs.existsSync(abs(f)) ? readText(f) : '';
-  check('EP-V15 inactivity (P-C): ' + f + ' mentions no P-V21..26 / executionProfile', !/P-V2[1-6]\b|executionProfile/.test(t));
+  check('EP-V15 worker active (P-C): ' + f + ' carries the profile binding / phase-gate vocabulary', /executionProfile|phase-gate\.js/.test(t));
 }
+check('EP-V15 P-C artifact arc-worker/scripts/phase-gate.js present', fs.existsSync(abs('.claude/skills/arc-worker/scripts/phase-gate.js')));
 let pbLib = null;
 try { pbLib = require(abs(REL.publisherLib)); } catch (e) { console.log('  (P-B library not loadable: ' + e.message.split('\n')[0] + ')'); }
 check('EP-V15 P-B library profile-contract.js loads', !!pbLib);
@@ -434,9 +436,8 @@ if (pbLib) {
     check('EP-V15 P-B lib.libraryHash(' + f + ') == sha256(CR-stripped file) (K3)', pbLib.libraryHash(obj) === hashes[f]);
   }
 }
-const headWorker = spawnSync('git', ['show', 'HEAD:.claude/skills/arc-worker/SKILL.md'], { cwd: ROOT, encoding: 'utf8' });
-check('EP-V15 arc-worker/SKILL.md byte-identical to HEAD (P-C inactive)', headWorker.status === 0 && headWorker.stdout.replace(/\r/g, '') === readText('.claude/skills/arc-worker/SKILL.md').replace(/\r/g, ''));
-check('EP-V15 contract doc present and labels P-C as not implemented', fs.existsSync(abs(REL.contractDoc)) && /P-C/.test(readText(REL.contractDoc)) && /not implemented|NOT implemented|inactive/i.test(readText(REL.contractDoc)));
+check('EP-V15 arc-worker/SKILL.md allowed-tools includes Edit (D-17, B2)', /^allowed-tools:.*\bEdit\b/m.test(readText('.claude/skills/arc-worker/SKILL.md').replace(/\r/g, '')));
+check('EP-V15 contract doc present and labels P-C as implemented (B2)', fs.existsSync(abs(REL.contractDoc)) && /P-C/.test(readText(REL.contractDoc)) && /implemented in B2/.test(readText(REL.contractDoc)) && !/P-C[^\n]*not implemented/.test(readText(REL.contractDoc)));
 
 console.log('\n' + (failed === 0 ? 'ARC EXECUTION PROFILES (P-A): PASS (' + total + ' asserts)' : 'ARC EXECUTION PROFILES (P-A): FAIL (' + failed + ' of ' + total + ' asserts failed)'));
 assert.strictEqual(failed, 0, failures.slice(0, 12).join(' | '));

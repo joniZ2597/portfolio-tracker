@@ -21,6 +21,9 @@ task state    CLAIMED | WAITING_OWNER_GO | AUTHORIZED
               | BLOCKED | COMPLETE | UNCLAIMED
 worker outcome  IDLE | STOPPED
 entryMode     DIRECT | PLAN
+profile       <ID> v<n>  libraryHash <8>…  W-V10 verified   | none (legacy snapshot)
+claim root    claims/<TASK-ID>   (legacy namespace)
+resumed       no | yes - prior acknowledgements not carried
 
 ----------------------------------------------------------------
 MUTEXES
@@ -37,6 +40,18 @@ WRITES PERFORMED
 claims/<TASK-ID>/claim.json
 mutex/<CLASS>/holder.json          x<n>
   Both shapes are inside the allowlist. Nothing else was written.
+
+----------------------------------------------------------------
+PHASES   (report-only; claim.json carries no mode field)
+----------------------------------------------------------------
+phase      kind       recommended   ceiling       acknowledged  acknowledgedAt        outcome
+BUILD      IMPLEMENT  ACCEPT_EDITS  ACCEPT_EDITS  ACCEPT_EDITS  2026-08-22T10:00:00Z  as-recommended
+    operator acknowledged MODE ACCEPT_EDITS at 2026-08-22T10:00:00Z
+RUN        VERIFY     AUTO          AUTO          ACCEPT_EDITS  2026-08-22T10:05:00Z  declined-increase
+HANDOFF    REPORT     ACCEPT_EDITS  ACCEPT_EDITS  AUTO          2026-08-22T10:09:00Z  stopped-above-ceiling
+HANDOFF    REPORT     ACCEPT_EDITS  ACCEPT_EDITS  MANUAL        2026-08-22T10:10:00Z  stricter-than-recommended
+CLOSE      TERMINAL   MANUAL        MANUAL        MANUAL        2026-08-22T10:20:00Z  as-recommended
+  (rendered by phase-gate.js renderPhases; legacy snapshot: "none - legacy snapshot, no handshake")
 
 ----------------------------------------------------------------
 WORK
@@ -96,3 +111,12 @@ owner action.
 
 **Never present a claim as authorization.** A claimed task with `requiresOwnerGo: true`
 has reserved resources and nothing more.
+
+**Never assert a harness transition.** Each PHASES row quotes what the operator typed —
+`operator acknowledged MODE X at <ISO>` — and that literal is the evidence of record; the
+banner's harness-signal line is corroboration only. Outcomes are exactly `as-recommended`,
+`stricter-than-recommended`, `looser-than-recommended`, `declined-increase`,
+`stopped-above-ceiling` or `SKIP-evidenced`. A STOP at a phase entry (handshake, automation
+increase, above ceiling, unmapped harness mode, unsatisfied entry gate) is **not** a terminal
+point: no report is emitted, the PHASE ENTRY banner is printed and the worker waits for
+that STOP's own resolution.

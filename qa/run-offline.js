@@ -198,7 +198,8 @@ const OFFLINE_TESTS = [
   'qa/p5_call1_offline.js',
   'qa/p5_call2_offline.js',
   'qa/arc_execution_profiles_offline.js',
-  'qa/arc_publish_profiles_offline.js'
+  'qa/arc_publish_profiles_offline.js',
+  'qa/arc_worker_handshake_offline.js'
 ];
 
 const CLIENT_GATES = [

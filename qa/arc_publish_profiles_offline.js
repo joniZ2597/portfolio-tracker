@@ -481,11 +481,11 @@ try {
   check('docs plan-projection.md validation block lists P-V15 and P-V21..P-V26', /P-V15/.test(doc('projection')) && ['21', '22', '23', '24', '25', '26'].every((n) => new RegExp('P-V' + n + '\\b').test(doc('projection'))));
   check('docs publish-report.md has projectionHash and PROFILES EMBEDDED', /projectionHash/.test(doc('report')) && /PROFILES EMBEDDED/.test(doc('report')));
   check('docs execution-profiles/README.md status names P-B as implemented and the resolver', /P-B[\s\S]*?implemented/i.test(doc('readme')) && /resolve-profiles\.js/.test(doc('readme')));
-  check('docs execution-profile.md section 7 names the P-B implementation', /profile-contract\.js/.test(doc('contract')) && /P-C[\s\S]*?(not implemented|NOT implemented|inactive)/i.test(doc('contract')));
+  check('docs execution-profile.md section 7 names the P-B implementation (P-C implemented in B2)', /profile-contract\.js/.test(doc('contract')) && /implemented in B2/.test(doc('contract')) && !/P-C[^\n]*not implemented/.test(doc('contract')));
   check('wiring run-offline.js registers qa/arc_publish_profiles_offline.js', /'qa\/arc_publish_profiles_offline\.js'/.test(doc('runner')));
-  check('wiring no B2 artifact (arc-worker/scripts/phase-gate.js) exists', !fs.existsSync(abs('.claude/skills/arc-worker/scripts/phase-gate.js')));
+  check('wiring B2 artifact (arc-worker/scripts/phase-gate.js) exists and requires this library read-only (P-C implemented in B2)', fs.existsSync(abs('.claude/skills/arc-worker/scripts/phase-gate.js')) && /require\('\.\.\/\.\.\/arc-publish-plan\/scripts\/lib\/profile-contract\.js'\)/.test(readText('.claude/skills/arc-worker/scripts/phase-gate.js')));
   for (const f of ['.claude/skills/arc-worker/SKILL.md', '.claude/skills/arc-worker/references/runtime-contract.md', '.claude/skills/arc-worker/references/claim-protocol.md', '.claude/skills/arc-worker/templates/worker-report.md', '.claude/skills/arc-authorize/SKILL.md']) {
-    check('scope worker/authorize file untouched by P-B vocabulary: ' + f, fs.existsSync(abs(f)) && !/P-V2[1-6]\b|executionProfile/.test(readText(f)));
+    check('scope worker/authorize file carries the P-C vocabulary (B2): ' + f, fs.existsSync(abs(f)) && /executionProfile|phase-gate\.js/.test(readText(f)));
   }
 } finally {
   cleanup();

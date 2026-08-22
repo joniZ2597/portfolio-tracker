@@ -37,6 +37,17 @@ entryMode        DIRECT | PLAN
 closeCondition   <verbatim from the published row>
 stopCondition    <verbatim from the published row>
 
+----------------------------------------------------------------
+PHASE LADDER   (phase-gate.js --ladder, pasted verbatim - A-V5)
+----------------------------------------------------------------
+profile        MAIN-CODE-SLICE v1  libraryHash <sha256>  W-V10 verified
+phases         PLAN M/M -> IMPLEMENT M/M -> VERIFY A/A -> HANDOFF A/A -> CLOSE M/M
+grant          none | IMPLEMENT -> ACCEPT_EDITS paths index.html mutex CODE:index-html (requiresOwnerGo true)
+lock-out       netlify/functions/** (CODE:netlify-functions not held by <TASK-ID>) | none
+  Legacy snapshot: "profile none (legacy snapshot)" - no ladder, no refusal.
+  This GO covers the ladder, every grant and every lock-out exactly as printed.
+  It authorizes the row's terms, not a permission mode.
+
 ================================================================
 AUTHORIZED IS NOT RUNNING.
 
@@ -68,6 +79,11 @@ other Main-lane slice for as long as it sits there.
 **Echo `note` verbatim.** If the grant was narrow — one symbol, one run, gates re-parked
 afterwards — that scope is the durable record of what was actually approved. Paraphrasing
 it widens it.
+
+**Paste the ladder, never paraphrase it.** The PHASE LADDER block is the `--ladder` output of
+`arc-worker/scripts/phase-gate.js` (single renderer, K7). A `grant` line is the bounded MAIN
+`ACCEPT_EDITS` grant the GO covers; a `lock-out` line is a code surface the row cannot write
+because it does not hold the class. Omitting either widens or narrows what was approved.
 
 **Repair mode is stated explicitly.** An owner seeing `mode repair` learns an earlier
 invocation was interrupted, which is worth knowing even though the outcome is identical.

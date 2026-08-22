@@ -8,13 +8,14 @@ written in `arc-worker/references/execution-profile.md`.
 
 **Increment status.** P-A (committed `a2fec4e`) defines and provides this library, the schema
 and the contract. **P-B (publisher resolution and embedding) is implemented in B1**
-(working-tree implementation under QA; commit/push require their own owner authorization):
+(committed `7b54b39`):
 `/arc-publish-plan` resolves every task's `executionProfile` through
 `../../scripts/resolve-profiles.js` (library `../../scripts/lib/profile-contract.js`), embeds
 the referenced profiles hash-pinned into the snapshot, and enforces P-V21 … P-V26
-(`../plan-validation.md`); QA mirror `qa/arc_publish_profiles_offline.js`. **P-C (worker
-phase handshake) is not implemented**; nothing in `/arc-worker` reads this directory or the
-embedded copy yet.
+(`../plan-validation.md`); QA mirror `qa/arc_publish_profiles_offline.js`.
+**P-C (worker phase handshake) is implemented in B2** (`arc-worker/scripts/phase-gate.js`; QA mirror
+`qa/arc_worker_handshake_offline.js`): `/arc-worker` and `/arc-authorize` read the profile embedded
+in the published snapshot **only**; nothing reads this directory at runtime.
 
 ## Rules
 
