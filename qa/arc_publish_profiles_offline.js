@@ -420,13 +420,17 @@ try {
       fs.writeFileSync(path.join(rtRoot, 'plans', 'current.json'), JSON.stringify({ planId: 'legacy-v3' }) + '\n');
       console.log('  (live runtime absent - synthetic runtime root used)');
     }
-    check('EP-B14 temp runtime mutex/ empty before', fs.existsSync(path.join(rtRoot, 'mutex')) && fs.readdirSync(path.join(rtRoot, 'mutex')).length === 0);
+    // rtRoot may be a copy of the LIVE runtime, whose mutex/ legitimately holds whatever an
+    // in-flight ARC task owns. Pin the state as RECEIVED, never as empty.
+    const mutexRoot = path.join(rtRoot, 'mutex');
+    check('EP-B14 temp runtime mutex/ present before (state inherited from the copied source; never required to be empty)', fs.existsSync(mutexRoot));
+    const mutexBefore = fs.existsSync(mutexRoot) ? treeHash(mutexRoot) : null;
     const before = treeHash(rtRoot);
     const outRt = path.join(io, 'rt-out.json');
     const rRt = runCli(['--in', inPath, '--out', outRt, '--runtime-root', rtRoot]);
     check('EP-B14 CLI with --runtime-root exit 0' + (rRt.status !== 0 ? ' - ' + rRt.out.slice(0, 300) : ''), rRt.status === 0);
     check('EP-B14 runtime tree hash unchanged after the run', treeHash(rtRoot) === before);
-    check('EP-B14 mutex/ still empty (no mutex taken)', fs.readdirSync(path.join(rtRoot, 'mutex')).length === 0);
+    check('EP-B14 mutex/ preserved exactly as received (no mutex taken)', mutexBefore !== null && treeHash(mutexRoot) === mutexBefore);
     check('EP-B14 stdout reports P-V11 and P-V13 PASS against the runtime root', /^P-V11\b.*PASS/m.test(rRt.stdout) && /^P-V13\b.*PASS/m.test(rRt.stdout));
     check('EP-B14 --out under the runtime root ⇒ exit 3, tree unchanged', (() => { const r = runCli(['--in', inPath, '--out', path.join(rtRoot, 'plans', 'x.json'), '--runtime-root', rtRoot]); return r.status === 3 && treeHash(rtRoot) === before; })());
     check('EP-B14 --runtime-root not a directory ⇒ exit 3', runCli(['--in', inPath, '--out', path.join(io, 'z.json'), '--runtime-root', path.join(rt, 'nope')]).status === 3);

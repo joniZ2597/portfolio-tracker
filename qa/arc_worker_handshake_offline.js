@@ -506,6 +506,10 @@ try {
     if (fs.existsSync(liveRuntime)) copyTree(liveRuntime, rtCopy); else { for (const d of ['plans', 'claims', 'mutex']) fs.mkdirSync(path.join(rtCopy, d), { recursive: true }); }
     const copyPlan = writePlan(rtCopy, Object.assign(clone(planA), { planId: 'fixture-pc-copy-r1' }));
     const hBefore = treeHash(rtCopy);
+    // rtCopy may be a copy of the LIVE runtime, whose mutex/ legitimately holds whatever an
+    // in-flight ARC task owns. Pin the state as RECEIVED, never as empty.
+    const mutexCopy = path.join(rtCopy, 'mutex');
+    const mutexCopyBefore = fs.existsSync(mutexCopy) ? treeHash(mutexCopy) : null;
     const cwdBefore = treeHash(cwdScratch);
     const runs = [
       ['--plan', copyPlan, '--task', 'LX-2', '--ladder'],
@@ -521,7 +525,7 @@ try {
     check('EP-C14 every CLI mode ran (exit codes ' + codes.join(',') + ' within {0,2,3,4})', codes.every((c) => [0, 2, 3, 4].includes(c)));
     check('EP-C14 runtime copy tree hash unchanged after every CLI mode', treeHash(rtCopy) === hBefore);
     check('EP-C14 cwd tree unchanged (no stray output files)', treeHash(cwdScratch) === cwdBefore);
-    check('EP-C14 mutex/ in the copy still empty', fs.readdirSync(path.join(rtCopy, 'mutex')).length === 0);
+    check('EP-C14 mutex/ in the copy preserved exactly as received (phase-gate takes no mutex)', mutexCopyBefore !== null && treeHash(mutexCopy) === mutexCopyBefore);
 
     // ── EP-C15 ladder / grant / lock-out print (K7, A-V5) ─────────────────────
     section('EP-C15 ladder print for authorize (single renderer)');
