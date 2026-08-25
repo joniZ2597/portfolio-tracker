@@ -482,6 +482,7 @@ nothing, and leaves the task exactly as it was — the same vocabulary as the pr
 this invocation has no authority over.
 
 ```bash
+# @op step9b-resume-rebind   (section 9 continued: re-bind the profile in the SELECTED namespace)
 CLAIM_DIR_REL="${CLAIM_DIR#"$ROOT/"}"         # the resumed claim, in the SELECTED namespace
 node "$GATE" --plan "$PLAN" --task "$TASK_ID" --ladder --claim-dir "$CLAIM_DIR_REL" \
   || { echo "BLOCKED - profile binding failed on resume"; exit 0; }

@@ -308,12 +308,15 @@ const claimText = exists(REL.docs.claimProtocol) ? stripCR(readText(REL.docs.cla
 const ownerText = exists(REL.docs.ownerOps) ? stripCR(readText(REL.docs.ownerOps)) : '';
 const CP = extractOps(claimText);
 const OO = extractOps(ownerText);
+const authSkillText = exists(REL.docs.authorizeSkill) ? stripCR(readText(REL.docs.authorizeSkill)) : '';
+const AUTH = extractOps(authSkillText);
 
 const CLAIM_TAGS = ['worker-prelude', 'worker-args', 'worker-namespace', 'step0-preconditions', 'step1-snapshot',
   'step1a-filter', 'step1b-bind-profile', 'step2-claim', 'step3-mutex', 'step4-rollback', 'step5-commit-claim',
-  'step6-owner-go', 'step6a-phase-entry', 'step7-complete', 'step8-blocked', 'step9-resume'];
+  'step6-owner-go', 'step6a-phase-entry', 'step7-complete', 'step8-blocked', 'step9-resume', 'step9b-resume-rebind'];
 const OWNER_TAGS = ['owner-prelude', 'owner-selector', 'owner-inspect', 'owner-release', 'owner-abandon',
   'owner-resume', 'owner-mutex-acquire', 'owner-mutex-release', 'owner-retire'];
+const AUTH_TAGS = ['authorize-prelude', 'authorize-namespace', 'authorize-ladder'];
 
 const CLAIM_SEQ = ['worker-prelude', 'worker-args', 'worker-namespace', 'step0-preconditions', 'step1-snapshot', 'step1a-filter', 'step2-claim', 'step3-mutex', 'step4-rollback', 'step5-commit-claim'];
 const FILTER_SEQ = ['worker-prelude', 'worker-args', 'worker-namespace', 'step0-preconditions', 'step1-snapshot', 'step1a-filter'];
@@ -321,8 +324,9 @@ const COMPLETE_SEQ = CLAIM_SEQ.concat(['step7-complete']);
 const RESUME_SEQ = ['worker-prelude', 'worker-args', 'worker-namespace', 'step0-preconditions', 'step1-snapshot', 'step9-resume'];
 const RELEASE_ONLY_SEQ = ['worker-prelude', 'worker-args', 'worker-namespace', 'step7-complete'];
 
-// The QA re-points exactly the two path variables the temp repo cannot carry (IDENT, GATE); every other
-// command in every block runs verbatim.
+// The QA re-points only the path variables a temp repo cannot carry: IDENT and GATE after the
+// worker/owner preludes, GATE alone after authorize-prelude (which declares no IDENT, so binding one
+// would contradict its charter). Every other command in every block runs verbatim.
 function runOps(repo, source, opNames, env, glue) {
   glue = glue || {};
   const parts = [];
@@ -331,6 +335,7 @@ function runOps(repo, source, opNames, env, glue) {
     parts.push('# ---- ' + op);
     parts.push(source.ops[op]);
     if (op === 'worker-prelude' || op === 'owner-prelude') parts.push('IDENT="$QA_IDENT"; GATE="$QA_GATE"');
+    if (op === 'authorize-prelude') parts.push('GATE="$QA_GATE"');
     if (glue[op]) parts.push(glue[op]);
   }
   parts.push('echo "::DONE::"');
@@ -345,6 +350,23 @@ const runOwner = (repo, seq, env, glue) => runOps(repo, OO, seq, env, glue);
 const done = (r) => r.status === 0 && /::DONE::/.test(r.stdout);
 const ok = (r) => r.status === 0;
 const tail = (r) => r.status !== 0 ? ' - exit ' + r.status + ': ' + r.out.slice(-700) : '';
+
+// ── gate stubs + argv reader shared by EP-R11 / EP-R12 (B6.1) ────────────────
+// $GATE is a path variable this suite already re-points by contract; pointing it at a stub makes
+// the argv the REAL committed block passes observable. Neither stub prints the real gate's
+// "PHASE-GATE   task ..." head line, which is what lets EP-R11 prove phase-gate.js itself ran.
+const REAL_GATE = fwd(abs(REL.gate));
+const GATE_REC_SRC = ["'use strict';",
+  "var fs = require('fs');",
+  "fs.appendFileSync(process.env.QA_ARGV_LOG, JSON.stringify(process.argv.slice(2)) + String.fromCharCode(10));",
+  "console.log('worktree          none');",
+  'process.exit(0);'].join('\n');
+const GATE_EXIT4_SRC = ["'use strict';",
+  "console.log('PROFILE BINDING   TASK-10');",
+  "console.log('  profile  profile-binding-missing');",
+  'process.exit(4);'].join('\n');
+const readArgvLog = (f) => { try { return fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch (e) { return []; } };
+const claimDirOf = (calls, flag) => { const c = calls.find((a) => a.indexOf(flag) !== -1); if (!c) return null; const i = c.indexOf('--claim-dir'); return i === -1 ? '(ABSENT)' : c[i + 1]; };
 
 try {
   // ══ EP-R0 · surfaces, tags and the executor ════════════════════════════════
@@ -361,6 +383,11 @@ try {
   check('EP-R0 owner-ops.md resolves holder ownership through runtime-identity.js holderOwnershipMatches', /runtime-identity\.js/.test(ownerText) && /holderOwnershipMatches/.test(ownerText));
   check('EP-R0 neither worker nor owner-ops mentions the registry root .ai-reports/arcs (workers and the owner runtime lane never read the registry — D5-e)',
     !/\.ai-reports\/arcs/.test(claimText) && !/\.ai-reports\/arcs/.test(ownerText));
+
+  check('EP-R0 arc-authorize/SKILL.md carries every tagged block in order (' + (AUTH_TAGS.filter((t) => !AUTH.ops[t]).join(', ') || 'all present') + ')',
+    AUTH_TAGS.every((t) => !!AUTH.ops[t]) && AUTH_TAGS.every((t, i) => i === 0 || authSkillText.indexOf('# @op ' + AUTH_TAGS[i - 1]) < authSkillText.indexOf('# @op ' + t)));
+  check('EP-R0 arc-authorize/SKILL.md carries the house tagging sentence (R-3: the executable surface is declared, never implied)',
+    /Every executable block is tagged `# @op <name>` on its first line/.test(authSkillText));
 
   const ready = !!BASH && !!ident && CLAIM_TAGS.every((t) => !!CP.ops[t]) && OWNER_TAGS.every((t) => !!OO.ops[t]);
   if (!ready) console.log('  (tagged blocks / bash / identity helper not all available - executed scenarios skipped; RED)');
@@ -717,18 +744,17 @@ try {
     // a bound snapshot, and binding is the B1-owned libraryHash rule. Binding + rendering are
     // proven where they are owned (EP-C17); the call sites are proven here.
     //
-    // DEFERRED TO B6.1 (not covered executably here, static coverage only):
-    //   - /arc-authorize A-V5: prose in the procedure list, not a tagged @op - nothing to execute.
-    //   - the resume-path re-bind ladder: the one UNTAGGED bash fence in claim-protocol.md.
+    // Both surfaces deferred here in B6 are now executed in B6.1: /arc-authorize A-V5 in EP-R11
+    // (authorize-ladder is a tagged @op) and the resume-path re-bind in EP-R12 (step9b-resume-rebind).
     section('EP-R10 shipped worker ladder call sites pass the selected claim root (B7 pilot finding)');
     {
       // ── supplemental static evidence (call-site text) ──
       const cpLadder = claimText.split('\n').filter((l) => /^[^#|>]*node .*--ladder/.test(l));
-      check('EP-R10 (static) claim-protocol.md: every executable --ladder call passes --claim-dir (' + cpLadder.length + ' call site(s), incl. the untagged resume fence - B6.1 candidate)',
+      check('EP-R10 (static) claim-protocol.md: every executable --ladder call passes --claim-dir (' + cpLadder.length + ' call site(s), incl. the resume re-bind - tagged step9b-resume-rebind and executed in EP-R12)',
         cpLadder.length >= 3 && cpLadder.every((l) => /--claim-dir/.test(l)));
       const authTxt = exists(REL.docs.authorizeSkill) ? stripCR(readText(REL.docs.authorizeSkill)) : '';
-      const aIdx = authTxt.indexOf('--task <TASK-ID> --ladder');
-      check('EP-R10 (static) arc-authorize/SKILL.md A-V5 renders the ladder with --claim-dir of the selected claim root (executed argv proof deferred to B6.1: A-V5 is prose, not a tagged @op)',
+      const aIdx = authTxt.indexOf('--task "$TASK_ID" --ladder');
+      check('EP-R10 (static) arc-authorize/SKILL.md A-V5 passes --claim-dir of the selected claim root (now the executable authorize-ladder block; the argv itself is proven in EP-R11)',
         aIdx !== -1 && /--claim-dir/.test(authTxt.slice(aIdx, aIdx + 160)));
       check('EP-R10 (static) arc-authorize/SKILL.md states the renderer legacy default is never relied on for approval evidence', /never relied on here/.test(authTxt));
 
@@ -797,7 +823,8 @@ try {
     if (AU.ops['authorize-namespace']) {
       const a1 = mkRepo('authNs', ownerSpec());
       const authBefore = treeHash(a1.root);
-      const runAuth = (env) => bash(['# ---- authorize-namespace', AU.ops['authorize-namespace'],
+      const runAuth = (env) => bash(['# ---- authorize-prelude', AU.ops['authorize-prelude'],
+        '# ---- authorize-namespace', AU.ops['authorize-namespace'],
         'echo "::PTR::$PTR"', 'echo "::CLAIMS::$CLAIMS"', 'echo "::C::$C"', 'echo "::A::$A"', 'echo "::ADONE::"'].join('\n'),
       a1.dir, Object.assign({ TASK_ID: 'TASK-10', ARC: '' }, env));
       const mk = (out, n) => { const m = out.match(new RegExp('^::' + n + '::(.*)$', 'm')); return m ? m[1] : null; };
@@ -816,6 +843,105 @@ try {
       check('EP-R9 resolving a namespace wrote nothing: the whole runtime tree is byte-identical', treeHash(a1.root) === authBefore);
       check('EP-R9 the ARC and legacy resolutions share no claim path (the two grants are different identities)',
         mk(arcRun.stdout, 'C') !== mk(legRun.stdout, 'C') && mk(arcRun.stdout, 'A') !== mk(legRun.stdout, 'A'));
+    }
+
+    // ══ EP-R11 · A-V5 computes, binds and passes the SELECTED claim root (B6.1) ══════
+    // Caller-side binding only. This proves what the committed authorize-ladder block PASSES; it
+    // makes no claim that phase-gate.js validates or rejects arbitrary --claim-dir values.
+    section('EP-R11 A-V5 computes, binds and passes the selected claim root (executed argv, B6.1)');
+    if (AUTH_TAGS.every((t) => !!AUTH.ops[t])) {
+      const AUTH_SEQ = ['authorize-prelude', 'authorize-namespace', 'authorize-ladder'];
+      const AUTH_SPEC = () => ({
+        snapshots: { 'arc-a-r1': { arcId: 'ARC-A' }, 'legacy-v3': {} },
+        legacyPointer: 'legacy-v3', arcPointers: { 'ARC-A': 'arc-a-r1' }, arcContainers: ['ARC-A'],
+        arcClaims: { 'ARC-A': { 'TASK-10': claimRec('TASK-10', 'WAITING_OWNER_GO', 'arc-a-r1', 'ARC-A') } },
+        legacyClaims: { 'TASK-10': claimRec('TASK-10', 'WAITING_OWNER_GO', 'legacy-v3') }
+      });
+      // gateSrc === null -> the REAL committed phase-gate.js, resolved explicitly (never an unset var).
+      function authRun(label, env, gateSrc) {
+        const repo = mkRepo(label, AUTH_SPEC());
+        const before = treeHash(repo.root);
+        const log = path.join(repo.dir, 'argv.log');
+        let gate = REAL_GATE;
+        if (gateSrc !== null) { const stub = path.join(repo.dir, 'gate-stub.js'); fs.writeFileSync(stub, gateSrc); gate = fwd(stub); }
+        const e = Object.assign({ TASK_ID: 'TASK-10', QA_ARGV_LOG: fwd(log), QA_GATE: gate }, env);
+        const r = runOps(repo, AUTH, AUTH_SEQ, e);
+        return { repo, r, calls: readArgvLog(log), gate, before, after: treeHash(repo.root) };
+      }
+      const aArc = authRun('r11arc', { ARC: 'ARC-A' }, GATE_REC_SRC);
+      const aLeg = authRun('r11leg', { ARC: '' }, GATE_REC_SRC);
+      check('EP-R11 --arc ARC-A: the real authorize-ladder block passes --claim-dir arc-claims/ARC-A/TASK-10' + tail(aArc.r),
+        done(aArc.r) && claimDirOf(aArc.calls, '--ladder') === 'arc-claims/ARC-A/TASK-10');
+      check('EP-R11 no --arc: the same real block passes --claim-dir claims/TASK-10' + tail(aLeg.r),
+        done(aLeg.r) && claimDirOf(aLeg.calls, '--ladder') === 'claims/TASK-10');
+      check('EP-R11 the recorded ladder argv is the REAL committed call (--plan, --task TASK-10, --ladder)',
+        (() => { const c = aArc.calls.find((x) => x.indexOf('--ladder') !== -1) || [];
+          return c.indexOf('--plan') !== -1 && c[c.indexOf('--task') + 1] === 'TASK-10'; })());
+      check('EP-R11 --arc ARC-A: the passed claim-dir is byte-identical to the claim directory the fixture holds',
+        fs.existsSync(path.join(aArc.repo.arcClaims, 'ARC-A', 'TASK-10', 'claim.json')) && claimDirOf(aArc.calls, '--ladder') === 'arc-claims/ARC-A/TASK-10');
+      check('EP-R11 no --arc: the passed claim-dir is byte-identical to the claim directory the fixture holds',
+        fs.existsSync(path.join(aLeg.repo.claims, 'TASK-10', 'claim.json')) && claimDirOf(aLeg.calls, '--ladder') === 'claims/TASK-10');
+      check('EP-R11 the two namespaces never collapse: ARC starts arc-claims/, legacy starts claims/, neither inferred from the other',
+        claimDirOf(aArc.calls, '--ladder') !== claimDirOf(aLeg.calls, '--ladder') && /^arc-claims\//.test(claimDirOf(aArc.calls, '--ladder') || '') &&
+        /^claims\//.test(claimDirOf(aLeg.calls, '--ladder') || '') && !/^arc-claims\//.test(claimDirOf(aLeg.calls, '--ladder') || ''));
+      check('EP-R11 neither run relied on the renderer legacy default: --claim-dir was passed explicitly in both (caller-side binding)',
+        claimDirOf(aArc.calls, '--ladder') !== '(ABSENT)' && claimDirOf(aLeg.calls, '--ladder') !== '(ABSENT)' &&
+        claimDirOf(aArc.calls, '--ladder') !== null && claimDirOf(aLeg.calls, '--ladder') !== null);
+      const aCore = authRun('r11core', { ARC: 'CORE-STREAM' }, GATE_REC_SRC);
+      check('EP-R11 --arc CORE-STREAM is REFUSED in authorize-namespace: the ladder is never invoked (zero recorded gate calls)',
+        aCore.r.status === 1 && /REFUSED/.test(aCore.r.out) && aCore.calls.length === 0);
+      const a4 = authRun('r11x4', { ARC: 'ARC-A' }, GATE_EXIT4_SRC);
+      check('EP-R11 gate exit 4 => the block REFUSES A-V5 and exits 1; no ladder is pasted',
+        a4.r.status === 1 && /A-V5 REFUSED/.test(a4.r.out) && !/::DONE::/.test(a4.r.stdout));
+      const aNone = authRun('r11none', { ARC: '' }, null);   // REAL phase-gate.js, legacy snapshot
+      check('EP-R11 a legacy snapshot (no executionProfiles) is exit 0 "profile none (legacy snapshot)" and is explicitly NOT a refusal - run against the REAL committed phase-gate.js' + tail(aNone.r),
+        exists(REL.gate) && aNone.gate === REAL_GATE && done(aNone.r) &&
+        /PHASE-GATE\s+task TASK-10/.test(aNone.r.stdout) &&
+        /profile none \(legacy snapshot\)/.test(aNone.r.stdout) && !/A-V5 REFUSED/.test(aNone.r.out));
+      check('EP-R11 A-V5 wrote nothing: every temp runtime tree is byte-identical before and after (step 6 is the first write)',
+        [aArc, aLeg, aCore, a4, aNone].every((x) => x.after === x.before));
+    }
+
+    // ══ EP-R12 · the resume re-bind renders the SELECTED namespace (B6.1) ══════════
+    section('EP-R12 the resume re-bind renders the selected namespace (previously untagged fence, B6.1)');
+    if (CP.ops['step9b-resume-rebind']) {
+      const REBIND_SEQ = RESUME_SEQ.concat(['step9b-resume-rebind']);
+      // The resumed claim HOLDS CODE:index-html: step9-resume verifies the pair and leaves the holder
+      // untouched, so "nothing released" is observable rather than vacuous. One namespace per fixture -
+      // classes are global, so a single holder can only ever match one owner pair.
+      const RSPEC = (arc) => ({
+        snapshots: { 'arc-a-r1': { arcId: 'ARC-A' }, 'legacy-v3': {} },
+        legacyPointer: 'legacy-v3', arcPointers: { 'ARC-A': 'arc-a-r1' }, arcContainers: ['ARC-A'],
+        arcClaims: arc ? { 'ARC-A': { 'TASK-10': claimRec('TASK-10', 'CLAIMED', 'arc-a-r1', 'ARC-A', null, ['CODE:index-html']) } } : { 'ARC-A': {} },
+        legacyClaims: arc ? {} : { 'TASK-10': claimRec('TASK-10', 'CLAIMED', 'legacy-v3', null, null, ['CODE:index-html']) },
+        mutex: { 'CODE:index-html': holderRec('TASK-10', arc || null) }
+      });
+      const HOLDER = (repo) => path.join(repo.root, 'mutex', 'CODE__index-html', 'holder.json');
+      function rebind(label, arc, gateSrc) {
+        const repo = mkRepo(label, RSPEC(arc));
+        const mutexDir = path.join(repo.root, 'mutex');
+        const mutexBefore = treeHash(mutexDir);
+        const holderBefore = fs.readFileSync(HOLDER(repo));
+        const log = path.join(repo.dir, 'argv.log');
+        const g = path.join(repo.dir, 'gate.js'); fs.writeFileSync(g, gateSrc);
+        const r = runOps(repo, CP, REBIND_SEQ, { TASK_ID: 'TASK-10', RESUME: '1', ARC: arc || '', QA_GATE: fwd(g), QA_ARGV_LOG: fwd(log) });
+        return { repo, r, calls: readArgvLog(log), mutexBefore, mutexAfter: treeHash(mutexDir), holderBefore,
+          holderAfter: fs.existsSync(HOLDER(repo)) ? fs.readFileSync(HOLDER(repo)) : null };
+      }
+      const rArc = rebind('r12arc', 'ARC-A', GATE_REC_SRC);
+      const rLeg = rebind('r12leg', '', GATE_REC_SRC);
+      check('EP-R12 --arc ARC-A: the resume re-bind passes --claim-dir arc-claims/ARC-A/TASK-10' + tail(rArc.r),
+        done(rArc.r) && claimDirOf(rArc.calls, '--ladder') === 'arc-claims/ARC-A/TASK-10');
+      check('EP-R12 no --arc: the resume re-bind passes --claim-dir claims/TASK-10' + tail(rLeg.r),
+        done(rLeg.r) && claimDirOf(rLeg.calls, '--ladder') === 'claims/TASK-10');
+      check('EP-R12 each re-bind names the claim directory step9-resume actually resumed - one namespace per invocation, never two',
+        claimDirOf(rArc.calls, '--ladder') !== claimDirOf(rLeg.calls, '--ladder') &&
+        fs.existsSync(path.join(rArc.repo.arcClaims, 'ARC-A', 'TASK-10', 'claim.json')) &&
+        fs.existsSync(path.join(rLeg.repo.claims, 'TASK-10', 'claim.json')));
+      const rFail = rebind('r12fail', 'ARC-A', GATE_EXIT4_SRC);
+      check('EP-R12 a failed re-bind on resume is BLOCKED at exit 0 (the documented divergence from step 1b IDLE) and releases nothing: the seeded holder (ARC-A, TASK-10) and the whole mutex tree survive byte-identical',
+        ok(rFail.r) && /BLOCKED - profile binding failed on resume/.test(rFail.r.stdout) &&
+        rFail.mutexAfter === rFail.mutexBefore && rFail.holderAfter !== null && rFail.holderAfter.equals(rFail.holderBefore));
     }
 
     // ══ EP-R7 · RETIRE POINTER ═════════════════════════════════════════════════════════════
@@ -896,7 +1022,7 @@ try {
     const t = readText(REL.docs.runner);
     return /'qa\/arc_runtime_ops_offline\.js'/.test(t) && t.indexOf("'qa/arc_multi_arc_offline.js'") < t.indexOf("'qa/arc_runtime_ops_offline.js'");
   })());
-  check('scope phase-gate.js needed no B6 change: it already accepts --claim-dir, validates a <namespace>/.../<TASK-ID> shape and flags legacyNamespace',
+  check('scope phase-gate.js needed no B6/B6.1 change: it accepts --claim-dir and flags legacyNamespace; the <namespace>/.../<TASK-ID> shape check lives in resolveScope, so it runs on the --scope / --phase paths and NOT on --ladder (source-presence check only; --ladder validation is a deferred B6.2 candidate)',
     exists(REL.gate) && /--claim-dir/.test(readText(REL.gate)) && /legacyNamespace/.test(readText(REL.gate)) && /claim-dir must end with/.test(readText(REL.gate)));
   for (const f of REL.forbidden) {
     const head = gitShow(f);

@@ -35,9 +35,23 @@ worker prints it in its `WAITING_OWNER_GO` report.
 
 ## Procedure
 
+Every executable block is tagged `# @op <name>` on its first line.
+`qa/arc_runtime_ops_offline.js` extracts the tagged blocks and **executes them with Git Bash**
+against temp git repositories and temp runtime roots (D-31) — the QA proves the real sequence,
+never a mirror of it. The only thing it re-points after the prelude is the path variable `GATE`
+(to the checked-out script); every other command runs verbatim.
+
+```bash
+# @op authorize-prelude   (the single derivation of the repo-level paths; reads nothing under $ROOT)
+COMMON="$(git rev-parse --path-format=absolute --git-common-dir)"
+ROOT="$COMMON/arc-runtime"
+REPO="$(dirname "$COMMON")"
+MAIN_WT="$REPO"
+GATE="$REPO/.claude/skills/arc-worker/scripts/phase-gate.js"
+```
+
 ```bash
 # @op authorize-namespace   (resolves the one namespace this grant lives in; reads nothing)
-ROOT="$(git rev-parse --path-format=absolute --git-common-dir)/arc-runtime"
 case "${ARC:-}" in
   "")           PTR="$ROOT/plans/current.json";           CLAIMS="$ROOT/claims" ;;
   CORE-STREAM)  echo "REFUSED - CORE-STREAM is the registry index entry for the legacy stream, never a runtime arcId"; exit 1 ;;
@@ -45,6 +59,21 @@ case "${ARC:-}" in
 esac
 C="$CLAIMS/$TASK_ID/claim.json"
 A="$CLAIMS/$TASK_ID/authorized.json"
+```
+
+```bash
+# @op authorize-ladder   (step 5a / A-V5: computes, binds and passes the SELECTED claim root)
+# The ladder is approval evidence pasted verbatim, so it must render the claim root of the
+# namespace this grant lives in. Resolve it from $CLAIMS - never from the renderer's legacy default.
+PLAN_ID=$(grep -o '"planId"[[:space:]]*:[[:space:]]*"[^"]*"' "$PTR" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+PLAN="$ROOT/plans/$PLAN_ID/plan.json"
+CLAIM_DIR_REL="${CLAIMS#"$ROOT/"}/$TASK_ID"
+node "$GATE" --plan "$PLAN" --task "$TASK_ID" --ladder --claim-dir "$CLAIM_DIR_REL"; RC=$?
+case $RC in
+  0) : ;;   # W-V10 verified, or "profile none (legacy snapshot)" - explicitly NOT a refusal
+  4) echo "A-V5 REFUSED - $TASK_ID profile binding (profile-binding-missing | profile-hash-mismatch)"; exit 1 ;;
+  *) echo "REFUSED - phase-gate usage/IO error $RC"; exit 1 ;;
+esac
 ```
 
 ```
@@ -63,13 +92,12 @@ A="$CLAIMS/$TASK_ID/authorized.json"
      else                                                     -> REFUSE
 5. The task's row in the published plan still declares requiresOwnerGo: true
      else                                                     -> REFUSE     [A-V4]
-5a. Profile binding (P-C): node "$MAIN_WT/.claude/skills/arc-worker/scripts/phase-gate.js"
-        --plan "$ROOT/plans/<planId>/plan.json" --task <TASK-ID> --ladder
-        --claim-dir "${CLAIMS#$ROOT/}/<TASK-ID>"
-     exit 0 "W-V10 verified"                  -> paste the ladder into the report
-     exit 0 "profile none (legacy snapshot)"  -> report "profile none", no refusal
-     exit 4 (profile-binding-missing |
-             profile-hash-mismatch)            -> REFUSE     [A-V5]
+5a. Profile binding (P-C), A-V5: run the tagged `authorize-ladder` block above. It computes
+    CLAIM_DIR_REL from the SELECTED $CLAIMS and passes it explicitly on --claim-dir.
+     gate exit 0 "W-V10 verified"                  -> paste the ladder into the report
+     gate exit 0 "profile none (legacy snapshot)"  -> report "profile none", no refusal
+     gate exit 4 (profile-binding-missing |
+                  profile-hash-mismatch)            -> REFUSE     [A-V5]
 6. write authorized.json.tmp (carrying arcId iff --arc) ; mv -f -> authorized.json
 7. write claim.json.tmp (state=AUTHORIZED, stateHistory appended) ; mv -f
 8. Emit the report from templates/authorize-report.md
