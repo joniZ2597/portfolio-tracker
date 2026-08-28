@@ -610,12 +610,21 @@ try {
     ['SUPERSEDED-BY 2026-08-09_lab-e2e-experiment-backlog-v2.COWORK.md', 'SUPERSEDED'],
     ['**HOLD** by owner ruling 2026-08-14 — no ARC, no slices, no Tool Contract/Registry v0', 'HOLD'],
     ['SPEC REGISTERED — implementation requires separate Main Control authorization', 'REGISTERED'],
-    ['RATIFIED PLAN — implementation per batch GO', 'RATIFIED']
+    ['RATIFIED PLAN — implementation per batch GO', 'RATIFIED'],
+    // VERIFIED-GREEN (2026-08-29): authoring-time result, no git lifecycle encoded. The first
+    // fixture is the verbatim frozen Status of 2026-08-29_wu-scope-guard-unblock.MAIN.md — note the
+    // backtick after the em dash, which is why the pattern cannot span `npm run qa:offline`.
+    ['**GREEN — `npm run qa:offline` exit 0. Six-file surface only. NOT committed, NOT pushed, NOT deployed.**', 'VERIFIED-GREEN'],
+    ['GREEN - qa:offline exit 0, ASCII-hyphen separator', 'VERIFIED-GREEN']
   ];
   const auNegatives = [
     'M1 ARTIFACTS AUTHORED under Step-0 Owner GO · pilot NOT launched',
     '**Retrospective only. No process change enacted. No follow-up implemented. No protocol, schema or profile amended.**',
     'FOO BAR BAZ',
+    // VERIFIED-GREEN must not over-reach: `GREEN` is a substring of both of these, and only the
+    // separator anchor keeps them UNKNOWN.
+    'GREENFIELD REFACTOR NOTES',
+    'EVERGREEN BACKLOG',
     ''
   ];
   const auBadFix = auFixtures.filter((f) => auNormalize(f[0]) !== f[1]).map((f) => f[1] + '<-got:' + auNormalize(f[0]));
@@ -623,6 +632,11 @@ try {
   const auBadNeg = auNegatives.filter((s) => auNormalize(s) !== 'UNKNOWN');
   check('D10-k genuinely unmapped forms stay UNKNOWN - no over-reach (' + (auBadNeg.join(' | ') || 'none') + ')', auBadNeg.length === 0);
   check('D10-k a missing Status key normalizes to UNKNOWN', auNormalize(auStatusOf('# HANDOFF - x\n- From: MAIN\n')) === 'UNKNOWN');
+  const auVg = auRows.filter((r) => r.cls === 'VERIFIED-GREEN');
+  check('D10-n VERIFIED-GREEN appears exactly once and is the LAST mapped row, immediately before the terminal UNKNOWN (any earlier position would steal the `QA GREEN` strings owned by IMPLEMENTED-UNCOMMITTED / IMPLEMENTED-COMMITTED)',
+    auVg.length === 1 && auClsList[auClsList.length - 2] === 'VERIFIED-GREEN' && auClsList[auClsList.length - 1] === 'UNKNOWN');
+  check('D10-n VERIFIED-GREEN patterns are separator-anchored, never the bare word (bare `GREEN` would capture GREENFIELD / EVERGREEN by substring): ' + (auVg.length ? auVg[0].patterns.join(' | ') : 'row absent'),
+    auVg.length === 1 && auVg[0].patterns.length > 0 && auVg[0].patterns.every((p) => /^GREEN\s\S/.test(p)));
   check('D10-k the bold-field variant is read only when no `- Status:` key exists',
     auStatusOf('# H\n**Status:** IMPLEMENTATION GREEN\n') === 'IMPLEMENTATION GREEN' && auStatusOf('# H\n- Status: OPEN\n**Status:** CLOSED PASS\n') === 'OPEN');
 

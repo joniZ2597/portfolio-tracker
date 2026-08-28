@@ -161,7 +161,17 @@ placeholder (`SUPERSEDED-BY <file>`) matches on its literal prefix.
 | `HOLD` | `HOLD`, `PARKED`, `DEFERRED`, `BLOCKED` |
 | `APPROVED-NOT-STARTED` | `APPROVED` without a `CLOSED`/`COMPLETE` marker |
 | `REGISTERED` | `SPEC REGISTERED`, `REGISTERED` |
+| `VERIFIED-GREEN` | `GREEN —`, `GREEN -` |
 | `UNKNOWN` | anything else → **flag for owner ruling** |
+
+`VERIFIED-GREEN` is an **authoring-time result** class: it records that the work was verified green
+at the moment the artifact was frozen. It carries no git or deployment meaning — that lifecycle is a
+separate axis, derived at audit time and never stored in a frozen Status. Two properties of the row
+are load bearing. Its patterns anchor on the separator (`GREEN —`, `GREEN -`) rather than the bare
+word, because substring matching would otherwise capture `GREENFIELD` and `EVERGREEN`. And its
+position as the **last mapped row before `UNKNOWN`** keeps every other class ahead of it: placed any
+earlier it would steal the `QA GREEN` strings that belong to `IMPLEMENTED-UNCOMMITTED` and
+`IMPLEMENTED-COMMITTED`.
 
 Compound and qualified strings are real and must not be flattened — e.g.
 `RATIFIED EXCEPT FOR STEP-4-DEPENDENT SYNTHESIS SHAPE` normalizes to `RATIFIED`
