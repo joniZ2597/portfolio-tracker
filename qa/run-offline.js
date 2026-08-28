@@ -3589,6 +3589,133 @@ function phaseScoreContract() {
   }
 }
 
+// ── Phase 14 — Provider policy (WU-PROV / PROV-PROXY) ───────────────────────
+// Owner provider-fallback ruling 2026-08-28: public / anonymous CORS proxies are
+// NOT an approved production fallback, and production data must not be routed
+// through an uncontrolled public proxy. The only approved market-data source is
+// the first-party Netlify Function. If it cannot supply data the code must fail
+// closed — never fabricate, never silently substitute an uncontrolled source —
+// preserving the existing honest failure behaviour (throw, so callers degrade to
+// [] / null). Every expectation below is hand-authored against that ruling and is
+// never captured from output. Static reachability plus behavioural proof; the
+// helper is driven with a stub fetch, so this phase makes no network call.
+async function phaseProviderPolicy() {
+  header('Phase 14 - Provider policy (WU-PROV)');
+
+  const content = read('index.html');
+  if (content === null) {
+    fail('provider-policy', 'index.html is missing');
+    return;
+  }
+
+  let total = 0;
+  let okCount = 0;
+  function check(name, cond) {
+    total += 1;
+    if (cond) { okCount += 1; } else { fail('provider-policy', 'assertion failed: ' + name); }
+  }
+
+  function countOf(hay, needle) {
+    let n = 0;
+    let i = hay.indexOf(needle);
+    while (i !== -1) { n += 1; i = hay.indexOf(needle, i + needle.length); }
+    return n;
+  }
+
+  // ── static reachability: no public-proxy hostname survives anywhere ──
+  (function () {
+    const PUBLIC_PROXY_HOSTS = [
+      'api.allorigins.win', 'allorigins.win', 'corsproxy.io', 'cors-anywhere',
+      'thingproxy', 'whateverorigin', 'crossorigin.me', 'api.codetabs.com',
+      'jsonp.afeld.me', 'yacdn.org', 'proxy.cors.sh'
+    ];
+    PUBLIC_PROXY_HOSTS.forEach(function (h) {
+      check('index.html has zero occurrences of public proxy host "' + h + '"', countOf(content, h) === 0);
+    });
+    // The two identifiers that carried the proxy list and the undefined-guard default.
+    check('the _YAHOO_PROXIES identifier no longer exists in index.html', countOf(content, '_YAHOO_PROXIES') === 0);
+    check('the YAHOO_PROXY identifier no longer exists in index.html', countOf(content, 'YAHOO_PROXY') === 0);
+    // A typeof-undefined guard around a proxy list is the exact shape that re-admits
+    // a hardcoded public-proxy default when the list is absent.
+    check('no `typeof _YAHOO_PROXIES` undefined-guard remains', !/typeof\s+_YAHOO_PROXIES/.test(content));
+  })();
+
+  // ── behavioural: extract the real helper and drive it with a stub fetch ──
+  const src = extractFunctionSource(content, 'fetchYahooChart');
+  if (!src) {
+    fail('provider-policy', 'could not extract fetchYahooChart from index.html');
+    return;
+  }
+
+  check('fetchYahooChart source contains no absolute http(s) URL literal', !/https?:\/\//.test(src));
+  check('fetchYahooChart still names the first-party market-data function', src.indexOf('/.netlify/functions/market-data') !== -1);
+
+  let makeFn;
+  try {
+    // eslint-disable-next-line no-new-func
+    const factory = new Function('fetch', 'AbortSignal', 'console', src + '\nreturn fetchYahooChart;');
+    makeFn = function (fetchImpl) {
+      return factory(
+        fetchImpl,
+        { timeout: function () { return { __stubSignal: true }; } },
+        { log: function () {}, warn: function () {}, error: function () {} }
+      );
+    };
+  } catch (e) {
+    fail('provider-policy', 'factory build error: ' + e.message);
+    return;
+  }
+
+  async function run(responder) {
+    const urls = [];
+    const fn = makeFn(function (url) {
+      urls.push(String(url));
+      return responder(String(url));
+    });
+    let value = null;
+    let rejected = false;
+    try {
+      value = await fn('AAPL', '1d', '5d', 10000);
+    } catch (e) {
+      rejected = true;
+    }
+    return { urls: urls, value: value, rejected: rejected };
+  }
+
+  const CHART_OK = { chart: { result: [{ meta: { regularMarketPrice: 1 } }] } };
+  const okRes   = function () { return Promise.resolve({ ok: true,  status: 200, json: function () { return Promise.resolve(CHART_OK); } }); };
+  const http500 = function () { return Promise.resolve({ ok: false, status: 500, json: function () { return Promise.resolve({}); } }); };
+  const noChart = function () { return Promise.resolve({ ok: true,  status: 200, json: function () { return Promise.resolve({ error: 'invalid ticker' }); } }); };
+  const netDown = function () { return Promise.reject(new Error('network down')); };
+
+  const FIRST_PARTY = '/.netlify/functions/market-data';
+
+  // ── success: the approved source is attempted first and its payload returned ──
+  const s = await run(okRes);
+  check('success: the first request goes to the first-party market-data function', s.urls.length > 0 && s.urls[0].indexOf(FIRST_PARTY) === 0);
+  check('success: exactly one request is made', s.urls.length === 1);
+  check('success: the parsed first-party payload is returned unmodified', s.rejected === false && s.value === CHART_OK);
+
+  // ── three distinct first-party failure modes: all fail closed, none falls back ──
+  const FAILURES = [
+    { name: 'HTTP 500', responder: http500 },
+    { name: '200 with no chart result', responder: noChart },
+    { name: 'network error', responder: netDown }
+  ];
+  for (const f of FAILURES) {
+    const r = await run(f.responder);
+    check('failure (' + f.name + '): rejects rather than returning data', r.rejected === true);
+    check('failure (' + f.name + '): exactly one request - no fallback attempt', r.urls.length === 1);
+    check('failure (' + f.name + '): the only request was the first-party path', r.urls.length === 1 && r.urls[0].indexOf(FIRST_PARTY) === 0);
+    check('failure (' + f.name + '): no request leaves the first party (no absolute URL)', r.urls.every(function (u) { return u.indexOf('://') === -1; }));
+    check('failure (' + f.name + '): no chart data is synthesized', r.value === null || !(r.value && r.value.chart));
+  }
+
+  if (okCount === total) {
+    pass(total + ' provider-policy assertion(s) passed');
+  }
+}
+
 async function main() {
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
@@ -3606,6 +3733,7 @@ async function main() {
   phaseNeedsAttention();
   phaseTechScore();
   phaseScoreContract();
+  await phaseProviderPolicy();
 
   console.log('\n=== Summary ===');
 

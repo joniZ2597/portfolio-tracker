@@ -29,6 +29,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
+const { authorizedProductWrite } = require('./lib/arc-scope-authorization.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const WORKER_DIR = '.claude/skills/arc-worker';
@@ -1016,6 +1017,157 @@ try {
   check('docs owner-ops.md section 8 residue table covers arc-claims/', /arc-claims\//.test(ownerText));
   check('docs A-V5 / phase-gate ladder wording from B2 is intact in arc-authorize/SKILL.md', /A-V5/.test(as) && /phase-gate\.js/.test(as) && /--ladder/.test(as));
 
+  // ══ scope authorization — qa/lib/arc-scope-authorization.js (deny-by-default) ═════════════
+  // The five ARC suites pin `index.html` to HEAD. An edit made under a live, owner-issued ARC
+  // authorization is legitimate and must not fail the tree; everything else must still fail.
+  //
+  // Construction: every negative below is the ALLOW control with a single targeted deviation,
+  // chosen to reach its OWN branch rather than tripping an earlier one. Two fixtures carry a
+  // second flag, for coherence rather than for extra coverage: `noClaim` also suppresses the
+  // authorized record, which lives inside the claim directory being omitted; and the traversal
+  // fixture pairs an unsafe planId with `noPlan` so nothing is ever written through an
+  // unnormalized path segment. A degenerate always-allow predicate fails every negative; a
+  // degenerate always-deny predicate fails the controls. Neither can pass this section.
+  section('scope authorization (deny-by-default; every negative is the control with one targeted deviation)');
+  {
+    const SA = require('./lib/arc-scope-authorization.js');
+    const HEAD_FIX = 'a'.repeat(40);
+    const CLASS_DIR = 'CODE__index-html';
+    const rdSafe = (f) => { try { return JSON.parse(stripCR(fs.readFileSync(f, 'utf8'))); } catch (_) { return null; } };
+
+    function mkChain(mut) {
+      mut = mut || {};
+      const rr = path.join(tmp('scopeauth'), 'arc-runtime');
+      const arcId = 'arcId' in mut ? mut.arcId : 'ARC-A';
+      const taskId = mut.taskId || 'T-CODE';
+      const planId = mut.planId || 'arc-a-r1-2026-08-29';
+      const planFile = path.join(rr, 'plans', planId, 'plan.json');
+      let planHash = 'f'.repeat(64);
+      if (!mut.noPlan) {
+        wrJson(planFile, {
+          planId: planId, repoRef: 'repoRef' in mut ? mut.repoRef : HEAD_FIX, arcId: arcId,
+          executionProfiles: { 'MAIN-CODE-SLICE': { profileId: 'MAIN-CODE-SLICE', scope: { writes: mut.writes || ['index.html', 'qa/**'] } } },
+          tasks: [{ id: mut.noTask ? 'A-DIFFERENT-TASK' : taskId, executionProfile: mut.profileRef || 'MAIN-CODE-SLICE', mutexes: ['CODE:index-html'] }]
+        });
+        // Corrupt BEFORE hashing, so claim.planHash matches the corrupt bytes and the predicate
+        // reaches the JSON-parse branch instead of denying earlier on a hash mismatch.
+        if (mut.planCorrupt) fs.writeFileSync(planFile, 'not json\n');
+        planHash = sha256(fs.readFileSync(planFile));
+      }
+      if (mut.planHash) planHash = mut.planHash;
+      const claimDir = arcId ? path.join(rr, 'arc-claims', arcId, taskId) : path.join(rr, 'claims', taskId);
+      if (!mut.noClaim) {
+        const claim = {
+          taskId: taskId, lane: 'MAIN', planId: planId, planHash: planHash, conversationId: 'c',
+          startedAt: '2026-08-29T00:00:00Z', mutexes: 'mutexes' in mut ? mut.mutexes : ['CODE:index-html'],
+          state: mut.state || 'AUTHORIZED', reason: null, mutexesReleasedAt: null
+        };
+        if (arcId) claim.arcId = arcId;
+        // Written at the holder-derived directory, then patched, so a field mismatch is reached
+        // as a field mismatch and not as a missing claim.
+        wrJson(path.join(claimDir, 'claim.json'), Object.assign(claim, mut.claimPatch || {}));
+        if (!mut.noAuthorized) {
+          // planHash deviates ONLY when authPlanHash is set; claim.planHash and the plan bytes
+          // stay untouched, so that fixture reaches the authorized-record correlation check.
+          const au = { taskId: mut.authTaskId || taskId, planId: mut.authPlanId || planId, planHash: mut.authPlanHash || planHash, authorizedAt: '2026-08-29T00:00:00Z', authorizedBy: mut.authorizedBy || 'owner' };
+          if (arcId) au.arcId = arcId;
+          wrJson(path.join(claimDir, 'authorized.json'), au);
+        }
+      }
+      if (!mut.noHolder) {
+        const h = { taskId: 'holderTaskId' in mut ? mut.holderTaskId : taskId, lane: 'MAIN', acquiredAt: '2026-08-29T00:00:00Z' };
+        const ha = 'holderArcId' in mut ? mut.holderArcId : arcId;
+        if (ha) h.arcId = ha;
+        wrJson(path.join(rr, 'mutex', CLASS_DIR, 'holder.json'), h);
+      }
+      if (mut.corrupt) fs.writeFileSync(path.join(rr, mut.corrupt), 'not json\n');
+      return rr;
+    }
+    const ask = (rr, p) => SA.authorizedProductWrite(p || 'index.html', { runtimeRoot: rr, headSha: HEAD_FIX });
+    const denies = (mut, p) => { const r = ask(mkChain(mut), p); return r.authorized === false && typeof r.reason === 'string' && r.reason.length > 0; };
+
+    // ── controls: a degenerate always-deny predicate dies here ──
+    const ctl = ask(mkChain());
+    check('SA control: complete owner-AUTHORIZED chain (holder -> claim -> authorized.json -> plan -> profile.scope.writes) ALLOWS and names arc/task/plan',
+      ctl.authorized === true && ctl.arcId === 'ARC-A' && ctl.taskId === 'T-CODE' && ctl.planId === 'arc-a-r1-2026-08-29');
+    check('SA control: the legacy (arcId null) chain under claims/<TASK-ID> ALLOWS and reports arcId null',
+      (() => { const r = ask(mkChain({ arcId: null })); return r.authorized === true && r.arcId === null && r.taskId === 'T-CODE'; })());
+
+    // ── holder resolution: the chain STARTS at the live holder, never at a historical claim ──
+    check('SA holder absent ⇒ DENY (no live CODE:index-html holder means no live authorization)', denies({ noHolder: true }));
+    check('SA holder malformed JSON ⇒ DENY, never a throw', denies({ corrupt: 'mutex/' + CLASS_DIR + '/holder.json' }));
+    check('SA holder.taskId empty ⇒ DENY', denies({ holderTaskId: '' }));
+    check('SA holder.taskId is not a safe single path segment ⇒ DENY (no traversal out of the claims root)', denies({ holderTaskId: '../../evil' }));
+    check('SA holder names a task that has no claim directory ⇒ DENY (resolution never falls back to another claim)', denies({ holderTaskId: 'OTHER-TASK' }));
+    check('SA holder names an arc that has no claim directory ⇒ DENY', denies({ holderArcId: 'ARC-B' }));
+    check('SA holder carries no arcId while the claim lives in arc-claims/ ⇒ DENY (resolution stays in the legacy namespace; namespaces never collapse)', denies({ holderArcId: null }));
+    check('SA claim.taskId field != holder.taskId ⇒ DENY (claim present at the holder path, internal field mismatched)', denies({ claimPatch: { taskId: 'OTHER-TASK' } }));
+    check('SA claim.arcId field != holder.arcId ⇒ DENY (claim present at the holder path, internal field mismatched)', denies({ claimPatch: { arcId: 'ARC-B' } }));
+
+    // ── claim state: AUTHORIZED only. COMPLETE is explicitly NOT an exemption (owner ruling) ──
+    for (const st of ['CLAIMED', 'WAITING_OWNER_GO', 'BLOCKED', 'COMPLETE', 'ABANDONED']) {
+      check('SA claim.state ' + st + ' ⇒ DENY (only AUTHORIZED exempts; COMPLETE deliberately does not)', denies({ state: st }));
+    }
+    check('SA claim absent ⇒ DENY', denies({ noClaim: true }));
+    check('SA claim malformed JSON ⇒ DENY, never a throw', denies({ corrupt: 'arc-claims/ARC-A/T-CODE/claim.json' }));
+    check('SA claim does not declare CODE:index-html ⇒ DENY', denies({ mutexes: [] }));
+    check('SA claim declares only an unrelated class ⇒ DENY', denies({ mutexes: ['CODE:netlify-functions'] }));
+
+    // ── owner authorization record ──
+    check('SA authorized.json absent ⇒ DENY', denies({ noAuthorized: true }));
+    check('SA authorized.json malformed JSON ⇒ DENY, never a throw', denies({ corrupt: 'arc-claims/ARC-A/T-CODE/authorized.json' }));
+    check('SA authorizedBy != owner ⇒ DENY (a worker may never mint its own exemption)', denies({ authorizedBy: 'worker' }));
+    check('SA authorized.json taskId != claim taskId ⇒ DENY', denies({ authTaskId: 'OTHER-TASK' }));
+    check('SA authorized.json planId != claim planId ⇒ DENY', denies({ authPlanId: 'other-plan-r1' }));
+    check('SA authorized.json planHash != claim.planHash ⇒ DENY (plan bytes and claim.planHash both untouched, so this is the authorized-record correlation)', denies({ authPlanHash: 'd'.repeat(64) }));
+
+    // ── published plan identity ──
+    check('SA plan absent ⇒ DENY', denies({ noPlan: true }));
+    check('SA plan malformed JSON, hash matching the corrupt bytes ⇒ DENY at the parse branch, never a throw', denies({ planCorrupt: true }));
+    check('SA plan bytes do not hash to claim.planHash ⇒ DENY', denies({ planHash: 'b'.repeat(64) }));
+    check('SA plan.repoRef != HEAD ⇒ DENY (this is what expires the exemption once the edit is committed)', denies({ repoRef: 'c'.repeat(40) }));
+    check('SA claim.planId is not a safe single path segment ⇒ DENY before any filesystem read (no traversal out of plans/)', denies({ planId: '../../../etc', noPlan: true }));
+
+    // ── execution profile scope ──
+    check('SA claim taskId is not present in plan.tasks ⇒ DENY', denies({ noTask: true }));
+    check('SA executionProfile does not resolve in plan.executionProfiles ⇒ DENY', denies({ profileRef: 'NO-SUCH-PROFILE' }));
+    check('SA profile.scope.writes does not list index.html ⇒ DENY', denies({ writes: ['qa/**'] }));
+    check('SA profile.scope.writes lists a glob that merely looks like it covers index.html ⇒ DENY (literal membership only)', denies({ writes: ['*.html'] }));
+
+    // ── path + root handling ──
+    check('SA unknown product path ⇒ DENY (the class table is closed; nothing is inferred)', denies({}, 'netlify/functions/market-data.js'));
+    check('SA runtime root absent ⇒ DENY', (() => { const r = SA.authorizedProductWrite('index.html', { runtimeRoot: path.join(tmp('sa-none'), 'absent'), headSha: HEAD_FIX }); return r.authorized === false && typeof r.reason === 'string' && r.reason.length > 0; })());
+
+    // ── composite: exactly how the five guards consume the predicate ──
+    // Only the contingent halves are asserted. `identical === true` short-circuits the disjunction,
+    // so a "passes when byte-identical" check could never fail and is deliberately NOT written.
+    const guard = (identical, auth) => identical || auth.authorized === true;
+    check('SA composite: index.html differs from HEAD and authorization DENIES ⇒ the scope guard still FAILS', guard(false, ask(mkChain({ state: 'COMPLETE' }))) === false);
+    check('SA composite: index.html differs from HEAD and authorization ALLOWS ⇒ the scope guard PASSES', guard(false, ask(mkChain())) === true);
+
+    // ── live chain: the gate condition is read INDEPENDENTLY of the predicate, so this is neither
+    //    self-fulfilling nor a time bomb once the holder is released or the claim leaves AUTHORIZED.
+    const liveRoot = abs(REL.runtime);
+    const liveHolder = rdSafe(path.join(liveRoot, 'mutex', CLASS_DIR, 'holder.json'));
+    const liveHead = git(['rev-parse', 'HEAD']);
+    if (liveHolder && typeof liveHolder.taskId === 'string' && liveHead.status === 0) {
+      const live = SA.authorizedProductWrite('index.html', { root: ROOT });
+      console.log('  live CODE:index-html holder ' + (liveHolder.arcId || '(legacy)') + '/' + liveHolder.taskId + ' -> authorized=' + live.authorized + ' [' + live.reason + ']');
+      check('SA live: the predicate resolves the LIVE holder\'s own identity and never some other claim that happens to match',
+        live.authorized === false || (live.taskId === liveHolder.taskId && live.arcId === (liveHolder.arcId || null)));
+      const liveDir = liveHolder.arcId ? path.join(liveRoot, 'arc-claims', liveHolder.arcId, liveHolder.taskId) : path.join(liveRoot, 'claims', liveHolder.taskId);
+      const liveClaim = rdSafe(path.join(liveDir, 'claim.json'));
+      if (liveClaim && liveClaim.state === 'AUTHORIZED' && fs.existsSync(path.join(liveDir, 'authorized.json'))) {
+        check('SA live: the live owner-AUTHORIZED chain ALLOWS index.html and names the holder\'s own arc/task/plan (this is what unblocks an authorized product edit)',
+          live.authorized === true && live.taskId === liveHolder.taskId && live.arcId === (liveHolder.arcId || null) && typeof live.planId === 'string');
+      } else {
+        console.log('  SKIP live-ALLOW check: the live claim is not AUTHORIZED with an owner authorized.json (1 check not run)');
+      }
+    } else {
+      console.log('  SKIP live-chain checks: no readable live CODE:index-html holder (2 checks not run)');
+    }
+  }
+
   // ══ wiring + scope ════════════════════════════════════════════════════════
   section('wiring + scope');
   check('wiring run-offline.js registers qa/arc_runtime_ops_offline.js after qa/arc_multi_arc_offline.js', (() => {
@@ -1029,7 +1181,9 @@ try {
     check('scope unchanged vs HEAD: ' + f, head !== null && exists(f) && sha256(stripCR(readText(f))) === sha256(head));
   }
   const ih = gitShow('index.html');
-  check('scope unchanged vs HEAD: index.html', ih !== null && sha256(stripCR(readText('index.html'))) === sha256(ih));
+  const ihAuth = authorizedProductWrite('index.html', { root: ROOT });
+  check('scope index.html: byte-identical to HEAD, or modified only under a live owner-AUTHORIZED ARC claim holding CODE:index-html whose plan pins repoRef==HEAD and lists index.html in scope.writes [' + ihAuth.reason + ']',
+    (ih !== null && sha256(stripCR(readText('index.html'))) === sha256(ih)) || ihAuth.authorized === true);
   if (LIVE_BEFORE !== null) {
     check('live runtime tree untouched by this suite (no claim, holder, pointer or container written outside os.tmpdir())', treeHash(LIVE_RUNTIME) === LIVE_BEFORE);
     check('live runtime arc-claims/ and plans/arcs/ presence unchanged by this suite (B6 performs zero runtime writes)',

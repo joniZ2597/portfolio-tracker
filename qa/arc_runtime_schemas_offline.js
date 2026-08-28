@@ -25,6 +25,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
+const { authorizedProductWrite } = require('./lib/arc-scope-authorization.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const SCHEMA_DIR = '.claude/skills/arc-publish-plan/references/schemas';
@@ -460,7 +461,9 @@ try {
     check('scope unchanged vs HEAD: ' + f, head !== null && fs.existsSync(abs(f)) && sha256(stripCR(readText(f))) === sha256(head));
   }
   const ih = gitShow('index.html');
-  check('scope unchanged vs HEAD: index.html', ih !== null && sha256(stripCR(readText('index.html'))) === sha256(ih));
+  const ihAuth = authorizedProductWrite('index.html', { root: ROOT });
+  check('scope index.html: byte-identical to HEAD, or modified only under a live owner-AUTHORIZED ARC claim holding CODE:index-html whose plan pins repoRef==HEAD and lists index.html in scope.writes [' + ihAuth.reason + ']',
+    (ih !== null && sha256(stripCR(readText('index.html'))) === sha256(ih)) || ihAuth.authorized === true);
 } finally {
   cleanup();
 }

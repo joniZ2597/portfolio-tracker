@@ -937,11 +937,11 @@ select.edit-inp{appearance:none;cursor:pointer}
  * services/history.js
  * Lightweight historical daily candle fetcher.
  *
- * Uses the same proxy + API infrastructure already present in the
+ * Uses the same first-party API infrastructure already present in the
  * Market State Engine. No new dependencies introduced.
  *
- * Primary:  Yahoo Finance via allorigins.win/raw (same YAHOO_PROXY as pipeline)
- * Fallback: Alpha Vantage TIME_SERIES_DAILY (if AV key is available)
+ * Primary:  Yahoo Finance via the first-party /.netlify/functions/market-data
+ * Fallback: Alpha Vantage TIME_SERIES_DAILY via /.netlify/functions/av-proxy
  *
  * DOES NOT implement: RSI, MA, ATR, RS, intraday, WebSockets, AI logic.
  * DOES NOT modify any existing fetcher, orchestration, or UI code.
@@ -949,16 +949,6 @@ select.edit-inp{appearance:none;cursor:pointer}
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 const _HIST_AV_BASE = 'https://www.alphavantage.co/query';
-
-// Yahoo proxy list — tried sequentially on failure
-const _YAHOO_PROXIES = [
-  // allorigins raw — returns body as-is
-  url => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
-  // allorigins get — returns JSON wrapper { contents, status }
-  url => 'https://api.allorigins.win/get?url=' + encodeURIComponent(url),
-  // corsproxy.io — straightforward CORS proxy
-  url => 'https://corsproxy.io/?' + encodeURIComponent(url),
-];
 
 const RANGE_MAP = {
   '1M': '1mo', '3M': '3mo', '6M': '6mo', '1Y': '1y',
@@ -4444,20 +4434,21 @@ const _mktFailCache = {}; // display-only session flag: true=known failure, fals
 
 // ────────────────────────────────────── STOCK DATA LAYER ──────────────────────────────────────
 
-const YAHOO_PROXY = 'https://api.allorigins.win/raw?url='; // kept for reference
 const AV_BASE     = 'https://www.alphavantage.co/query';
 
 // ── fetchYahooChart: shared Yahoo chart helper ───────────────────────────────
-// Priority 1: Netlify Function (server-side, no CORS).
-// Priority 2: public CORS proxy fallback list.
-// Returns parsed Yahoo chart JSON or throws when all sources fail.
+// Single approved source: the first-party Netlify Function (server-side, no CORS).
+// Public / anonymous CORS proxies are NOT an approved production fallback and must
+// not carry production data (Owner provider-fallback ruling, 2026-08-28). When the
+// approved source cannot supply data this throws rather than fabricating a result
+// or silently substituting an uncontrolled source; callers keep their existing
+// honest failure behaviour. Returns parsed Yahoo chart JSON, or throws.
 async function fetchYahooChart(symbol, interval, range, timeoutMs = 10000) {
   const qs = '?symbol=' + encodeURIComponent(symbol)
     + '&interval=' + encodeURIComponent(interval)
     + '&range='    + encodeURIComponent(range);
   const netlifyUrl = '/.netlify/functions/market-data' + qs;
 
-  // ── Step 1: Netlify Function (primary — no browser CORS issues) ───────────
   try {
     const res = await fetch(netlifyUrl, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -4471,38 +4462,10 @@ async function fetchYahooChart(symbol, interval, range, timeoutMs = 10000) {
     console.warn('[market-data] netlify no chart for ' + symbol + ':', errMsg);
     throw new Error(errMsg);
   } catch (netlifyErr) {
-    console.warn('[market-data] netlify failed for ' + symbol + ':', netlifyErr.message ?? netlifyErr);
-    console.log('[market-data] falling back to public proxies for ' + symbol);
+    const msg = netlifyErr?.message ?? String(netlifyErr);
+    console.warn('[market-data] netlify failed for ' + symbol + ':', msg);
+    throw new Error('market-data unavailable for ' + symbol + ': ' + msg);
   }
-
-  // ── Step 2: public CORS proxy fallback list ───────────────────────────────
-  const yahooUrl = 'https://query1.finance.yahoo.com/v8/finance/chart/'
-    + symbol + '?interval=' + interval + '&range=' + range;
-
-  const proxies = (typeof _YAHOO_PROXIES !== 'undefined')
-    ? _YAHOO_PROXIES
-    : [url => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)];
-
-  for (let i = 0; i < proxies.length; i++) {
-    const proxied = proxies[i](yahooUrl);
-    try {
-      const res = await fetch(proxied, { signal: AbortSignal.timeout(timeoutMs) });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const raw = await res.json();
-      // allorigins /get wraps response in { contents: "...", status: {...} }
-      const data = (raw && typeof raw.contents === 'string')
-        ? JSON.parse(raw.contents)
-        : raw;
-      if (data?.chart?.result?.[0]) {
-        console.log('[yahoo] proxy ' + i + ' OK for ' + symbol);
-        return data;
-      }
-      console.warn('[yahoo] proxy ' + i + ' returned no chart data for ' + symbol);
-    } catch (err) {
-      console.warn('[yahoo] proxy ' + i + ' failed for ' + symbol + ':', err.message ?? err);
-    }
-  }
-  throw new Error('Yahoo: all proxies failed for ' + symbol);
 }
 
 // Validate a stock data object → returns true if all required fields present
