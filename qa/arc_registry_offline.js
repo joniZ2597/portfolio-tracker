@@ -531,6 +531,122 @@ try {
   check('D10 O-2 arc-audit.md template byte-identical to HEAD', gitShow(REL.auditorTemplate) !== null && sha256(stripCR(readText(REL.auditorTemplate))) === sha256(gitShow(REL.auditorTemplate)));
   check('D10 scan-contract sections 1-7 keep their existing rules (README wins; CHECKPOINT never read whole; status classes)', /README wins/.test(scan) && /never read it whole/.test(scan) && /`UNKNOWN`/.test(scan));
 
+  // ── D10-i..D10-m: ARC-era status vocabulary (Wave 0 audit unblock) ─────────
+  // The vocabulary is PARSED OUT OF scan-contract.md section 7, never hardcoded here:
+  // these asserts fail while the contract lacks the rows, which is what makes the
+  // QA-first RED real. Precedence is first-matching-row-wins in table order.
+  section('D10-i..m auditor status vocabulary (live-record validation)');
+  const auFlat = (s) => String(s).replace(/\s+/g, ' ');
+  const auStop = 'more than 20% of scanned artifacts fail header normalization';
+  const auParse = (md) => {
+    const at = md.indexOf('## 7. Status normalization');
+    if (at === -1) return [];
+    const end = md.indexOf('\n## ', at + 5);
+    const seg = md.slice(at, end === -1 ? md.length : end);
+    const rows = [];
+    for (const line of seg.split('\n')) {
+      const m = /^\|\s*`([A-Z][A-Z0-9-]*)`\s*\|\s*(.+?)\s*\|\s*$/.exec(line);
+      if (!m) continue;
+      // A pattern may carry a documented trailing placeholder (`SUPERSEDED-BY <file>`); strip only
+      // that and trim, leaving the literal matchable prefix. filter(Boolean) drops a pattern that
+      // was ONLY a placeholder - an empty pattern would match every string.
+      rows.push({ cls: m[1], patterns: (m[2].match(/`[^`]+`/g) || []).map((x) => x.slice(1, -1).replace(/\s*<[^>]*>\s*$/, '').trim()).filter(Boolean) });
+    }
+    return rows;
+  };
+  const auRows = auParse(scan);
+  const auClsList = auRows.map((r) => r.cls);
+  const auNormalize = (s) => {
+    if (s === null || s === undefined) return 'UNKNOWN';
+    const up = String(s).toUpperCase();
+    for (const row of auRows) for (const p of row.patterns) if (up.indexOf(p.toUpperCase()) !== -1) return row.cls;
+    return 'UNKNOWN';
+  };
+  const auStatusOf = (txt) => {
+    const head = stripCR(txt).split('\n').slice(0, 14);
+    for (const l of head) { const m = /^-\s*Status:\s*(.+)$/.exec(l); if (m) return m[1].trim(); }
+    for (const l of head) { const m = /^\*\*Status:\*\*\s*(.+)$/.exec(l); if (m) return m[1].trim(); }
+    return null;
+  };
+  const auNew = ['PLANNING-SOURCE', 'ACTIVE-SOURCE', 'IMPLEMENTED-UNCOMMITTED',
+    'IMPLEMENTED-COMMITTED', 'REVIEW-RECORD', 'STANDING-POLICY', 'SCOPE-DEFINITION'];
+  const auOld = ['OPEN', 'CLOSED', 'RATIFIED', 'SUPERSEDED', 'HOLD', 'APPROVED-NOT-STARTED', 'REGISTERED', 'UNKNOWN'];
+
+  check('D10-i table parses; all 8 original classes still present', auOld.every((c) => auClsList.indexOf(c) !== -1));
+  check('D10-i all 7 ARC-era classes present exactly once (' + auClsList.length + ' rows parsed)',
+    auNew.every((c) => auClsList.filter((x) => x === c).length === 1));
+  check('D10-i precedence documented: first matching row wins, in table order', /first matching row wins/i.test(scan) && /table order/i.test(scan));
+  check('D10-i PLANNING-SOURCE precedes RATIFIED and HOLD (NOT RATIFIED / rev1 DRAFT-HOLD strings)',
+    auClsList.indexOf('PLANNING-SOURCE') !== -1 && auClsList.indexOf('PLANNING-SOURCE') < auClsList.indexOf('RATIFIED') && auClsList.indexOf('PLANNING-SOURCE') < auClsList.indexOf('HOLD'));
+  check('D10-i UNKNOWN remains the terminal fallback row and is still flagged for owner ruling',
+    auClsList[auClsList.length - 1] === 'UNKNOWN' && /flag for owner ruling/i.test(scan));
+  check('D10-i section 3 documents the bold-field `**Status:**` variant', /\*\*Status:\*\*/.test(scan));
+  check('D10-i `**Task state**` is explicitly NOT a status source (no semantic guessing)',
+    /\*\*Task state\*\*/.test(scan) && /not a status source|never a status source/i.test(scan));
+  const auPct = scan.match(/\b\d+\s*%/g) || [];
+  check('D10-i scan-contract.md carries exactly ONE percentage token - the documentary ">20% abort" cross-reference - and never defines, restates or overrides the threshold (found: ' + (auPct.join(', ') || 'none') + ')',
+    auPct.length === 1
+    && /excluded from the header-normalization denominator\*\* and from the >20% abort/.test(auFlat(scan))
+    && auFlat(scan).indexOf(auStop) === -1
+    && !/\b20\s*%[^.]{0,80}(threshold|stop condition|stop and report)/i.test(auFlat(scan)));
+
+  const auFixtures = [
+    ['**PLANNING SOURCE — revision r1. NOT PROMOTED. NOT PUBLISHED. NOT AUTHORIZED.**', 'PLANNING-SOURCE'],
+    ['**PLANNING SOURCE — revision r2. NOT RATIFIED. NOT PROMOTED. NOT PUBLISHED. Arc remains at PLANNING (rev1 DRAFT/HOLD) until Owner ratification of this artifact.**', 'PLANNING-SOURCE'],
+    ['**ACTIVE ROUTING SOURCE — supersedes 2026-08-15_parallel-arc-execution-plan.COWORK.md**', 'ACTIVE-SOURCE'],
+    ['**ACTIVE PUBLICATION SOURCE — supersedes `2026-08-15_parallel-arc-execution-plan-v2.COWORK.md`**', 'ACTIVE-SOURCE'],
+    ['IMPLEMENTED IN THE WORKING TREE · QA GREEN · COMMIT RECOMMENDED (commit and push are separate owner GOs)', 'IMPLEMENTED-UNCOMMITTED'],
+    ['IMPLEMENTATION GREEN · STATIC REVIEW PASS · **UNCOMMITTED**', 'IMPLEMENTED-UNCOMMITTED'],
+    ['**COMMITTED + PUSHED** · QA GREEN (all figures below were captured on the tree that was committed, byte-for-byte)', 'IMPLEMENTED-COMMITTED'],
+    ['REVIEW RECORD — nothing in this handoff authorizes anything. No promote, no publish, no arc start, no CHECKPOINT change.', 'REVIEW-RECORD'],
+    ['**STANDING POLICY, IN FORCE from 2026-08-28. Temporary — expires when the underlying circularity is mechanically removed.**', 'STANDING-POLICY'],
+    ['**SCOPE DEFINITION — implementation NOT authorized by this artifact**', 'SCOPE-DEFINITION'],
+    ['OPEN', 'OPEN'],
+    ['OPEN — supersedes 2026-08-09_lab-e2e-experiment-backlog.COWORK.md', 'OPEN'],
+    ['CLOSED PASS', 'CLOSED'],
+    ['**CLOSED / RATIFIED**', 'CLOSED'],
+    ['RECON COMPLETE — preparation only', 'CLOSED'],
+    ['SUPERSEDED-BY 2026-08-09_lab-e2e-experiment-backlog-v2.COWORK.md', 'SUPERSEDED'],
+    ['**HOLD** by owner ruling 2026-08-14 — no ARC, no slices, no Tool Contract/Registry v0', 'HOLD'],
+    ['SPEC REGISTERED — implementation requires separate Main Control authorization', 'REGISTERED'],
+    ['RATIFIED PLAN — implementation per batch GO', 'RATIFIED']
+  ];
+  const auNegatives = [
+    'M1 ARTIFACTS AUTHORED under Step-0 Owner GO · pilot NOT launched',
+    '**Retrospective only. No process change enacted. No follow-up implemented. No protocol, schema or profile amended.**',
+    'FOO BAR BAZ',
+    ''
+  ];
+  const auBadFix = auFixtures.filter((f) => auNormalize(f[0]) !== f[1]).map((f) => f[1] + '<-got:' + auNormalize(f[0]));
+  check('D10-j all ' + auFixtures.length + ' observed status forms normalize deterministically (' + (auBadFix.join(', ') || 'none wrong') + ')', auBadFix.length === 0);
+  const auBadNeg = auNegatives.filter((s) => auNormalize(s) !== 'UNKNOWN');
+  check('D10-k genuinely unmapped forms stay UNKNOWN - no over-reach (' + (auBadNeg.join(' | ') || 'none') + ')', auBadNeg.length === 0);
+  check('D10-k a missing Status key normalizes to UNKNOWN', auNormalize(auStatusOf('# HANDOFF - x\n- From: MAIN\n')) === 'UNKNOWN');
+  check('D10-k the bold-field variant is read only when no `- Status:` key exists',
+    auStatusOf('# H\n**Status:** IMPLEMENTATION GREEN\n') === 'IMPLEMENTATION GREEN' && auStatusOf('# H\n- Status: OPEN\n**Status:** CLOSED PASS\n') === 'OPEN');
+
+  // Live-record validation (Codex finding 9). existsSync-guarded: .ai-reports/ is git-excluded.
+  const auHoDir = abs('.ai-reports/handoffs');
+  if (fs.existsSync(auHoDir)) {
+    const auFiles = fs.readdirSync(auHoDir).filter((f) => /\.md$/.test(f) && f !== 'README.local.md');
+    const auUnknown = auFiles.filter((f) => auNormalize(auStatusOf(fs.readFileSync(path.join(auHoDir, f), 'utf8'))) === 'UNKNOWN').sort();
+    const auPinned = [
+      '2026-08-16_g1-clock-seam.MAIN.md',
+      '2026-08-22_ep-pilot-r1-review.MAIN.md',
+      '2026-08-22_lx-2-ep-pilot-wv10.LAB.md',
+      '2026-08-23_ep-pilot-main-closeout.MAIN.md',
+      '2026-08-26_intake-m1-pilot-launch.COWORK.md',
+      '2026-08-28_pilot-close-pc-closeout.MAIN.md'
+    ].sort();
+    const auRate = auFiles.length ? (auUnknown.length * 100) / auFiles.length : 0;
+    console.log('  live corpus: ' + auFiles.length + ' handoffs, ' + auUnknown.length + ' UNKNOWN (' + auRate.toFixed(1) + '%)');
+    check('D10-l residual UNKNOWN set equals the pinned bounded list (' + (auUnknown.join(', ') || 'none') + ')',
+      JSON.stringify(auUnknown) === JSON.stringify(auPinned));
+    check('D10-m live header-normalization failure rate is under the auditor 20% stop threshold (' + auRate.toFixed(1) + '%)', auRate < 20);
+  } else console.log('  (.ai-reports/handoffs absent on this checkout - live-record checks SKIPPED, 2 asserts not run)');
+  check('D10-m authoritative >20% stop condition lives ONLY in SKILL.md: exact sentence exactly once there, absent from scan-contract.md (SKILL.md itself byte-pinned to HEAD by D10-h)',
+    auFlat(stripCR(readText(REL.auditorSkill))).split(auStop).length - 1 === 1 && auFlat(scan).indexOf(auStop) === -1);
+
   // ── local-only seeds (existsSync-guarded; PROPERTIES only, never inventory) ─
   section('local seeds (guarded, property-only)');
   const seedsDir = abs(REL.arcsLocal);

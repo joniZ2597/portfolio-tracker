@@ -85,6 +85,12 @@ Header block, first ~14 lines of each handoff:
 3. Header keys beyond the README template exist in the wild (`- Companion:`,
    `- Sequencing ruling (binding):`). Accept unknown `- <Key>:` lines; never treat one
    as the start of the body.
+4. A handoff may carry the status as a **bold field**, `**Status:** <value>`, instead of the
+   `- Status:` key. Read the bold field **only when no `- Status:` key exists** in the header
+   block — a `- Status:` key always wins.
+   The bold field `**Task state**` is **not a status source**: a task's runtime state is not the
+   artifact's status, and inferring one from the other would be guessing. An artifact carrying
+   neither key normalizes to `UNKNOWN` and is flagged.
 
 Semantics from the README, binding:
 
@@ -133,8 +139,21 @@ queue itself is a staleness finding.
 Status strings are **not a fixed enum**. Normalize to a class; report the raw
 string verbatim alongside it.
 
+**Precedence: rows are evaluated in table order and the first matching row wins.** Rows are
+ordered most-specific first, so a compound ARC-era string is classified by its own row before a
+generic substring inside it can claim it — `PLANNING SOURCE — revision r2. NOT RATIFIED … (rev1
+DRAFT/HOLD)` is `PLANNING-SOURCE`, never `RATIFIED` or `HOLD`. A pattern written with a trailing
+placeholder (`SUPERSEDED-BY <file>`) matches on its literal prefix.
+
 | Class | Matches (case-insensitive, substring) |
 |---|---|
+| `PLANNING-SOURCE` | `PLANNING SOURCE` |
+| `ACTIVE-SOURCE` | `ACTIVE ROUTING SOURCE`, `ACTIVE PUBLICATION SOURCE` |
+| `IMPLEMENTED-UNCOMMITTED` | `IMPLEMENTED IN THE WORKING TREE`, `UNCOMMITTED` |
+| `IMPLEMENTED-COMMITTED` | `COMMITTED + PUSHED`, `COMMITTED, PUSHED` |
+| `REVIEW-RECORD` | `REVIEW RECORD` |
+| `STANDING-POLICY` | `STANDING POLICY` |
+| `SCOPE-DEFINITION` | `SCOPE DEFINITION` |
 | `OPEN` | `OPEN` |
 | `CLOSED` | `CLOSED`, `CLOSED PASS`, `COMPLETE`, `DONE` |
 | `RATIFIED` | `RATIFIED`, `ACCEPTED` |

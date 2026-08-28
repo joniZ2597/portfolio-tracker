@@ -65,7 +65,7 @@ const REL = {
     SKILL_DIR + '/references/execution-profiles/MAIN-CODE-SLICE.json', SKILL_DIR + '/references/execution-profiles/MAIN-GATED-LIVE-QA.json',
     SKILL_DIR + '/references/execution-profiles/OWNER-MANUAL.json',
     '.claude/skills/arc-registry/references/registry-contract.md', '.claude/skills/arc-registry/templates/status-report.md',
-    '.claude/skills/arc-progress-auditor/SKILL.md', '.claude/skills/arc-progress-auditor/references/scan-contract.md', '.claude/skills/arc-progress-auditor/templates/arc-audit.md',
+    '.claude/skills/arc-progress-auditor/SKILL.md', '.claude/skills/arc-progress-auditor/templates/arc-audit.md',
     'netlify.toml'
   ]
 };
