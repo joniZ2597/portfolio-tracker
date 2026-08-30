@@ -62,6 +62,10 @@ const REL = {
     'netlify.toml'
   ]
 };
+// Lines printed with this prefix are echoed by qa/run-offline.js even when this suite PASSES.
+// check() prints only on failure and the runner discards a passing suite's stdout, so without
+// this marker the live-registry governance results would never be visible in `npm run qa:offline`.
+const QA_SURFACE = '@@QA-SURFACE@@ ';
 const abs = (p) => path.join(ROOT, p);
 const exists = (p) => fs.existsSync(abs(p));
 const readText = (p) => fs.readFileSync(abs(p), 'utf8');
@@ -662,9 +666,80 @@ try {
   check('D10-m authoritative >20% stop condition lives ONLY in SKILL.md: exact sentence exactly once there, absent from scan-contract.md (SKILL.md itself byte-pinned to HEAD by D10-h)',
     auFlat(stripCR(readText(REL.auditorSkill))).split(auStop).length - 1 === 1 && auFlat(scan).indexOf(auStop) === -1);
 
-  // ── local-only seeds (existsSync-guarded; PROPERTIES only, never inventory) ─
-  section('local seeds (guarded, property-only)');
+  // ── live registry governance (existsSync-guarded; PROPERTY-based, never inventory) ─
+  // Every directory under the resolved .ai-reports/arcs root is validated - not a named subset.
+  // Entries may be at ANY legal lifecycle state and may mutate while this suite runs (WU-PROV and
+  // WU-VAL are EXECUTING, and WU-VAL is this task's own entry), so no live entry's state, hash or
+  // revision is pinned except through the bounded table below.
+  section('live registry governance (every entry)');
   const seedsDir = abs(REL.arcsLocal);
+  const govBefore = total;
+  // Fixed (non-per-entry) checks in this block: README(1) + CORE-STREAM(3) + EP-PILOT(2)
+  // + registry-consistent(1) + no-CORE-STREAM-runtime(1) + negative controls(2) = 10.
+  // Asserted at the end of the block, so this constant cannot silently drift.
+  const GOV_FIXED_CHECKS = 10;
+  let govEntryChecks = 0;
+
+  // Bounded exemption table - the ONLY way to express an exemption. Adding a row is the only
+  // widening mechanism; there is deliberately no schema relaxation, general rule, regex, wildcard
+  // or arc.json field that can excuse anything.
+  //
+  // NOT to be confused with GRANDFATHER ('CORE-STREAM'), which is the unrelated LIFECYCLE
+  // exemption (promotion null at EXECUTING). This table excuses VALIDATION FAILURES in two
+  // historical records, enumerated per field, and CORE-STREAM has no row here because it conforms.
+  //
+  // Each row pins the whole file by sha256 of its \r-stripped bytes. ANY byte difference fails,
+  // including a change that would make the file conforming: the pin asserts "these exact bytes,
+  // with exactly these known defects", not "this file is allowed to be broken".
+  const PINNED_NONCONFORMING = {
+    'TV-FEAS': {
+      sha256: '241500c55e6919d235c5851bcfd010c81e01b653bd273b89698a3c9e3f268855',
+      excused: [
+        'history:history[2] PLANNING -> PLANNING illegal',
+        'history:history[3] PLANNING -> PLANNING illegal',
+        'schema:$.authority.ratifiedAt: pattern',
+        'schema:$.authority: oneOf must match exactly one',
+        'schema:$.planning.revisions[0].reviews[0].at: pattern',
+        'schema:$.planning.revisions[0].reviews[0].verdict: not in enum',
+        'schema:$.planning.revisions[0].reviews[0]: additional property lane',
+        'schema:$.planning.revisions[0].reviews[0]: additional property note',
+        'schema:$.planning.revisions[0].reviews[0]: missing artifact',
+        'schema:$.planning.revisions[0].reviews[0]: missing reviewer',
+        'schema:$.planning.revisions[1].reviews[0].at: pattern',
+        'schema:$.planning.revisions[1].reviews[0]: additional property lane',
+        'schema:$.planning.revisions[1].reviews[0]: additional property note',
+        'schema:$.planning.revisions[1].reviews[0]: missing artifact',
+        'schema:$.planning.revisions[1].reviews[0]: missing reviewer'
+      ]
+    },
+    'FUND-SCORE-RES': {
+      sha256: 'c68b9cbea3ddb0f076fca6536bf3fbed8c0fe18ca9a2c7df7d20b490a140842d',
+      excused: [
+        'schema:$.authority.ratifiedAt: pattern',
+        'schema:$.authority: oneOf must match exactly one',
+        'schema:$.planning.revisions[0].reviews[0].at: pattern',
+        'schema:$.planning.revisions[0].reviews[0]: additional property lane',
+        'schema:$.planning.revisions[0].reviews[0]: additional property note',
+        'schema:$.planning.revisions[0].reviews[0]: missing artifact',
+        'schema:$.planning.revisions[0].reviews[0]: missing reviewer'
+      ]
+    }
+  };
+
+  // Canonical namespaced failure vocabulary, SORTED so validator key order can never make a
+  // pinned row spuriously pass or fail. A revisionsConsistent() failure is deliberately NOT
+  // expressible as an excused entry: a byte-frozen pinned file cannot acquire one, so a revisions
+  // failure on a pinned entry is unconditionally fatal and must surface as an unexcused failure.
+  const entryFailures = (arc, dir, S) => {
+    const out = [];
+    validate(S, arc, S).forEach((e) => out.push('schema:' + e));
+    const h = historyConsistent(arc);
+    if (!h.ok) h.reasons.forEach((r) => out.push('history:' + r));
+    if (!revisionsConsistent(arc)) out.push('revisions:inconsistent');
+    if (arc.arcId !== dir) out.push('identity:arcId ' + String(arc.arcId) + ' != directory ' + dir);
+    return out.sort();
+  };
+
   if (fs.existsSync(seedsDir)) {
     const csPath = path.join(seedsDir, 'CORE-STREAM', 'arc.json'), epPath = path.join(seedsDir, 'EP-PILOT', 'arc.json');
     check('seed .ai-reports/arcs/README.local.md present', fs.existsSync(path.join(seedsDir, 'README.local.md')));
@@ -703,12 +778,178 @@ try {
     } else check('seed EP-PILOT/arc.json present', false);
     check('seed registry consistent (arcId == dir, no case-folded duplicates)', registryConsistent(fs.readdirSync(seedsDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => ({ dir: e.name, arc: fs.existsSync(path.join(seedsDir, e.name, 'arc.json')) ? JSON.parse(stripCR(fs.readFileSync(path.join(seedsDir, e.name, 'arc.json'), 'utf8'))) : null }))).ok);
     check('seed: no plans/arcs/CORE-STREAM or arc-claims/CORE-STREAM exists in the live runtime', !fs.existsSync(path.join(liveRuntime, 'plans', 'arcs', 'CORE-STREAM')) && !fs.existsSync(path.join(liveRuntime, 'arc-claims', 'CORE-STREAM')));
-  } else console.log('  (.ai-reports/arcs absent on this checkout - seed property checks skipped)');
+
+    // ── EVERY live entry, derived from the filesystem - never an enumerated list ──
+    const govDirs = fs.readdirSync(seedsDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    // check() prints only on FAILURE, and run-offline.js discards a passing sub-suite's stdout, so
+    // per-entry results would otherwise be invisible in `npm run qa:offline`. Lines carrying the
+    // QA_SURFACE marker are echoed by the runner even when this suite passes (see run-offline.js),
+    // which is what makes the governance section visible and labelled inside qa:offline.
+    console.log(QA_SURFACE + '== live registry governance (' + govDirs.length + ' entries) ==');
+    for (const dir of govDirs) {
+      const f = path.join(seedsDir, dir, 'arc.json');
+      if (!fs.existsSync(f)) { govEntryChecks += 1; check('live entry ' + dir + ': arc.json present', false); continue; }
+      const raw = stripCR(fs.readFileSync(f, 'utf8'));
+      let arc = null;
+      try { arc = JSON.parse(raw); } catch (e) { arc = null; }
+      if (!arc) { govEntryChecks += 1; check('live entry ' + dir + ': arc.json parses', false); continue; }
+      const pin = Object.prototype.hasOwnProperty.call(PINNED_NONCONFORMING, dir) ? PINNED_NONCONFORMING[dir] : null;
+      const got = entryFailures(arc, dir, S);
+      if (pin) {
+        const h = sha256(raw);
+        const want = pin.excused.slice().sort();
+        const extra = got.filter((x) => want.indexOf(x) === -1);
+        const gone = want.filter((x) => got.indexOf(x) === -1);
+        const setOk = JSON.stringify(got) === JSON.stringify(want);
+        console.log(QA_SURFACE + 'live entry ' + dir.padEnd(17) + 'GRANDFATHERED  pin '
+          + (h === pin.sha256 ? 'OK' : 'DRIFT') + ', ' + want.length + ' excused '
+          + (setOk ? 'matched exactly' : 'MISMATCH' + (extra.length ? ' +' + extra.length + ' unexcused' : '') + (gone.length ? ' -' + gone.length + ' absent' : '')));
+        govEntryChecks += 2;
+        check('live entry ' + dir + ' GRANDFATHERED: bytes match the pin exactly - any byte change fails, including one that would make the file conforming (' + (h === pin.sha256 ? h.slice(0, 16) + '…' : 'DRIFT: got ' + h.slice(0, 16) + '… want ' + pin.sha256.slice(0, 16) + '…') + ')',
+          h === pin.sha256);
+        check('live entry ' + dir + ' GRANDFATHERED: observed failures equal the ' + want.length + ' enumerated excused field paths exactly - per-field, never per-file-blanket'
+          + (extra.length ? ' [UNEXCUSED: ' + extra.join(' | ') + ']' : '') + (gone.length ? ' [NO LONGER PRESENT: ' + gone.join(' | ') + ']' : ''),
+          JSON.stringify(got) === JSON.stringify(want));
+      } else {
+        console.log(QA_SURFACE + 'live entry ' + dir.padEnd(17) + '(' + String(arc.state) + ') '
+          + (got.length === 0 ? 'OK' : 'FAIL: ' + got.join(' | ')));
+        govEntryChecks += 1;
+        check('live entry ' + dir + ' (state=' + String(arc.state) + '): schema-valid, legal history, consistent revisions, arcId == directory'
+          + (got.length ? ' [FAILS: ' + got.join(' | ') + ']' : ''),
+          got.length === 0);
+      }
+    }
+
+    // ── negative controls: the proof is that these FAIL, not that the live tree passes ──
+    const ncArc = readyArc({ arcId: 'ARC-NC' });
+    ncArc.planning.revisions[0].reviews = [{ lane: 'COWORK', verdict: 'GREEN', at: '2026-08-27', note: 'malformed legacy shape' }];
+    const ncFail = entryFailures(ncArc, 'ARC-NC', S);
+    check('NEGATIVE CONTROL: a synthetic NON-grandfathered entry carrying the malformed {lane,verdict,at,note} review shape is REJECTED (' + ncFail.length + ' failures) and has no table row',
+      ncFail.length > 0 && !Object.prototype.hasOwnProperty.call(PINNED_NONCONFORMING, 'ARC-NC'));
+    check('NEGATIVE CONTROL: a mutated grandfathered byte string FAILS its pin (synthetic mutation of the read bytes; the file itself is never written)',
+      (() => {
+        const f = path.join(seedsDir, 'TV-FEAS', 'arc.json');
+        if (!fs.existsSync(f)) return false;
+        const mutated = stripCR(fs.readFileSync(f, 'utf8')).replace('"arcId"', '"arcId" ');
+        return sha256(mutated) !== PINNED_NONCONFORMING['TV-FEAS'].sha256;
+      })());
+
+    // The SKIP count printed on the absent-root branch is self-verifying: if GOV_FIXED_CHECKS ever
+    // drifts from what this block actually registers, THIS assert fails on a normal checkout.
+    check('governance block check accounting: ' + (total - govBefore) + ' checks ran = ' + GOV_FIXED_CHECKS + ' fixed + ' + govEntryChecks + ' per-entry (keeps the absent-root SKIP count honest)',
+      (total - govBefore) === GOV_FIXED_CHECKS + govEntryChecks);
+  } else {
+    // Visible, counted SKIP - never a silent existsSync bypass (r2 closeCondition; OD-r2-2
+    // temporary-bridge ruling, which does NOT close F12). .ai-reports/ is untracked and excluded,
+    // so an absent root is the normal state of a fresh clone, not a defect.
+    console.log(QA_SURFACE + '== live registry governance ==');
+    console.log(QA_SURFACE + 'SKIP - .ai-reports/arcs absent on this checkout; '
+      + GOV_FIXED_CHECKS + ' fixed governance checks + 1-2 per live entry NOT RUN (0 entries visible)');
+  }
   check('handoffs README documents the optional `- Arc: <ARC-ID>` header key (D-11)', exists(REL.handoffsReadme) ? /- Arc: <ARC-ID>/.test(stripCR(readText(REL.handoffsReadme))) : true);
+
+  // ── scope authorization regression (qa/lib/arc-scope-authorization.js) ─────
+  // FIXTURES ONLY. Every call below passes an explicit opts.root or opts.runtimeRoot rooted under
+  // os.tmpdir() plus a fixed opts.headSha; the live runtime is never read and never written here.
+  // The library itself is read-only to this task and is byte-pinned to HEAD below.
+  //
+  // TOCTOU: authorizedProductWrite() is DETECTION, NOT ENFORCEMENT. It answers "is this write
+  // covered by a live authorization chain, as of the moment it is asked?" Nothing prevents the
+  // holder, claim, authorization or HEAD from changing between that answer and an actual write,
+  // and the predicate deliberately makes no attempt to lock or reserve anything. It exists so a
+  // QA gate can DETECT an uncovered product edit, not so a runtime can PREVENT one.
+  section('scope authorization (authorizedProductWrite)');
+  {
+    const SA_HEAD = 'f'.repeat(40);
+    const SA_LIB = 'qa/lib/arc-scope-authorization.js';
+    // Builds a complete, valid chain under a fresh temp root, then applies one mutation.
+    const saRoot = (mut) => {
+      mut = mut || {};
+      const repoRoot = tmp('sa');
+      const rr = path.join(repoRoot, '.git', 'arc-runtime');
+      const arcId = 'arcId' in mut ? mut.arcId : 'ARC-A';
+      const taskId = 'T-CODE', planId = 'arc-a-r1-2026-08-30';
+      const plan = {
+        planId: planId,
+        repoRef: 'repoRef' in mut ? mut.repoRef : SA_HEAD,
+        executionProfiles: { P: { scope: { writes: mut.writes || ['index.html', 'qa/**'] } } },
+        tasks: [{ id: taskId, executionProfile: 'P' }]
+      };
+      const planDir = path.join(rr, 'plans', planId);
+      fs.mkdirSync(planDir, { recursive: true });
+      const planFile = path.join(planDir, 'plan.json');
+      fs.writeFileSync(planFile, JSON.stringify(plan, null, 2) + '\n');
+      const planHash = sha256(fs.readFileSync(planFile));
+      const claimDir = arcId ? path.join(rr, 'arc-claims', arcId, taskId) : path.join(rr, 'claims', taskId);
+      fs.mkdirSync(claimDir, { recursive: true });
+      const claim = { taskId: taskId, lane: 'MAIN', planId: planId, planHash: planHash, mutexes: ['CODE:index-html'], state: mut.state || 'AUTHORIZED' };
+      if (arcId) claim.arcId = arcId;
+      fs.writeFileSync(path.join(claimDir, 'claim.json'), JSON.stringify(claim, null, 2) + '\n');
+      if (!mut.noAuthorized) {
+        const auth = { taskId: taskId, planId: mut.authPlanId || planId, planHash: mut.authPlanHash || planHash, authorizedBy: 'owner' };
+        if (arcId) auth.arcId = arcId;
+        fs.writeFileSync(path.join(claimDir, 'authorized.json'), JSON.stringify(auth, null, 2) + '\n');
+      }
+      if (!mut.noHolder) {
+        const hd = path.join(rr, 'mutex', 'CODE__index-html');
+        fs.mkdirSync(hd, { recursive: true });
+        const h = { taskId: taskId, lane: 'MAIN', acquiredAt: ISO('2026-08-30') };
+        if (arcId) h.arcId = arcId;
+        fs.writeFileSync(path.join(hd, 'holder.json'), JSON.stringify(h) + '\n');
+      }
+      return repoRoot;
+    };
+    const saAsk = (mut, head) => authorizedProductWrite('index.html', { root: saRoot(mut), headSha: head || SA_HEAD });
+
+    // Positive control FIRST: without it, every DENY below would also pass against a degenerate
+    // always-deny predicate, and the section would prove nothing.
+    const saCtl = saAsk();
+    check('SA-1 CONTROL: a complete owner-AUTHORIZED chain (holder -> claim -> authorized.json -> plan -> profile.scope.writes) ALLOWS and names arc/task/plan [' + saCtl.reason + ']',
+      saCtl.authorized === true && saCtl.arcId === 'ARC-A' && saCtl.taskId === 'T-CODE' && saCtl.planId === 'arc-a-r1-2026-08-30');
+    check('SA-2 holder absent ⇒ DENY (no live CODE:index-html holder means no live authorization)',
+      saAsk({ noHolder: true }).authorized === false);
+    check('SA-3 authorized.json stale - planId names a superseded plan ⇒ DENY',
+      saAsk({ authPlanId: 'arc-a-r1-2026-08-28-superseded' }).authorized === false);
+    check('SA-4 authorized.json mismatched - planHash drift vs the claim ⇒ DENY',
+      saAsk({ authPlanHash: 'd'.repeat(64) }).authorized === false);
+    check('SA-5 a RETAINED COMPLETE claim does NOT re-enable ALLOW (COMPLETE is deliberately not an exemption: it would leave a post-close/pre-commit window)',
+      saAsk({ state: 'COMPLETE' }).authorized === false);
+    check('SA-6 runtime root absent ⇒ DENY with a reason, and never a throw',
+      (() => {
+        try {
+          const r = authorizedProductWrite('index.html', { runtimeRoot: path.join(tmp('sa-absent'), 'nope'), headSha: SA_HEAD });
+          return r.authorized === false && typeof r.reason === 'string' && r.reason.length > 0;
+        } catch (e) { return false; }
+      })());
+    check('SA-7 fresh clone - opts.root points at a repo with no .git/arc-runtime at all ⇒ DENY without throwing',
+      (() => {
+        try {
+          const r = authorizedProductWrite('index.html', { root: tmp('sa-freshclone'), headSha: SA_HEAD });
+          return r.authorized === false && typeof r.reason === 'string' && r.reason.length > 0;
+        } catch (e) { return false; }
+      })());
+    check('SA-8 HEAD moved away from plan.repoRef ⇒ deterministic DENY (this is what expires the exemption once the authorized edit is committed)',
+      (() => { const root = saRoot(); const a = authorizedProductWrite('index.html', { root: root, headSha: 'a'.repeat(40) }); const b = authorizedProductWrite('index.html', { root: root, headSha: 'a'.repeat(40) }); return a.authorized === false && b.authorized === false && a.reason === b.reason; })());
+    check('SA-9 HEAD equal to plan.repoRef ⇒ deterministic ALLOW; the same root evaluated twice yields the identical verdict',
+      (() => { const root = saRoot(); const a = authorizedProductWrite('index.html', { root: root, headSha: SA_HEAD }); const b = authorizedProductWrite('index.html', { root: root, headSha: SA_HEAD }); return a.authorized === true && b.authorized === true && a.reason === b.reason; })());
+    check('SA-10 an alternate root supplied via opts.root RESOLVES THERE and never falls back to the real repository - a valid alternate chain ALLOWS, and an alternate root whose holder is missing DENIES even though the real repo is untouched',
+      (() => {
+        const good = authorizedProductWrite('index.html', { root: saRoot(), headSha: SA_HEAD });
+        const bad = authorizedProductWrite('index.html', { root: saRoot({ noHolder: true }), headSha: SA_HEAD });
+        return good.authorized === true && bad.authorized === false;
+      })());
+    check('SA-11 TOCTOU is documented in this suite as DETECTION, not enforcement (documentation marker, not a behavioural proof)',
+      (() => { const src = stripCR(readText('qa/arc_registry_offline.js')); return /TOCTOU/.test(src) && /DETECTION, NOT ENFORCEMENT/.test(src) && /not so a runtime can PREVENT one/.test(src); })());
+    const saHead = gitShow(SA_LIB);
+    check('SA-12 ' + SA_LIB + ' is byte-identical to HEAD - this task tests the predicate and never edits it',
+      saHead !== null && exists(SA_LIB) && sha256(stripCR(readText(SA_LIB))) === sha256(saHead));
+  }
 
   // ── wiring + scope ─────────────────────────────────────────────────────────
   section('wiring + scope');
   check('wiring run-offline.js registers qa/arc_registry_offline.js', /'qa\/arc_registry_offline\.js'/.test(readText(REL.runner)));
+  check('wiring run-offline.js echoes ' + QA_SURFACE.trim() + '-marked lines from PASSING sub-suites - without it the runner discards this suite\'s stdout and the governance section would be invisible inside qa:offline',
+    readText(REL.runner).indexOf(QA_SURFACE.trim()) !== -1);
   for (const f of REL.forbidden) {
     const head = gitShow(f);
     check('scope unchanged vs HEAD: ' + f, head !== null && exists(f) && sha256(stripCR(readText(f))) === sha256(head));

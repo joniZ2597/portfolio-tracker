@@ -305,6 +305,14 @@ function phaseOfflineTests() {
 
     if (result.status === 0) {
       pass(testFile);
+      // A passing sub-suite's stdout is otherwise discarded entirely. Echo only the lines a suite
+      // explicitly marks for surfacing, so it can make its own findings visible here (WU-VAL /
+      // VAL-QA: the live-registry governance section, whose per-entry results are printed rather
+      // than merely asserted). Suites that emit no marker are completely unaffected.
+      for (const line of String(result.stdout || '').split('\n')) {
+        const at = line.indexOf(QA_SURFACE_MARKER);
+        if (at !== -1) console.log('    ' + line.slice(at + QA_SURFACE_MARKER.length).replace(/\s+$/, ''));
+      }
     } else {
       const output = ((result.stdout || '') + (result.stderr || '')).trim();
       fail('offline-test', testFile + ' exited with ' + result.status + (output ? '\n' + output : ''));
@@ -314,10 +322,25 @@ function phaseOfflineTests() {
   console.log('  (' + OFFLINE_TESTS.length + ' offline test file(s))');
 }
 
+// Sub-suites print lines with this prefix when they want them visible in `npm run qa:offline`
+// even on success; the runner otherwise discards a passing suite's stdout. Kept in sync with
+// QA_SURFACE in qa/arc_registry_offline.js.
+const QA_SURFACE_MARKER = '@@QA-SURFACE@@ ';
+
+// The six fund-facts-* libs are swept alongside the evidence libs (WU-VAL / VAL-QA). They are
+// server-side product code sitting on the same containment boundary, but were previously outside
+// the Phase-3 forbidden-surface sweep entirely: a scoring call, a pt_results write or a
+// localStorage mutation planted in any of them would not have been detected here.
+const FUND_FACTS_LIB_RE = /(?:^|\/)fund-facts-[^/]*\.js$/;
+
+function fundFactsLibPaths() {
+  return uniqueSorted(walkJs('netlify/functions/lib').filter((file) => FUND_FACTS_LIB_RE.test(file)));
+}
+
 function evidenceAndSyncPaths() {
   return uniqueSorted(
     []
-      .concat(walkJs('netlify/functions/lib').filter((file) => /evidence/.test(file)))
+      .concat(walkJs('netlify/functions/lib').filter((file) => /evidence/.test(file) || FUND_FACTS_LIB_RE.test(file)))
       .concat([
         'netlify/functions/research-evidence.js',
         'netlify/functions/sec-evidence-store.js',
@@ -393,6 +416,16 @@ function checkNoEvidenceOrSyncMutation() {
 
   if (clean) {
     pass('no scoring / pt_results / localStorage mutation in ' + paths.length + ' evidence+sync path(s)');
+  }
+
+  // Record the newly covered files by name, not just by count, so the widening is auditable and a
+  // silent regression in the selector (a lib renamed out of the pattern) is visible here.
+  const ff = fundFactsLibPaths();
+  const covered = ff.filter((file) => paths.indexOf(file) !== -1);
+  console.log('  newly swept by this sweep (WU-VAL / VAL-QA): ' + covered.length + ' fund-facts lib(s)');
+  for (const file of covered) console.log('    + ' + file);
+  if (covered.length !== ff.length) {
+    fail('forbidden-surface', 'fund-facts libs found but not selected: ' + ff.filter((f) => covered.indexOf(f) === -1).join(', '));
   }
 }
 
