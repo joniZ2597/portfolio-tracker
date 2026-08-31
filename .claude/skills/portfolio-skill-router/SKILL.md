@@ -1,6 +1,6 @@
 ---
 name: portfolio-skill-router
-description: Thin Portfolio Tracker / Pulse routing overlay. Given a task, returns a compact routing decision — lane, skill(s), model, gate flags, risk level, and next safe action. Does not execute tasks. For full work-mode classification use /lab-planner.
+description: Thin Portfolio Tracker / Pulse routing overlay. Given a task, returns a compact routing decision — lane, skill(s), model, gate flags, risk level, next safe action, and exactly one execution-route disposition. Does not execute tasks. For full work-mode classification use /lab-planner.
 disable-model-invocation: true
 ---
 
@@ -36,6 +36,44 @@ Apply the first matching rule. If multiple rules match, apply all and flag the c
 14. **Repeated automated QA failures** — If automated QA fails repeatedly due to sandbox, localhost, or script duplication issues, recommend switching to manual browser/console QA when the check is simple and low-risk.
 15. **Ambiguous task** — Default to safest lane: `Read-only Lab`.
 
+## Execution-Route Disposition
+
+This skill is the authoritative home for execution-route selection. Every routing decision selects **exactly one** disposition:
+
+- `DIRECT_ONE_PASS` — execute the accepted scope in one bounded pass, then validate.
+- `TWO_PASS` — implement, plus one separate verification/reconciliation pass against actual disk state.
+- `PLAN_FIRST` — a plan must be produced and accepted before execution.
+- `HELPER_FIRST` — build and review one pinned, single-purpose helper before executing (see optimization-rules §7).
+- `MICRO_APPROVAL` — step-by-step owner approval at each bounded action.
+- `HOLD` — do not execute; an identity, authority, or state question must be resolved first.
+
+### Selection rules
+
+1. An accepted implementation-ready plan routes to `DIRECT_ONE_PASS` or `TWO_PASS` unless a material scope, authority, architecture, or disk-state conflict exists.
+2. Prefer `TWO_PASS` over `DIRECT_ONE_PASS` when disk state is partially uncertain — the extra pass reconciles and verifies actual state.
+3. Do not select `PLAN_FIRST` merely because implementation has not started. `PLAN_FIRST` requires a material unresolved decision (e.g. an unresolved architecture choice).
+4. Select `HELPER_FIRST` when a repeated fragile or authenticated multi-step workflow is about to be run manually a third time (helper-over-inline, optimization-rules §7).
+5. Do not default to `MICRO_APPROVAL` for isolated, reversible, local-only, dry-run, fixture-only, or zero-network work. A read-only verification batch is `DIRECT_ONE_PASS`.
+6. Use `MICRO_APPROVAL` only for genuinely high-risk, irreversible, secret-custody, production, live-system, or externally mutating boundaries.
+7. Explicit external target identity is mandatory. `HOLD` when a site, branch, environment, endpoint, account, or other live target depends on cwd, implicit defaults, or unresolved context.
+8. `HOLD` on a material authority conflict or contradiction (contradictory scope or authority instructions).
+
+## Reroute Triggers
+
+Any of the following invalidates the current disposition:
+
+- two rejected or materially distorted approval previews;
+- three actions without a validated milestone;
+- two identical HOLD or tool-failure outcomes without changed input;
+- validation that no longer changes a go/no-go decision;
+- two owner decisions about the next micro-step within one phase;
+- a scope or authority change;
+- a blocker;
+- a dry-run to live transition;
+- a local to external mutation transition.
+
+On any trigger, first return `Status: REROUTE_REQUIRED — <trigger>` before selecting a replacement disposition.
+
 ## PT/Pulse Protected Surfaces
 
 Never route any task toward unguarded writes to:
@@ -61,8 +99,20 @@ Touches localStorage:     <YES — read-only audit / YES — write approved / NO
 Gate involvement:         <G-R approval-gated / G-L high-risk approval-gated / None>
 Production/Netlify:       <Approval required / Not involved>
 Risk level:               <Low / Medium / High / Approval-gated>
+Execution disposition:    <DIRECT_ONE_PASS / TWO_PASS / PLAN_FIRST / HELPER_FIRST / MICRO_APPROVAL / HOLD>
+Expected prompt count:    <number>
+Expected owner decisions: <number>
+Validation strategy:      <one line>
+Milestone:                <the validated milestone this route targets>
+Rollback:                 <one line>
 Forbidden actions:        <explicit list>
 Next safe action:         <one action only>
+```
+
+If a reroute trigger fired, append (before selecting a replacement disposition):
+
+```
+Status: REROUTE_REQUIRED — <trigger>
 ```
 
 If blocked or ambiguous, append:

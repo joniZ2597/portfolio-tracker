@@ -13,6 +13,13 @@ Before each project task, read:
 - Apply minimal scoped changes only. Do not expand the requested phase or bundle unrelated work.
 - Workflow order: inspect → explain → smallest safe plan → approval → implement → verify → QA → summarize.
 
+### Execution-routing checkpoint
+
+- Main applies the `portfolio-skill-router` execution-routing decision model internally at: the start of each new task; a phase transition; a scope or authority change; any reroute trigger; before dry-run becomes live; before any external or production mutation.
+- Explicit `/portfolio-skill-router` invocation is needed only when the route is ambiguous, high-risk, or `REROUTE_REQUIRED`.
+- Do not rerun routing before ordinary continuation prompts, approval responses, read-backs, or validation commands inside the same unchanged milestone.
+- Approval behavior: use the largest coherent bounded edit the approval UI supports; never request blanket or session-wide approval; a materially distorted preview is not evidence of disk corruption and does not mandate decomposition into micro-edits (preview semantics: `approval-flow-optimizer` optimization-rules).
+
 ## Git safety
 
 Before any edit, commit, push, merge, checkout, reset, deploy, or configuration change, run and report:

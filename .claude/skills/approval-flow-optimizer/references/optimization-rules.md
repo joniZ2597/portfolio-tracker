@@ -74,12 +74,34 @@ non-read-only step — they remain **separate boundaries**.
 
 ## 5. Approval-preview rules
 
+This section is the authoritative home for approval-preview semantics.
+
 Every proposed consolidated action MUST still render as a single clean literal
 preview. Reject the consolidation if it would introduce: shell expansion, a
 second command, a wildcard, a persistent/broader permission grant, or any
 element that makes the preview not one short understandable action. The visible
-approval preview is authoritative — if it is duplicated, expanded, truncated, or
-warned, the action is not ready.
+approval preview is authoritative **for whether the proposed operation form is
+ready to execute** — if it is duplicated, expanded, truncated, or warned, that
+operation form is not ready.
+
+### Preview semantics and distortion handling
+
+- Before execution, the approval preview describes the **proposed operation**
+  only.
+- A distorted (duplicated, expanded, truncated, or warned) preview may block
+  **that operation form**.
+- A distorted preview is **not** evidence that existing disk content is
+  corrupt.
+- After an approved local write, **direct disk read-back is authoritative** for
+  the actual file state.
+- After two rejected or distorted previews, change the operation form or
+  reroute (see the `portfolio-skill-router` reroute triggers) instead of
+  shrinking into constants or individual functions.
+- Prefer the **largest coherent bounded operation** the approval UI can render
+  as one clean preview.
+- Never recommend blanket, session-wide, "allow all", future automatic, or
+  "don't ask again" approval. Each approval request must remain explicit,
+  bounded, and one-time.
 
 ## 6. Time-critical-transaction preparation rules
 
