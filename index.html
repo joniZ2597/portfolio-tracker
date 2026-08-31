@@ -665,6 +665,18 @@ select.edit-inp{appearance:none;cursor:pointer}
 #sig-card.collapsed>:not(.pc-card-title),#cmp-card.collapsed>:not(.pc-card-title),#kl-card.collapsed>:not(.pc-card-title){display:none}
 #sig-card.collapsed,#cmp-card.collapsed,#kl-card.collapsed{align-self:start}
 #sig-card.collapsed .pc-card-title,#cmp-card.collapsed .pc-card-title,#kl-card.collapsed .pc-card-title{margin-bottom:0}
+#ffp-card.collapsed>:not(.pc-card-title){display:none}
+#ffp-card.collapsed{align-self:start}
+#ffp-card.collapsed .pc-card-title{margin-bottom:0}
+.ffp-table{display:flex;flex-direction:column;gap:7px;margin-top:8px}
+.ffp-row{display:grid;grid-template-columns:132px 1fr;gap:3px 12px;align-items:baseline}
+.ffp-lbl{font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:.3px}
+.ffp-val{font-family:var(--mono);font-size:11px;color:var(--text1);font-variant-numeric:tabular-nums}
+.ffp-val.ffp-insufficient-history,.ffp-val.ffp-not-covered{color:var(--text3)}
+.ffp-meta{grid-column:2;font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:.3px}
+.ffp-inferred{grid-column:2;font-family:var(--mono);font-size:9px;color:var(--yellow2);letter-spacing:.3px;font-style:italic}
+.ffp-gaps{margin-top:9px;font-family:var(--mono);font-size:9px;color:var(--yellow2);line-height:1.5}
+.ffp-prov{margin-top:7px;font-family:var(--mono);font-size:9px;color:var(--text3);line-height:1.5}
 .nd-list{display:flex;flex-direction:column;gap:2px}.nd-row{display:flex;align-items:flex-start;gap:6px;padding:3px 0;border-bottom:1px solid rgba(30,41,59,.4)}.nd-row:last-child{border-bottom:none}.nd-tag{font-family:var(--mono);font-size:9px;font-weight:700;color:var(--text3);letter-spacing:.5px;min-width:68px;padding-top:2px;flex-shrink:0}.nd-txt{font-size:12px;color:var(--text2);line-height:1.45;flex:1}
 .pc-empty{font-family:var(--mono);font-size:10px;color:var(--text3);font-style:italic}
 /* ─── TOP-LEVEL NAV ───────────────────────────── */
@@ -7541,6 +7553,14 @@ ${window.PT_ENABLE_FUND_FACTS_READ_CLIENT === true ? `
         <div id="ffr-panel-${item.ticker}"></div>
       </div>` : ''}
 
+${window.PT_ENABLE_FUND_FACTS_READ_CLIENT === true ? `
+      <!-- FUNDAMENTALS FACTOR PANEL (WU-PANEL · display-only, non-scoring) — span 12 -->
+      <div id="ffp-card" class="pc-card pc-span-12${_ffpCardCollapsed ? ' collapsed' : ''}">
+        <div class="pc-card-title" onclick="_ffpToggleCard()">Fundamentals Factors (non-scoring) <span class="ffp-chevron">${_ffpCardCollapsed ? '▶' : '▼'}</span></div>
+        <div class="pc-card-sub" style="margin-top:0">Display-only · projected from the loaded Fund Facts envelope · verify independently</div>
+        <div id="ffp-panel-${item.ticker}"></div>
+      </div>` : ''}
+
     </div>
 
     <div class="src-trace">
@@ -12707,6 +12727,10 @@ async function _runFundFactsCard(sym) {
   try {
     var result = await requestFundFactsRead({ ticker: sym, token: token });
     _ffrRenderPanel(panel, _ffrViewForResult(result));
+    // WU-PANEL: project the same envelope into the fundamentals factor panel.
+    // typeof-guarded so this handler stays self-contained when the panel family
+    // is absent (the landed S6 suite evaluates it in an isolated scope).
+    if (typeof _ffpRenderFromResult === 'function') { _ffpRenderFromResult(sym, result); }
   } catch (e) {
     // The canonical client never rejects; if a replaced or faulty function
     // does, fail closed with the fixed CLIENT_INVALID_RESPONSE view and no
@@ -12719,6 +12743,282 @@ async function _runFundFactsCard(sym) {
   }
 }
 // ── end S6-B Fund Facts handlers ─────────────────────────────────────────────
+
+// ── WU-PANEL: fundamentals factor panel (display-only, non-scoring) ──────────
+// Projects the four contract factors from an already-loaded fund-facts
+// envelope. It reuses the S6-B client gate and introduces no gate, no network
+// path and no token surface of its own. Producer scalars are displayed
+// verbatim — a factor value is never recomputed here. Series facts are read
+// only to qualify coverage/history and to run the A3-a completeness proxy.
+// Rendering is textContent-only, scoped to the panel's own container. Nothing
+// here reads or writes browser storage, scoring engines, scan state, or any
+// Actionable-Take flow.
+
+// Inputs consulted for coverage. balanceSheetStrength deliberately lists only
+// its NON-DEBT inners: owner ruling A3-a defines absent debt as an inferable
+// condition, so requiring debt for coverage would make the ruled inference
+// path unreachable.
+var FFP_FACTORS = [
+  { key: 'revenueGrowth',        label: 'Revenue growth', series: ['revenue'] },
+  { key: 'netMargin',            label: 'Net margin',     series: ['netIncome', 'revenue'] },
+  { key: 'freeCashFlow',         label: 'Free cash flow', series: ['cfo', 'capex'] },
+  { key: 'balanceSheetStrength', label: 'Balance sheet',  series: ['cash', 'equity'] }
+];
+var FFP_COVERAGE_WINDOW = 6;
+var FFP_COVERAGE_FLOOR = 4;
+var FFP_INFERENCE_LABEL = 'inferred — no debt reported';
+var _ffpCardCollapsed = true; // in-memory only; resets on reload
+
+// Internal period key, e.g. "2026|Q1". Lexicographic order is chronological.
+function _ffpQuarterKey(fact) {
+  return String(fact.fiscalYear) + '|' + String(fact.fiscalPeriod);
+}
+
+// Display form of a period key, e.g. "FY2026 Q1".
+function _ffpQuarterLabel(key) {
+  var parts = String(key).split('|');
+  return 'FY' + parts[0] + ' ' + parts[1];
+}
+
+// Only true quarters qualify. Annual/FY/YTD facts are excluded, matching the
+// producer's true-quarter basis rule.
+function _ffpTrueQuarterFacts(member) {
+  var out = [];
+  if (!member || !Object.prototype.toString.call(member.facts).match(/Array/)) { return out; }
+  for (var i = 0; i < member.facts.length; i++) {
+    var f = member.facts[i];
+    if (f && /^Q[1-4]$/.test(String(f.fiscalPeriod))) { out.push(f); }
+  }
+  return out;
+}
+
+// Dedupe by fy|fp with the newest filing winning. A period carrying more than
+// one filing is labelled restated. Result is newest-first.
+function _ffpDedupeByPeriod(facts) {
+  var byKey = {};
+  var order = [];
+  for (var i = 0; i < facts.length; i++) {
+    var f = facts[i];
+    var k = _ffpQuarterKey(f);
+    if (!Object.prototype.hasOwnProperty.call(byKey, k)) {
+      byKey[k] = { key: k, fact: f, restated: false };
+      order.push(k);
+    } else {
+      var cur = byKey[k];
+      cur.restated = true;
+      if (String(f.filed) > String(cur.fact.filed)) { cur.fact = f; }
+    }
+  }
+  var out = [];
+  for (var j = 0; j < order.length; j++) { out.push(byKey[order[j]]); }
+  out.sort(function (a, b) { return a.key < b.key ? 1 : (a.key > b.key ? -1 : 0); });
+  return out;
+}
+
+// Coverage over the most recent FFP_COVERAGE_WINDOW true quarters seen across
+// the factor's inputs. A quarter counts only when EVERY input has a fact for
+// it, so the count is an intersection and never a union.
+function _ffpCoverage(series, names) {
+  var perName = {};
+  var seen = {};
+  var keys = [];
+  var i, j;
+  for (i = 0; i < names.length; i++) {
+    var points = _ffpDedupeByPeriod(_ffpTrueQuarterFacts(series ? series[names[i]] : null));
+    var set = {};
+    var anyRestated = false;
+    for (j = 0; j < points.length; j++) {
+      set[points[j].key] = points[j].fact;
+      if (points[j].restated) { anyRestated = true; }
+      if (!Object.prototype.hasOwnProperty.call(seen, points[j].key)) {
+        seen[points[j].key] = true;
+        keys.push(points[j].key);
+      }
+    }
+    perName[names[i]] = { set: set, restated: anyRestated };
+  }
+  keys.sort(function (a, b) { return a < b ? 1 : (a > b ? -1 : 0); });
+  var windowKeys = keys.slice(0, FFP_COVERAGE_WINDOW);
+  var complete = [];
+  var restated = false;
+  for (i = 0; i < names.length; i++) { if (perName[names[i]].restated) { restated = true; } }
+  for (i = 0; i < windowKeys.length; i++) {
+    var all = true;
+    for (j = 0; j < names.length; j++) {
+      if (!Object.prototype.hasOwnProperty.call(perName[names[j]].set, windowKeys[i])) { all = false; }
+    }
+    if (all) { complete.push(windowKeys[i]); }
+  }
+  return { present: complete.length, of: FFP_COVERAGE_WINDOW, complete: complete, restated: restated };
+}
+
+// Owner ruling A3-a. The panel tests the balance-sheet inners directly and
+// never trusts a non-null balanceSheetStrength alone: the producer nulls the
+// whole metric when neither inner is computable, which is exactly the shape an
+// absent debt series produces.
+//
+// A reported netCash is authoritative and is never overwritten. An absent one
+// is inferred ONLY when the completeness proxy passes — every non-debt inner
+// (cash and equity) present for the reference quarter while debt is absent.
+// Inferring debt = 0 makes netCash EQUAL CASH; it never makes netCash zero.
+function _ffpBssNetCash(series, metric) {
+  var reported = (metric && typeof metric.netCash === 'number' && isFinite(metric.netCash))
+    ? metric.netCash : null;
+  if (reported !== null) { return { value: reported, inferred: false }; }
+  if (!series) { return { value: null, inferred: false }; }
+  var cashPoints = _ffpDedupeByPeriod(_ffpTrueQuarterFacts(series.cash));
+  if (cashPoints.length === 0) { return { value: null, inferred: false }; }
+  var ref = cashPoints[0].key;
+  var equitySet = {};
+  var debtSet = {};
+  var e = _ffpDedupeByPeriod(_ffpTrueQuarterFacts(series.equity));
+  var d = _ffpDedupeByPeriod(_ffpTrueQuarterFacts(series.debt));
+  var i;
+  for (i = 0; i < e.length; i++) { equitySet[e[i].key] = true; }
+  for (i = 0; i < d.length; i++) { debtSet[d[i].key] = true; }
+  var proxyPasses = Object.prototype.hasOwnProperty.call(equitySet, ref) &&
+                    !Object.prototype.hasOwnProperty.call(debtSet, ref);
+  if (!proxyPasses) { return { value: null, inferred: false }; }
+  return { value: cashPoints[0].fact.valueNumeric, inferred: true };
+}
+
+// One factor entry in the pinned Definition-of-Done shape.
+function _ffpFactorEntry(env, spec) {
+  var cov = _ffpCoverage(env ? env.series : null, spec.series);
+  var metric = (env && env.derived) ? env.derived[spec.key] : null;
+  var entry = {
+    key: spec.key,
+    label: spec.label,
+    state: 'not-covered',
+    display: 'not covered',
+    coverage: { present: cov.present, of: cov.of },
+    asOf: cov.complete.length > 0 ? _ffpQuarterLabel(cov.complete[0]) : null,
+    restated: cov.restated,
+    inferred: false,
+    inferenceLabel: null
+  };
+  if (cov.present === 0) { return entry; }
+  if (cov.present < FFP_COVERAGE_FLOOR) {
+    entry.state = 'insufficient-history';
+    entry.display = 'insufficient history';
+    return entry;
+  }
+  var text = null;
+  if (spec.key === 'balanceSheetStrength') {
+    var nc = _ffpBssNetCash(env ? env.series : null, metric);
+    var de = (metric && typeof metric.debtToEquity === 'number' && isFinite(metric.debtToEquity))
+      ? metric.debtToEquity : null;
+    if (nc.value !== null || de !== null) {
+      text = 'net cash ' + (nc.value === null ? '—' : _ffrFmtNum(nc.value)) +
+             ' · D/E ' + (de === null ? '—' : de.toFixed(2));
+      entry.inferred = nc.inferred;
+      entry.inferenceLabel = nc.inferred ? FFP_INFERENCE_LABEL : null;
+    }
+  } else if (metric) {
+    if (spec.key === 'freeCashFlow') { text = _ffrFmtNum(metric.valueNumeric); }
+    else if (spec.key === 'revenueGrowth') { text = metric.valuePct.toFixed(2) + '% YoY'; }
+    else { text = metric.valuePct.toFixed(2) + '%'; }
+  }
+  if (text === null) {
+    entry.state = 'insufficient-history';
+    entry.display = 'insufficient history';
+    return entry;
+  }
+  entry.state = 'value';
+  entry.display = text;
+  return entry;
+}
+
+// Pure projection: validated envelope -> the pinned panel model.
+function _ffpPanelModel(env) {
+  var factors = [];
+  var gaps = [];
+  var i;
+  if (env && Object.prototype.toString.call(env.gaps).match(/Array/)) {
+    for (i = 0; i < env.gaps.length; i++) { gaps.push(env.gaps[i]); }
+  }
+  for (i = 0; i < FFP_FACTORS.length; i++) {
+    factors.push(_ffpFactorEntry(env, FFP_FACTORS[i]));
+  }
+  var nc = _ffpBssNetCash(env ? env.series : null,
+    (env && env.derived) ? env.derived.balanceSheetStrength : null);
+  if (nc.value === null) {
+    gaps.push('balanceSheetStrength: netCash withheld — no reported debt and the completeness proxy did not pass');
+  }
+  return { factors: factors, gaps: gaps };
+}
+
+// textContent-only renderer, scoped to its own container. Assigning textContent
+// clears existing children, so a re-render replaces rather than appends.
+function _ffpRenderPanel(container, model) {
+  if (!container || !model) { return; }
+  container.textContent = '';
+  var table = document.createElement('div');
+  table.className = 'ffp-table';
+  for (var i = 0; i < model.factors.length; i++) {
+    var f = model.factors[i];
+    var row = document.createElement('div');
+    row.className = 'ffp-row';
+    var lbl = document.createElement('div');
+    lbl.className = 'ffp-lbl';
+    lbl.textContent = f.label;
+    var val = document.createElement('div');
+    val.className = 'ffp-val ffp-' + f.state;
+    val.textContent = f.display;
+    var meta = document.createElement('div');
+    meta.className = 'ffp-meta';
+    var bits = [f.coverage.present + '/' + f.coverage.of + ' quarters'];
+    if (f.asOf !== null) { bits.push('as of ' + f.asOf); }
+    if (f.restated) { bits.push('restated'); }
+    meta.textContent = bits.join(' · ');
+    row.appendChild(lbl);
+    row.appendChild(val);
+    row.appendChild(meta);
+    if (f.inferred) {
+      var mark = document.createElement('div');
+      mark.className = 'ffp-inferred';
+      mark.textContent = f.inferenceLabel;
+      row.appendChild(mark);
+    }
+    table.appendChild(row);
+  }
+  container.appendChild(table);
+  if (model.gaps.length > 0) {
+    var gapsEl = document.createElement('div');
+    gapsEl.className = 'ffp-gaps';
+    gapsEl.textContent = 'Gaps: ' + model.gaps.join(' · ');
+    container.appendChild(gapsEl);
+  }
+  var prov = document.createElement('div');
+  prov.className = 'ffp-prov';
+  prov.textContent = 'Display-only · non-scoring · SEC XBRL · verify independently';
+  container.appendChild(prov);
+}
+
+// Entry point called by the S6-B handler with the same normalized result it
+// just rendered. Enforces the strict client gate independently. Never issues a
+// request of its own and never sees a token.
+function _ffpRenderFromResult(sym, result) {
+  if (window.PT_ENABLE_FUND_FACTS_READ_CLIENT !== true) { return; }
+  var host = document.getElementById('ffp-panel-' + sym);
+  if (!host) { return; }
+  if (!result || result.kind !== 'ok' || !result.envelope) {
+    host.textContent = 'Fundamentals unavailable for this load.';
+    return;
+  }
+  _ffpRenderPanel(host, _ffpPanelModel(result.envelope));
+}
+
+// Collapse toggle, matching the 10C-UI-1A pattern used by the other cards.
+function _ffpToggleCard() {
+  var card = document.getElementById('ffp-card');
+  if (!card) { return; }
+  _ffpCardCollapsed = !_ffpCardCollapsed;
+  card.classList.toggle('collapsed', _ffpCardCollapsed);
+  var chev = card.querySelector('.ffp-chevron');
+  if (chev) { chev.textContent = _ffpCardCollapsed ? '▶' : '▼'; }
+}
+// ── end WU-PANEL fundamentals factor panel ───────────────────────────────────
 
 function exportJSON() {
   if (!results.length) return;
