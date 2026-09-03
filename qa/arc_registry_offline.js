@@ -848,6 +848,148 @@ try {
   }
   check('handoffs README documents the optional `- Arc: <ARC-ID>` header key (D-11)', exists(REL.handoffsReadme) ? /- Arc: <ARC-ID>/.test(stripCR(readText(REL.handoffsReadme))) : true);
 
+  // ── R-A1 failed-revision archival (PROTO-FRA) ──────────────────────────────
+  // FIXTURES ONLY. Every arc object below is synthetic and every source file is planted under
+  // os.tmpdir(); no live arc.json is read for a behavioural assertion and the D10-l pinned set is
+  // never widened. RA1-11 is the one live read: existsSync-guarded and property-only, per the
+  // determinism rule at the head of this file.
+  //
+  // BYTE SEMANTICS: `sourceHash` pins the source file's RAW BYTES - sha256 of the file as read,
+  // with no CR stripping and no text normalization of any kind (the same shape treeHash() uses).
+  // Every hash below, fixture and live alike, is taken that way on purpose: normalizing here would
+  // silently weaken the byte-identity requirement that is the entire point of R-A1.
+  section('R-A1 failed-revision archival (PROTO-FRA)');
+  {
+    const ARCHIVE_PREFIX = '.ai-reports/handoffs/archive/';
+    const archivedMeta = (from) => ({ at: '2026-09-02', by: 'owner', from: from, rulingArtifact: ART('proto-fra-ruling') });
+    // A revision that has failed independent review: DRAFT, with a FAIL verdict on record.
+    const failedArc = (over) => mkArc(Object.assign({
+      state: 'PLANNING', authority: AUTH,
+      planning: { currentRevision: 1, revisions: [Object.assign(clone(REV1), {
+        status: 'DRAFT',
+        reviews: [{ artifact: ART('arc-a-plan-r1-review'), reviewer: 'MAIN', verdict: 'FAIL', at: '2026-08-21' }]
+      })], lease: null },
+      history: hist('IDEA', 'PLANNING')
+    }, over || {}));
+    // The archival act itself: source -> archive path, status -> WITHDRAWN, archived{} written.
+    // rev / sourceHash / reviews[] / history[] are deliberately left alone.
+    const applyArchival = (arc) => {
+      const a = clone(arc);
+      const r = a.planning.revisions[0];
+      r.archived = archivedMeta(r.source);
+      r.source = ARCHIVE_PREFIX + path.posix.basename(r.source);
+      r.status = 'WITHDRAWN';
+      return a;
+    };
+    // R-A1 expressed as executable logic; the prose in registry-contract.md must match it.
+    // `movedBytes` is a Buffer of the file as it now sits at the archive path, or null when the
+    // case under test is not about bytes.
+    const archivalRefusals = (before, after, movedBytes) => {
+      const reasons = [];
+      const b = before.planning.revisions[0], a = after.planning.revisions[0];
+      if (!['DRAFT', 'REVIEWED'].includes(b.status)) reasons.push('precondition: status was ' + b.status + ' - a PROMOTED or PUBLISHED revision can never use R-A1');
+      if (!(b.reviews || []).some((v) => v.verdict === 'FAIL')) reasons.push('precondition: no reviews[] entry with verdict FAIL');
+      if (a.rev !== b.rev) reasons.push('rev changed');
+      if (a.sourceHash !== b.sourceHash) reasons.push('sourceHash changed');
+      if (JSON.stringify(a.reviews) !== JSON.stringify(b.reviews)) reasons.push('reviews[] changed');
+      if (String(a.source).indexOf(ARCHIVE_PREFIX) !== 0) reasons.push('source is not under ' + ARCHIVE_PREFIX);
+      if (a.status !== 'WITHDRAWN') reasons.push('status is ' + a.status + ', not WITHDRAWN');
+      if (!isObj(a.archived)) reasons.push('archived{} absent');
+      if (movedBytes !== null && sha256(movedBytes) !== b.sourceHash) reasons.push('moved bytes differ: sha256(source) != sourceHash');
+      if (JSON.stringify(after.history) !== JSON.stringify(before.history)) reasons.push('history[] changed - no transition may be recorded');
+      return reasons;
+    };
+    // Real planted files, read as raw Buffers, so RA1-1 and RA1-7 are byte checks rather than
+    // assertions about bytes - and so the fixture semantics are identical to RA1-11's live check.
+    const plantDir = tmp('ra1');
+    fs.writeFileSync(path.join(plantDir, 'good.md'), '# r-a1 fixture plan source\n');
+    fs.writeFileSync(path.join(plantDir, 'drifted.md'), '# r-a1 fixture plan source\none byte of drift\n');
+    const movedGood = fs.readFileSync(path.join(plantDir, 'good.md'));
+    const movedDrifted = fs.readFileSync(path.join(plantDir, 'drifted.md'));
+    const pinned = failedArc();
+    pinned.planning.revisions[0].sourceHash = sha256(movedGood);
+
+    const ra1 = applyArchival(pinned);
+    check('RA1-1 DRAFT + FAIL review + archive path + WITHDRAWN + archived{} is schema-valid and satisfies R-A1 (' + (viol(ra1).join(' | ') || 'schema clean') + ')',
+      ok(ra1) && archivalRefusals(pinned, ra1, movedGood).length === 0);
+
+    const ra2 = applyArchival(pinned); ra2.planning.revisions[0].status = 'DRAFT';
+    check('RA1-2 archive path but status still DRAFT REFUSED (the schema conditional requires WITHDRAWN)',
+      !ok(ra2) && archivalRefusals(pinned, ra2, movedGood).length > 0);
+
+    const ra3 = applyArchival(pinned); delete ra3.planning.revisions[0].archived;
+    check('RA1-3 archive path with archived{} absent REFUSED',
+      !ok(ra3) && archivalRefusals(pinned, ra3, movedGood).length > 0);
+
+    const promoted = failedArc(); promoted.planning.revisions[0].status = 'PROMOTED';
+    check('RA1-4 a PROMOTED revision may never be archived REFUSED',
+      archivalRefusals(promoted, applyArchival(promoted), movedGood).some((r) => /PROMOTED or PUBLISHED/.test(r)));
+
+    const published = failedArc(); published.planning.revisions[0].status = 'PUBLISHED';
+    check('RA1-5 a PUBLISHED revision may never be archived REFUSED',
+      archivalRefusals(published, applyArchival(published), movedGood).some((r) => /PROMOTED or PUBLISHED/.test(r)));
+
+    const noFail = failedArc();
+    noFail.planning.revisions[0].reviews = [{ artifact: ART('arc-a-plan-r1-review'), reviewer: 'CODEX', verdict: 'PASS', at: '2026-08-21' }];
+    check('RA1-6 no FAIL verdict in reviews[] REFUSED (archival is for failed revisions only)',
+      archivalRefusals(noFail, applyArchival(noFail), movedGood).some((r) => /verdict FAIL/.test(r)));
+
+    check('RA1-7 moved bytes that differ from sourceHash REFUSED - byte identity is the pin, and the pin is the whole point',
+      archivalRefusals(pinned, ra1, movedDrifted).some((r) => /moved bytes differ/.test(r)));
+
+    const ra8 = applyArchival(pinned);
+    ra8.planning.revisions[0].sourceHash = 'b'.repeat(64);
+    ra8.planning.revisions[0].reviews = [];
+    check('RA1-8 rev / sourceHash / reviews[] altered by the act REFUSED',
+      archivalRefusals(pinned, ra8, movedGood).some((r) => /sourceHash changed/.test(r))
+      && archivalRefusals(pinned, ra8, movedGood).some((r) => /reviews\[\] changed/.test(r)));
+
+    const ra9 = applyArchival(pinned);
+    ra9.history = ra9.history.concat([{ state: 'PLANNING', at: ISO('2026-09-02'), by: 'owner', note: 'illegal archival transition' }]);
+    check('RA1-9 history[] grew during the act REFUSED - archival records no state transition',
+      archivalRefusals(pinned, ra9, movedGood).some((r) => /history\[\] changed/.test(r)));
+
+    check('RA1-10 CONTROL: a normal non-archived revision is still schema-valid and unaffected by R-A1 (no regression)',
+      ok(failedArc()) && ok(planningArc()) && ok(readyArc()) && ok(executingArc()));
+
+    // The invariant is bidirectional: archive path <=> archived{}. Without this direction the
+    // schema would admit archival metadata pinned to a source still sitting in the live corpus,
+    // which is a record claiming an act that never happened.
+    const ra12 = clone(pinned);
+    ra12.planning.revisions[0].archived = archivedMeta(ra12.planning.revisions[0].source);
+    check('RA1-12 archived{} on a revision whose source is NOT under the archive path REFUSED (' + (viol(ra12).join(' | ') || 'WRONGLY ACCEPTED') + ')',
+      !ok(ra12) && String(ra12.planning.revisions[0].source).indexOf(ARCHIVE_PREFIX) !== 0);
+
+    // RA1-11 live property (existsSync-guarded, property-only, never a count or an inventory):
+    // every revision whose source sits under handoffs/archive/ must satisfy R-A1 - including the
+    // byte pin, hashed from the archived file's RAW bytes against the recorded sourceHash.
+    {
+      const seeds = abs(REL.arcsLocal);
+      const offenders = [];
+      if (fs.existsSync(seeds)) {
+        for (const dir of fs.readdirSync(seeds).filter((d) => fs.existsSync(path.join(seeds, d, 'arc.json')))) {
+          let arc = null;
+          try { arc = JSON.parse(stripCR(fs.readFileSync(path.join(seeds, dir, 'arc.json'), 'utf8'))); } catch (e) { continue; }
+          for (const r of ((arc.planning || {}).revisions || [])) {
+            if (String(r.source || '').indexOf(ARCHIVE_PREFIX) !== 0) continue;
+            const why = [];
+            if (r.status !== 'WITHDRAWN') why.push('status ' + r.status + ', not WITHDRAWN');
+            if (!isObj(r.archived)) why.push('archived{} absent');
+            if (!(r.reviews || []).some((v) => v.verdict === 'FAIL')) why.push('no FAIL review');
+            if (!exists(r.source)) why.push('source missing at the archive path');
+            else {
+              const onDisk = sha256(fs.readFileSync(abs(r.source)));
+              if (onDisk !== r.sourceHash) why.push('archived bytes ' + onDisk.slice(0, 16) + '… != sourceHash ' + String(r.sourceHash).slice(0, 16) + '…');
+            }
+            if (why.length) offenders.push(dir + ' rev ' + r.rev + ': ' + why.join(', '));
+          }
+        }
+      }
+      check('RA1-11 live property: every revision whose source is under ' + ARCHIVE_PREFIX + ' satisfies R-A1, archived bytes included (' + (offenders.join(' | ') || 'no offending revision') + ')',
+        offenders.length === 0);
+    }
+  }
+
   // ── scope authorization regression (qa/lib/arc-scope-authorization.js) ─────
   // FIXTURES ONLY. Every call below passes an explicit opts.root or opts.runtimeRoot rooted under
   // os.tmpdir() plus a fixed opts.headSha; the live runtime is never read and never written here.

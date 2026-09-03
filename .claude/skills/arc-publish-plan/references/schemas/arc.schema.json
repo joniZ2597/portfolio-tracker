@@ -209,8 +209,30 @@
         "source": { "$ref": "#/$defs/artifact" },
         "sourceHash": { "$ref": "#/$defs/sha256" },
         "status": { "type": "string", "enum": ["DRAFT", "REVIEWED", "PROMOTED", "PUBLISHED", "SUPERSEDED", "WITHDRAWN"] },
-        "reviews": { "type": "array", "default": [], "items": { "$ref": "#/$defs/review" } }
-      }
+        "reviews": { "type": "array", "default": [], "items": { "$ref": "#/$defs/review" } },
+        "archived": {
+          "description": "R-A1 failed-revision archival. Present EXACTLY when `source` sits under .ai-reports/handoffs/archive/ - the two conditionals below enforce that biconditional in both directions. The act moves the source file byte-identically, so `sourceHash` still pins it; `rev`, `sourceHash` and `reviews[]` are never changed by the act, and no history[] entry is written because no state transition occurs.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["at", "by", "from", "rulingArtifact"],
+          "properties": {
+            "at": { "$ref": "#/$defs/date" },
+            "by": { "type": "string", "enum": ["owner"] },
+            "from": { "$ref": "#/$defs/artifact" },
+            "rulingArtifact": { "$ref": "#/$defs/artifact" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "source": { "pattern": "^\\.ai-reports/handoffs/archive/" } }, "required": ["source"] },
+          "then": { "required": ["archived"], "properties": { "status": { "const": "WITHDRAWN" } } }
+        },
+        {
+          "if": { "required": ["archived"] },
+          "then": { "required": ["source"], "properties": { "source": { "pattern": "^\\.ai-reports/handoffs/archive/" } } }
+        }
+      ]
     },
     "lease": {
       "description": "Advisory only - which lane/conversation is authoring now. Never a lock.",
