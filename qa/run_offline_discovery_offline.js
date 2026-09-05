@@ -231,28 +231,36 @@ check('D09 this suite has no registration literal anywhere in the runner source'
 check('D09 this suite matches the discovery pattern and is in the live effective set',
   /(_offline|_test)\.js$/.test(SELF) && OFFLINE_TESTS.indexOf(SELF) !== -1);
 
-// ── Fail-closed shape guard (D-2.1) ──────────────────────────────────────────────────
+// ── Fail-closed shape guard (D-2.1, generalized post-WFT-S1) ─────────────────────────
 section('shape guard');
 
-// preSliceEffectiveCount is the count captured from the pre-slice baseline run and recorded
-// in the slice evidence. The guard is a RELATION - pre-slice plus exactly what this slice
-// adds - never a bare literal, which would be arithmetically stale the moment it changed.
+// PRE_SLICE_EFFECTIVE_COUNT is a frozen historical constant captured from the pre-WFT-S1
+// baseline run: it protects against the LANDED baseline array silently shrinking or being
+// corrupted, and is never expected to change.
+//
+// The set of suites beyond that baseline is NOT hand-enumerated per slice - a hardcoded
+// list would reject any legitimate suite a later, unrelated slice adds (exactly WFT-S1's
+// own limitation). It is instead independently re-derived by re-scanning the real qa/
+// directory through the same discoverSuites() primitive the runner itself uses, then
+// applying the identical baseline/denylist exclusion - NOT by subtracting
+// OFFLINE_TESTS_BASELINE from OFFLINE_TESTS itself, which would make every check below
+// tautologically true (count-only in disguise) and defeat the guard's purpose.
 const PRE_SLICE_EFFECTIVE_COUNT = 41;
-const ADDED_BY_THIS_SLICE = [
-  'qa/instruction_layer_offline.js',
-  'qa/run_offline_discovery_offline.js'
-];
+const rediscovered = discoverSuites(path.join(ROOT, 'qa'));
+const derivedAdditions = rediscovered
+  .filter((f) => OFFLINE_TESTS_DENYLIST.indexOf(f) === -1 && OFFLINE_TESTS_BASELINE.indexOf(f) === -1)
+  .sort();
 
 check('shape the pre-slice effective count equals the landed baseline size',
   OFFLINE_TESTS_BASELINE.length === PRE_SLICE_EFFECTIVE_COUNT);
-check('shape the effective set is exactly pre-slice plus the suites this slice adds',
-  OFFLINE_TESTS.length === PRE_SLICE_EFFECTIVE_COUNT + ADDED_BY_THIS_SLICE.length);
+check('shape the effective set is exactly pre-slice plus the independently re-derived additions',
+  OFFLINE_TESTS.length === PRE_SLICE_EFFECTIVE_COUNT + derivedAdditions.length);
 check('shape every pre-slice member is still present',
   OFFLINE_TESTS_BASELINE.every((e) => OFFLINE_TESTS.indexOf(e) !== -1));
-check('shape both suites this slice adds are present',
-  ADDED_BY_THIS_SLICE.every((e) => OFFLINE_TESTS.indexOf(e) !== -1));
-check('shape no entry appears that is neither pre-slice nor added by this slice',
-  OFFLINE_TESTS.every((e) => OFFLINE_TESTS_BASELINE.indexOf(e) !== -1 || ADDED_BY_THIS_SLICE.indexOf(e) !== -1));
+check('shape every independently re-derived addition is present in the effective set',
+  derivedAdditions.every((e) => OFFLINE_TESTS.indexOf(e) !== -1));
+check('shape no entry appears that is neither pre-slice nor an independently re-derived addition',
+  OFFLINE_TESTS.every((e) => OFFLINE_TESTS_BASELINE.indexOf(e) !== -1 || derivedAdditions.indexOf(e) !== -1));
 check('shape both denylisted filenames are absent',
   OFFLINE_TESTS_DENYLIST.every((d) => OFFLINE_TESTS.indexOf(d) === -1));
 
