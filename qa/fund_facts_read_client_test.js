@@ -942,8 +942,12 @@ function respond(status, body) {
     ok(!/pt_enable_fund_facts/.test(html), 'gate has no lowercase storage-key form anywhere');
     eq(ro.split("'PT_ENABLE_FUND_FACTS_READ_CLIENT'").length - 1, 1, 'gate registered exactly once in CLIENT_GATES');
     ok(ro.indexOf('10 known client gates') !== -1, 'stale gate-count comment updated to 10');
-    ok(ro.indexOf('fund_facts_read_offline.js') === -1, 'unrelated read-endpoint suite not registered');
-    ok(ro.indexOf('news_catalysts_provider_offline.js') === -1, 'unrelated news suite not registered');
+    // WFT-S1: both suites are asked of the runner's effective suite set through its
+    // discovery seam rather than by scanning its source text - the denylist literals now
+    // appear in that source, so a source scan could no longer fail and would assert nothing.
+    const effective = require(RUN_OFFLINE_PATH).OFFLINE_TESTS;
+    ok(effective.indexOf('qa/fund_facts_read_offline.js') === -1, 'unrelated read-endpoint suite not registered');
+    ok(effective.indexOf('qa/news_catalysts_provider_offline.js') === -1, 'unrelated news suite not registered');
   });
 
   await test('RC33: gate behavior — no request unless strictly true; token cleared first', async function () {

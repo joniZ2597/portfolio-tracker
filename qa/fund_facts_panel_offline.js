@@ -475,8 +475,12 @@ async function main() {
   await test('PN15: suite registered exactly once in run-offline.js OFFLINE_TESTS', function () {
     const ro = fs.readFileSync(RUN_OFFLINE_PATH, 'utf8');
     eq(ro.split("'qa/fund_facts_panel_offline.js'").length - 1, 1, 'registered exactly once');
-    // The landed S6 suite asserts this unrelated suite stays unregistered.
-    ok(ro.indexOf('fund_facts_read_offline.js') === -1, 'unrelated read-endpoint suite still unregistered');
+    // The landed S6 suite asserts this unrelated suite stays out of the run.
+    // WFT-S1: asked of the runner's effective suite set through its discovery seam rather
+    // than by scanning its source text - the denylist literal now appears in that source,
+    // so a source scan could no longer fail and would assert nothing.
+    const effective = require(RUN_OFFLINE_PATH).OFFLINE_TESTS;
+    ok(effective.indexOf('qa/fund_facts_read_offline.js') === -1, 'unrelated read-endpoint suite still unregistered');
   });
 
   await test('PN16: verbatim read-client block still byte-identical (drift guard)', function () {

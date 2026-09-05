@@ -164,7 +164,13 @@ function extractConstSource(content, name) {
   return content.slice(start, semi + 1);
 }
 
-const OFFLINE_TESTS = [
+// ── W1 (WFT-S1): suite auto-discovery replaces the registration chokepoint ───────────
+// OFFLINE_TESTS is no longer hand-maintained. OFFLINE_TESTS_BASELINE holds the 41 landed
+// entries byte-for-byte and in their landed order; anything else in qa/ matching the
+// discovery pattern is appended in sorted order. The quoted 'qa/...' literals below are
+// load-bearing beyond this array: sibling suites assert their presence, their exact
+// occurrence count, and their relative ordering in this file's source text.
+const OFFLINE_TESTS_BASELINE = [
   'qa/research_evidence_contract_test.js',
   'qa/research_evidence_mock_provider_test.js',
   'qa/research_evidence_cache_test.js',
@@ -207,6 +213,68 @@ const OFFLINE_TESTS = [
   'qa/arc_runtime_ops_offline.js',
   'qa/arc_safecheck_offline.js'
 ];
+
+// Files that match the discovery pattern but are deliberately NOT part of qa:offline.
+// Kept as an explicit list so exclusion is a recorded decision rather than an accident of
+// naming. Removing an entry here is the mutation that proves the sibling non-membership
+// assertions can actually fail.
+const OFFLINE_TESTS_DENYLIST = [
+  'qa/fund_facts_read_offline.js',
+  'qa/news_catalysts_provider_offline.js'
+];
+
+// Top-level qa/ only. qa/lib/** is never discovered by construction - the walk does not
+// recurse - rather than by an exclusion rule that could be forgotten.
+const OFFLINE_SUITE_RE = /(_offline|_test)\.js$/;
+
+function discoverSuites(dir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    return [];
+  }
+  return entries
+    .filter(function (d) { return d.isFile() && OFFLINE_SUITE_RE.test(d.name); })
+    .map(function (d) { return 'qa/' + d.name; })
+    .sort();
+}
+
+function fatalMissingBaseline(message) {
+  console.log('  FAIL  offline-test: ' + message);
+  console.log('OFFLINE VALIDATION: FAIL (baseline suite missing)');
+  process.exit(1);
+}
+
+// Effective set = baseline (landed order preserved) + newly discovered (sorted), minus the
+// denylist. A baseline entry absent from disk is FATAL: silently running 40 suites instead
+// of 41 is exactly the failure this discovery mechanism must not introduce.
+// Every input is injectable so the FATAL branch and the ordering guarantees are testable
+// without touching the real qa/ tree or terminating the test process.
+function computeEffective(options) {
+  const opts = options || {};
+  const baseline = opts.baseline === undefined ? OFFLINE_TESTS_BASELINE : opts.baseline;
+  const denylist = opts.denylist === undefined ? OFFLINE_TESTS_DENYLIST : opts.denylist;
+  const discovered = opts.discovered === undefined
+    ? discoverSuites(path.join(ROOT, 'qa'))
+    : opts.discovered;
+  const onFatal = opts.onFatal === undefined ? fatalMissingBaseline : opts.onFatal;
+
+  const missing = baseline.filter(function (entry) { return discovered.indexOf(entry) === -1; });
+  if (missing.length > 0) {
+    return onFatal('baseline suite missing from qa/: ' + missing.join(', '));
+  }
+
+  const denied = denylist.slice();
+  const isDenied = function (file) { return denied.indexOf(file) !== -1; };
+  const kept = baseline.filter(function (entry) { return !isDenied(entry); });
+  const added = discovered
+    .filter(function (file) { return !isDenied(file) && baseline.indexOf(file) === -1; })
+    .sort();
+  return kept.concat(added);
+}
+
+const OFFLINE_TESTS = computeEffective();
 
 const CLIENT_GATES = [
   'PT_ENABLE_CAPITAL_RETURNS_CLIENT',
@@ -300,10 +368,12 @@ function phaseOfflineTests() {
       continue;
     }
 
+    const suiteStarted = Date.now();
     const result = spawnSync(NODE, [abs(testFile)], {
       encoding: 'utf8',
       cwd: ROOT
     });
+    const suiteMs = Date.now() - suiteStarted;
 
     if (result.status === 0) {
       pass(testFile);
@@ -319,6 +389,9 @@ function phaseOfflineTests() {
       const output = ((result.stdout || '') + (result.stderr || '')).trim();
       fail('offline-test', testFile + ' exited with ' + result.status + (output ? '\n' + output : ''));
     }
+
+    suiteTimings.push({ file: testFile, ms: suiteMs });
+    console.log(QA_TIMING_MARKER + 'suite ' + testFile + ' ' + suiteMs);
   }
 
   console.log('  (' + OFFLINE_TESTS.length + ' offline test file(s))');
@@ -328,6 +401,45 @@ function phaseOfflineTests() {
 // even on success; the runner otherwise discards a passing suite's stdout. Kept in sync with
 // QA_SURFACE in qa/arc_registry_offline.js.
 const QA_SURFACE_MARKER = '@@QA-SURFACE@@ ';
+
+// ── W2 (WFT-S1): additive timing instrumentation ─────────────────────────────────────
+// Print-only. Nothing here participates in pass/fail and no pre-existing line is altered
+// or reordered; every timing line is appended alongside output that already existed.
+const QA_TIMING_MARKER = '@@QA-TIMING@@ ';
+const phaseTimings = [];
+const suiteTimings = [];
+
+async function timedPhase(name, fn) {
+  const started = Date.now();
+  await fn();
+  const elapsed = Date.now() - started;
+  phaseTimings.push({ name: name, ms: elapsed });
+  console.log(QA_TIMING_MARKER + 'phase ' + name + ' ' + elapsed);
+}
+
+function printTimingSummary() {
+  const totalMs = phaseTimings.reduce(function (sum, p) { return sum + p.ms; }, 0);
+  header('Timing summary (W2)');
+  console.log('  total ' + totalMs + ' ms across ' + phaseTimings.length
+    + ' phase(s) and ' + suiteTimings.length + ' spawned suite(s)');
+
+  for (const p of phaseTimings) {
+    console.log('  phase  ' + p.ms + ' ms  ' + p.name);
+  }
+
+  const slowest = suiteTimings
+    .slice()
+    .sort(function (a, b) { return b.ms - a.ms; })
+    .slice(0, 5);
+
+  console.log('  five slowest suites:');
+  if (slowest.length === 0) {
+    console.log('    (no suites were spawned)');
+  }
+  for (const s of slowest) {
+    console.log('    ' + s.ms + ' ms  ' + s.file);
+  }
+}
 
 // The six fund-facts-* libs are swept alongside the evidence libs (WU-VAL / VAL-QA). They are
 // server-side product code sitting on the same containment boundary, but were previously outside
@@ -3755,20 +3867,22 @@ async function main() {
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
 
-  phaseSyntax();
-  phaseOfflineTests();
-  phaseForbiddenSurface();
-  phaseResolverTests();
-  phaseResearchViewTests();
-  phaseTerminalChainIntegrity();
-  phaseBackupFidelity();
-  await phasePortfolioReporting();
-  phaseMoneyMath();
-  phaseReconciliation();
-  phaseNeedsAttention();
-  phaseTechScore();
-  phaseScoreContract();
-  await phaseProviderPolicy();
+  await timedPhase('Phase 1 - syntax check', phaseSyntax);
+  await timedPhase('Phase 2 - offline tests', phaseOfflineTests);
+  await timedPhase('Phase 3 - forbidden-surface checks', phaseForbiddenSurface);
+  await timedPhase('Phase 4 - research resolver', phaseResolverTests);
+  await timedPhase('Phase 5 - ResearchView adapter', phaseResearchViewTests);
+  await timedPhase('Phase 6 - terminal-chain integrity', phaseTerminalChainIntegrity);
+  await timedPhase('Phase 7 - backup fidelity', phaseBackupFidelity);
+  await timedPhase('Phase 8 - portfolio reporting', phasePortfolioReporting);
+  await timedPhase('Phase 9 - money math', phaseMoneyMath);
+  await timedPhase('Phase 10 - broker reconciliation', phaseReconciliation);
+  await timedPhase('Phase 11 - needs attention', phaseNeedsAttention);
+  await timedPhase('Phase 12 - technical score', phaseTechScore);
+  await timedPhase('Phase 13 - score contract', phaseScoreContract);
+  await timedPhase('Phase 14 - provider policy', phaseProviderPolicy);
+
+  printTimingSummary();
 
   console.log('\n=== Summary ===');
 
@@ -3789,7 +3903,24 @@ async function main() {
   console.log('OFFLINE VALIDATION: PASS');
 }
 
-main().catch(function (e) {
-  console.error(e);
-  process.exit(1);
-});
+// ── Test seam (WFT-S1, D-1 clause 2 / D-2.2) ─────────────────────────────────────────
+// The runner's execution path runs only when this file is executed directly, so a suite
+// may require() it to obtain the discovery and effective-set logic without running qa
+// validation as a side effect. Direct execution is unchanged: `main().catch(...)` was the
+// only top-level executable statement in this file, so guarding it is the whole seam.
+if (require.main === module) {
+  main().catch(function (e) {
+    console.error(e);
+    process.exit(1);
+  });
+}
+
+// Exported surface is exactly the discovery and effective-set logic and its inputs -
+// nothing else in this runner is reachable through require().
+module.exports = {
+  OFFLINE_TESTS_BASELINE: OFFLINE_TESTS_BASELINE,
+  OFFLINE_TESTS_DENYLIST: OFFLINE_TESTS_DENYLIST,
+  discoverSuites: discoverSuites,
+  computeEffective: computeEffective,
+  OFFLINE_TESTS: OFFLINE_TESTS
+};
