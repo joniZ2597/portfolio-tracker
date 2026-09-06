@@ -51,7 +51,8 @@ const REL = {
     // B6 (P-E execution side, 2026-08-22) owns arc-worker/SKILL.md, claim-protocol.md, runtime-contract.md,
     // worker-report.md, arc-authorize/SKILL.md, owner-ops.md and authorize-report.md; their HEAD-identity pins
     // were removed mechanically (R-B4-2 pattern). D5-e below still proves those files never read the registry.
-    '.claude/skills/arc-worker/references/execution-profile.md', '.claude/skills/arc-worker/scripts/phase-gate.js',
+    // phase-gate.js's pin was removed the same way by WU-PHG B6.2, which fixes that file.
+    '.claude/skills/arc-worker/references/execution-profile.md',
     // B5 (P-E publisher, 2026-08-22) owns arc-publish-plan/SKILL.md, plan-validation.md, publish-protocol.md, plan-projection.md,
     // publish-report.md, resolve-profiles.js and profile-contract.js; their HEAD-identity pins were removed mechanically (R-B4-2 pattern).
     '.claude/skills/arc-publish-plan/references/bootstrap.md',

@@ -56,10 +56,10 @@ const REL = {
     ownerOps: AUTH_DIR + '/references/owner-ops.md',
     runner: 'qa/run-offline.js'
   },
-  // B6 never touches these (B5 / B4 / B3 surfaces, and the two worker artifacts B6 proved it does not
-  // need to change); byte-identical to HEAD
+  // B6 never touches these (B5 / B4 / B3 surfaces, and the worker artifact B6 proved it does not
+  // need to change); byte-identical to HEAD. phase-gate.js's pin was removed the same way by
+  // WU-PHG B6.2, which fixes that file.
   forbidden: [
-    WORKER_DIR + '/scripts/phase-gate.js',
     WORKER_DIR + '/references/execution-profile.md',
     PUB_DIR + '/SKILL.md', PUB_DIR + '/references/publish-protocol.md', PUB_DIR + '/references/plan-validation.md',
     PUB_DIR + '/references/bootstrap.md', PUB_DIR + '/templates/plan-projection.md', PUB_DIR + '/templates/publish-report.md',
@@ -1174,8 +1174,23 @@ try {
     const t = readText(REL.docs.runner);
     return /'qa\/arc_runtime_ops_offline\.js'/.test(t) && t.indexOf("'qa/arc_multi_arc_offline.js'") < t.indexOf("'qa/arc_runtime_ops_offline.js'");
   })());
-  check('scope phase-gate.js needed no B6/B6.1 change: it accepts --claim-dir and flags legacyNamespace; the <namespace>/.../<TASK-ID> shape check lives in resolveScope, so it runs on the --scope / --phase paths and NOT on --ladder (source-presence check only; --ladder validation is a deferred B6.2 candidate)',
-    exists(REL.gate) && /--claim-dir/.test(readText(REL.gate)) && /legacyNamespace/.test(readText(REL.gate)) && /claim-dir must end with/.test(readText(REL.gate)));
+  // WU-PHG B6.2 corrected the stale claim here. --ladder now calls validateClaimDir directly before
+  // rendering the ladder block, enforcing the same claim-dir contract that --scope already enforced.
+  // The condition is EXECUTED against the real gate rather than grepping the source, so it fails if
+  // --ladder ever again renders a ladder block for a structurally invalid claim directory.
+  const gateRepo = mkRepo('gate-ladder', { snapshots: { 'legacy-v3': {} }, legacyPointer: 'legacy-v3' });
+  const gatePlan = fwd(path.join(gateRepo.root, 'plans', 'legacy-v3', 'plan.json'));
+  const ladderRefusals = [
+    ['not relative to the runtime root', '/abs/TASK-10'],
+    ['fewer than two path segments', 'TASK-10'],
+    ['an empty, dot, double-dot or otherwise invalid segment', 'claims/../TASK-10'],
+    ['a final segment that is not the exact task id', 'claims/SOMEONE-ELSE']
+  ].map(function (p) {
+    const r = spawnSync(process.execPath, [REAL_GATE, '--plan', gatePlan, '--task', 'TASK-10', '--ladder', '--claim-dir', p[1]], { encoding: 'utf8', cwd: gateRepo.dir });
+    return { label: p[0], status: r.status, out: (r.stdout || '') + (r.stderr || '') };
+  });
+  check('scope phase-gate.js --ladder enforces the same validateClaimDir contract --scope already enforced: each of the four structurally invalid claim-dir classes exits 3 and renders NO ladder block (executed against the real gate, not a source grep)',
+    exists(REL.gate) && ladderRefusals.every(function (r) { return r.status === 3 && /claim-dir/.test(r.out) && !/PROFILE BINDING/.test(r.out); }));
   for (const f of REL.forbidden) {
     const head = gitShow(f);
     check('scope unchanged vs HEAD: ' + f, head !== null && exists(f) && sha256(stripCR(readText(f))) === sha256(head));

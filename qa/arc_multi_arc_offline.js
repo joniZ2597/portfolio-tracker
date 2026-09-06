@@ -55,9 +55,10 @@ const REL = {
   // B6 (P-E execution side, 2026-08-22) owns arc-worker/SKILL.md, claim-protocol.md, runtime-contract.md,
   // worker-report.md, arc-authorize/SKILL.md, owner-ops.md and authorize-report.md; their HEAD-identity pins
   // were removed here mechanically (same pattern as R-B4-2 / the B5 narrowing). No assertion below is weakened:
-  // execution-profile.md and phase-gate.js stay pinned because B6 proved it needed neither.
+  // execution-profile.md stays pinned because B6 proved it needed no change; phase-gate.js's pin was
+  // removed here mechanically (same pattern) by WU-PHG B6.2, which fixes that file. No assertion weakened.
   forbidden: [
-    '.claude/skills/arc-worker/references/execution-profile.md', '.claude/skills/arc-worker/scripts/phase-gate.js',
+    '.claude/skills/arc-worker/references/execution-profile.md',
     SKILL_DIR + '/references/bootstrap.md', SKILL_DIR + '/scripts/lib/runtime-identity.js', SKILL_DIR + '/references/execution-profiles/README.md',
     SCHEMA_DIR + '/plan.schema.json', SCHEMA_DIR + '/current.schema.json', SCHEMA_DIR + '/claim.schema.json', SCHEMA_DIR + '/authorized.schema.json',
     SCHEMA_DIR + '/holder.schema.json', SCHEMA_DIR + '/arc.schema.json', SCHEMA_DIR + '/execution-profile.schema.json',

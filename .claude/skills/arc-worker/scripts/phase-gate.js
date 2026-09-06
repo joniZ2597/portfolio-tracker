@@ -102,11 +102,32 @@ function harnessModeOf(text) {
   if (typeof text !== 'string') return null;
   const t = text.trim();
   if (!t || /NOT MACHINE-VERIFIABLE/.test(t)) return null;
-  for (const u of UNMAPPED_HARNESS_MODES) if (new RegExp('(^|[^A-Za-z])' + u + '([^A-Za-z]|$)').test(t)) return { unmapped: u, raw: t };
+  // A notice announcing an EXIT from a mode, or reporting its COMPLETION, does not say the mode is
+  // current. The two cues are DIRECTIONAL and are the only ones recognised: "exited" immediately
+  // before the mode name, and "completed" after it across a mandatory "mode" token. Suppression is
+  // per OCCURRENCE, so an exit for one mode never hides a genuine entry for another in the same text.
+  const BEFORE_EXIT = /(^|[^A-Za-z])exited[^A-Za-z]+$/i;
+  const AFTER_COMPLETED = /^[^A-Za-z]+mode[^A-Za-z]+completed(?![A-Za-z])/i;
+  // Occurrence scan without a stateful regex cursor: find each occurrence, honour the same boundary
+  // rule the original pattern used, and judge cue adjacency per occurrence.
+  const occurs = (needle, ci, bounded) => {
+    const hay = ci ? t.toLowerCase() : t;
+    const nd = ci ? needle.toLowerCase() : needle;
+    let i = hay.indexOf(nd);
+    while (i !== -1) {
+      const before = t.slice(0, i);
+      const after = t.slice(i + nd.length);
+      const bounds = !bounded || ((i === 0 || !/[A-Za-z]$/.test(before)) && !/^[A-Za-z]/.test(after));
+      if (bounds && !BEFORE_EXIT.test(before) && !AFTER_COMPLETED.test(after)) return true;
+      i = hay.indexOf(nd, i + 1);
+    }
+    return false;
+  };
+  for (const u of UNMAPPED_HARNESS_MODES) if (occurs(u, false, true)) return { unmapped: u, raw: t };
   const hits = [];
-  if (/(^|[^A-Za-z])auto([^A-Za-z]|$)/i.test(t)) hits.push('AUTO');
-  if (/acceptEdits|accept edits/i.test(t)) hits.push('ACCEPT_EDITS');
-  if (/(^|[^A-Za-z])manual([^A-Za-z]|$)/i.test(t)) hits.push('MANUAL');
+  if (occurs('auto', true, true)) hits.push('AUTO');
+  if (occurs('acceptEdits', true, false) || occurs('accept edits', true, false)) hits.push('ACCEPT_EDITS');
+  if (occurs('manual', true, true)) hits.push('MANUAL');
   if (!hits.length) return null;
   hits.sort((a, b) => RANK[b] - RANK[a]);          // the most automated mention wins (fail closed)
   return { mapped: hits[0], raw: t };
@@ -310,7 +331,11 @@ function runCli(argv) {
 
   if (binding.status === 'missing' || binding.status === 'mismatch') return { code: 4, out: head + 'PROFILE BINDING   ' + task.id + '\n' + pad('profile') + binding.reason + '\n' + pad('disposition') + 'pre-claim: IDLE, nothing written · on --resume: BLOCKED (R-11)\n' };
 
-  if (args.ladder) return { code: 0, out: head + renderLadderBlock(binding, { claimDir }) + '\n' };
+  if (args.ladder) {
+    const cdErr = validateClaimDir(claimDir, task.id);
+    if (cdErr) return usage(cdErr);
+    return { code: 0, out: head + renderLadderBlock(binding, { claimDir }) + '\n' };
+  }
 
   let phase = null;
   if (binding.status === 'bound') {
