@@ -29,13 +29,14 @@ in the published snapshot **only**; nothing reads this directory at runtime.
 | r2.1 (owner, 2026-08-21) | MAIN lane never AUTO in any phase · no boundary is grantable (`inside` is always empty; `outside` lists all eleven) · gate / live-provider / `pt_*` / git / runtime / deploy / env / production actions occur only in MANUAL phases, declared per phase via `actions[]` · `git-stage` is its own boundary; `git-commit` is never overloaded. |
 | Change control | A new task shape ⇒ a new profile added here by a reviewed commit. Library files are immutable once a snapshot has embedded them (the embedded copy + `libraryHash` pin the bytes). |
 
-## The seven canonical profiles (ladders are `recommended / ceiling`)
+## The eight canonical profiles (ladders are `recommended / ceiling`)
 
 | Profile | Lane | Ladder |
 |---|---|---|
 | `LAB-SANDBOX-STATIC` | LAB | BUILD A/A → RUN AUTO/AUTO → HANDOFF A/A → CLOSE M/M |
 | `MAIN-CODE-SLICE` | MAIN | PLAN M/M → IMPLEMENT M/M → VERIFY A/A → HANDOFF A/A → CLOSE M/M |
 | `MAIN-CODE-SLICE-BOUNDED` | MAIN | PLAN M/M → IMPLEMENT A/A + grant (`index.html`, `CODE:index-html`, `requiresOwnerGo: true`) → VERIFY A/A → HANDOFF A/A → CLOSE M/M |
+| `MAIN-SKILL-SLICE` | MAIN | PLAN M/M → IMPLEMENT M/M → VERIFY A/A → HANDOFF A/A → CLOSE M/M (writes `.claude/skills/arc-worker/scripts/*.js` + `qa/**`, not `index.html`/`netlify/functions/**`) |
 | `MAIN-BROWSER-QA` | MAIN | SETUP M/M → VERIFY M/M → HANDOFF A/A → CLOSE M/M |
 | `MAIN-GATED-LIVE-QA` | MAIN | SETUP M/M `[gate-toggle]` → VERIFY M/M `[live-external-call, gate-toggle]` → REPARK M/M `[gate-toggle]` → HANDOFF A/A → CLOSE M/M |
 | `COWORK-REGISTER` | COWORK | AUTHOR A/A → CLOSE M/M |

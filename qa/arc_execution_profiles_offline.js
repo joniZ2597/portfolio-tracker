@@ -89,7 +89,7 @@ const CLEANUP_REQUIRED = ['scratch', 'sandbox', 'gates', 'mutexes', 'handoff', '
 const PLACEHOLDER_RE = /^[^{}]*(\{TASK_ID\}[^{}]*)*$/;
 const GRANT_PATH_FORBIDDEN = [/^\.git\//, /^\.netlify\//, /^netlify\.toml$/, /^\.env/, /pt_/];
 const PROFILE_ID_RE = /^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$/;
-const LIBRARY_IDS = ['LAB-SANDBOX-STATIC', 'MAIN-CODE-SLICE', 'MAIN-CODE-SLICE-BOUNDED', 'MAIN-BROWSER-QA', 'MAIN-GATED-LIVE-QA', 'COWORK-REGISTER', 'OWNER-MANUAL'];
+const LIBRARY_IDS = ['COWORK-REGISTER', 'LAB-SANDBOX-STATIC', 'MAIN-BROWSER-QA', 'MAIN-CODE-SLICE', 'MAIN-CODE-SLICE-BOUNDED', 'MAIN-GATED-LIVE-QA', 'MAIN-SKILL-SLICE', 'OWNER-MANUAL'];
 
 // ── executable mirror of the contract: returns violation codes ──────────────
 function validateProfile(p) {

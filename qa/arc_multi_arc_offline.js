@@ -64,6 +64,7 @@ const REL = {
     SKILL_DIR + '/references/execution-profiles/COWORK-REGISTER.json', SKILL_DIR + '/references/execution-profiles/LAB-SANDBOX-STATIC.json',
     SKILL_DIR + '/references/execution-profiles/MAIN-BROWSER-QA.json', SKILL_DIR + '/references/execution-profiles/MAIN-CODE-SLICE-BOUNDED.json',
     SKILL_DIR + '/references/execution-profiles/MAIN-CODE-SLICE.json', SKILL_DIR + '/references/execution-profiles/MAIN-GATED-LIVE-QA.json',
+    SKILL_DIR + '/references/execution-profiles/MAIN-SKILL-SLICE.json',
     SKILL_DIR + '/references/execution-profiles/OWNER-MANUAL.json',
     '.claude/skills/arc-registry/references/registry-contract.md', '.claude/skills/arc-registry/templates/status-report.md',
     '.claude/skills/arc-progress-auditor/SKILL.md', '.claude/skills/arc-progress-auditor/templates/arc-audit.md',
