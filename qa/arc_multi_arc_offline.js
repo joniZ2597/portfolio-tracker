@@ -59,12 +59,13 @@ const REL = {
   // removed here mechanically (same pattern) by WU-PHG B6.2, which fixes that file. No assertion weakened.
   forbidden: [
     '.claude/skills/arc-worker/references/execution-profile.md',
-    SKILL_DIR + '/references/bootstrap.md', SKILL_DIR + '/scripts/lib/runtime-identity.js', SKILL_DIR + '/references/execution-profiles/README.md',
+    SKILL_DIR + '/references/bootstrap.md', SKILL_DIR + '/scripts/lib/runtime-identity.js',
     SCHEMA_DIR + '/plan.schema.json', SCHEMA_DIR + '/current.schema.json', SCHEMA_DIR + '/claim.schema.json', SCHEMA_DIR + '/authorized.schema.json',
     SCHEMA_DIR + '/holder.schema.json', SCHEMA_DIR + '/arc.schema.json', SCHEMA_DIR + '/execution-profile.schema.json',
     SKILL_DIR + '/references/execution-profiles/COWORK-REGISTER.json', SKILL_DIR + '/references/execution-profiles/LAB-SANDBOX-STATIC.json',
     SKILL_DIR + '/references/execution-profiles/MAIN-BROWSER-QA.json', SKILL_DIR + '/references/execution-profiles/MAIN-CODE-SLICE-BOUNDED.json',
     SKILL_DIR + '/references/execution-profiles/MAIN-CODE-SLICE.json', SKILL_DIR + '/references/execution-profiles/MAIN-GATED-LIVE-QA.json',
+    SKILL_DIR + '/references/execution-profiles/MAIN-PROFILE-SLICE.json',
     SKILL_DIR + '/references/execution-profiles/MAIN-SKILL-SLICE.json',
     SKILL_DIR + '/references/execution-profiles/OWNER-MANUAL.json',
     '.claude/skills/arc-registry/references/registry-contract.md', '.claude/skills/arc-registry/templates/status-report.md',

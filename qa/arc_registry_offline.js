@@ -58,7 +58,6 @@ const REL = {
     '.claude/skills/arc-publish-plan/references/bootstrap.md',
     '.claude/skills/arc-publish-plan/scripts/lib/runtime-identity.js',
     SCHEMA_DIR + '/plan.schema.json', SCHEMA_DIR + '/current.schema.json', SCHEMA_DIR + '/claim.schema.json', SCHEMA_DIR + '/authorized.schema.json', SCHEMA_DIR + '/holder.schema.json', SCHEMA_DIR + '/execution-profile.schema.json',
-    '.claude/skills/arc-publish-plan/references/execution-profiles/README.md',
     '.claude/skills/arc-progress-auditor/SKILL.md', '.claude/skills/arc-progress-auditor/templates/arc-audit.md',
     'netlify.toml'
   ]
