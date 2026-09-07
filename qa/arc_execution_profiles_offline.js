@@ -89,7 +89,7 @@ const CLEANUP_REQUIRED = ['scratch', 'sandbox', 'gates', 'mutexes', 'handoff', '
 const PLACEHOLDER_RE = /^[^{}]*(\{TASK_ID\}[^{}]*)*$/;
 const GRANT_PATH_FORBIDDEN = [/^\.git\//, /^\.netlify\//, /^netlify\.toml$/, /^\.env/, /pt_/];
 const PROFILE_ID_RE = /^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$/;
-const LIBRARY_IDS = ['COWORK-REGISTER', 'LAB-SANDBOX-STATIC', 'MAIN-BROWSER-QA', 'MAIN-CODE-SLICE', 'MAIN-CODE-SLICE-BOUNDED', 'MAIN-GATED-LIVE-QA', 'MAIN-PROFILE-SLICE', 'MAIN-SKILL-SLICE', 'OWNER-MANUAL'];
+const LIBRARY_IDS = ['COWORK-REGISTER', 'LAB-SANDBOX-STATIC', 'MAIN-BROWSER-QA', 'MAIN-CODE-SLICE', 'MAIN-CODE-SLICE-BOUNDED', 'MAIN-GATED-LIVE-QA', 'MAIN-PROFILE-SLICE', 'MAIN-SKILL-AUTHORING', 'MAIN-SKILL-SLICE', 'OWNER-MANUAL'];
 
 // ── executable mirror of the contract: returns violation codes ──────────────
 function validateProfile(p) {
@@ -359,7 +359,7 @@ check('EP-V14 ownerProfile write without pt-write action rejected', has((() => {
 console.log('== EP-V12/V13 committed library ==');
 let libFiles = [];
 try { libFiles = fs.readdirSync(abs(REL.libDir)).filter((f) => f.endsWith('.json')).sort(); } catch (e) { check('library directory present (' + e.message + ')', false); }
-check('EP-V12 library has exactly the nine canonical profiles', JSON.stringify(libFiles.slice().sort()) === JSON.stringify(LIBRARY_IDS.map((id) => id + '.json').sort()));
+check('EP-V12 library has exactly the ten canonical profiles', JSON.stringify(libFiles.slice().sort()) === JSON.stringify(LIBRARY_IDS.map((id) => id + '.json').sort()));
 check('EP-V12 README.md present', fs.existsSync(abs(path.join(REL.libDir, 'README.md'))));
 const seen = new Set();
 const hashes = {};

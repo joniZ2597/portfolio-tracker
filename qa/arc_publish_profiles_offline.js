@@ -160,7 +160,7 @@ if (lib) {
   try { library = lib.loadLibrary(abs(REL.libDir)); } catch (e) { check('EP-B0 loadLibrary throws: ' + e.message, false); }
   if (library) {
     check('EP-B0 library loads with zero errors' + (library.errors.length ? ' - ' + library.errors.map((e) => e.code).join(',') : ''), library.errors.length === 0);
-    check('EP-B0 library has the nine canonical profiles', Object.keys(library.profiles).sort().join(',') === 'COWORK-REGISTER,LAB-SANDBOX-STATIC,MAIN-BROWSER-QA,MAIN-CODE-SLICE,MAIN-CODE-SLICE-BOUNDED,MAIN-GATED-LIVE-QA,MAIN-PROFILE-SLICE,MAIN-SKILL-SLICE,OWNER-MANUAL');
+    check('EP-B0 library has the ten canonical profiles', Object.keys(library.profiles).sort().join(',') === 'COWORK-REGISTER,LAB-SANDBOX-STATIC,MAIN-BROWSER-QA,MAIN-CODE-SLICE,MAIN-CODE-SLICE-BOUNDED,MAIN-GATED-LIVE-QA,MAIN-PROFILE-SLICE,MAIN-SKILL-AUTHORING,MAIN-SKILL-SLICE,OWNER-MANUAL');
     for (const id of Object.keys(library.profiles)) {
       const e = library.profiles[id];
       check('EP-B0 ' + id + ' canonical (fileHash == canonicalHash)', e.fileHash === e.canonicalHash);
