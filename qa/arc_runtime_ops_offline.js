@@ -1126,6 +1126,8 @@ try {
     check('SA plan malformed JSON, hash matching the corrupt bytes ⇒ DENY at the parse branch, never a throw', denies({ planCorrupt: true }));
     check('SA plan bytes do not hash to claim.planHash ⇒ DENY', denies({ planHash: 'b'.repeat(64) }));
     check('SA plan.repoRef != HEAD ⇒ DENY (this is what expires the exemption once the edit is committed)', denies({ repoRef: 'c'.repeat(40) }));
+    check('SA plan.repoRef != HEAD ⇒ reason is exactly "plan-reporef-not-head" (the live-runtime section keys on this exact string to distinguish an expired-by-commit exemption from a real gap; a prefix or substring match would risk over-matching)',
+      (() => { const r = ask(mkChain({ repoRef: 'c'.repeat(40) })); return r.authorized === false && r.reason === 'plan-reporef-not-head'; })());
     check('SA claim.planId is not a safe single path segment ⇒ DENY before any filesystem read (no traversal out of plans/)', denies({ planId: '../../../etc', noPlan: true }));
 
     // ── execution profile scope ──
@@ -1158,8 +1160,17 @@ try {
       const liveDir = liveHolder.arcId ? path.join(liveRoot, 'arc-claims', liveHolder.arcId, liveHolder.taskId) : path.join(liveRoot, 'claims', liveHolder.taskId);
       const liveClaim = rdSafe(path.join(liveDir, 'claim.json'));
       if (liveClaim && liveClaim.state === 'AUTHORIZED' && fs.existsSync(path.join(liveDir, 'authorized.json'))) {
-        check('SA live: the live owner-AUTHORIZED chain ALLOWS index.html and names the holder\'s own arc/task/plan (this is what unblocks an authorized product edit)',
-          live.authorized === true && live.taskId === liveHolder.taskId && live.arcId === (liveHolder.arcId || null) && typeof live.planId === 'string');
+        if (live.reason === 'plan-reporef-not-head') {
+          // Legitimate post-own-commit / pre-close window: the task's own approved edit has already
+          // landed, HEAD moved past plan.repoRef, and the exemption correctly expired (this is the
+          // documented behaviour in qa/lib/arc-scope-authorization.js - "the exemption expires the
+          // moment the edit is committed"). Asserting ALLOW here would be asserting against the
+          // predicate's own by-design DENY, not detecting a real gap.
+          console.log('  SKIP live-ALLOW check: the live claim is AUTHORIZED but plan.repoRef no longer equals HEAD - the task\'s own commit has already landed and the exemption has correctly expired (1 check not run)');
+        } else {
+          check('SA live: the live owner-AUTHORIZED chain ALLOWS index.html and names the holder\'s own arc/task/plan (this is what unblocks an authorized product edit)',
+            live.authorized === true && live.taskId === liveHolder.taskId && live.arcId === (liveHolder.arcId || null) && typeof live.planId === 'string');
+        }
       } else {
         console.log('  SKIP live-ALLOW check: the live claim is not AUTHORIZED with an owner authorized.json (1 check not run)');
       }
