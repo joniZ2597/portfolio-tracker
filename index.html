@@ -803,6 +803,14 @@ select.edit-inp{appearance:none;cursor:pointer}
 /* ─── EG-07: Research Detail Panel ─── */
 .btn-pf-details{font-family:var(--mono);font-size:9px;color:var(--accent);background:none;border:1px solid rgba(75,130,241,.5);border-radius:3px;padding:4px 9px;cursor:pointer;margin-top:6px;transition:border-color 120ms}
 .btn-pf-details:hover{border-color:var(--accent)}
+/* ─── P5S5: holding-card research trigger (UI wiring only, no engine change) ─── */
+.btn-pf-research{font-family:var(--mono);font-size:9px;color:var(--accent);background:none;border:1px solid rgba(75,130,241,.5);border-radius:3px;padding:4px 9px;cursor:pointer;transition:border-color 120ms}
+.btn-pf-research:hover{border-color:var(--accent)}
+.p5-card-mount{margin-top:6px}
+.p5-card-mount:empty{margin-top:0}
+.p5-displayed,.p5-last-attempt{margin-top:6px;padding-top:6px;border-top:1px dashed var(--border2)}
+.btn-pf-p5-retry{font-family:var(--mono);font-size:9px;color:var(--red2);background:none;border:1px solid rgba(248,113,113,.4);border-radius:3px;padding:3px 8px;cursor:pointer;margin-top:4px;transition:border-color 120ms}
+.btn-pf-p5-retry:hover{border-color:var(--red2)}
 .pf-rdp-overlay{position:fixed;inset:0;background:rgba(8,13,22,.72);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:48px 16px;box-sizing:border-box;overflow-y:auto}
 .pf-rdp-panel{background:var(--card);border:1px solid var(--border);border-radius:8px;width:100%;max-width:420px;padding:20px 22px;box-sizing:border-box}
 .pf-rdp-hdr{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:16px}
@@ -3029,6 +3037,101 @@ async function _p5RunSynthesis(ctx, accepted) {
 }
 
 // ═══ end P-5 sourcing validator (step 1) ══════════════════════════════
+
+// ── Step 5 (P5S5): holding-card research trigger — UI wiring only ──────────
+// No engine change: this block calls _p5RunResearch/_p5RenderPacket exactly as
+// built and adds no packet state, section state or suppression reason beyond
+// the vocabulary at 36bf497 (index.html:2346-2358). No pt_* key is read or
+// written here; state is memory-only, per-symbol, session-scoped. No gate is
+// touched — the P5 base engine (call-1/local context) is ungated; only call-2
+// tool-use remains behind its existing dual gate, untouched by this block.
+//
+// Two-slot presentation model, keyed by symbol:
+//   _p5Displayed[sym] — last packet PROMOTED (news done, counts.accepted>=1).
+//   _p5LastRun[sym]   — most recent TERMINAL packet regardless of promotion,
+//                       used only to surface a non-promoting attempt's own
+//                       asOf/reason/Retry alongside a still-intact _p5Displayed.
+//   _p5Pending[sym]   — true while a run is in flight for sym (blocks a second
+//                       concurrent run for the same symbol; no queueing).
+var _p5Displayed = {};
+var _p5LastRun   = {};
+var _p5Pending   = {};
+
+function _p5ShouldPromote(packet) {
+  return !!(packet && packet.sections && packet.sections.news &&
+    packet.sections.news.state === 'done' && packet.counts &&
+    typeof packet.counts.accepted === 'number' && packet.counts.accepted >= 1);
+}
+
+function _p5RenderDisplayedBox(packet, label) {
+  var box = document.createElement('div');
+  box.className = 'p5-displayed';
+  var lbl = document.createElement('div');
+  lbl.className = 'pf-guidance';
+  lbl.textContent = label + ' — as of ' + (packet.asOf || 'unknown');
+  box.appendChild(lbl);
+  _p5RenderPacket(packet, box);
+  return box;
+}
+
+// Renders the settled (non-pending) state for one card: the last promoted
+// packet if any, plus — only when the most recent run did NOT promote and is
+// therefore a distinct result — that run's own outcome and asOf, with a Retry
+// when its news section failed. Never invoked while a run is in flight for
+// this symbol; _p5RunResearchCard owns the pending presentation instead.
+function _p5RenderCard(sym) {
+  var mountEl = document.getElementById('pf-p5-mount-' + sym);
+  if (!mountEl) return;
+  while (mountEl.firstChild) mountEl.removeChild(mountEl.firstChild);
+  var displayed = _p5Displayed[sym] || null;
+  var lastRun = _p5LastRun[sym] || null;
+  if (lastRun && lastRun !== displayed) {
+    var lastBox = _p5RenderDisplayedBox(lastRun,
+      lastRun.sections.news.state === 'failed' ? 'Last attempt failed' : 'Last attempt — 0 accepted');
+    lastBox.className = 'p5-last-attempt';
+    if (lastRun.sections.news.state === 'failed') {
+      var retryBtn = document.createElement('button');
+      retryBtn.className = 'btn-pf-p5-retry';
+      retryBtn.textContent = 'Retry';
+      retryBtn.setAttribute('aria-label', 'Retry research for ' + sym);
+      retryBtn.onclick = function () { _p5RunResearchCard(sym); };
+      lastBox.appendChild(retryBtn);
+    }
+    mountEl.appendChild(lastBox);
+  }
+  if (displayed) {
+    mountEl.appendChild(_p5RenderDisplayedBox(displayed, 'Last successful'));
+  }
+}
+
+// Click entry point. One in-flight run per symbol. Local sections (via
+// _p5RunResearch's own intermediate _p5RenderPacket calls) render into the
+// pending mount, which is placed FIRST so a re-run's progression is seen
+// ahead of the retained _p5Displayed packet beneath it. No failure path
+// clears _p5Displayed — only _p5ShouldPromote(packet) ever assigns to it.
+async function _p5RunResearchCard(sym) {
+  if (_p5Pending[sym]) return;
+  var mountEl = document.getElementById('pf-p5-mount-' + sym);
+  if (!mountEl) return;
+  _p5Pending[sym] = true;
+  while (mountEl.firstChild) mountEl.removeChild(mountEl.firstChild);
+  var pendingMount = document.createElement('div');
+  pendingMount.className = 'p5-pending-mount';
+  mountEl.appendChild(pendingMount);
+  var displayed = _p5Displayed[sym] || null;
+  if (displayed) {
+    mountEl.appendChild(_p5RenderDisplayedBox(displayed, 'Last successful'));
+  }
+  var packet;
+  try {
+    packet = await _p5RunResearch(sym, pendingMount, Date.now());
+  } finally {
+    _p5Pending[sym] = false;
+  }
+  _p5LastRun[sym] = packet;
+  if (_p5ShouldPromote(packet)) _p5Displayed[sym] = packet;
+  _p5RenderCard(sym);
+}
 
 // ═══ services/research-evidence-client.js — inlined (EG-20E-2A) ═══════
 // Verbatim copy of the committed services/research-evidence-client.js (dd566bd),
@@ -9605,12 +9708,29 @@ function _renderPortfolioPanel() {
       delBtn.className   = 'btn-pf-delete';
       delBtn.textContent = 'Delete';
       delBtn.onclick     = function(){ deletePosition(sym); };
+      // P5S5: research trigger — UI wiring only, see _p5RunResearchCard above.
+      var p5ResBtn = document.createElement('button');
+      p5ResBtn.className   = 'btn-pf-research';
+      p5ResBtn.textContent = 'Research';
+      p5ResBtn.setAttribute('aria-label', 'Start research for ' + sym);
+      p5ResBtn.onclick     = function(){ _p5RunResearchCard(sym); };
       cardActions.appendChild(editBtn);
       cardActions.appendChild(delBtn);
+      cardActions.appendChild(p5ResBtn);
       card.appendChild(cardActions);
+      var p5Mount = document.createElement('div');
+      p5Mount.id = 'pf-p5-mount-' + sym;
+      p5Mount.className = 'p5-card-mount';
+      card.appendChild(p5Mount);
       list.appendChild(card);
     });
     panel.appendChild(list);
+    // Restore any already-displayed P5 packet across a card-list re-render
+    // (memory-only; must run after attachment so getElementById can resolve
+    // each mount). A run in flight re-renders itself on completion.
+    Object.keys(holdings).forEach(function (sym) {
+      if (!_p5Pending[sym]) _p5RenderCard(sym);
+    });
   }
   if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true && count > 0) {
     var _pfSyms = Object.keys(holdings);
