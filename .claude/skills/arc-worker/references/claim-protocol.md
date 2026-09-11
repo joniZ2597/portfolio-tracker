@@ -320,8 +320,9 @@ the claim was taken under; without it `/arc-authorize` would look in the legacy 
 
 ```bash
 # @op step6a-phase-entry
-# the worktree named by scope.worktree (printed by --ladder); phase-gate.js is git-free, so
-# the path is resolved here and passed in (D-16)
+# the worktree named by scope.worktree (printed by --ladder); phase-gate.js never resolves the
+# path itself (D-16; for LAB profiles it runs only the R-2a allowlisted read-only isolation
+# queries against the path it is given), so the path is resolved here and passed in
 CLAIM_DIR_REL="${CLAIMS#"$ROOT/"}/$TASK_ID"   # the task's claim directory per runtime-contract.md section 2
 WT_NAME=$(node "$GATE" --plan "$PLAN" --task "$TASK_ID" --ladder --claim-dir "$CLAIM_DIR_REL" | sed -n 's/^worktree  *\([^ ]*\).*/\1/p')
 case "$WT_NAME" in

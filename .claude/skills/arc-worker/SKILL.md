@@ -127,8 +127,10 @@ runtime-enforced (X-9), so this list plus review is the only real fence.
 The snapshot's `executionProfiles[row.executionProfile]` is the **only** profile a worker
 reads (K4). The library under `arc-publish-plan/references/execution-profiles/` is never
 opened at runtime; `arc.json` and conversation text are never a profile source. Contract:
-`references/execution-profile.md`; mechanics: `scripts/phase-gate.js` — pure Node, git-free,
-zero writes, public surface exactly `--ladder | --phase | --scope`; literal command
+`references/execution-profile.md`; mechanics: `scripts/phase-gate.js` — pure Node, zero writes,
+git-free for non-LAB profiles (LAB profiles: allowlisted read-only git only — `rev-parse`,
+`symbolic-ref`, `status`, `merge-base`, `diff`; R-2a, 2026-09-11), public surface exactly
+`--ladder | --phase | --scope`; literal command
 sequences in `references/claim-protocol.md` sections 1b and 6a.
 
 | Step | Call | Result |
