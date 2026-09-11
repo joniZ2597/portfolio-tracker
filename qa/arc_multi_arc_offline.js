@@ -63,7 +63,7 @@ const REL = {
     SCHEMA_DIR + '/plan.schema.json', SCHEMA_DIR + '/current.schema.json', SCHEMA_DIR + '/claim.schema.json', SCHEMA_DIR + '/authorized.schema.json',
     SCHEMA_DIR + '/holder.schema.json', SCHEMA_DIR + '/arc.schema.json', SCHEMA_DIR + '/execution-profile.schema.json',
     SKILL_DIR + '/references/execution-profiles/COWORK-REGISTER.json', SKILL_DIR + '/references/execution-profiles/LAB-SANDBOX-STATIC.json',
-    SKILL_DIR + '/references/execution-profiles/MAIN-BROWSER-QA.json', SKILL_DIR + '/references/execution-profiles/MAIN-CODE-SLICE-BOUNDED.json',
+    SKILL_DIR + '/references/execution-profiles/MAIN-BROWSER-QA.json', // MAIN-CODE-SLICE-BOUNDED.json pin removed by WU-BNDA (owner; R-B4-2 pattern; guarded by arc_execution_profiles_offline.js)
     SKILL_DIR + '/references/execution-profiles/MAIN-CODE-SLICE.json', SKILL_DIR + '/references/execution-profiles/MAIN-GATED-LIVE-QA.json',
     SKILL_DIR + '/references/execution-profiles/MAIN-PROFILE-SLICE.json',
     SKILL_DIR + '/references/execution-profiles/MAIN-SKILL-SLICE.json',

@@ -58,7 +58,9 @@ const REL = {
     '.claude/skills/arc-publish-plan/references/execution-profiles/COWORK-REGISTER.json',
     '.claude/skills/arc-publish-plan/references/execution-profiles/LAB-SANDBOX-STATIC.json',
     '.claude/skills/arc-publish-plan/references/execution-profiles/MAIN-BROWSER-QA.json',
-    '.claude/skills/arc-publish-plan/references/execution-profiles/MAIN-CODE-SLICE-BOUNDED.json',
+    // MAIN-CODE-SLICE-BOUNDED.json is owned by WU-BNDA (Bundle A, MAIN-PROFILE-SLICE) which adds its IMPLEMENT-QA
+    // phase; its HEAD-identity pin was removed here mechanically (R-B4-2 pattern). Content is guarded by
+    // arc_execution_profiles_offline.js (EP-V12 canonical/validate, EP-V16 reachability + exposure). No assertion weakened.
     '.claude/skills/arc-publish-plan/references/execution-profiles/MAIN-CODE-SLICE.json',
     '.claude/skills/arc-publish-plan/references/execution-profiles/MAIN-GATED-LIVE-QA.json',
     '.claude/skills/arc-publish-plan/references/execution-profiles/OWNER-MANUAL.json',

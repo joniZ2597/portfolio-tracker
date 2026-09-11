@@ -89,7 +89,7 @@ const CLEANUP_REQUIRED = ['scratch', 'sandbox', 'gates', 'mutexes', 'handoff', '
 const PLACEHOLDER_RE = /^[^{}]*(\{TASK_ID\}[^{}]*)*$/;
 const GRANT_PATH_FORBIDDEN = [/^\.git\//, /^\.netlify\//, /^netlify\.toml$/, /^\.env/, /pt_/];
 const PROFILE_ID_RE = /^[A-Z0-9]([A-Z0-9-]*[A-Z0-9])?$/;
-const LIBRARY_IDS = ['COWORK-REGISTER', 'LAB-SANDBOX-STATIC', 'MAIN-BROWSER-QA', 'MAIN-CODE-SLICE', 'MAIN-CODE-SLICE-BOUNDED', 'MAIN-GATED-LIVE-QA', 'MAIN-PROFILE-SLICE', 'MAIN-SKILL-AUTHORING', 'MAIN-SKILL-SLICE', 'OWNER-MANUAL'];
+const LIBRARY_IDS = ['COWORK-REGISTER', 'LAB-CODE-SLICE', 'LAB-SANDBOX-STATIC', 'MAIN-BROWSER-QA', 'MAIN-CODE-SLICE', 'MAIN-CODE-SLICE-BOUNDED', 'MAIN-GATED-LIVE-QA', 'MAIN-PROFILE-SLICE', 'MAIN-SKILL-AUTHORING', 'MAIN-SKILL-SLICE', 'OWNER-MANUAL'];
 
 // ── executable mirror of the contract: returns violation codes ──────────────
 function validateProfile(p) {
@@ -359,7 +359,7 @@ check('EP-V14 ownerProfile write without pt-write action rejected', has((() => {
 console.log('== EP-V12/V13 committed library ==');
 let libFiles = [];
 try { libFiles = fs.readdirSync(abs(REL.libDir)).filter((f) => f.endsWith('.json')).sort(); } catch (e) { check('library directory present (' + e.message + ')', false); }
-check('EP-V12 library has exactly the ten canonical profiles', JSON.stringify(libFiles.slice().sort()) === JSON.stringify(LIBRARY_IDS.map((id) => id + '.json').sort()));
+check('EP-V12 library has exactly the eleven canonical profiles', JSON.stringify(libFiles.slice().sort()) === JSON.stringify(LIBRARY_IDS.map((id) => id + '.json').sort()));
 check('EP-V12 README.md present', fs.existsSync(abs(path.join(REL.libDir, 'README.md'))));
 const seen = new Set();
 const hashes = {};
@@ -438,6 +438,23 @@ if (pbLib) {
 }
 check('EP-V15 arc-worker/SKILL.md allowed-tools includes Edit (D-17, B2)', /^allowed-tools:.*\bEdit\b/m.test(readText('.claude/skills/arc-worker/SKILL.md').replace(/\r/g, '')));
 check('EP-V15 contract doc present and labels P-C as implemented (B2)', fs.existsSync(abs(REL.contractDoc)) && /P-C/.test(readText(REL.contractDoc)) && /implemented in B2/.test(readText(REL.contractDoc)) && !/P-C[^\n]*not implemented/.test(readText(REL.contractDoc)));
+
+// ── EP-V16 scope.writes reachability + BOUNDED qa/** exposure (Bundle A r2) ─────────────
+console.log('== EP-V16 reachability + BOUNDED exposure ==');
+{
+  const unreachable = (obj) => { const ph = [].concat(...obj.phases.map((p) => p.writes || [])); return (obj.scope.writes || []).filter((w) => !ph.includes(w)); };
+  const libObjs = libFiles.map((f) => JSON.parse(fs.readFileSync(abs(path.join(REL.libDir, f)), 'utf8')));
+  libObjs.forEach((obj) => check('EP-V16 ' + obj.profileId + ': every scope.writes entry reachable by >=1 phase' + (unreachable(obj).length ? ' [UNREACHABLE: ' + unreachable(obj).join(', ') + ']' : ''), unreachable(obj).length === 0));
+  const planted = JSON.parse(JSON.stringify(libObjs.find((o) => o.profileId === 'MAIN-SKILL-SLICE'))); planted.scope.writes.push('planted/unreachable/**');
+  check('EP-V16 NEGATIVE CONTROL: a planted unreachable scope entry is rejected', JSON.stringify(unreachable(planted)) === JSON.stringify(['planted/unreachable/**']));
+  const bounded = libObjs.find((o) => o.profileId === 'MAIN-CODE-SLICE-BOUNDED');
+  const aboveManual = (obj) => obj.phases.filter((p) => p.modeCeiling !== 'MANUAL').reduce((a, p) => a.concat(p.writes || []), []);
+  check('EP-V16 BOUNDED: qa/** is written by exactly one phase, IMPLEMENT-QA, MANUAL/MANUAL, no grant', (() => { const qs = bounded.phases.filter((p) => (p.writes || []).includes('qa/**')); return qs.length === 1 && qs[0].id === 'IMPLEMENT-QA' && qs[0].recommendedMode === 'MANUAL' && qs[0].modeCeiling === 'MANUAL' && !('grant' in qs[0]); })());
+  check('EP-V16 BOUNDED: qa/** absent from every phase whose mode ceiling is above MANUAL (exposure regression)', !aboveManual(bounded).includes('qa/**'));
+  const r1shape = JSON.parse(JSON.stringify(bounded)); r1shape.phases.find((p) => p.id === 'IMPLEMENT').writes.push('qa/**');
+  check('EP-V16 NEGATIVE CONTROL: the rejected r1 shape (qa/** in the granted ACCEPT_EDITS phase) IS exposed', aboveManual(r1shape).includes('qa/**'));
+  check('EP-V16 BOUNDED: granted IMPLEMENT phase writes index.html only and its grant is unchanged', JSON.stringify(bounded.phases.find((p) => p.id === 'IMPLEMENT').writes) === '["index.html"]' && JSON.stringify(bounded.phases.find((p) => p.id === 'IMPLEMENT').grant) === '{"toMode":"ACCEPT_EDITS","paths":["index.html"],"mutexClass":"CODE:index-html"}');
+}
 
 console.log('\n' + (failed === 0 ? 'ARC EXECUTION PROFILES (P-A): PASS (' + total + ' asserts)' : 'ARC EXECUTION PROFILES (P-A): FAIL (' + failed + ' of ' + total + ' asserts failed)'));
 assert.strictEqual(failed, 0, failures.slice(0, 12).join(' | '));

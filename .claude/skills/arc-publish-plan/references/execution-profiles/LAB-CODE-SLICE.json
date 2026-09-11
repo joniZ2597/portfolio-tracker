@@ -1,30 +1,32 @@
 {
-  "profileId": "MAIN-CODE-SLICE-BOUNDED",
+  "profileId": "LAB-CODE-SLICE",
   "version": 1,
-  "appliesToLane": "MAIN",
-  "requiresOwnerGo": true,
+  "appliesToLane": "LAB",
   "scope": {
-    "worktree": "branch-dev",
+    "worktree": "portfolio-tracker-test-lab",
     "pinnedRef": "PLAN_REPO_REF",
     "writes": [
-      "index.html",
-      "qa/**",
-      ".ai-reports/handoffs/*.MAIN.md"
+      "<worktree>/index.html",
+      "<worktree>/qa/**",
+      ".ai-reports/handoffs/*.LAB.md"
     ],
     "readOnly": [
-      "**"
+      "<worktree>/**",
+      "git show <pinnedRef>:**"
     ],
     "forbidden": [
-      ".git/arc-runtime/** (except own claim + own mutex holders)",
+      "branch-dev:index.html",
+      "branch-dev:netlify/**",
+      "<worktree>/netlify/**",
+      "<worktree>/.netlify/**",
       ".netlify/**",
-      "netlify.toml",
-      ".env*",
+      ".git/arc-runtime/** (except own claim + own mutex holders)",
       "pt_*"
     ]
   },
   "capabilities": {
     "network": "none",
-    "browser": "none",
+    "browser": "isolated-profile",
     "git": "read-only",
     "deploy": "none",
     "gates": "none",
@@ -49,21 +51,25 @@
     ]
   },
   "skills": {
-    "required": [
-      "phase-start"
+    "required": [],
+    "demandOnly": [
+      "lab-planner",
+      "browser-integrity-qa"
     ],
-    "demandOnly": [],
-    "ownerInvokedOnly": []
+    "ownerInvokedOnly": [
+      "lab-planner",
+      "browser-integrity-qa"
+    ]
   },
   "phases": [
     {
       "id": "PLAN",
-      "kind": "PLAN",
+      "kind": "IMPLEMENT",
       "recommendedMode": "MANUAL",
       "modeCeiling": "MANUAL",
       "entryGate": "AUTHORIZED_JSON",
       "writes": [],
-      "exit": "owner-approved plan (Policy v3 section A)"
+      "exit": "worktree verified at pinnedRef; entry-point facts re-verified; design recorded in scratch"
     },
     {
       "id": "IMPLEMENT",
@@ -72,36 +78,28 @@
       "modeCeiling": "ACCEPT_EDITS",
       "entryGate": "NONE",
       "writes": [
-        "index.html"
+        "<worktree>/index.html",
+        "<worktree>/qa/**"
       ],
-      "exit": "edits complete within the approved plan and the granted paths",
-      "grant": {
-        "toMode": "ACCEPT_EDITS",
-        "paths": [
-          "index.html"
-        ],
-        "mutexClass": "CODE:index-html"
-      }
-    },
-    {
-      "id": "IMPLEMENT-QA",
-      "kind": "IMPLEMENT",
-      "recommendedMode": "MANUAL",
-      "modeCeiling": "MANUAL",
-      "entryGate": "NONE",
-      "writes": [
-        "qa/**"
-      ],
-      "exit": "offline suite for this slice authored and green; no grant, MANUAL only"
+      "exit": "declared surface implemented; new suite(s) authored; no path outside the declared surface touched"
     },
     {
       "id": "VERIFY",
       "kind": "VERIFY",
-      "recommendedMode": "ACCEPT_EDITS",
-      "modeCeiling": "ACCEPT_EDITS",
+      "recommendedMode": "AUTO",
+      "modeCeiling": "AUTO",
       "entryGate": "NONE",
       "writes": [],
-      "exit": "offline suites green; counts recorded"
+      "exit": "npm run qa:offline exit 0 in the worktree; effective set equals pinnedRef set plus exactly the declared new suites"
+    },
+    {
+      "id": "BROWSER",
+      "kind": "VERIFY",
+      "recommendedMode": "MANUAL",
+      "modeCeiling": "MANUAL",
+      "entryGate": "NONE",
+      "writes": [],
+      "exit": "isolated browser origin against the worktree build; every acceptance state exercised; pt_* byte-identical before/after; no live provider call"
     },
     {
       "id": "HANDOFF",
@@ -110,9 +108,9 @@
       "modeCeiling": "ACCEPT_EDITS",
       "entryGate": "NONE",
       "writes": [
-        ".ai-reports/handoffs/*.MAIN.md"
+        ".ai-reports/handoffs/*.LAB.md"
       ],
-      "exit": "handoff registered; closeCondition evidence present"
+      "exit": "handoff registered with delta stat, delta sha256 vs pinnedRef, suite counts, browser evidence"
     },
     {
       "id": "CLOSE",
@@ -143,17 +141,16 @@
     ]
   },
   "verification": {
-    "suites": [
-      "npm run qa:offline"
-    ],
-    "selfTest": "targeted phase fixtures before the edit (QA-first RED), then GREEN",
-    "evidence": "handoff + diff + suite counts",
+    "suites": [],
+    "selfTest": "qa:offline in the worktree plus the task's own new suite(s); counts printed",
+    "evidence": "LAB handoff + worktree delta (never committed by LAB)",
     "proofStyle": "counts-not-claims"
   },
   "triggers": [
     {
       "on": "containment-breach",
-      "action": "STOP"
+      "action": "STOP",
+      "reason": "any write outside <worktree>/index.html, <worktree>/qa/**, own handoff, own claim - and any Netlify CLI or .netlify path (main worktree state is linked to production)"
     },
     {
       "on": "target-surface-changed",
@@ -175,11 +172,16 @@
     {
       "on": "newer-artifact-observed",
       "action": "REPORT-stay-on-snapshot"
+    },
+    {
+      "on": "live-call-needed",
+      "action": "BLOCKED",
+      "reason": "needs EXTERNAL:live-provider - live canaries are MAIN release verification (MAIN-GATED-LIVE-QA), never a LAB phase"
     }
   ],
   "cleanup": {
     "scratch": "scratchpad only, deleted",
-    "sandbox": "n/a",
+    "sandbox": "worktree delta retained uncommitted until MAIN applies or discards it; never committed by LAB",
     "gates": "n/a",
     "mutexes": "release own classes at COMPLETE (claim-protocol section 7)",
     "handoff": "required",
