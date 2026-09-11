@@ -20,6 +20,13 @@
  * resolves the worktree and the claim directory and passes them in (R-2 / D-16), which keeps
  * this script claim-root-agnostic (--claim-dir defaults to the legacy claims/<TASK-ID>).
  *
+ * WU-LABE (LAB worktree isolation): when the bound profile applies to the LAB lane and declares a
+ * scope.worktree, scope resolution additionally runs READ-ONLY git queries against the resolved worktree
+ * (symbolic-ref, rev-parse, status, merge-base, diff — never a mutating verb) and, at the TERMINAL
+ * phase, reads the owning repository's .ai-reports/handoffs/*.LAB.md to locate the task's Delta
+ * record. No value of those checks is ever accepted from the command line: the worktree state and
+ * the handoff record are the only inputs. Profiles with scope.worktree "none" are untouched.
+ *
  * Exit codes: 0 CONTINUE / rendered / legacy snapshot · 2 STOP (HANDSHAKE-REQUIRED,
  * STOP-request-MODE-literal, STOP-before-write, INVALID-PHASE, entry-gate-unsatisfied) ·
  * 3 usage / IO · 4 profile binding failure (profile-binding-missing, profile-hash-mismatch).
@@ -31,6 +38,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { spawnSync } = require('child_process');
 const lib = require('../../arc-publish-plan/scripts/lib/profile-contract.js');
 
 const MODES = lib.MODES;                       // MANUAL < ACCEPT_EDITS < AUTO
@@ -174,6 +183,132 @@ function validateClaimDir(claimDir, taskId) {
   return null;
 }
 
+// ── WU-LABE: LAB worktree isolation — six mechanical checks, read-only git only ──────────
+// Every query is `git -C <worktree> --no-optional-locks <read-only verb>`. Nothing here writes,
+// stages, commits, checks out, or takes a lock. A git failure is a refusal, never a pass.
+const GIT_READ_VERBS = ['rev-parse', 'symbolic-ref', 'status', 'merge-base', 'diff'];
+const SHA40_RE = /^[a-f0-9]{40}$/;
+const DELTA_LINE_RE = /^- Delta: arc=(\S+) task=(\S+) base=([a-f0-9]{40}) sha256=([a-f0-9]{64})\s*$/;
+const HANDOFFS_REL = '.ai-reports/handoffs';
+
+function gitVerbOf(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '-c') { i += 1; continue; }               // -c key=value is a config pair, not the verb
+    if (!String(args[i]).startsWith('-')) return args[i];
+  }
+  return null;
+}
+function gitQuery(wt, args) {
+  const verb = gitVerbOf(args);
+  if (!GIT_READ_VERBS.includes(verb)) throw new Error('gitQuery: verb not in the read-only allowlist: ' + String(verb));
+  const r = spawnSync('git', ['-C', wt, '--no-optional-locks'].concat(args), { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (r.error) return { ok: false, status: -1, out: '', err: String(r.error.message) };
+  return { ok: r.status === 0, status: r.status, out: r.stdout || '', err: r.stderr || '' };
+}
+function realOrResolved(p) { try { return fs.realpathSync.native(p); } catch (_) { return path.resolve(p); } }
+
+// Untracked, non-ignored paths of the worktree (porcelain v1, NUL-separated, renames off).
+function untrackedPaths(wt) {
+  const st = gitQuery(wt, ['status', '--porcelain=v1', '--untracked-files=all', '--no-renames', '-z']);
+  if (!st.ok) return { error: 'worktree-status-failed: ' + st.err.trim() };
+  const entries = st.out.split('\0').filter((e) => e.length >= 4);
+  return { entries, untracked: entries.filter((e) => e.startsWith('?? ')).map((e) => e.slice(3)).sort() };
+}
+
+// The delta of the worktree against the pinned ref: tracked changes (git diff <pinnedRef>) plus
+// every untracked, non-ignored file (git diff --no-index /dev/null <file>), in sorted order.
+// sha256 over the concatenation. Deterministic on one host; recomputed, never trusted from text.
+function deltaDigest(wt, pinnedRef) {
+  const tracked = gitQuery(wt, ['-c', 'core.quotepath=false', 'diff', '--no-color', '--no-ext-diff', '--binary', pinnedRef, '--']);
+  if (!tracked.ok) return { error: 'delta-uncomputable: git diff ' + pinnedRef + ' failed: ' + tracked.err.trim() };
+  const up = untrackedPaths(wt);
+  if (up.error) return { error: 'delta-uncomputable: ' + up.error };
+  const parts = ['tracked\n' + tracked.out];
+  for (const u of up.untracked) {
+    const d = gitQuery(wt, ['-c', 'core.quotepath=false', 'diff', '--no-color', '--no-ext-diff', '--binary', '--no-index', '--', '/dev/null', u]);
+    if (d.status !== 0 && d.status !== 1) return { error: 'delta-uncomputable: git diff --no-index ' + u + ' failed: ' + d.err.trim() };
+    parts.push('untracked ' + u + '\n' + d.out);
+  }
+  return { sha256: crypto.createHash('sha256').update(parts.join('\n\0')).digest('hex'), untracked: up.untracked.length };
+}
+
+function deltaLine(arcId, taskId, base, sha) { return '- Delta: arc=' + arcId + ' task=' + taskId + ' base=' + base + ' sha256=' + sha; }
+
+// Locate the task's Delta record in the owning repository's handoffs (the repository that owns the
+// linked worktree, resolved from the worktree itself via --git-common-dir). Exactly one required.
+function findDeltaRecords(ownerRoot, arcId, taskId) {
+  const dir = path.join(ownerRoot, HANDOFFS_REL);
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => /\.LAB\.md$/.test(n)).sort(); } catch (_) { return []; }
+  const found = [];
+  for (const n of names) {
+    let text = '';
+    try { text = lib.stripCR(fs.readFileSync(path.join(dir, n), 'utf8')); } catch (_) { continue; }
+    text.split('\n').forEach((line, i) => {
+      const m = DELTA_LINE_RE.exec(line);
+      if (m && m[1] === arcId && m[2] === taskId) found.push({ file: HANDOFFS_REL + '/' + n, line: i + 1, base: m[3], sha256: m[4] });
+    });
+  }
+  return found;
+}
+
+function checkWorktree(input) {
+  const wt = input.worktreePath, pinnedRef = input.pinnedRef, errors = [];
+  const res = { errors, head: null, ownerRoot: null, delta: null, record: null, checked: [] };
+  const inside = gitQuery(wt, ['rev-parse', '--is-inside-work-tree']);
+  if (!inside.ok || inside.out.trim() !== 'true') { errors.push('worktree-not-a-git-worktree: ' + wt + (inside.err ? ' (' + inside.err.trim().split('\n')[0] + ')' : '')); return res; }
+  if (!SHA40_RE.test(pinnedRef)) { errors.push('worktree-pin-invalid: pinnedRef ' + JSON.stringify(pinnedRef) + ' is not a 40-hex commit'); return res; }
+  // 1 detached
+  const sym = gitQuery(wt, ['symbolic-ref', '-q', 'HEAD']);
+  if (sym.ok) errors.push('worktree-not-detached: HEAD is attached to ' + sym.out.trim() + ' (a LAB worktree must be detached)');
+  res.checked.push('worktree-not-detached');
+  // 2 pinned
+  const head = gitQuery(wt, ['rev-parse', 'HEAD']);
+  res.head = head.ok ? head.out.trim() : null;
+  if (!head.ok) errors.push('worktree-head-not-pinned: cannot resolve HEAD (' + head.err.trim() + ')');
+  else if (res.head !== pinnedRef) errors.push('worktree-head-not-pinned: HEAD ' + res.head + ' != pinnedRef ' + pinnedRef);
+  res.checked.push('worktree-head-not-pinned');
+  // 3 not the main worktree — --git-dir equals --git-common-dir only in the main worktree
+  const gd = gitQuery(wt, ['rev-parse', '--git-dir']), cd = gitQuery(wt, ['rev-parse', '--git-common-dir']);
+  if (!gd.ok || !cd.ok) errors.push('worktree-is-main: cannot resolve git dirs (' + (gd.err || cd.err).trim() + ')');
+  else {
+    const gdAbs = realOrResolved(path.resolve(wt, gd.out.trim())), cdAbs = realOrResolved(path.resolve(wt, cd.out.trim()));
+    res.ownerRoot = path.dirname(cdAbs);
+    if (gdAbs === cdAbs) errors.push('worktree-is-main: ' + wt + ' is the main worktree of ' + res.ownerRoot + ' (LAB must run in a linked worktree)');
+  }
+  res.checked.push('worktree-is-main');
+  // 4 clean — first phase entry only (later phases legitimately carry the LAB delta)
+  if (input.firstPhase) {
+    const up = untrackedPaths(wt);
+    if (up.error) errors.push('worktree-not-clean: ' + up.error);
+    else if (up.entries.length) errors.push('worktree-not-clean: ' + up.entries.length + ' entr' + (up.entries.length === 1 ? 'y' : 'ies') + ' (tracked modification or non-ignored untracked path) on entry to the first phase: ' + up.entries.slice(0, 5).join(' | ') + (up.entries.length > 5 ? ' | ...' : ''));
+    res.checked.push('worktree-not-clean');
+  }
+  // 5 transfer base — the pinned ref must be an ancestor of (or equal to) the worktree HEAD
+  const mb = gitQuery(wt, ['merge-base', 'HEAD', pinnedRef]);
+  if (!mb.ok) errors.push('transfer-not-from-pinned-base: merge-base HEAD ' + pinnedRef + ' failed (' + mb.err.trim().split('\n')[0] + ')');
+  else if (mb.out.trim() !== pinnedRef) errors.push('transfer-not-from-pinned-base: merge-base ' + mb.out.trim() + ' != pinnedRef ' + pinnedRef);
+  res.checked.push('transfer-not-from-pinned-base');
+  // 6 delta record — REPORT phase computes and prints the canonical line; TERMINAL phase validates it
+  if (input.phaseKind === 'REPORT' || input.phaseKind === 'TERMINAL') {
+    if (typeof input.arcId !== 'string' || !input.arcId) { errors.push('delta-arc-unknown: the snapshot carries no arcId, so no Delta record can be named'); return res; }
+    const dg = deltaDigest(wt, pinnedRef);
+    if (dg.error) { errors.push(dg.error); return res; }
+    res.delta = { base: pinnedRef, sha256: dg.sha256, untracked: dg.untracked, line: deltaLine(input.arcId, input.taskId, pinnedRef, dg.sha256) };
+    if (input.phaseKind === 'TERMINAL') {
+      const recs = res.ownerRoot ? findDeltaRecords(res.ownerRoot, input.arcId, input.taskId) : [];
+      if (recs.length === 0) errors.push('delta-record-missing: no "- Delta: arc=' + input.arcId + ' task=' + input.taskId + ' ..." line in ' + HANDOFFS_REL + '/*.LAB.md of ' + String(res.ownerRoot));
+      else if (recs.length > 1) errors.push('delta-record-ambiguous: ' + recs.length + ' Delta records for arc=' + input.arcId + ' task=' + input.taskId + ' (' + recs.map((r) => r.file + ':' + r.line).join(', ') + ')');
+      else {
+        res.record = recs[0];
+        if (recs[0].base !== pinnedRef || recs[0].sha256 !== dg.sha256) errors.push('delta-base-or-hash-mismatch: recorded base=' + recs[0].base + ' sha256=' + recs[0].sha256.slice(0, 12) + '... vs pinnedRef ' + pinnedRef + ' and recomputed sha256 ' + dg.sha256.slice(0, 12) + '... (' + recs[0].file + ':' + recs[0].line + ')');
+      }
+      res.checked.push('delta-base-or-hash-mismatch');
+    }
+  }
+  return res;
+}
+
 function resolveScope(input) {
   const plan = input.plan, task = input.task, profile = input.profile, phase = input.phase;
   const taskId = task.id;
@@ -201,9 +336,16 @@ function resolveScope(input) {
   const lockouts = (phase.writes || []).filter((w) => locked.has(w)).map((w) => lockoutsAll.find((l) => l.surface === w));
   const classes = Array.isArray(task.mutexes) ? task.mutexes.slice().sort() : [];
   const allowlist = [claimDir + '/claim.json'].concat(classes.map((cl) => 'mutex/' + encodeClass(cl) + '/holder.json'));
+  // LAB lane only: MAIN/COWORK profiles name the host branch-dev worktree by design (attached branch,
+  // main worktree) and are untouched; OWNER-MANUAL names none. The checks need a resolved path.
+  let isolation = null;
+  if (profile.appliesToLane === 'LAB' && wtName !== 'none' && worktreePath) {
+    isolation = checkWorktree({ worktreePath, pinnedRef, firstPhase: profile.phases.length > 0 && phase.id === profile.phases[0].id, phaseKind: phase.kind, arcId: plan.arcId, taskId });
+    isolation.errors.forEach((e) => errors.push(e));
+  }
   return {
     errors, taskId, claimDir, legacyNamespace: /^claims\//.test(claimDir),
-    worktree: { name: wtName, path: worktreePath }, pinnedRef,
+    worktree: { name: wtName, path: worktreePath }, pinnedRef, isolation,
     writes, lockouts, lockoutsAll, allowlist,
     readOnly: (profile.scope.readOnly || []).map(sub), forbidden: (profile.scope.forbidden || []).map(sub),
     actions: Array.isArray(phase.actions) ? phase.actions.slice() : []
@@ -211,6 +353,14 @@ function resolveScope(input) {
 }
 
 // ── renderers ────────────────────────────────────────────────────────────────
+function isolationLines(s) {
+  const iso = s.isolation, out = [];
+  if (!iso) return out;
+  out.push(pad('isolation') + 'LAB worktree checks passed: ' + iso.checked.join(', ') + '   HEAD ' + String(iso.head) + '   owner ' + String(iso.ownerRoot));
+  if (iso.delta && !iso.record) { out.push(pad('delta') + 'record this exact line in the LAB handoff (' + iso.delta.untracked + ' untracked file' + (iso.delta.untracked === 1 ? '' : 's') + ' included):'); out.push('  ' + iso.delta.line); }
+  if (iso.record) out.push(pad('delta record') + iso.record.file + ':' + iso.record.line + '  base and sha256 match the recomputed worktree delta (evidence, not authority: MAIN re-verifies the transferred delta)');
+  return out;
+}
 function claimLine(claimDir) { return claimDir + (/^claims\//.test(claimDir) ? ' (legacy namespace)' : ''); }
 
 function renderLadderBlock(binding, opts) {
@@ -265,6 +415,7 @@ function renderEntry(input) {
   s.lockouts.forEach((l) => lines.push('  lock-out        ' + l.surface + ' (' + l.class + ' not held by ' + input.taskId + ')'));
   lines.push(pad('forbidden here') + lib.BOUNDARIES.join(' · '));
   lines.push(pad('declared actions') + (s.actions.length ? s.actions.join(', ') + ' (MANUAL owner act declared for this phase)' : 'none'));
+  isolationLines(s).forEach((l) => lines.push(l));
   lines.push(pad('entry gate') + gateLine(ph, input.resumed));
   lines.push(pad('action') + d.action + ' - ' + d.reason + (d.request ? '   request: ' + d.request : ''));
   lines.push(RULE);
@@ -363,6 +514,7 @@ function runCli(argv) {
     lines.push(pad('read-only') + (scope.readOnly.length ? scope.readOnly.join(' · ') : '(none)'));
     lines.push(pad('forbidden') + (scope.forbidden.length ? scope.forbidden.join(' · ') : '(none)'));
     lines.push(pad('declared actions') + (scope.actions.length ? scope.actions.join(', ') : 'none'));
+    isolationLines(scope).forEach((l) => lines.push(l));
     lines.push(pad('scope STOP') + 'a needed write outside the write scope and the V1 allowlist is BLOCKED scope-expansion (mutexes retained)');
     return { code: 0, out: lines.join('\n') + '\n' };
   }
@@ -389,6 +541,7 @@ function main() {
 module.exports = {
   MODES, RANK, ACK_MODES, HARNESS_MODE_MAP, UNMAPPED_HARNESS_MODES, ACTIONS, OUTCOMES, USAGE,
   findTask, bindProfile, parseAck, harnessModeOf, decide, resolveScope, validateClaimDir,
+  gitVerbOf, gitQuery, deltaDigest, deltaLine, findDeltaRecords, checkWorktree, GIT_READ_VERBS, DELTA_LINE_RE,
   renderLadderBlock, renderEntry, renderPhases, runCli
 };
 

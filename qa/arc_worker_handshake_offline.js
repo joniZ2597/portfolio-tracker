@@ -13,6 +13,12 @@
  *   - the worker / authorize docs (greps) and, read-only, the live runtime (hash before/after)
  * Every temp tree lives under os.tmpdir() and is removed in `finally`.
  *
+ * R-2a (Owner ruling 2026-09-11, .ai-reports/handoffs/2026-09-11_r2a-lab-readonly-git-ruling.MAIN.md)
+ * supersedes R-2/D-16 for LAB profiles ONLY: phase-gate.js may run the allowlisted read-only git verbs
+ * rev-parse · symbolic-ref · status · merge-base · diff against the resolved LAB worktree (WU-LABE
+ * mechanical isolation); non-LAB profiles remain git-free and every mutating verb stays forbidden.
+ * The LAB fixture below is therefore a REAL temporary repository with a linked, detached worktree.
+ *
  * Owner rulings encoded (2026-08-22, B2): R-1 B1 QA flip · R-2/D-16 git-free, claim-root-agnostic
  * phase-gate · R-3/D-17 Edit in allowed-tools, tools = allowed-tools ∩ tools.allowed · R-4/D-15
  * report-only record · R-7 harness mapping manual/acceptEdits/auto, plan/dontAsk/bypassPermissions
@@ -124,7 +130,7 @@ function mkProposed(mut) {
     planId: 'fixture-pc-profiled-r1',
     source: '.ai-reports/handoffs/2026-08-22_fixture-pc.COWORK.md',
     sourceHash: sha256('fixture-source'),
-    repoRef: '7b54b39d13ef260919b58e3a1c5afd7f8e65c74b',
+    repoRef: FIXTURE_HEAD,
     generatedAt: '2026-08-22T00:00:00Z',
     mutexRegistry: MUTEX_REGISTRY.slice(),
     tasks: clone(ROWS)
@@ -138,6 +144,23 @@ function mkLegacy() {
   p.tasks.forEach((t) => { delete t.executionProfile; });
   return p;
 }
+// R-2a LAB fixture: a real temporary repository (one commit) with a linked, DETACHED worktree named as
+// the LAB profiles name it. FIXTURE_HEAD is the commit the plans pin (repoRef); the literal below is
+// only the pre-fixture placeholder and is overwritten before any plan is built.
+let FIXTURE_HEAD = '7b54b39d13ef260919b58e3a1c5afd7f8e65c74b';
+function git(cwd, args) { const r = spawnSync('git', ['-C', cwd, '-c', 'user.email=qa@fixture', '-c', 'user.name=qa'].concat(args), { encoding: 'utf8' }); if (r.status !== 0) throw new Error('fixture git ' + args.join(' ') + ': ' + (r.stderr || '').trim()); return (r.stdout || '').trim(); }
+function mkLabFixture(baseLabel, wtParent, wtName) {
+  const base = tmp(baseLabel);
+  git(base, ['init', '-q']);
+  fs.writeFileSync(path.join(base, 'index.html'), '<!doctype html>\n<title>fixture</title>\n');
+  fs.mkdirSync(path.join(base, 'qa'), { recursive: true });
+  fs.writeFileSync(path.join(base, 'qa', 'fixture_offline.js'), "'use strict';\n");
+  git(base, ['add', '-A']); git(base, ['commit', '-q', '-m', 'fixture base']);
+  const head = git(base, ['rev-parse', 'HEAD']);
+  const wt = path.join(wtParent, wtName);
+  git(base, ['worktree', 'add', '-q', '--detach', wt, head]);
+  return { base, head, wt };
+}
 const ALL_ACKS = ['UNKNOWN', 'MANUAL', 'ACCEPT_EDITS', 'AUTO'];
 const BOUNDARIES = ['git-stage', 'git-commit', 'git-push', 'deploy', 'env-change', 'gate-toggle', 'live-external-call', 'pt-write', 'runtime-mutation-other-claim', 'scope-expansion', 'production'];
 
@@ -147,8 +170,9 @@ try { lib = require(abs(REL.lib)); } catch (e) { console.log('  (B1 library not 
 try { gate = require(abs(REL.gate)); } catch (e) { console.log('  (phase-gate.js not loadable: ' + e.message.split('\n')[0] + ')'); }
 if (lib) { try { library = lib.loadLibrary(abs(REL.libDir)); } catch (e) { console.log('  (library not loadable: ' + e.message.split('\n')[0] + ')'); } }
 
+const FIXTURE_ARC = 'ARC-A';
 function resolved(mut) {
-  const r = lib.resolveProfiles(mkProposed(mut), library);
+  const r = lib.resolveProfiles(mkProposed(mut), library, { arcId: FIXTURE_ARC });
   return JSON.parse(r.text);
 }
 function writePlan(root, plan) {
@@ -186,7 +210,18 @@ try {
   check('phase-gate.js never names the library directory', !/execution-profiles/.test(src));
   check('phase-gate.js never calls loadLibrary / libraryFromObjects', !/loadLibrary|libraryFromObjects/.test(src));
   check('phase-gate.js has no write / mutation syscalls', !/writeFileSync|writeFile\(|appendFileSync|mkdirSync|mkdir\(|renameSync|unlinkSync|rmSync|rmdirSync|copyFileSync|createWriteStream|truncateSync|chmodSync|symlinkSync/.test(src));
-  check('phase-gate.js spawns nothing and never calls git (R-2: git-free)', !/child_process|execSync|spawnSync|spawn\(|exec\(|\bgit\b\s+(rev-parse|worktree|branch|show)/.test(src));
+  // R-2a: exactly one spawn site (gitQuery), verbs pinned to the approved read-only family, no other
+  // process launcher, and no mutating verb anywhere in the source (quoted-token scan).
+  const R2A_VERBS = ['rev-parse', 'symbolic-ref', 'status', 'merge-base', 'diff'];
+  const R2A_MUTATING = ['add', 'am', 'apply', 'branch', 'checkout', 'cherry-pick', 'clean', 'clone', 'commit', 'fetch', 'gc', 'merge', 'mv', 'pull', 'push', 'rebase', 'reflog', 'reset', 'restore', 'revert', 'rm', 'stash', 'switch', 'tag', 'update-ref', 'worktree'];
+  const gqCalls = src.match(/gitQuery\(wt, \[([^\]]*)\]/g) || [];
+  const gqTokens = gqCalls.map((s) => (s.match(/'[^']*'/g) || []).map((x) => x.slice(1, -1)));
+  const gqVerb = (toks) => { for (let i = 0; i < toks.length; i += 1) { if (toks[i] === '-c') { i += 1; continue; } if (!toks[i].startsWith('-')) return toks[i]; } return null; };
+  check('phase-gate.js R-2a: child_process is imported exactly once, as { spawnSync } only, and called exactly once (inside gitQuery)', (src.match(/child_process/g) || []).length === 1 && /const \{ spawnSync \} = require\('child_process'\);/.test(src) && (src.match(/spawnSync\(/g) || []).length === 1 && /function gitQuery\(/.test(src) && !/execSync|execFileSync|\bspawn\(|\bfork\(/.test(src));
+  check('phase-gate.js R-2a: GIT_READ_VERBS is exactly rev-parse, symbolic-ref, status, merge-base, diff', /const GIT_READ_VERBS = \['rev-parse', 'symbolic-ref', 'status', 'merge-base', 'diff'\];/.test(src));
+  check('phase-gate.js R-2a: every gitQuery call site (' + gqCalls.length + ') names an allowlisted verb and no argument token is a mutating verb', gqCalls.length >= 6 && gqTokens.every((toks) => R2A_VERBS.includes(gqVerb(toks)) && toks.every((k) => !R2A_MUTATING.includes(k))));
+  check('phase-gate.js R-2a: the single git spawn carries -C <worktree> --no-optional-locks', (src.match(/spawnSync\('git'/g) || []).length === 1 && /\['-C', wt, '--no-optional-locks'\]/.test(src));
+  check('phase-gate.js R-2a: isolation is gated on appliesToLane === \'LAB\' (non-LAB profiles stay git-free)', /profile\.appliesToLane === 'LAB' && wtName !== 'none' && worktreePath/.test(src));
   check('phase-gate.js reuses lib.deriveLockouts and lib.renderLadder (no re-implementation)', /lib\.deriveLockouts\(/.test(src) && /lib\.renderLadder\(/.test(src) && !/function (deriveLockouts|renderLadder)\s*\(/.test(src));
   check('phase-gate.js reuses lib.libraryHash / withoutLibraryHash / validateProfile for W-V10', /lib\.libraryHash\(/.test(src) && /lib\.withoutLibraryHash\(/.test(src) && /lib\.validateProfile\(/.test(src));
   check('phase-gate.js never prints "mode changed"', !/mode changed/i.test(src));
@@ -205,11 +240,25 @@ try {
     const libLab = library.profiles['LAB-SANDBOX-STATIC'].obj;
     const libMain = library.profiles['MAIN-CODE-SLICE'].obj;
     const rtA = mkRuntime('rt');
+    const cwdScratch = tmp('cwd');
+    // R-2a: the LAB worktree the LX-2 rows run in is a real linked, detached worktree of a real temp
+    // repository; the plans pin its commit. The owner root (base) carries the LX-2 Delta record for the
+    // TERMINAL phase, computed by the gate's own deltaDigest over the clean worktree (empty delta).
+    const labFx = mkLabFixture('lab-base', cwdScratch, 'portfolio-tracker-test-lab');
+    FIXTURE_HEAD = labFx.head;
+    const wt = labFx.wt;
     const planA = resolved();
     const planAFile = writePlan(rtA, planA);
     const legacyPlan = mkLegacy();
     const legacyFile = writePlan(rtA, legacyPlan);
-    const cwdScratch = tmp('cwd');
+    {
+      const dg = gate.deltaDigest(wt, labFx.head);
+      fs.mkdirSync(path.join(labFx.base, '.ai-reports', 'handoffs'), { recursive: true });
+      fs.writeFileSync(path.join(labFx.base, '.ai-reports', 'handoffs', '2026-09-11_fixture-lx-2.LAB.md'), '# fixture\n' + gate.deltaLine(FIXTURE_ARC, 'LX-2', labFx.head, dg.sha256) + '\n');
+    }
+    check('R-2a fixture: plans pin the real fixture commit and the LAB worktree is detached at it', planA.repoRef === labFx.head && /^[a-f0-9]{40}$/.test(labFx.head) && spawnSync('git', ['-C', wt, 'symbolic-ref', '-q', 'HEAD']).status !== 0 && git(wt, ['rev-parse', 'HEAD']) === labFx.head);
+    check('R-2a fixture: the LAB worktree is a LINKED worktree (git-dir differs from git-common-dir), not the main worktree', git(wt, ['rev-parse', '--git-dir']) !== git(wt, ['rev-parse', '--git-common-dir']));
+    check('R-2a: MAIN rows are still driven with a NON-git --worktree-path (cwdScratch is not a repository) and continue to succeed below, proving non-LAB stays git-free', spawnSync('git', ['-C', cwdScratch, 'rev-parse', '--is-inside-work-tree'], { encoding: 'utf8' }).status !== 0);
 
     // ── EP-C1 worker reads the embedded snapshot only ─────────────────────────
     section('EP-C1 embedded snapshot only (W-V10 from the embedded bytes)');
@@ -269,9 +318,9 @@ try {
     check('EP-C4 LAB RUN lastAck AUTO -> CONTINUE as-recommended', r3.action === 'CONTINUE' && r3.outcome === 'as-recommended');
     const r4 = gate.decide({ lane: 'LAB', phase: { id: 'Y', kind: 'IMPLEMENT', recommendedMode: 'MANUAL', modeCeiling: 'ACCEPT_EDITS', entryGate: 'NONE', writes: [] }, lastAck: 'ACCEPT_EDITS', answered: false });
     check('EP-C4 rec MANUAL / ceiling ACCEPT_EDITS, lastAck ACCEPT_EDITS -> CONTINUE looser-than-recommended (within ceiling)', r4.action === 'CONTINUE' && r4.outcome === 'looser-than-recommended');
-    const c4 = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'MANUAL', '--answered', '--worktree-path', cwdScratch], cwdScratch);
+    const c4 = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'MANUAL', '--answered', '--worktree-path', wt], cwdScratch);
     check('EP-C4 CLI LX-2 BUILD --last-ack MANUAL --answered -> exit 0 CONTINUE stricter-than-recommended', c4.status === 0 && /CONTINUE/.test(c4.stdout) && /stricter-than-recommended/.test(c4.stdout));
-    const c4b = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'MANUAL', '--worktree-path', cwdScratch], cwdScratch);
+    const c4b = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'MANUAL', '--worktree-path', wt], cwdScratch);
     check('EP-C4 CLI LX-2 BUILD --last-ack MANUAL (not answered) -> exit 2 STOP-request-MODE-literal requesting MODE ACCEPT_EDITS', c4b.status === 2 && /STOP-request-MODE-literal/.test(c4b.stdout) && /MODE ACCEPT_EDITS/.test(c4b.stdout));
 
     // ── EP-C5 the acknowledgement literal ─────────────────────────────────────
@@ -339,11 +388,11 @@ try {
     const t1Run = runGate(['--plan', t1File, '--task', 'LX-2', '--ladder'], cwdScratch);
     check('EP-C7 CLI --ladder on a tampered snapshot -> exit 4 profile-hash-mismatch (W-V10)', t1Run.status === 4 && /profile-hash-mismatch/.test(t1Run.out) && /W-V10/.test(t1Run.out));
     const t5File = writePlan(rtA, Object.assign(clone(t5), { planId: 'fixture-pc-missing-r1' }));
-    const t5Run = runGate(['--plan', t5File, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'UNKNOWN', '--worktree-path', cwdScratch], cwdScratch);
+    const t5Run = runGate(['--plan', t5File, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'UNKNOWN', '--worktree-path', wt], cwdScratch);
     check('EP-C7 CLI --phase on a binding-missing snapshot -> exit 4 profile-binding-missing, no banner decision', t5Run.status === 4 && /profile-binding-missing/.test(t5Run.out) && !/HANDSHAKE-REQUIRED/.test(t5Run.out));
     check('EP-C7 CLI unknown task -> exit 3 usage', runGate(['--plan', planAFile, '--task', 'NOPE', '--ladder'], cwdScratch).status === 3);
-    check('EP-C7 CLI unknown phase -> exit 3 usage', runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'NOPE', '--last-ack', 'UNKNOWN', '--worktree-path', cwdScratch], cwdScratch).status === 3);
-    check('EP-C7 CLI bad --last-ack -> exit 3 usage', runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'auto', '--worktree-path', cwdScratch], cwdScratch).status === 3);
+    check('EP-C7 CLI unknown phase -> exit 3 usage', runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'NOPE', '--last-ack', 'UNKNOWN', '--worktree-path', wt], cwdScratch).status === 3);
+    check('EP-C7 CLI bad --last-ack -> exit 3 usage', runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'auto', '--worktree-path', wt], cwdScratch).status === 3);
     check('EP-C7 CLI missing plan -> exit 3 usage', runGate(['--plan', path.join(rtA, 'nope.json'), '--task', 'LX-2', '--ladder'], cwdScratch).status === 3);
     check('EP-C7 CLI no mode flag -> exit 3 usage', runGate(['--plan', planAFile, '--task', 'LX-2'], cwdScratch).status === 3);
 
@@ -355,19 +404,19 @@ try {
     // namespaces, which is why B6 changed neither phase-gate.js nor execution-profile.md.
     section('EP-C17 phase-gate is claim-root-agnostic across namespaces (B6 conditional NOT used)');
     const ARC_DIR = 'arc-claims/ARC-A/LX-2';
-    const sArc = runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD', '--claim-dir', ARC_DIR, '--worktree-path', cwdScratch], cwdScratch);
-    const sLeg = runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD', '--claim-dir', 'claims/LX-2', '--worktree-path', cwdScratch], cwdScratch);
+    const sArc = runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD', '--claim-dir', ARC_DIR, '--worktree-path', wt], cwdScratch);
+    const sLeg = runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD', '--claim-dir', 'claims/LX-2', '--worktree-path', wt], cwdScratch);
     check('EP-C17 --claim-dir arc-claims/<ARC-ID>/<TASK-ID> is accepted and heads the V1 allowlist', sArc.status === 0 && has(sArc.stdout, ARC_DIR + '/claim.json'));
     check('EP-C17 the legacy claim line is marked "(legacy namespace)" and the ARC one is not', has(sLeg.stdout, 'claims/LX-2 (legacy namespace)') && !has(sArc.stdout, ARC_DIR + ' (legacy namespace)'));
     check('EP-C17 only the claim path differs between the two namespaces: worktree, pinnedRef, write scope, read-only and forbidden lines are identical', (() => {
       const pick = (s) => s.split('\n').filter((l) => /^(worktree|pinnedRef|write scope|read-only|forbidden|declared actions|scope STOP)/.test(l)).join('\n');
       return sArc.status === 0 && sLeg.status === 0 && pick(sArc.stdout) === pick(sLeg.stdout) && pick(sArc.stdout).length > 0;
     })());
-    check('EP-C17 a --claim-dir that does not end in the task id -> exit 3 usage; no namespace is ever inferred', runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD', '--claim-dir', 'arc-claims/ARC-A/OTHER', '--worktree-path', cwdScratch], cwdScratch).status === 3);
-    check('EP-C17 a single-segment --claim-dir -> exit 3 usage', runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD', '--claim-dir', 'LX-2', '--worktree-path', cwdScratch], cwdScratch).status === 3);
+    check('EP-C17 a --claim-dir that does not end in the task id -> exit 3 usage; no namespace is ever inferred', runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD', '--claim-dir', 'arc-claims/ARC-A/OTHER', '--worktree-path', wt], cwdScratch).status === 3);
+    check('EP-C17 a single-segment --claim-dir -> exit 3 usage', runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD', '--claim-dir', 'LX-2', '--worktree-path', wt], cwdScratch).status === 3);
     const ladderArc = runGate(['--plan', planAFile, '--task', 'LX-2', '--ladder', '--claim-dir', ARC_DIR], cwdScratch);
     check('EP-C17 --ladder prints the ARC claim root, so /arc-authorize pastes the ladder of the namespace it actually grants in (A-V5 + A-V6)', ladderArc.status === 0 && has(ladderArc.stdout, ARC_DIR));
-    const entryArc = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'ACCEPT_EDITS', '--answered', '--claim-dir', ARC_DIR, '--worktree-path', cwdScratch], cwdScratch);
+    const entryArc = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'ACCEPT_EDITS', '--answered', '--claim-dir', ARC_DIR, '--worktree-path', wt], cwdScratch);
     check('EP-C17 the PHASE ENTRY banner carries the ARC claim root and still CONTINUEs (mode policy is namespace-independent)', entryArc.status === 0 && has(entryArc.stdout, ARC_DIR) && has(entryArc.stdout, 'CONTINUE'));
 
     const l1 = runGate(['--plan', legacyFile, '--task', 'LX-2', '--ladder'], cwdScratch);
@@ -391,7 +440,7 @@ try {
     check('EP-C9 HANDOFF after MODE MANUAL -> CONTINUE stricter-than-recommended', (() => { const d = gate.decide({ lane: 'LAB', phase: HANDOFF, lastAck: 'MANUAL', answered: true }); return d.action === 'CONTINUE' && d.outcome === 'stricter-than-recommended'; })());
     check('EP-C9 CLOSE after MODE MANUAL -> CONTINUE as-recommended', (() => { const d = gate.decide({ lane: 'LAB', phase: CLOSE, lastAck: 'MANUAL', answered: true }); return d.action === 'CONTINUE' && d.outcome === 'as-recommended'; })());
     check('EP-C9 CLOSE after MODE ACCEPT_EDITS -> STOP-before-write again (> ceiling)', gate.decide({ lane: 'LAB', phase: CLOSE, lastAck: 'ACCEPT_EDITS', answered: true }).action === 'STOP-before-write');
-    const c9 = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'CLOSE', '--last-ack', 'AUTO', '--worktree-path', cwdScratch], cwdScratch);
+    const c9 = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'CLOSE', '--last-ack', 'AUTO', '--worktree-path', wt], cwdScratch);
     check('EP-C9 CLI LX-2 CLOSE --last-ack AUTO -> exit 2 STOP-before-write mode-exceeds-ceiling', c9.status === 2 && /STOP-before-write/.test(c9.stdout) && /mode-exceeds-ceiling/.test(c9.stdout));
     const c9h = gate.decide({ lane: 'LAB', phase: CLOSE, lastAck: 'MANUAL', answered: true, harnessMode: { mapped: 'AUTO', raw: 'auto' } });
     check('EP-C9 CLOSE lastAck MANUAL but harness signal auto -> STOP-before-write (above ceiling regardless of how learned)', c9h.action === 'STOP-before-write' && /mode-exceeds-ceiling/.test(c9h.reason));
@@ -399,7 +448,7 @@ try {
       const d = gate.decide({ lane: 'LAB', phase: BUILD, lastAck: 'ACCEPT_EDITS', answered: true, harnessMode: { unmapped: u, raw: u } });
       check('EP-C9 unmapped harness mode ' + u + ' visible -> STOP-before-write unmapped-harness-mode (R-7)', d.action === 'STOP-before-write' && /unmapped-harness-mode/.test(d.reason) && d.reason.indexOf(u) !== -1);
     }
-    const c9u = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'ACCEPT_EDITS', '--answered', '--harness-signal', 'bypassPermissions', '--worktree-path', cwdScratch], cwdScratch);
+    const c9u = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'ACCEPT_EDITS', '--answered', '--harness-signal', 'bypassPermissions', '--worktree-path', wt], cwdScratch);
     check('EP-C9 CLI --harness-signal bypassPermissions -> exit 2 unmapped-harness-mode, asks for manual | acceptEdits | auto', c9u.status === 2 && /unmapped-harness-mode/.test(c9u.stdout) && /manual/.test(c9u.stdout) && /acceptEdits/.test(c9u.stdout));
 
     // ── EP-C10 boundaries MANUAL / non-grantable ──────────────────────────────
@@ -417,9 +466,9 @@ try {
 
     // ── EP-C11 restart / resume ───────────────────────────────────────────────
     section('EP-C11 restart / resume');
-    const c11 = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'UNKNOWN', '--resumed', '--worktree-path', cwdScratch], cwdScratch);
+    const c11 = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'UNKNOWN', '--resumed', '--worktree-path', wt], cwdScratch);
     check('EP-C11 --resumed first entry -> HANDSHAKE-REQUIRED, resumed line present', c11.status === 2 && /HANDSHAKE-REQUIRED/.test(c11.stdout) && /resumed\s+yes - prior acknowledgements not carried/.test(c11.stdout));
-    const c11b = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'UNKNOWN', '--worktree-path', cwdScratch], cwdScratch);
+    const c11b = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'UNKNOWN', '--worktree-path', wt], cwdScratch);
     check('EP-C11 fresh first entry -> HANDSHAKE-REQUIRED, resumed no', c11b.status === 2 && /HANDSHAKE-REQUIRED/.test(c11b.stdout) && /resumed\s+no/.test(c11b.stdout));
     check('EP-C11 the ladder is walked in phases[] order (renderPhases keeps trail order)', (() => { const r = gate.renderPhases(libLab.phases.map((ph) => ({ phase: ph.id, kind: ph.kind, recommended: ph.recommendedMode, ceiling: ph.modeCeiling, acknowledged: 'UNKNOWN', acknowledgedAt: null, outcome: 'SKIP-evidenced' })), { resumed: true }); const idx = libLab.phases.map((ph) => r.indexOf(ph.id + ' ')); return idx.every((v, i) => v >= 0 && (i === 0 || v > idx[i - 1])); })());
 
@@ -469,7 +518,6 @@ try {
     // ── EP-C13 scope resolution (D-16) ────────────────────────────────────────
     section('EP-C13 scope resolution');
     const taskLX2 = gate.findTask(planA, 'LX-2');
-    const wt = path.join(cwdScratch, 'portfolio-tracker-test-lab');
     const s1 = gate.resolveScope({ plan: planA, task: taskLX2, profile: b.profile, phase: BUILD, claimDir: 'claims/LX-2', worktreePath: wt });
     check('EP-C13 {TASK_ID} + <worktree> substituted in BUILD writes', s1.errors.length === 0 && s1.writes.length === 1 && s1.writes[0].resolved === wt + '/lab-LX-2/**');
     check('EP-C13 readOnly <pinnedRef> -> plan.repoRef', s1.readOnly.some((x) => x === 'git show ' + planA.repoRef + ':**'));
@@ -495,7 +543,7 @@ try {
       check('EP-C13 claimDir ' + JSON.stringify(bad1) + ' rejected (must be relative, clean, ending in /LX-2)', s.errors.some((x) => /claim-dir/.test(x)));
     }
     const c13 = runGate(['--plan', planAFile, '--task', 'G1-CLOCK-SEAM', '--scope', '--phase', 'IMPLEMENT', '--worktree-path', cwdScratch], cwdScratch);
-    check('EP-C13 CLI --scope prints write scope with the lock-out and the V1 allowlist', c13.status === 0 && /lock-out/.test(c13.stdout) && /netlify\/functions\/\*\*/.test(c13.stdout) && /mutex\/CODE__index-html\/holder\.json/.test(c13.stdout) && /pinnedRef\s+7b54b39d13ef260919b58e3a1c5afd7f8e65c74b/.test(c13.stdout));
+    check('EP-C13 CLI --scope prints write scope with the lock-out and the V1 allowlist', c13.status === 0 && /lock-out/.test(c13.stdout) && /netlify\/functions\/\*\*/.test(c13.stdout) && /mutex\/CODE__index-html\/holder\.json/.test(c13.stdout) && new RegExp('pinnedRef\\s+' + FIXTURE_HEAD).test(c13.stdout));
     const c13b = runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'CLOSE', '--claim-dir', 'arc-claims/ARC-A/LX-2', '--worktree-path', wt], cwdScratch);
     check('EP-C13 CLI --scope --claim-dir (ARC-shaped, structural only) resolves the TERMINAL write', c13b.status === 0 && /arc-claims\/ARC-A\/LX-2\/claim\.json/.test(c13b.stdout));
     check('EP-C13 CLI --scope LAB without --worktree-path -> exit 3 worktree-unresolved', (() => { const r = runGate(['--plan', planAFile, '--task', 'LX-2', '--scope', '--phase', 'BUILD'], cwdScratch); return r.status === 3 && /worktree-unresolved/.test(r.out); })());
@@ -553,7 +601,7 @@ try {
     check('EP-C16 G1 PLAN with --resumed -> gate satisfied by the resume preconditions; HANDSHAKE-REQUIRED', g2.status === 2 && /entry gate\s+AUTHORIZED_JSON \(satisfied by the --resume preconditions R1-R5\)/.test(g2.stdout) && /HANDSHAKE-REQUIRED/.test(g2.stdout));
     const g3 = runGate(['--plan', planAFile, '--task', 'G1-CLOCK-SEAM', '--phase', 'PLAN', '--last-ack', 'MANUAL', '--resumed', '--worktree-path', cwdScratch], cwdScratch);
     check('EP-C16 G1 PLAN --resumed --last-ack MANUAL -> CONTINUE as-recommended', g3.status === 0 && /CONTINUE/.test(g3.stdout) && /as-recommended/.test(g3.stdout));
-    const g4 = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'ACCEPT_EDITS', '--worktree-path', cwdScratch], cwdScratch);
+    const g4 = runGate(['--plan', planAFile, '--task', 'LX-2', '--phase', 'BUILD', '--last-ack', 'ACCEPT_EDITS', '--worktree-path', wt], cwdScratch);
     check('EP-C16 LX-2 BUILD (gate NONE) needs no resume -> CONTINUE', g4.status === 0 && /entry gate\s+NONE/.test(g4.stdout));
     check('EP-C16 gate check precedes the mode decision (AUTHORIZED_JSON + lastAck AUTO without --resumed -> entry-gate-unsatisfied, not main-never-auto)', /entry-gate-unsatisfied/.test(runGate(['--plan', planAFile, '--task', 'G1-CLOCK-SEAM', '--phase', 'PLAN', '--last-ack', 'AUTO', '--worktree-path', cwdScratch], cwdScratch).stdout));
   }
