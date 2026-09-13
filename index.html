@@ -7691,7 +7691,16 @@ ${window.PT_ENABLE_EDGAR_FORM4 === true ? `
       </div>
       <div id="edgar-dd-panel-${item.ticker}" style="display:none;margin-top:10px"></div>
     </div>` : ''}
-  `; /* Deep Dive deferred to v1.2 — not rendered */
+${window.PT_ENABLE_DEEP_DIVE === true ? `
+    <div class="mp-dd-bar" id="dd0-bar-${item.ticker}">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <span style="font-family:var(--mono);font-size:8px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">Deep Dive — AI Analysis</span>
+        <button class="mp-dd-btn" id="dd0-btn-${item.ticker}"
+          onclick="_dd0RunCard('${item.ticker}')">▶ Run Deep Dive</button>
+      </div>
+      <div id="dd0-panel-${item.ticker}" style="display:none;margin-top:10px"></div>
+    </div>` : ''}
+  `; /* DDV0-IMPL: Deep Dive v0 client trigger, gated by PT_ENABLE_DEEP_DIVE, rendered above */
   _initTsCard();
   _initSigCard();
   _initCmpCard();
@@ -12289,6 +12298,86 @@ async function _runEdgarInsiderDeepDive(sym) {
   panel.style.display = 'block';
   btn.textContent = '▶ Run again';  // neutral manual-run copy; no auto-retry
   btn.disabled = false;
+}
+
+// ── DDV0-IMPL: Deep Dive v0 — isolated per-ticker AI analysis trigger ────────
+// Client gate: window.PT_ENABLE_DEEP_DIVE === true (strict boolean, not persisted,
+// reset on reload). No pt_* read or write anywhere below. Does not touch normal
+// scan, scoring, orchestrate, analyzeChunk, enforceScoreConsistency, or _techCache
+// (read-only access to the existing cached snapshot only). Mirrors the EDGAR
+// insider deep-dive block's bar/button/panel structure (index.html above) rather
+// than inventing new markup or state shape.
+async function _dd0RunCard(sym) {
+  if (window.PT_ENABLE_DEEP_DIVE !== true) { console.warn('[PT][DDV0] disabled — set window.PT_ENABLE_DEEP_DIVE = true'); return; }
+  const btn   = document.getElementById('dd0-btn-' + sym);
+  const panel = document.getElementById('dd0-panel-' + sym);
+  if (!btn || !panel) return;
+  if (btn.disabled) return; // one in-flight run per ticker
+  const item = (_cockpitResults || []).find(function (r) { return r.ticker === sym; });
+  if (!item) return;
+  btn.disabled = true;
+  btn.textContent = '⟳ Running…';
+  panel.style.display = 'none';
+  panel.innerHTML = '';
+  const snap = (_techCache[sym] && _techCache[sym].snap) || {};
+  let techSnapshotText = '';
+  try { techSnapshotText = buildTechSnapshotBlock(sym, snap, item.technical_setup || 'unknown') || ''; }
+  catch (e) { techSnapshotText = ''; }
+  let result;
+  try {
+    result = await _dd0FetchAnalysis(item, techSnapshotText);
+  } catch (e) {
+    result = { state: 'failed', reason: String(e && e.message || e), text: null };
+  }
+  panel.innerHTML = _dd0RenderResultHtml(result);
+  panel.style.display = 'block';
+  btn.textContent = '▶ Run again';
+  btn.disabled = false;
+}
+
+function _dd0RenderResultHtml(result) {
+  if (!result || result.state !== 'success') {
+    const reason = _crEsc((result && result.reason) || 'unknown error');
+    return `<div style="font-family:var(--mono);font-size:10px;color:var(--red2)">Deep dive failed: ${reason}</div>`;
+  }
+  return `<div style="font-size:11px;color:var(--text1);white-space:pre-wrap">${_crEsc(result.text)}</div>`;
+}
+
+// Isolated call site — separate from fetchAnthropicAnalysis (the scoring engine's
+// own Anthropic call, untouched). Model and max_tokens are literal-pinned; system
+// and user content are built ONLY from the scanned item's own existing fields
+// plus the read-only technical snapshot text — no other source is consulted.
+async function _dd0FetchAnalysis(item, techSnapshotText) {
+  const sys = 'You are producing a single deep-dive note on one already-scanned equity, using only the verified fields provided below. Do not invent data not present here.';
+  const parts = [];
+  parts.push('TICKER: ' + item.ticker);
+  if (item.company_name)    parts.push('COMPANY: ' + item.company_name);
+  if (item.sentiment)       parts.push('SENTIMENT: ' + item.sentiment);
+  if (typeof item.sentiment_score === 'number') parts.push('SENTIMENT SCORE: ' + item.sentiment_score);
+  if (item.summary)         parts.push('EXISTING SUMMARY: ' + item.summary);
+  if (item.technical_setup) parts.push('TECHNICAL SETUP: ' + item.technical_setup);
+  if (item.news_bias)       parts.push('NEWS BIAS: ' + item.news_bias);
+  if (Array.isArray(item.news) && item.news.length) parts.push('NEWS:\n' + item.news.join('\n'));
+  if (Array.isArray(item.alerts) && item.alerts.length) parts.push('ALERTS:\n' + item.alerts.map(function (a) { return (a.type || '') + ': ' + (a.text || ''); }).join('\n'));
+  if (techSnapshotText) parts.push('TECHNICAL SNAPSHOT (deterministic — computed from 1Y candles):\n' + techSnapshotText);
+  const user = parts.join('\n\n');
+  const response = await fetch('/.netlify/functions/anthropic-proxy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-4-5', max_tokens: 1200, system: sys, messages: [{ role: 'user', content: user }] })
+  });
+  if (!response.ok) {
+    let reason = 'proxy error';
+    try { const errBody = await response.json(); reason = (errBody && errBody.error && errBody.error.message) || reason; } catch (e) {}
+    return { state: 'failed', reason: reason, text: null };
+  }
+  const data = await response.json();
+  let text = '';
+  if (data && Array.isArray(data.content)) {
+    for (let i = 0; i < data.content.length; i++) { if (data.content[i].type === 'text') text += data.content[i].text; }
+  }
+  if (!text) return { state: 'failed', reason: 'empty response', text: null };
+  return { state: 'success', reason: null, text: text };
 }
 
 // ── 7B-6G-6: Capital Returns DEV Evidence Display Panel ──────────────────────
