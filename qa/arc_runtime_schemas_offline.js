@@ -25,7 +25,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
-const { authorizedProductWrite } = require('./lib/arc-scope-authorization.js');
+const { authorizedProductWrite, resolveRuntimeRoot } = require('./lib/arc-scope-authorization.js');
 
 const ROOT = path.resolve(__dirname, '..');
 const SCHEMA_DIR = '.claude/skills/arc-publish-plan/references/schemas';
@@ -210,7 +210,10 @@ const holderLegacy = (taskId, lane) => ({ taskId, lane: lane || 'LAB', acquiredA
 const holderArc = (taskId, arcId, lane) => Object.assign(holderLegacy(taskId, lane), { arcId });
 
 console.log('ARC runtime schemas + topology contract (P-E0, B4) - structural proofs');
-const liveRuntime = abs(REL.runtime);
+// The live runtime lives under the OWNING repository's common git dir. Inside a linked worktree
+// `<ROOT>/.git` is a gitdir pointer file, so the path is resolved canonically (git-common-dir) by
+// the same library the scope guard uses; REL.runtime remains the literal for the main worktree.
+const liveRuntime = resolveRuntimeRoot(ROOT) || abs(REL.runtime);
 const liveExists = fs.existsSync(liveRuntime);
 const liveBefore = liveExists ? treeHash(liveRuntime) : null;
 // Bootstrap-aware: B7 is explicitly allowed to create these (Gate A owner bootstrap); B4 is not.

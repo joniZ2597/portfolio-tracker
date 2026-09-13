@@ -1149,7 +1149,7 @@ try {
 
     // ── live chain: the gate condition is read INDEPENDENTLY of the predicate, so this is neither
     //    self-fulfilling nor a time bomb once the holder is released or the claim leaves AUTHORIZED.
-    const liveRoot = abs(REL.runtime);
+    const liveRoot = SA.resolveRuntimeRoot(ROOT) || abs(REL.runtime);
     const liveHolder = rdSafe(path.join(liveRoot, 'mutex', CLASS_DIR, 'holder.json'));
     const liveHead = git(['rev-parse', 'HEAD']);
     if (liveHolder && typeof liveHolder.taskId === 'string' && liveHead.status === 0) {
@@ -1160,7 +1160,18 @@ try {
       const liveDir = liveHolder.arcId ? path.join(liveRoot, 'arc-claims', liveHolder.arcId, liveHolder.taskId) : path.join(liveRoot, 'claims', liveHolder.taskId);
       const liveClaim = rdSafe(path.join(liveDir, 'claim.json'));
       if (liveClaim && liveClaim.state === 'AUTHORIZED' && fs.existsSync(path.join(liveDir, 'authorized.json'))) {
-        if (live.reason === 'plan-reporef-not-head') {
+        if (liveHolder.lane === 'LAB' && /^profile-scope-worktree-only:/.test(live.reason)) {
+          // A LAB holder's exemption covers ONLY its linked worktree (profile.scope.writes lists
+          // `<worktree>/index.html`). Evaluated from the main worktree the predicate DENIES by
+          // design, and the main worktree's index.html must stay byte-identical to HEAD for the
+          // whole LAB task - which is exactly what the scope guard below then enforces.
+          const livePlan = rdSafe(path.join(liveRoot, 'plans', liveClaim.planId, 'plan.json'));
+          const liveTask = livePlan && Array.isArray(livePlan.tasks) ? livePlan.tasks.filter((t) => t && t.id === liveHolder.taskId)[0] : null;
+          const liveProfile = liveTask && livePlan.executionProfiles ? livePlan.executionProfiles[liveTask.executionProfile] : null;
+          const liveWt = liveProfile && liveProfile.scope ? String(liveProfile.scope.worktree) : null;
+          check('SA live: a LAB holder\'s chain DENIES index.html from the main worktree with profile-scope-worktree-only:<scope.worktree> (the exemption belongs to the linked worktree, never to branch-dev)',
+            live.authorized === false && liveWt !== null && live.reason === 'profile-scope-worktree-only:' + liveWt);
+        } else if (live.reason === 'plan-reporef-not-head') {
           // Legitimate post-own-commit / pre-close window: the task's own approved edit has already
           // landed, HEAD moved past plan.repoRef, and the exemption correctly expired (this is the
           // documented behaviour in qa/lib/arc-scope-authorization.js - "the exemption expires the
@@ -1176,6 +1187,100 @@ try {
       }
     } else {
       console.log('  SKIP live-chain checks: no readable live CODE:index-html holder (2 checks not run)');
+    }
+
+    // ── SA-WT linked-worktree topology: real temp repositories, never the live tree ──
+    // A LAB task edits index.html inside a linked worktree whose `.git` is a gitdir pointer FILE.
+    // The runtime must be discovered under the OWNING repository's common dir, and the LAB form
+    // `<worktree>/index.html` must license exactly the linked worktree named by scope.worktree.
+    section('scope authorization - linked-worktree topology (SA-WT; real temp repos)');
+    {
+      const gitOk = (args, cwd) => { const r = spawnSync('git', args, { cwd: cwd, encoding: 'utf8' }); return r.status === 0 ? String(r.stdout).trim() : null; };
+      const QUIET = ['-c', 'user.email=qa@example.invalid', '-c', 'user.name=qa', '-c', 'commit.gpgsign=false'];
+      // mkTopo(): base repo with one commit + a detached linked worktree named WT under the same temp root.
+      // opts.separateGitDir builds the MAIN checkout with `git init --separate-git-dir` (its .git is a pointer
+      // FILE, exactly like a linked worktree's, but git-dir == common-dir). opts.wtParent places the worktree
+      // under another parent (same-basename siblings).
+      const mkTopo = (wtName, opts) => {
+        opts = opts || {};
+        const d = tmp('sa-wt');
+        const base = path.join(d, 'base');
+        fs.mkdirSync(base);
+        const sep = opts.separateGitDir ? path.join(d, 'sep-gitdir') : null;
+        if (gitOk(['init', '-q', '-b', 'main'].concat(sep ? ['--separate-git-dir', sep] : []), base) === null) return null;
+        fs.writeFileSync(path.join(base, 'index.html'), '<!doctype html>\n<title>fixture</title>\n');
+        if (gitOk(QUIET.concat(['add', '-A']), base) === null || gitOk(QUIET.concat(['commit', '-q', '-m', 'C0']), base) === null) return null;
+        const head = gitOk(['rev-parse', 'HEAD'], base);
+        const wt = path.join(opts.wtParent || d, wtName);
+        if (gitOk(['worktree', 'add', '-q', '--detach', wt, head], base) === null) return null;
+        return { base: base, wt: wt, head: head, gitDir: sep || path.join(base, '.git'), dir: d };
+      };
+      // addSibling(): a SECOND linked worktree of the same base with the SAME basename under another parent.
+      const addSibling = (topo, wtName) => { const p = tmp('sa-wt-sib'); const wt = path.join(p, wtName); return gitOk(['worktree', 'add', '-q', '--detach', wt, topo.head], topo.base) === null ? null : wt; };
+      // mkLabChain(): a complete owner-AUTHORIZED chain under <base>/.git/arc-runtime whose profile is LAB-shaped.
+      const mkLabChain = (topo, o) => {
+        o = o || {};
+        const rr = path.join(topo.gitDir, 'arc-runtime');
+        const planId = 'arc-l-r1-2026-09-12';
+        const planFile = path.join(rr, 'plans', planId, 'plan.json');
+        wrJson(planFile, {
+          planId: planId, repoRef: topo.head, arcId: 'ARC-L',
+          executionProfiles: { 'LAB-CODE-SLICE': { profileId: 'LAB-CODE-SLICE', appliesToLane: 'LAB', scope: { worktree: 'worktree' in o ? o.worktree : path.basename(topo.wt), pinnedRef: 'PLAN_REPO_REF', writes: o.writes || ['<worktree>/index.html', '<worktree>/qa/**'] } } },
+          tasks: [{ id: 'L-CODE', lane: 'LAB', executionProfile: 'LAB-CODE-SLICE', mutexes: ['CODE:index-html'] }]
+        });
+        const planHash = sha256(fs.readFileSync(planFile));
+        const claimDir = path.join(rr, 'arc-claims', 'ARC-L', 'L-CODE');
+        wrJson(path.join(claimDir, 'claim.json'), { taskId: 'L-CODE', lane: 'LAB', planId: planId, planHash: planHash, conversationId: 'c', startedAt: '2026-09-12T00:00:00Z', mutexes: ['CODE:index-html'], state: 'AUTHORIZED', reason: null, mutexesReleasedAt: null, arcId: 'ARC-L' });
+        wrJson(path.join(claimDir, 'authorized.json'), { taskId: 'L-CODE', planId: planId, planHash: planHash, authorizedAt: '2026-09-12T00:00:00Z', authorizedBy: 'owner', arcId: 'ARC-L' });
+        wrJson(path.join(rr, 'mutex', CLASS_DIR, 'holder.json'), { taskId: 'L-CODE', lane: 'LAB', acquiredAt: '2026-09-12T00:00:00Z', arcId: 'ARC-L' });
+        return rr;
+      };
+      const t0 = mkTopo('portfolio-tracker-test-lab');
+      if (!t0) {
+        console.log('  SKIP SA-WT: git could not build the temp topology (0 checks run)');
+      } else {
+        check('SA-WT-0 fixture + topologyOf: the LAB worktree is a LINKED worktree (its .git is a gitdir pointer file; git-dir differs from git-common-dir; topologyOf(...).linked true) and its HEAD equals the base HEAD; the main checkout is NOT linked (topologyOf(...).linked false, git-dir == common-dir)',
+          fs.statSync(path.join(t0.wt, '.git')).isFile() && gitOk(['rev-parse', '--git-dir'], t0.wt) !== gitOk(['rev-parse', '--git-common-dir'], t0.wt) && gitOk(['rev-parse', 'HEAD'], t0.wt) === t0.head && SA.topologyOf(t0.wt).linked === true && SA.topologyOf(t0.base).linked === false && SA.topologyOf(t0.base).gitDir === SA.topologyOf(t0.base).commonDir);
+        check('SA-WT-1 resolveRuntimeRoot: the main worktree resolves <base>/.git/arc-runtime, the linked worktree resolves the SAME path (git-common-dir), and a non-repository directory resolves nothing',
+          SA.resolveRuntimeRoot(t0.base) === path.join(t0.base, '.git', 'arc-runtime') && SA.resolveRuntimeRoot(t0.wt) === path.join(t0.base, '.git', 'arc-runtime') && SA.resolveRuntimeRoot(tmp('sa-wt-none')) === null);
+        check('SA-WT-2 runtime absent under the owning repository ⇒ DENY runtime-root-absent from the linked worktree, and NEVER a lookup under <worktree>/.git',
+          (() => { const r = SA.authorizedProductWrite('index.html', { root: t0.wt }); return r.authorized === false && r.reason === 'runtime-root-absent'; })());
+        const rr0 = mkLabChain(t0);
+        const rr0Before = treeHash(rr0);
+        const wtAllow = SA.authorizedProductWrite('index.html', { root: t0.wt });
+        check('SA-WT-3 CONTROL: from the linked worktree named by scope.worktree, an owner-AUTHORIZED LAB chain whose profile lists <worktree>/index.html ALLOWS and names arc/task/plan (runtime discovered via git-common-dir; HEAD read from the worktree) [' + wtAllow.reason + ']',
+          wtAllow.authorized === true && wtAllow.arcId === 'ARC-L' && wtAllow.taskId === 'L-CODE' && wtAllow.planId === 'arc-l-r1-2026-09-12');
+        const mainDeny = SA.authorizedProductWrite('index.html', { root: t0.base });
+        check('SA-WT-4 the SAME LAB chain evaluated from the MAIN worktree (git-dir == common-dir) DENIES profile-scope-worktree-only:<name> (a LAB exemption never licenses branch-dev\'s index.html) [' + mainDeny.reason + ']',
+          mainDeny.authorized === false && mainDeny.reason === 'profile-scope-worktree-only:portfolio-tracker-test-lab');
+        check('SA-WT-5 a profile naming a worktree that is NOT registered in the owning repository DENIES profile-scope-worktree-unregistered:<name>, whatever the evaluating worktree is called',
+          (() => { const t1 = mkTopo('some-other-worktree'); if (!t1) return false; mkLabChain(t1, { worktree: 'portfolio-tracker-test-lab' }); const r = SA.authorizedProductWrite('index.html', { root: t1.wt }); return r.authorized === false && r.reason === 'profile-scope-worktree-unregistered:portfolio-tracker-test-lab'; })());
+        check('SA-WT-5b the registered worktree exists but the evaluating root is a DIFFERENT linked worktree of the same repository ⇒ DENY profile-scope-worktree-only (identity is the registered canonical path, not the name the caller stands in)',
+          (() => { const t1b = mkTopo('portfolio-tracker-test-lab'); if (!t1b) return false; mkLabChain(t1b); const other = addSibling(t1b, 'some-other-worktree'); if (!other) return false; const r = SA.authorizedProductWrite('index.html', { root: other }); return r.authorized === false && r.reason === 'profile-scope-worktree-only:portfolio-tracker-test-lab'; })());
+        check('SA-WT-11 a MAIN checkout created with git init --separate-git-dir (its .git is a pointer FILE, but git-dir == common-dir) resolves its runtime under the separate git dir and DENIES the LAB form with profile-scope-worktree-only - a pointer file is never proof of a linked worktree',
+          (() => { const t7 = mkTopo('portfolio-tracker-test-lab', { separateGitDir: true }); if (!t7) return false; if (!fs.statSync(path.join(t7.base, '.git')).isFile()) return false; mkLabChain(t7); const tp = SA.topologyOf(t7.base); if (!tp || tp.linked !== false || tp.gitDir !== tp.commonDir) return false; const rt = SA.resolveRuntimeRoot(t7.base); const fromMain = SA.authorizedProductWrite('index.html', { root: t7.base }); const fromWt = SA.authorizedProductWrite('index.html', { root: t7.wt }); return rt === path.join(t7.gitDir, 'arc-runtime') && fromMain.authorized === false && fromMain.reason === 'profile-scope-worktree-only:portfolio-tracker-test-lab' && fromWt.authorized === true; })());
+        check('SA-WT-12 two linked worktrees of the same repository with the SAME basename under different parents: BOTH DENY profile-scope-worktree-ambiguous:<name> (a registration collision is the owner\'s to prune, never the predicate\'s to pick)',
+          (() => { const t8 = mkTopo('portfolio-tracker-test-lab'); if (!t8) return false; mkLabChain(t8); const twin = addSibling(t8, 'portfolio-tracker-test-lab'); if (!twin) return false; const a = SA.authorizedProductWrite('index.html', { root: t8.wt }); const b = SA.authorizedProductWrite('index.html', { root: twin }); return a.authorized === false && a.reason === 'profile-scope-worktree-ambiguous:portfolio-tracker-test-lab' && b.authorized === false && b.reason === 'profile-scope-worktree-ambiguous:portfolio-tracker-test-lab'; })());
+        check('SA-WT-13 a COPY of the registered worktree directory (same bytes, same pointer file, different path) DENIES profile-scope-worktree-only - the registered canonical path is the identity, not the pointer contents',
+          (() => { const t9 = mkTopo('portfolio-tracker-test-lab'); if (!t9) return false; mkLabChain(t9); const p = tmp('sa-wt-copy'); const copy = path.join(p, 'portfolio-tracker-test-lab'); fs.cpSync(t9.wt, copy, { recursive: true }); const r = SA.authorizedProductWrite('index.html', { root: copy }); return r.authorized === false && r.reason === 'profile-scope-worktree-only:portfolio-tracker-test-lab'; })());
+        check('SA-WT-14 a SUBDIRECTORY of the registered worktree as root resolves no topology (toplevel != root) ⇒ DENY runtime-root-absent',
+          (() => { const t10 = mkTopo('portfolio-tracker-test-lab'); if (!t10) return false; mkLabChain(t10); fs.mkdirSync(path.join(t10.wt, 'sub')); const r = SA.authorizedProductWrite('index.html', { root: path.join(t10.wt, 'sub') }); return r.authorized === false && r.reason === 'runtime-root-absent' && SA.resolveRuntimeRoot(path.join(t10.wt, 'sub')) === null; })());
+        check('SA-WT-6 a profile listing <worktree>/index.html with scope.worktree "none" or absent DENIES profile-scope-worktree-unnamed',
+          (() => { const t2 = mkTopo('portfolio-tracker-test-lab'); if (!t2) return false; mkLabChain(t2, { worktree: 'none' }); const a = SA.authorizedProductWrite('index.html', { root: t2.wt }); const t3 = mkTopo('portfolio-tracker-test-lab'); if (!t3) return false; mkLabChain(t3, { worktree: undefined }); const b = SA.authorizedProductWrite('index.html', { root: t3.wt }); return a.authorized === false && a.reason === 'profile-scope-worktree-unnamed' && b.authorized === false && b.reason === 'profile-scope-worktree-unnamed'; })());
+        check('SA-WT-7 a profile listing neither index.html nor <worktree>/index.html DENIES profile-scope-excludes-path from both worktrees (the LAB form is an alternative literal, not a wildcard)',
+          (() => { const t4 = mkTopo('portfolio-tracker-test-lab'); if (!t4) return false; mkLabChain(t4, { writes: ['<worktree>/qa/**'] }); const a = SA.authorizedProductWrite('index.html', { root: t4.wt }); const b = SA.authorizedProductWrite('index.html', { root: t4.base }); return a.authorized === false && a.reason === 'profile-scope-excludes-path' && b.authorized === false && b.reason === 'profile-scope-excludes-path'; })());
+        check('SA-WT-8 the exemption still expires with HEAD in the worktree: a worktree detached one commit past plan.repoRef DENIES plan-reporef-not-head',
+          (() => { const t5 = mkTopo('portfolio-tracker-test-lab'); if (!t5) return false; mkLabChain(t5); fs.writeFileSync(path.join(t5.base, 'README.md'), 'x\n'); if (gitOk(QUIET.concat(['add', '-A']), t5.base) === null || gitOk(QUIET.concat(['commit', '-q', '-m', 'C1']), t5.base) === null) return false; const h1 = gitOk(['rev-parse', 'HEAD'], t5.base); if (gitOk(['checkout', '-q', '--detach', h1], t5.wt) === null) return false; const r = SA.authorizedProductWrite('index.html', { root: t5.wt }); return r.authorized === false && r.reason === 'plan-reporef-not-head'; })());
+        // Broken topology, two constructions. Neither writes INTO the worktree's .git pointer file in place: on
+        // Windows that file carries the hidden attribute and an in-place overwrite is refused with EPERM, so the
+        // registration directory is removed instead (9a), or the pointer is unlinked and re-created (9b).
+        check('SA-WT-9a broken topology: the owning repository\'s registration <common-dir>/worktrees/<id>/ is removed ⇒ git refuses the worktree ⇒ DENY runtime-root-absent without throwing (fail closed)',
+          (() => { const t6 = mkTopo('portfolio-tracker-test-lab'); if (!t6) return false; mkLabChain(t6); const gd = gitOk(['rev-parse', '--path-format=absolute', '--git-dir'], t6.wt); if (!gd) return false; fs.rmSync(gd, { recursive: true, force: true }); try { const r = SA.authorizedProductWrite('index.html', { root: t6.wt }); return r.authorized === false && r.reason === 'runtime-root-absent'; } catch (e) { return false; } })());
+        check('SA-WT-9b broken topology: the pointer file is unlinked and re-created pointing at a gitdir that does not exist ⇒ DENY runtime-root-absent without throwing',
+          (() => { const t6b = mkTopo('portfolio-tracker-test-lab'); if (!t6b) return false; mkLabChain(t6b); const ptr = path.join(t6b.wt, '.git'); fs.rmSync(ptr, { force: true }); fs.writeFileSync(ptr, 'gitdir: ' + path.join(t6b.base, '.git', 'worktrees', 'does-not-exist') + '\n'); try { const r = SA.authorizedProductWrite('index.html', { root: t6b.wt }); return r.authorized === false && r.reason === 'runtime-root-absent'; } catch (e) { return false; } })());
+        check('SA-WT-10 the main-worktree form is unchanged: the existing MAIN chain fixtures above still ALLOW with a bare index.html entry, and rr0 is untouched by the evaluations (read-only predicate)',
+          ask(mkChain()).authorized === true && treeHash(rr0) === rr0Before);
+      }
     }
   }
 
