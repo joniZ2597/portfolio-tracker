@@ -661,10 +661,10 @@ select.edit-inp{appearance:none;cursor:pointer}
 #ts-card.collapsed>:not(.pc-card-title){display:none}
 #ts-card.collapsed{align-self:start}
 #ts-card.collapsed .pc-card-title{margin-bottom:0}
-#sig-card .pc-card-title,#cmp-card .pc-card-title,#kl-card .pc-card-title{cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center}
-#sig-card.collapsed>:not(.pc-card-title),#cmp-card.collapsed>:not(.pc-card-title),#kl-card.collapsed>:not(.pc-card-title){display:none}
-#sig-card.collapsed,#cmp-card.collapsed,#kl-card.collapsed{align-self:start}
-#sig-card.collapsed .pc-card-title,#cmp-card.collapsed .pc-card-title,#kl-card.collapsed .pc-card-title{margin-bottom:0}
+#sig-card .pc-card-title,#cmp-card .pc-card-title,#kl-card .pc-card-title,#dd0-card .pc-card-title{cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center}
+#sig-card.collapsed>:not(.pc-card-title),#cmp-card.collapsed>:not(.pc-card-title),#kl-card.collapsed>:not(.pc-card-title),#dd0-card.collapsed>:not(.pc-card-title){display:none}
+#sig-card.collapsed,#cmp-card.collapsed,#kl-card.collapsed,#dd0-card.collapsed{align-self:start}
+#sig-card.collapsed .pc-card-title,#cmp-card.collapsed .pc-card-title,#kl-card.collapsed .pc-card-title,#dd0-card.collapsed .pc-card-title{margin-bottom:0}
 #ffp-card.collapsed>:not(.pc-card-title){display:none}
 #ffp-card.collapsed{align-self:start}
 #ffp-card.collapsed .pc-card-title{margin-bottom:0}
@@ -5960,6 +5960,7 @@ let _tsCardCollapsed = true; // in-memory only; resets on reload
 let _sigCardCollapsed = true;
 let _cmpCardCollapsed = true;
 let _klCardCollapsed  = true;
+let _dd0CardCollapsed = true;
 
 // ─── Phase 2a: Pulse sidebar functions ───────────────────────────────────────
 
@@ -7692,6 +7693,8 @@ ${window.PT_ENABLE_EDGAR_FORM4 === true ? `
       <div id="edgar-dd-panel-${item.ticker}" style="display:none;margin-top:10px"></div>
     </div>` : ''}
 ${window.PT_ENABLE_DEEP_DIVE === true ? `
+    <div id="dd0-card" class="pc-card${_dd0CardCollapsed ? ' collapsed' : ''}">
+      <div class="pc-card-title">Deep Dive — AI Analysis <span class="ts-chevron">${_dd0CardCollapsed ? '▶' : '▼'}</span></div>
     <div class="mp-dd-bar" id="dd0-bar-${item.ticker}">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
         <span style="font-family:var(--mono);font-size:8px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">Deep Dive — AI Analysis</span>
@@ -7699,12 +7702,14 @@ ${window.PT_ENABLE_DEEP_DIVE === true ? `
           onclick="_dd0RunCard('${item.ticker}')">▶ Run Deep Dive</button>
       </div>
       <div id="dd0-panel-${item.ticker}" style="display:none;margin-top:10px"></div>
+    </div>
     </div>` : ''}
   `; /* DDV0-IMPL: Deep Dive v0 client trigger, gated by PT_ENABLE_DEEP_DIVE, rendered above */
   _initTsCard();
   _initSigCard();
   _initCmpCard();
   _initKlCard();
+  _initDd0Card();
 }
 
 function _initTsCard() {
@@ -7741,6 +7746,15 @@ function _initKlCard() {
     _klCardCollapsed = !_klCardCollapsed;
     card.classList.toggle('collapsed', _klCardCollapsed);
     card.querySelector('.ts-chevron').textContent = _klCardCollapsed ? '▶' : '▼';
+  };
+}
+function _initDd0Card() {
+  const card = document.getElementById('dd0-card');
+  if (!card) return;
+  card.querySelector('.pc-card-title').onclick = function() {
+    _dd0CardCollapsed = !_dd0CardCollapsed;
+    card.classList.toggle('collapsed', _dd0CardCollapsed);
+    card.querySelector('.ts-chevron').textContent = _dd0CardCollapsed ? '▶' : '▼';
   };
 }
 

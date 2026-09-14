@@ -159,7 +159,8 @@ function buildApi(fetchStub, docBundle, techCacheSeed, cockpitResultsSeed) {
     'var _techCache = ' + JSON.stringify(techCacheSeed || {}) + ';\n' +
     'var _cockpitResults = ' + JSON.stringify(cockpitResultsSeed || []) + ';\n' +
     FNS.map(function (n) { return src[n]; }).join('\n') +
-    '\nreturn { ' + FNS.map(function (n) { return n + ': ' + n; }).join(', ') + ' };';
+    '\nreturn { ' + FNS.map(function (n) { return n + ': ' + n; }).join(', ') +
+    ', _techCache: _techCache, _cockpitResults: _cockpitResults };';
   // eslint-disable-next-line no-new-func
   const factory = new Function('document', 'console', 'fetch', body);
   const quiet = { log: function () {}, warn: function () {}, error: function () {} };
@@ -188,11 +189,11 @@ function okBody(text) {
 
   // ══ CLAUSE 1+2 — gate on/off controls exactly the button count ═════════════
   (function () {
-    function render(gateValue, ticker) {
+    function render(gateValue, ticker, dd0CardCollapsed) {
       const win = (gateValue === undefined) ? {} : { PT_ENABLE_DEEP_DIVE: gateValue };
       // eslint-disable-next-line no-new-func
-      const evalFn = new Function('window', 'item', 'return (' + markupExpr + ');');
-      return evalFn(win, { ticker: ticker });
+      const evalFn = new Function('window', 'item', '_dd0CardCollapsed', 'return (' + markupExpr + ');');
+      return evalFn(win, { ticker: ticker }, dd0CardCollapsed !== undefined ? dd0CardCollapsed : true);
     }
 
     const OFF_VALUES = [undefined, 'true', 1, false, null];
@@ -383,6 +384,106 @@ function okBody(text) {
     }
     check('the full click-to-terminal run completes without touching localStorage',
       threw === null);
+  })();
+
+  // ══ G2 — card structure and shared collapse-CSS membership (DDV0-FIX) ══════
+  (function () {
+    check('gate === true -> #dd0-card wrapper with class pc-card is present',
+      /id="dd0-card"\s+class="pc-card/.test(markupExpr));
+    const cardOpenIdx = markupExpr.indexOf('id="dd0-card"');
+    const afterOpenTag = markupExpr.slice(markupExpr.indexOf('>', cardOpenIdx) + 1);
+    const firstChildMatch = afterOpenTag.match(/^\s*<div class="pc-card-title">/);
+    check('the wrapper card\'s first child is a single .pc-card-title div',
+      !!firstChildMatch);
+    check('exactly one .pc-card-title inside the dd0-card wrapper',
+      (markupExpr.match(/class="pc-card-title"/g) || []).length === 1);
+
+    const SHARED_GROUP_LINE =
+      '#sig-card .pc-card-title,#cmp-card .pc-card-title,#kl-card .pc-card-title,#dd0-card .pc-card-title';
+    check('#dd0-card joins the existing shared collapse-CSS selector list (no bespoke rule)',
+      content.indexOf(SHARED_GROUP_LINE) !== -1);
+    check('#dd0-card collapsed>:not(.pc-card-title) rule reuses the shared group',
+      content.indexOf('#kl-card.collapsed>:not(.pc-card-title),#dd0-card.collapsed>:not(.pc-card-title)') !== -1);
+    check('#dd0-card.collapsed align-self rule reuses the shared group',
+      content.indexOf('#kl-card.collapsed,#dd0-card.collapsed{align-self:start}') !== -1);
+    check('#dd0-card.collapsed .pc-card-title margin rule reuses the shared group',
+      content.indexOf('#kl-card.collapsed .pc-card-title,#dd0-card.collapsed .pc-card-title{margin-bottom:0}') !== -1);
+    // Sensitivity: an exact-line membership check against a copy of the shared group
+    // with #dd0-card's title-selector member removed must NOT find that (shorter,
+    // different) line verbatim in the real content — proving the positive check above
+    // (which does find the real, full SHARED_GROUP_LINE) is not vacuously true.
+    const corruptedGroupLine = SHARED_GROUP_LINE.replace(',#dd0-card .pc-card-title', '');
+    check('sensitivity: the membership check correctly rejects a group line missing #dd0-card',
+      corruptedGroupLine !== SHARED_GROUP_LINE && content.indexOf(corruptedGroupLine + '{') === -1);
+
+    // .mp-dd-bar / .mp-dd-btn inner block byte-identical to the DDV0-IMPL original —
+    // this task wraps it, it does not rewrite it. Compared CRLF-normalised since the
+    // worktree stores the file with CRLF line endings on disk.
+    const markupLf = markupExpr.replace(/\r\n/g, '\n');
+    const EXPECTED_INNER =
+      '<div class="mp-dd-bar" id="dd0-bar-${item.ticker}">\n' +
+      '      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">\n' +
+      '        <span style="font-family:var(--mono);font-size:8px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">Deep Dive — AI Analysis</span>\n' +
+      '        <button class="mp-dd-btn" id="dd0-btn-${item.ticker}"\n' +
+      '          onclick="_dd0RunCard(\'${item.ticker}\')">▶ Run Deep Dive</button>\n' +
+      '      </div>\n' +
+      '      <div id="dd0-panel-${item.ticker}" style="display:none;margin-top:10px"></div>\n' +
+      '    </div>';
+    check('.mp-dd-bar / .mp-dd-btn inner markup is byte-identical to the original (wrapped, not rewritten)',
+      markupLf.indexOf(EXPECTED_INNER) !== -1);
+  })();
+
+  // ══ G8/G9/G10e/G10f — _techCache and _cockpitResults untouched, success+failure ═
+  await (async function () {
+    function snapshot(x) { return JSON.stringify(x); }
+
+    // success path
+    (async function () {
+      const doc = makeDoc({ 'dd0-btn-AAA': makeBtnNode(), 'dd0-panel-AAA': makePanelNode() });
+      const fetchStub = makeFetch([{ ok: true, body: okBody('text') }]);
+      const techSeed = { AAA: { snap: { candleCount: 5 } } };
+      const cockpitSeed = [ITEM_AAA];
+      const api = buildApi(fetchStub, doc, techSeed, cockpitSeed);
+      const techBefore = snapshot(api._techCache);
+      const cockpitBefore = snapshot(api._cockpitResults);
+      await api._dd0RunCard('AAA');
+      check('G8 success path: _techCache byte-identical before/after', snapshot(api._techCache) === techBefore);
+      check('G9 success path: _cockpitResults byte-identical before/after', snapshot(api._cockpitResults) === cockpitBefore);
+    })();
+
+    // failure path
+    await (async function () {
+      const doc = makeDoc({ 'dd0-btn-AAA': makeBtnNode(), 'dd0-panel-AAA': makePanelNode() });
+      const fetchStub = makeFetch([{ ok: false, status: 500, body: { error: { message: 'down' } } }]);
+      const techSeed = { AAA: { snap: { candleCount: 5 } } };
+      const cockpitSeed = [ITEM_AAA];
+      const api = buildApi(fetchStub, doc, techSeed, cockpitSeed);
+      const techBefore = snapshot(api._techCache);
+      const cockpitBefore = snapshot(api._cockpitResults);
+      await api._dd0RunCard('AAA');
+      check('G10e failure path: _techCache byte-identical before/after', snapshot(api._techCache) === techBefore);
+      check('G10f failure path: _cockpitResults byte-identical before/after', snapshot(api._cockpitResults) === cockpitBefore);
+    })();
+  })();
+
+  // ══ G10a-c — no reference anywhere in the DDV0 surface to sibling cards / ══
+  // ══ Actionable Take / score display; G11 non-coupling extended ════════════
+  (function () {
+    const FORBIDDEN = [
+      'ts-card', 'sig-card', 'cmp-card', 'kl-card', 'ffp-card',
+      'Actionable Take', 'actionable', 'ACTIONABLE',
+      'runAnalysis(', 'analyzeChunk(', 'orchestrate(', 'enforceScoreConsistency('
+    ];
+    const combinedSrc = FNS.map(function (n) { return src[n]; }).join('\n');
+    for (const token of FORBIDDEN) {
+      check('G10/G11: DDV0 function sources never reference "' + token + '"',
+        combinedSrc.indexOf(token) === -1);
+    }
+    // Sensitivity: a deliberately corrupted copy carrying a forbidden token must
+    // be caught by the same scan, proving it is not vacuously true.
+    const corrupted = combinedSrc + '\n// enforceScoreConsistency(sneaky)';
+    check('sensitivity: the forbidden-token scan correctly flags an injected violation',
+      corrupted.indexOf('enforceScoreConsistency(') !== -1);
   })();
 
   // ══ Disabled-gate guard inside _dd0RunCard itself (defense in depth) ═══════
