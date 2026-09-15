@@ -656,7 +656,11 @@ try {
       '2026-08-23_ep-pilot-main-closeout.MAIN.md',
       '2026-08-26_intake-m1-pilot-launch.COWORK.md',
       '2026-08-28_pilot-close-pc-closeout.MAIN.md',
-      '2026-09-04_owner-ruling-wft-r10-confirm-hash-corrective.MAIN.md'
+      '2026-09-04_owner-ruling-wft-r10-confirm-hash-corrective.MAIN.md',
+      '2026-09-14_wu-vscr-light-plan-c1.COWORK.md',
+      '2026-09-14_wu-vscr-light-plan.COWORK.md',
+      '2026-09-15_wu-vscr-vscr-impl-codex-evidence-package.LAB.md',
+      '2026-09-15_wu-vscr-vscr-impl-implementation.LAB.md'
     ].sort();
     const auRate = auFiles.length ? (auUnknown.length * 100) / auFiles.length : 0;
     console.log('  live corpus: ' + auFiles.length + ' handoffs, ' + auUnknown.length + ' UNKNOWN (' + auRate.toFixed(1) + '%)');
