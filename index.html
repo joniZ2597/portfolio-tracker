@@ -470,6 +470,21 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .sr-score-track{width:28px;height:2px;background:rgba(255,255,255,.08);border-radius:1px;overflow:hidden}
 .sr-score-fill{height:100%;border-radius:1px;transition:width 180ms}
 .sr-score-fill.pos{background:var(--green2)}.sr-score-fill.warn{background:var(--yellow2)}.sr-score-fill.neg{background:var(--red2)}
+/* VSC-BEGIN */
+.vsc-cell{display:flex;flex-direction:column;align-items:stretch;gap:2px;width:44px}
+.vsc-track{position:relative;width:44px;height:4px;border-radius:1px;background:rgba(255,255,255,.07);overflow:hidden}
+.sr-panel.compact .vsc-track{height:3px}
+.vsc-trail{position:absolute;left:0;top:0;bottom:0;opacity:.35}
+.vsc-trail-pos{background:var(--green2)}
+.vsc-trail-warn{background:var(--yellow2)}
+.vsc-trail-neg{background:var(--red2)}
+.vsc-cap{position:absolute;top:0;bottom:0;width:2px;box-shadow:0 0 0 1px var(--card)}
+.vsc-cap-pos{background:var(--green2)}
+.vsc-cap-warn{background:var(--yellow2)}
+.vsc-cap-neg{background:var(--red2)}
+.vsc-num{font-family:var(--mono);font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:.2px;line-height:1.1;text-align:right;color:var(--text);min-width:44px}
+.vsc-num-missing{color:var(--text3)}
+/* VSC-END */
 .sr-rating.pos{color:var(--green2)}.sr-rating.neg{color:var(--red2)}.sr-rating.neutral-v{color:var(--text3)}
 .sr-setup{font-size:9px;letter-spacing:.4px}
 .sr-setup.pos{color:var(--green2)}.sr-setup.warn{color:var(--yellow2)}.sr-setup.neg{color:var(--red2)}.sr-setup.neutral-v{color:var(--text3)}
@@ -6066,6 +6081,12 @@ function _ptScoreFillHtml(v) {
   if (s === null) return '';
   return `<div class="sr-score-fill ${_ptScoreStates(s).fillCls}" style="width:${s}%"></div>`;
 }
+function _vscCellHtml(s) {
+  if (s === null) return `<div class="vsc-cell"><span class="vsc-num vsc-num-missing">—</span></div>`;
+  const band = s >= 65 ? 'pos' : s >= 40 ? 'warn' : 'neg';
+  const trail = s > 0 ? `<div class="vsc-trail vsc-trail-${band}" style="width:${s}%"></div>` : '';
+  return `<div class="vsc-cell"><span class="vsc-num">${s}</span><div class="vsc-track">${trail}<div class="vsc-cap vsc-cap-${band}" style="left:clamp(0px, calc(${s}% - 2px), calc(100% - 2px))"></div></div></div>`;
+}
 function _ptScoreDial(v, color) {
   const s = _ptScoreNorm(v);
   if (s === null) return { cls: 'at-dial no-score', style: '', numColor: 'var(--text3)' };
@@ -6332,7 +6353,7 @@ function openScanResultsOverlay() {
         <td class="r sr-rank">${i + 1}</td>
         <td class="sr-sym">${sym}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
-        <td class="r sr-score"><span>${_ptScoreText(score)}</span><div class="sr-score-track">${_ptScoreFillHtml(score)}</div></td>
+        <td class="r sr-score">${_vscCellHtml(score)}</td>
         <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>
         <td class="sr-setup ${setupCls}">${setupLbl}</td>
         <td class="r sr-chg ${chgCls}">${chgStr}</td>
