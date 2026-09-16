@@ -2380,7 +2380,27 @@ function _p5SynthesisPayload(accepted) {
 // plain JSON-serializable data: no DOM references, no functions, no
 // presentation state — the renderer consumes a packet, never builds one.
 
-function _p5CollectLocalContext(symbol, nowMs) {
+// ─── G-2 seam: single preload per generation, reused across holdings ───────
+// Reads storage exactly once per call. Portfolio-wide values (subtotals,
+// reporting) do not depend on symbol, so they are computed here once rather
+// than recomputed per holding by the pure builder below.
+function _p5PreloadContext(nowMs) {
+  var holdings = loadHoldings();
+  var fxCache = _pfFxLoadCache();
+  var cashState = _pfCashLoad();
+  var eodCache = _pfEodLoadCache();
+  var subtotals = _pfComputeHoldingsSubtotals(holdings);
+  var reporting = _pfComputePortfolioReporting(subtotals.usdSubtotal, subtotals.ilsSubtotal,
+    subtotals.unknownCurrencyCount, subtotals.hasCorrupt, subtotals.corruptCount, cashState, fxCache, nowMs);
+  return { holdings: holdings, fxCache: fxCache, cashState: cashState, eodCache: eodCache,
+    subtotals: subtotals, reporting: reporting };
+}
+
+// Pure. Touches no storage, reads no clock of its own — takes the preloaded
+// values and the injected clock as parameters. Same shape and logic as the
+// former _p5CollectLocalContext body, with storage reads and the portfolio
+// reporting recompute replaced by reads from `preload`.
+function _p5BuildLocalContext(symbol, nowMs, preload) {
   var sym = typeof symbol === 'string' ? symbol.trim().toUpperCase() : '';
   var ctx = {
     symbol: sym, found: false, corrupt: false, holding: null, pl: null,
@@ -2389,8 +2409,8 @@ function _p5CollectLocalContext(symbol, nowMs) {
     weight: { pct: null, unavailableReason: 'reporting-incomplete' }
   };
   if (sym === '') return ctx;
-  var holdings = loadHoldings();
-  var fxCache = _pfFxLoadCache();
+  var holdings = preload.holdings;
+  var fxCache = preload.fxCache;
   var clock = (typeof nowMs === 'number' && isFinite(nowMs)) ? nowMs : null;
   ctx.fx.state = _pfFxState(fxCache, nowMs);
   if (ctx.fx.state !== 'missing') {
@@ -2415,7 +2435,7 @@ function _p5CollectLocalContext(symbol, nowMs) {
     baselineAgeDays: ageDays
   };
   ctx.pl = _pfHoldingPl(h, fxCache, nowMs);
-  var eodEntry = _pfEodLoadCache()[sym];
+  var eodEntry = preload.eodCache[sym];
   if (eodEntry && typeof eodEntry === 'object') {
     ctx.market.present = true;
     ctx.market.changePercent = (typeof eodEntry.changePercent === 'number' && isFinite(eodEntry.changePercent)) ? eodEntry.changePercent : null;
@@ -2423,9 +2443,7 @@ function _p5CollectLocalContext(symbol, nowMs) {
   }
   // Weight: the exact existing P-2B allocation rule — reporting completeness
   // guard + _pfHoldingIlsValue over the unified allocation denominator.
-  var sub = _pfComputeHoldingsSubtotals(holdings);
-  var reporting = _pfComputePortfolioReporting(sub.usdSubtotal, sub.ilsSubtotal,
-    sub.unknownCurrencyCount, sub.hasCorrupt, sub.corruptCount, _pfCashLoad(), fxCache, nowMs);
+  var reporting = preload.reporting;
   if (!reporting.completeness) ctx.weight.unavailableReason = 'reporting-incomplete';
   else if (!(reporting.allocationDenominatorValue > 0)) ctx.weight.unavailableReason = 'denominator-zero';
   else {
@@ -2434,6 +2452,11 @@ function _p5CollectLocalContext(symbol, nowMs) {
     else { ctx.weight.pct = allocIls / reporting.allocationDenominatorValue * 100; ctx.weight.unavailableReason = null; }
   }
   return ctx;
+}
+
+// Thin wrapper — name, two-parameter signature and returned shape unchanged.
+function _p5CollectLocalContext(symbol, nowMs) {
+  return _p5BuildLocalContext(symbol, nowMs, _p5PreloadContext(nowMs));
 }
 
 function _p5PacketStatus(packet) {
@@ -2602,6 +2625,305 @@ function _p5RenderPacket(packet, mountEl) {
   }
   root.appendChild(sBox);
   mountEl.appendChild(root);
+}
+
+// ═══ EOD-1: Portfolio Intelligence Packet v0 (WU-EOD-V0 / EODV0-IMPL) ══════
+// Aggregates existing per-symbol P5 packets into one portfolio-level export.
+// Never triggers research — _eodSnapshotPackets is the only reader of the
+// session-scoped _p5Displayed/_p5LastRun maps below, and neither is ever
+// mutated. _eodBuildPacket is strictly pure: no storage/global/DOM access —
+// every read happens once, up front, in _eodExportPacket.
+
+// The only function that reads the session-scoped research globals. Never
+// mutates either map; never triggers a new research run.
+function _eodSnapshotPackets(symbols) {
+  var out = {};
+  symbols.forEach(function(sym) {
+    out[sym] = _p5Displayed[sym] || _p5LastRun[sym] || null;
+  });
+  return out;
+}
+
+function _eodReconciliationLimitationText(recon) {
+  if (recon.status === 'unset') return 'Reconciliation: not recorded.';
+  if (recon.status === 'invalid') return 'Reconciliation: recorded data could not be read.';
+  if (recon.status === 'stale') return 'Reconciliation: stale — ' + Math.round(recon.staleDays) +
+    ' day(s) between recorded as-of and oldest holding baseline.';
+  if (recon.status === 'total-incomplete') return 'Reconciliation: unavailable — Portfolio Total is incomplete.';
+  if (recon.status === 'unexplained-gap') return 'Reconciliation: unexplained gap of ₪' +
+    Math.abs(recon.unexplained).toFixed(2) + ' vs. broker total.';
+  if (recon.status === 'reconciled-with-exclusions') return 'Reconciliation: reconciled with declared exclusions of ₪' +
+    recon.exclusions.toFixed(2) + '.';
+  if (recon.status === 'fully-reconciled') return 'Reconciliation: fully reconciled with the broker total.';
+  return 'Reconciliation: not recorded.';
+}
+
+// Pure aggregator. Every input is explicit — no storage, no globals, no DOM.
+// Calls only _p5BuildLocalContext (never _p5CollectLocalContext, never
+// _p5RunResearch) so preload is read once and reused for every holding.
+function _eodBuildPacket(args) {
+  var asOf = args.asOf;
+  var nowMs = args.nowMs;
+  var packetsBySymbol = args.packetsBySymbol;
+  var preload = args.preload;
+  var reconState = args.reconState;
+
+  var holdings = preload.holdings;
+  var symbols = Object.keys(holdings).sort();
+
+  var limitations = [];
+  function addLimitation(code, text) { limitations.push({ code: code, text: text }); }
+
+  var researchedSymbols = [], notResearchedSymbols = [], failedSymbols = [], zeroAcceptedSymbols = [];
+  var aggCounts = { returned: 0, accepted: 0, rejectedMalformed: 0, rejectedUnmatched: 0,
+    rejectedDuplicate: 0, rejectedMissingDate: 0, rejectedMissingTitle: 0, searchResultsCount: 0 };
+
+  var holdingsOut = symbols.map(function(sym) {
+    var ctx = _p5BuildLocalContext(sym, nowMs, preload);
+    var packet = packetsBySymbol[sym] || null;
+    var coverage;
+    if (packet && packet.sections && packet.sections.news && packet.sections.news.state === 'done' &&
+        packet.counts && packet.counts.accepted >= 1) {
+      coverage = 'researched'; researchedSymbols.push(sym);
+    } else if (packet && packet.sections && packet.sections.news && packet.sections.news.state === 'failed') {
+      coverage = 'failed'; failedSymbols.push(sym);
+    } else if (packet) {
+      coverage = 'zero-accepted'; zeroAcceptedSymbols.push(sym);
+    } else {
+      coverage = 'not-researched'; notResearchedSymbols.push(sym);
+    }
+    if (packet && packet.counts) {
+      aggCounts.returned += packet.counts.returned || 0;
+      aggCounts.accepted += packet.counts.accepted || 0;
+      aggCounts.rejectedMalformed += packet.counts.rejectedMalformed || 0;
+      aggCounts.rejectedUnmatched += packet.counts.rejectedUnmatched || 0;
+      aggCounts.rejectedDuplicate += packet.counts.rejectedDuplicate || 0;
+      aggCounts.rejectedMissingDate += packet.counts.rejectedMissingDate || 0;
+      aggCounts.rejectedMissingTitle += packet.counts.rejectedMissingTitle || 0;
+      aggCounts.searchResultsCount += packet.counts.searchResultsCount || 0;
+    }
+    var hp = ctx.holding; // null for not-found/corrupt — never project raw storage fields directly
+    var h = holdings[sym];
+    return {
+      symbol: sym,
+      positionSize: hp ? hp.positionSize : null,
+      currency: hp ? hp.currency : null,
+      costBasis: hp ? hp.costBasis : null,
+      costBasisILS: hp ? hp.costBasisILS : null,
+      manualPlPct: hp ? hp.manualPlPct : null,
+      baselineAt: hp ? hp.baselineAt : null,
+      updatedAt: (ctx.found && !ctx.corrupt && typeof h.updatedAt === 'string') ? h.updatedAt : null,
+      eod: { weight: ctx.weight, market: ctx.market, pl: ctx.pl },
+      research: { coverage: coverage, packet: packet }
+    };
+  });
+
+  // ── Source dedup (§4): symbol-ascending outer, inputIndex-order inner,
+  // first-encountered normUrl wins and is never overwritten; later
+  // duplicates only union into tickerAttribution and record a conflict. ──
+  var sourcesByNormUrl = {};
+  var sourceOrder = [];
+  var conflicts = [];
+  symbols.forEach(function(sym) {
+    var packet = packetsBySymbol[sym];
+    if (!packet || !packet.sections || !packet.sections.news || packet.sections.news.state !== 'done') return;
+    var accepted = (packet.sections.news.accepted || []).slice()
+      .sort(function(a, b) { return (a.inputIndex || 0) - (b.inputIndex || 0); });
+    accepted.forEach(function(item) {
+      var key = item.normUrl;
+      if (!sourcesByNormUrl[key]) {
+        sourcesByNormUrl[key] = { url: item.url, normUrl: item.normUrl, title: item.title,
+          date: item.date, publisher: item.publisher, attribution: {} };
+        sourceOrder.push(key);
+      }
+      var entry = sourcesByNormUrl[key];
+      entry.attribution[sym] = true;
+      ['title', 'date', 'publisher', 'url'].forEach(function(field) {
+        if (entry[field] !== item[field]) {
+          conflicts.push({ normUrl: key, field: field, first: entry[field], second: item[field] });
+        }
+      });
+    });
+  });
+  var sources = sourceOrder.map(function(key) {
+    var e = sourcesByNormUrl[key];
+    return { url: e.url, normUrl: e.normUrl, title: e.title, date: e.date, publisher: e.publisher,
+      tickerAttribution: Object.keys(e.attribution).sort() };
+  });
+  var uniqueSources = sources.length;
+  var totalAttributions = sources.reduce(function(n, s) { return n + s.tickerAttribution.length; }, 0);
+
+  // ── Portfolio-level section (§1 IN list) ──
+  var reporting = preload.reporting;
+  var oldestBaselineAt = null;
+  symbols.forEach(function(sym) {
+    var h = holdings[sym];
+    if (h._corrupt === true) return;
+    if (typeof h.baselineAt !== 'string' || isNaN(Date.parse(h.baselineAt))) return;
+    if (oldestBaselineAt === null || Date.parse(h.baselineAt) < Date.parse(oldestBaselineAt)) oldestBaselineAt = h.baselineAt;
+  });
+  var recon = _pfComputeReconciliation(reconState, reporting.total, reporting.completeness, oldestBaselineAt);
+  var needsAttention = _pfComputeNeedsAttention(holdings, preload.fxCache, recon, preload.cashState, nowMs);
+
+  var portfolio = {
+    total: reporting.completeness ? reporting.total : null,
+    totalUnavailableReason: reporting.completeness ? null : (reporting.completenessReasons.join('; ') || 'incomplete'),
+    completeness: reporting.completeness,
+    usdSubtotal: preload.subtotals.usdSubtotal,
+    ilsSubtotal: preload.subtotals.ilsSubtotal,
+    cash: { state: preload.cashState.state,
+      amountILS: preload.cashState.state === 'recorded' ? preload.cashState.amountILS : null,
+      asOf: preload.cashState.state === 'recorded' ? preload.cashState.asOf : null },
+    fx: { state: reporting.fxState, rate: preload.fxCache.rate || null, effectiveAt: preload.fxCache.effectiveAt || null },
+    reconciliation: recon,
+    needsAttention: needsAttention
+  };
+
+  // ── Limitations (§5): unconditional rows always emitted; conditional rows
+  // only when the underlying condition is true. ──
+  var m = symbols.length, n = researchedSymbols.length;
+  if (n < m) {
+    addLimitation('coverage', 'Researched ' + n + ' of ' + m + ' holdings. Not researched: ' + notResearchedSymbols.join(', ') + '.');
+  }
+  if (failedSymbols.length > 0) {
+    addLimitation('news-failed', 'News collection failed for ' + failedSymbols.join(', ') + '. No evidence was retrieved for these holdings.');
+  }
+  if (zeroAcceptedSymbols.length > 0) {
+    addLimitation('zero-accepted', 'No sources passed validation for ' + zeroAcceptedSymbols.join(', ') + '. Absence of accepted evidence is not evidence of no news.');
+  }
+  var rejectedTotal = aggCounts.rejectedMalformed + aggCounts.rejectedUnmatched + aggCounts.rejectedDuplicate +
+    aggCounts.rejectedMissingDate + aggCounts.rejectedMissingTitle;
+  if (rejectedTotal > 0) {
+    addLimitation('rejections', 'Rejected ' + rejectedTotal + ' candidate items: ' + aggCounts.rejectedUnmatched +
+      ' unmatched, ' + aggCounts.rejectedDuplicate + ' duplicate, ' + aggCounts.rejectedMalformed + ' malformed, ' +
+      aggCounts.rejectedMissingDate + ' missing date, ' + aggCounts.rejectedMissingTitle +
+      ' missing title. Rejected items are excluded from this report.');
+  }
+  addLimitation('date-semantics', 'The "date" shown for each source is publication metadata from the search ' +
+    'provider. It is not an event date and must not be read as when something happened.');
+  addLimitation('provider-coverage', 'Evidence comes from a single provider request per holding. Coverage is ' +
+    'non-exhaustive — absence of a source does not mean absence of news.');
+  addLimitation('market-state', 'Market and session data is partial. Figures reflect only the market state ' +
+    'currently available.');
+  addLimitation('reconciliation', _eodReconciliationLimitationText(recon));
+  if (!reporting.completeness && reporting.completenessReasons.length > 0) {
+    addLimitation('incomplete-totals', 'Portfolio totals exclude: ' + reporting.completenessReasons.join('; ') + '. These totals are incomplete.');
+  }
+  if (reporting.fxState === 'missing' || reporting.fxState === 'stale-invalid') {
+    addLimitation('fx', 'FX unavailable — cross-currency totals are not reported.');
+  } else if (preload.fxCache.rate) {
+    addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' + reporting.fxState + '.');
+  }
+  symbols.forEach(function(sym) {
+    var h = holdings[sym];
+    if (typeof h.baselineAt === 'string' && !isNaN(Date.parse(h.baselineAt))) {
+      addLimitation('staleness:' + sym, sym + ': position values were last updated ' + h.baselineAt +
+        '; figures derived from them are as of that date, not today.');
+    }
+  });
+  conflicts.forEach(function(c) {
+    addLimitation('source-conflict:' + c.normUrl, 'Conflicting metadata for ' + c.normUrl + ': ' + c.field +
+      '. The first-encountered values were used.');
+  });
+  symbols.forEach(function(sym) {
+    var packet = packetsBySymbol[sym];
+    if (!packet || !packet.sections || !packet.sections.synthesis) return;
+    var s = packet.sections.synthesis;
+    var text;
+    if (s.state === 'pending') text = 'pending';
+    else if (s.state === 'done') text = 'done';
+    else if (s.state === 'failed') text = 'failed (' + s.reason + ')';
+    else if (s.state === 'suppressed') text = 'suppressed — ' + s.reason;
+    else text = String(s.state);
+    addLimitation('synthesis:' + sym, sym + ' — Synthesis: ' + text + '.');
+  });
+
+  var status = (notResearchedSymbols.length > 0 || failedSymbols.length > 0 || zeroAcceptedSymbols.length > 0) ? 'partial' : 'complete';
+
+  return {
+    schemaVersion: 1,
+    asOf: asOf,
+    status: status,
+    portfolio: portfolio,
+    holdings: holdingsOut,
+    sources: sources,
+    counts: aggCounts,
+    uniqueSources: uniqueSources,
+    totalAttributions: totalAttributions,
+    limitations: limitations
+  };
+}
+
+// Pure. Derives Markdown solely from the JSON packet (AC#17) — no storage,
+// no clock, no re-derivation of any figure. Limitations render before the
+// per-ticker sections (AC#10).
+function _eodPacketToMarkdown(packet) {
+  var lines = [];
+  lines.push('# EOD Portfolio Intelligence Packet');
+  lines.push('');
+  lines.push('As of: ' + packet.asOf);
+  lines.push('Status: ' + packet.status);
+  lines.push('');
+  lines.push('## Limitations');
+  packet.limitations.forEach(function(l) { lines.push('- ' + l.text); });
+  lines.push('');
+  lines.push('## Portfolio');
+  var p = packet.portfolio;
+  lines.push('- Total: ' + (p.total === null ? 'unavailable (' + (p.totalUnavailableReason || 'incomplete') + ')' : '₪' + p.total.toFixed(2)));
+  lines.push('- USD subtotal: ' + p.usdSubtotal + ', ILS subtotal: ' + p.ilsSubtotal);
+  lines.push('- Cash: ' + p.cash.state + (p.cash.amountILS !== null ? ' (₪' + p.cash.amountILS.toFixed(2) + ' as of ' + p.cash.asOf + ')' : ''));
+  lines.push('- FX: ' + p.fx.state + (p.fx.rate !== null ? ' (rate ' + p.fx.rate + ' as of ' + p.fx.effectiveAt + ')' : ''));
+  lines.push('- Reconciliation: ' + p.reconciliation.status);
+  if (p.needsAttention.length > 0) {
+    lines.push('- Needs Attention (' + p.needsAttention.length + '):');
+    p.needsAttention.forEach(function(item) { lines.push('  - [' + item.severity + '] ' + item.title + ' — ' + item.detail); });
+  }
+  lines.push('');
+  lines.push('## Holdings (' + packet.holdings.length + ')');
+  packet.holdings.forEach(function(h) {
+    lines.push('### ' + h.symbol);
+    lines.push('- Coverage: ' + h.research.coverage);
+    lines.push('- Position: ' + (h.positionSize === null ? 'n/a' : h.positionSize) + ' ' + (h.currency || ''));
+    lines.push('- Weight: ' + (h.eod.weight.pct === null ? 'unavailable (' + h.eod.weight.unavailableReason + ')' : h.eod.weight.pct.toFixed(2) + '%'));
+    var newsSection = h.research.packet && h.research.packet.sections && h.research.packet.sections.news;
+    if (newsSection && newsSection.state === 'done') {
+      (newsSection.accepted || []).forEach(function(item) {
+        lines.push('  - [' + item.title + '](' + item.url + ') — ' + item.publisher + ', ' + item.date);
+      });
+    }
+    var s = h.research.packet && h.research.packet.sections && h.research.packet.sections.synthesis;
+    if (s) {
+      lines.push('- Synthesis: ' + s.state + (s.reason ? ' (' + s.reason + ')' : ''));
+      if (s.state === 'done' && s.text) { lines.push(''); lines.push(s.text); }
+    }
+    lines.push('');
+  });
+  lines.push('## Sources (' + packet.sources.length + ' unique, ' + packet.totalAttributions + ' attributions)');
+  packet.sources.forEach(function(s) {
+    lines.push('- [' + s.title + '](' + s.url + ') — ' + s.publisher + ', ' + s.date + ' — ' + s.tickerAttribution.join(', '));
+  });
+  lines.push('');
+  lines.push('## Counts');
+  Object.keys(packet.counts).forEach(function(k) { lines.push('- ' + k + ': ' + packet.counts[k]); });
+  return lines.join('\n');
+}
+
+// Button handler — the only function performing the ordered I/O: one
+// preload, one packet-snapshot read, then the pure builder + Markdown
+// projection, then download. No research triggered; no pt_* write.
+function _eodExportPacket() {
+  var nowMs = Date.now();
+  var asOf = new Date(nowMs).toISOString();
+  var preload = _p5PreloadContext(nowMs);
+  var symbols = Object.keys(preload.holdings);
+  var packetsBySymbol = _eodSnapshotPackets(symbols);
+  var reconState = _pfReconLoad();
+  var packet = _eodBuildPacket({ asOf: asOf, nowMs: nowMs, packetsBySymbol: packetsBySymbol,
+    preload: preload, reconState: reconState });
+  var md = _eodPacketToMarkdown(packet);
+  var ts = _ptTimestamp();
+  _ptDownload(new Blob([JSON.stringify(packet, null, 2)], { type: 'application/json' }), 'eod_packet_' + ts + '.json');
+  _ptDownload(new Blob([md], { type: 'text/markdown' }), 'eod_packet_' + ts + '.md');
 }
 
 // ── Step 3 (P5-3 §11): call-1 wiring — perplexity-proxy → validator → news ──
@@ -8845,6 +9167,12 @@ function _renderPortfolioPanel() {
     if (inp) { inp.value = ''; inp.click(); }
   };
 
+  var eodExportBtn = document.createElement('button');
+  eodExportBtn.className   = 'btn-export';
+  eodExportBtn.textContent = 'EOD PACKET ↓';
+  eodExportBtn.title       = 'Export end-of-day portfolio intelligence packet (JSON + Markdown)';
+  eodExportBtn.onclick     = _eodExportPacket;
+
   var addBtn = document.createElement('button');
   addBtn.className   = 'btn-add-position';
   addBtn.textContent = '＋ Add Position';
@@ -8886,6 +9214,7 @@ function _renderPortfolioPanel() {
 
   hdrRight.appendChild(backupBtn);
   hdrRight.appendChild(restoreBtn);
+  hdrRight.appendChild(eodExportBtn);
   hdrRight.appendChild(addBtn);
 
   hdr.appendChild(hdrLeft);

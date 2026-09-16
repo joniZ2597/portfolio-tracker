@@ -88,7 +88,7 @@ const ENGINE_FNS = ['_pfIsFiniteNum', '_pfFxRateValid', '_pfFxState', '_pfNormal
   '_pfComputePortfolioReporting', '_pfComputeHoldingsSubtotals',
   '_p5NormalizeUrl', '_p5DomainFromUrl', '_p5UsableTitle', '_p5UsableDate',
   '_p5IndexSearchResults', '_p5ValidateItems', '_p5SynthesisPayload',
-  '_p5CollectLocalContext', '_p5PacketStatus', '_p5BuildPacket', '_p5RenderPacket',
+  '_p5PreloadContext', '_p5BuildLocalContext', '_p5CollectLocalContext', '_p5PacketStatus', '_p5BuildPacket', '_p5RenderPacket',
   '_p5Call1Prompt', '_p5ParseModelItems', '_p5RequestItems',
   '_p5PortfolioContext', '_p5Call2System', '_p5Call2User', '_p5ParseSynthesis',
   '_p5ValidateAttribution', '_p5ProhibitedSemantics', '_p5RequestSynthesis',

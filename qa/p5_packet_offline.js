@@ -63,7 +63,7 @@ const FNS = ['_pfIsFiniteNum', '_pfFxRateValid', '_pfFxState', '_pfNormalizeHold
   '_pfComputePortfolioReporting', '_pfComputeHoldingsSubtotals',
   '_p5NormalizeUrl', '_p5DomainFromUrl', '_p5UsableTitle', '_p5UsableDate',
   '_p5IndexSearchResults', '_p5ValidateItems', '_p5SynthesisPayload',
-  '_p5CollectLocalContext', '_p5PacketStatus', '_p5BuildPacket', '_p5RenderPacket'];
+  '_p5PreloadContext', '_p5BuildLocalContext', '_p5CollectLocalContext', '_p5PacketStatus', '_p5BuildPacket', '_p5RenderPacket'];
 const src = {};
 let missingExtract = [];
 for (const n of FNS) { src[n] = extractFunctionSource(content, n); if (!src[n]) missingExtract.push(n); }
