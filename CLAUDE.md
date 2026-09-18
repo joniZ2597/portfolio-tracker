@@ -20,8 +20,16 @@ current project state" below.
   diff (Codex or Owner) → full LAND QA / integration verification → Owner LAND → Owner SHIP when
   applicable. Full QA is a gate that must pass before LAND, not after it. Owner approval is
   required only at the explicit protected boundaries in this file and in `AGENTS.md` (commit,
-  push, `main`/production, Netlify writes, live external canaries, destructive Git ops) — not as
-  a gate before every ordinary scoped edit.
+  push, `main`/production, Netlify writes, live external canaries, destructive Git ops). After
+  the approved brief-only commit exists, ordinary in-scope implementation edits do not require
+  repeated Owner approval.
+- Ordinary implementation does not require a separate implementation-plan approval step. For
+  implementation tasks under the simplified workflow, the exact task scope is recorded in
+  `work/<id>/brief.md`. Implementation may begin only after the Owner approves the exact current
+  contents of that brief and its brief-only commit. This is the single scope-approval boundary,
+  not a separate planning ceremony. Read-only inspection, research, status checks, and other
+  non-implementation work do not need a `work/<id>/` brief unless they become implementation
+  tasks.
 
 ### Active workflow model (simplified, effective 2026-09-18)
 

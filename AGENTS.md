@@ -12,18 +12,46 @@ section for that history).
   runner).
 - `CHECKPOINT.md` is local-only, gitignored legacy historical context from the old ARC
   workflow — useful background, but not authoritative. Current operational truth comes from
-  Git (branches, log, diff), active worktrees, task evidence, and QA/review results — and,
-  once created, the `work/<id>/` convention. Never commit or recreate `CHECKPOINT.md`
-  elsewhere.
+  Git (branches, log, diff), active worktrees, task evidence, and QA/review results — and the
+  `work/<id>/` task-folder convention (see "Task folder convention" below). Never commit or
+  recreate `CHECKPOINT.md` elsewhere.
 - Task branches/worktrees should normally be based on `branch-dev`, the integration branch.
   Moving anything to `main`/production always requires separate, explicit Owner approval.
 
 ## Task brief convention
 
 Before implementing, state in plain language: what file(s) will change, the smallest scoped
-diff that satisfies the request, and how it will be validated. No task folder, registry entry,
-or claim file is required — a short brief in the conversation (or in the PR/commit description)
-is enough. (A `work/<id>/` task-folder convention is planned and not yet created.)
+diff that satisfies the request, and how it will be validated. See "Task folder convention"
+below for how this becomes an Owner-approved `work/<id>/brief.md`.
+
+## Task folder convention
+
+Each implementation task uses `work/<id>/`, where `<id>` is a stable slug derived from the task's
+branch/worktree name (e.g. `work/p7-a2-news-catalysts/`, `work/tradingview-alerts/`). No
+centrally allocated id, no lookup table, no registry.
+
+- `brief.md` (tracked) — the Owner-approved task scope: what file(s) will change, the
+  smallest scoped diff, how it will be validated. It may be drafted directly at
+  `work/<id>/brief.md` before approval — the required sequence is: draft `work/<id>/brief.md`
+  → Owner reviews the exact current contents → Owner approves the exact brief-only commit →
+  commit it unchanged → implementation may begin. **An uncommitted or merely staged brief does
+  not authorize implementation** — only the tracked, committed brief whose exact contents were
+  Owner-approved does.
+- `qa.log` (untracked, gitignored via `work/*/qa.log`) — raw output from targeted/full QA runs
+  for this task.
+- `review.md` (tracked) — the QA result summary and the Codex review outcome. Populated after
+  Codex reviews the implementation diff and any required fixes/QA re-runs are done; then one
+  final lightweight Codex check runs against the complete final diff including `review.md`
+  itself, so the complete final task diff (implementation + `review.md`) is reviewed before it
+  is committed. `review.md` is committed in the same commit as any final implementation
+  touch-ups — that commit's Owner approval and the separate, later Owner LAND approval are two
+  distinct events, never conflated even when they happen close together.
+
+No separate authorization record, editable status, or lifecycle state machine exists. The only
+operational meaning of a tracked, committed `brief.md` is that implementation may begin within
+its exact approved scope. `review.md` is evidence only and authorizes nothing. Commit, LAND, and
+SHIP still require their explicit Owner decisions. No registry, claim, or mutex exists anywhere
+in this convention.
 
 ## Test commands
 
