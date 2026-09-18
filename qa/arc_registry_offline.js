@@ -660,7 +660,10 @@ try {
       '2026-09-14_wu-vscr-light-plan-c1.COWORK.md',
       '2026-09-14_wu-vscr-light-plan.COWORK.md',
       '2026-09-15_wu-vscr-vscr-impl-codex-evidence-package.LAB.md',
-      '2026-09-15_wu-vscr-vscr-impl-implementation.LAB.md'
+      '2026-09-15_wu-vscr-vscr-impl-implementation.LAB.md',
+      '2026-09-16_eod-1-amendment-2-readiness.COWORK.md',
+      '2026-09-16_eod-1-amendment-2-update-1.COWORK.md',
+      '2026-09-18_wp-p7-a1-p7a1-impl-implementation.MAIN.md'
     ].sort();
     const auRate = auFiles.length ? (auUnknown.length * 100) / auFiles.length : 0;
     console.log('  live corpus: ' + auFiles.length + ' handoffs, ' + auUnknown.length + ' UNKNOWN (' + auRate.toFixed(1) + '%)');
