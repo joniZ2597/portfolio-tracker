@@ -125,8 +125,9 @@ check('W4 CLAUDE.md: Git-safety command block present',
   /##\s*Git safety/.test(claudeMd)
   && claudeMd.indexOf('git status --short --branch') !== -1
   && claudeMd.indexOf('git log --oneline origin/branch-dev -1') !== -1);
-check('W4 CLAUDE.md: execution-routing checkpoint present',
-  /###\s*Execution-routing checkpoint/.test(claudeMd)
+check('W4 CLAUDE.md: active simplified-workflow anchor present (effective 2026-09-18)',
+  /###\s*Active workflow model \(simplified, effective 2026-09-18\)/.test(claudeMd)
+  && claudeMd.indexOf('AGENTS.md') !== -1
   && claudeMd.indexOf('portfolio-skill-router') !== -1);
 check('W4 CLAUDE.md: pre-flight checklist heading present',
   /###\s*Agent Pre-Flight Skills & Goal Checklist/.test(claudeMd));
@@ -155,8 +156,8 @@ check('W4 optimization-rules.md: a distorted preview is not evidence of disk cor
 // Fingerprint baseline. Drift is a deliberate act; this suite makes it visible rather than
 // silently accepting a changed instruction layer.
 const FINGERPRINTS = {
-  'CLAUDE.md': 'b1e3c4530bbbd4caa43fc121880f91b91b7bb275163c0e296ff5135956404591',
-  '.claude/skills/portfolio-skill-router/SKILL.md': 'cebc935783d30f617e0e67d62fa70030a0c721215f6587f9ddea42c4ba5fadd9',
+  'CLAUDE.md': 'a1249aac3fde474c365646fc34ad1ec193d5ca0a0e39f89b24244031325db5e2',
+  '.claude/skills/portfolio-skill-router/SKILL.md': '7702d67d91a7e8706a4ae2528dee0f11683d0be1427063039281650d90339056',
   '.claude/skills/approval-flow-optimizer/references/optimization-rules.md': '44b03e3e2bdc8dc77c3af5e284d01174e7c5f584ff00524f4fba9d840a07446c'
 };
 
