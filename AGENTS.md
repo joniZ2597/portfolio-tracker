@@ -17,6 +17,8 @@ section for that history).
   recreate `CHECKPOINT.md` elsewhere.
 - Task branches/worktrees should normally be based on `branch-dev`, the integration branch.
   Moving anything to `main`/production always requires separate, explicit Owner approval.
+- `BACKLOG.md` is the canonical product backlog / queue of intent. It does not override Git,
+  active worktrees, task evidence, QA, or review evidence as operational truth.
 
 ## Task brief convention
 
