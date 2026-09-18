@@ -4,6 +4,10 @@ description: Thin Portfolio Tracker / Pulse routing overlay. Given a task, retur
 disable-model-invocation: true
 ---
 
+> **FROZEN LEGACY (2026-09-18):** superseded by the simplified workflow in `AGENTS.md`.
+> Ordinary tasks no longer route through this skill automatically — invoke only if the Owner
+> explicitly asks for this specific old routing model on a specific task.
+
 # Portfolio Skill Router
 
 This skill is a read-only routing selector for Portfolio Tracker / Pulse. It does not execute tasks, edit files, commit, push, deploy, invoke APIs, or change Netlify settings. Its only output is a compact routing decision.

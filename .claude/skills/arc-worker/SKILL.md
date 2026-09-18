@@ -5,6 +5,10 @@ disable-model-invocation: true
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 ---
 
+> **FROZEN LEGACY (2026-09-18):** superseded by the simplified workflow in `AGENTS.md`.
+> Not part of ordinary routing — invoke only if the Owner explicitly asks for this specific
+> old ARC workflow on a specific task.
+
 # ARC Worker
 
 > **STANDING BEHAVIOR — ONE TASK, THEN STOP.**

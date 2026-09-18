@@ -4,6 +4,10 @@ description: Manually invoked advisory review of an active multi-stage approval 
 disable-model-invocation: true
 ---
 
+> **FROZEN LEGACY (2026-09-18):** superseded by the simplified workflow in `AGENTS.md`.
+> Not part of ordinary routing — invoke only if the Owner explicitly asks for this specific
+> old approval-flow model on a specific task.
+
 # Approval Flow Optimizer
 
 > **STANDING BEHAVIOR — ADVISORY ONLY, NON-AUTHORIZING.**

@@ -4,21 +4,33 @@
 
 Before each project task, read:
 1. This file (`CLAUDE.md`)
-2. Local-only `CHECKPOINT.md` (current project state, phase history, QA results)
+2. `AGENTS.md` for the active simplified workflow (repo orientation, test commands, LAND/SHIP boundaries)
+
+Local-only `CHECKPOINT.md` may be consulted for legacy historical background (old phase
+history from the pre-2026-09-18 ARC model), but it is not authoritative — see "Source of
+current project state" below.
 
 ## Project workflow
 
 - `CHECKPOINT.md` is local-only and excluded from version control. Never stage, commit, push, or recreate it elsewhere. Never disclose secrets from it.
-- All feature work starts on `branch-dev`. Do not edit, merge into, deploy, or otherwise change `main`/production without explicit user approval after QA.
+- Task branches/worktrees should normally be based on `branch-dev`, which is the integration branch. Do not edit, merge into, deploy, or otherwise change `main`/production without explicit user approval after QA.
 - Apply minimal scoped changes only. Do not expand the requested phase or bundle unrelated work.
-- Workflow order: inspect → explain → smallest safe plan → approval → implement → verify → QA → summarize.
+- Ordinary scoped implementation flow (no separate planning/approval ceremony required): inspect
+  → short task brief → implement within requested scope → targeted tests → review the actual
+  diff (Codex or Owner) → full LAND QA / integration verification → Owner LAND → Owner SHIP when
+  applicable. Full QA is a gate that must pass before LAND, not after it. Owner approval is
+  required only at the explicit protected boundaries in this file and in `AGENTS.md` (commit,
+  push, `main`/production, Netlify writes, live external canaries, destructive Git ops) — not as
+  a gate before every ordinary scoped edit.
 
-### Execution-routing checkpoint
+### Active workflow model (simplified, effective 2026-09-18)
 
-- Main applies the `portfolio-skill-router` execution-routing decision model internally at: the start of each new task; a phase transition; a scope or authority change; any reroute trigger; before dry-run becomes live; before any external or production mutation.
-- Explicit `/portfolio-skill-router` invocation is needed only when the route is ambiguous, high-risk, or `REROUTE_REQUIRED`.
-- Do not rerun routing before ordinary continuation prompts, approval responses, read-backs, or validation commands inside the same unchanged milestone.
-- Approval behavior: use the largest coherent bounded edit the approval UI supports; never request blanket or session-wide approval; a materially distorted preview is not evidence of disk corruption and does not mandate decomposition into micro-edits (preview semantics: `approval-flow-optimizer` optimization-rules).
+This project uses the simplified workflow described in `AGENTS.md`: Claude Code as primary
+implementation owner, Codex as diff reviewer, plain Git worktrees for parallel tasks, and
+`npm run qa:offline` (+ relevant targeted `test:*` scripts) as the required gate at LAND.
+Ordinary tasks are **not** routed through `portfolio-skill-router`, the `arc-*` skill family,
+or any registry/claim/mutex/publish/authorize machinery — those are frozen legacy (see bottom
+of this file) and are used only if the Owner explicitly asks for that specific old workflow.
 
 ## Git safety
 
@@ -44,9 +56,9 @@ Never commit or push unless specifically approved for that exact action and scop
 
 | Task | Use |
 |------|-----|
-| Real-repo file edits, local validation, Git actions, `CHECKPOINT.md` updates | Claude Code / PowerShell |
+| Real-repo file edits, local validation, Git actions | Claude Code / PowerShell |
 | Hosted browser QA, read-only visual/runtime verification | Cowork / browser-capable session |
-| Netlify / environment changes | Verify exact site and branch-only scope first; no production changes; require explicit approval before writes |
+| Netlify / environment changes | Verify exact site and branch-only scope first; no production changes without separate explicit Owner approval; require explicit approval before writes |
 
 Cowork may not edit or claim to update the real repo unless that exact repo folder is connected and verified.
 
@@ -85,7 +97,11 @@ Never alter scoring, Actionable Take, recommendations, normal scan, persistence,
 
 ## Source of current project state
 
-Use local-only `CHECKPOINT.md` as the sole source for current commits, deployed state, completed phases, QA results, enabled DEV gates, and next planned work. Do not duplicate or hard-code changing project state in this file.
+Current operational truth comes from Git (branches, log, diff), active worktrees, current task
+evidence, QA results, review results, and current Owner instructions — not from any single
+document. Local-only `CHECKPOINT.md` is legacy historical context from the pre-2026-09-18 ARC
+model; it is not the sole source of current state and is not required to be kept up to date.
+Do not duplicate or hard-code changing project state in this file.
 
 ## Frontend aesthetics
 
@@ -104,10 +120,10 @@ Use local-only `CHECKPOINT.md` as the sole source for current commits, deployed 
 
 <deployment_and_qa_policy>
 
-- Netlify Personal permits Branch Deploys and Deploy Previews for DEV/browser QA; do not avoid a necessary `branch-dev` deploy solely to conserve deploy credits.
-- Local validation remains required before DEV deploy whenever feasible; batch related fixes when practical.
-- DEV deploy permission does not authorize scope expansion, state/localStorage/scoring/provenance changes, uncontrolled runtime testing, or production actions.
-- Explicit approval remains required before Netlify environment-variable changes, live external API/SEC/Perplexity canaries, repeated or long-running Function/background-runtime tests, commit, push, merge, production deploy, or any `main`/production change.
+- Every Netlify write requires explicit Owner approval — including branch deploys, deploy previews, production deploys, environment-variable changes, and any other Netlify mutation. Read-only Netlify inspection does not require approval.
+- Local validation remains required before requesting a DEV deploy whenever feasible; batch related fixes when practical.
+- DEV deploy approval does not authorize scope expansion, state/localStorage/scoring/provenance changes, uncontrolled runtime testing, or production actions.
+- Explicit approval remains required before live external API/SEC/Perplexity canaries, repeated or long-running Function/background-runtime tests, commit, push, merge, or any `main`/production change.
 - Production remains protected and requires reviewed diff, clean Git state, successful relevant DEV QA, and separate approval.
 
 </deployment_and_qa_policy>
@@ -137,3 +153,21 @@ State the exact variable names and check expressions for both gates.
 
 **[Goal - Definition of Done]**
 Specify the exact JSON shape or logic outcome that constitutes a successful run. This output shape serves as the strict QA benchmark — any deviation from it is a test failure, not a warning.
+
+---
+
+## FROZEN LEGACY — pre-2026-09-18 ARC / execution-routing model
+
+> Owner-ruled 2026-09-18: superseded by the simplified workflow in `AGENTS.md`. Kept for
+> historical reference and for the rare case the Owner explicitly asks for this specific old
+> workflow on a specific task. Do not route ordinary work through this section by default.
+
+The old model required Main to internally apply the `portfolio-skill-router` execution-routing
+decision model at the start of each task, every phase transition, scope/authority changes, reroute
+triggers, before dry-run-to-live, and before any external/production mutation, with explicit
+`/portfolio-skill-router` invocation reserved for ambiguous/high-risk/`REROUTE_REQUIRED` cases, and
+approval-preview handling governed by `approval-flow-optimizer` optimization-rules. It also included
+the full `arc-*` skill family (`arc-authorize`, `arc-progress-auditor`, `arc-publish-plan`,
+`arc-registry`, `arc-worker`) and their registry/claim/mutex/publish/authorize machinery under
+`.ai-reports/arcs/`. All of the above remain present on disk, otherwise behaviorally unchanged, and
+are frozen rather than deleted.
