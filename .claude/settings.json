@@ -1,0 +1,49 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)",
+      "Bash(git clean -fd*)",
+      "Bash(git branch -D*)",
+      "Bash(git branch --delete --force*)"
+    ],
+    "ask": [
+      "Bash(git commit)",
+      "Bash(git commit *)",
+      "Bash(git push)",
+      "Bash(git push *)",
+      "Bash(git merge)",
+      "Bash(git merge *)",
+      "Bash(git checkout main)",
+      "Bash(git checkout main *)",
+      "Bash(git switch main)",
+      "Bash(git switch main *)",
+      "Bash(netlify deploy*)",
+      "Bash(netlify env:set*)",
+      "Bash(netlify env:unset*)",
+      "Bash(netlify env:clone*)",
+      "Bash(netlify env:import*)",
+      "Bash(netlify sites:create*)",
+      "Bash(netlify sites:delete*)",
+      "Bash(netlify api*)",
+      "mcp__claude_ai_Netlify__netlify-deploy-services-updater",
+      "mcp__claude_ai_Netlify__netlify-extension-services-updater",
+      "mcp__claude_ai_Netlify__netlify-project-services-updater"
+    ],
+    "allow": [
+      "Bash(netlify status*)",
+      "Bash(netlify sites:list*)",
+      "Bash(netlify env:list*)",
+      "Bash(netlify env:get*)",
+      "Bash(netlify logs*)",
+      "mcp__claude_ai_Netlify__netlify-deploy-services-reader",
+      "mcp__claude_ai_Netlify__netlify-extension-services-reader",
+      "mcp__claude_ai_Netlify__netlify-project-services-reader",
+      "mcp__claude_ai_Netlify__netlify-team-services-reader",
+      "mcp__claude_ai_Netlify__netlify-user-services-reader",
+      "mcp__claude_ai_Netlify__get-netlify-coding-context"
+    ]
+  }
+}
