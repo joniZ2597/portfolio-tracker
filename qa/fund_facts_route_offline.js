@@ -83,7 +83,8 @@ const EXPECTED_FUNCTIONS = [
   'research-evidence.js',
   'sec-evidence-pull.mjs',
   'sec-evidence-store-writer.mjs',
-  'sec-evidence-store.js'
+  'sec-evidence-store.js',
+  'tradingview-webhook.js'
 ];
 
 // ── env management (the core reads process.env at its boundary) ──────────────

@@ -33,6 +33,24 @@ downstream of that.
   (including its `COLLISION_KEYS` array) is not touched. No scoring, Actionable Take,
   recommendations, normal scan, or persistence path outside the new store is touched.
 
+## Scope amendment — FR06 pin re-baseline (Owner-approved addition)
+
+`qa/fund_facts_route_offline.js` is added to the locked file list, for exactly one change:
+
+- `qa/fund_facts_route_offline.js` — add `'tradingview-webhook.js'` to the `EXPECTED_FUNCTIONS`
+  pin array (`qa/fund_facts_route_offline.js:71-86`). This is the single intentional
+  re-baseline the pin's own comment requires whenever a new file is added to
+  `netlify/functions/` ("A future INTENTIONAL function addition therefore requires explicit
+  re-baselining of this test — updating the pin is a deliberate, reviewed act, never an
+  incidental edit," `qa/fund_facts_route_offline.js:25-28,68-70`). No other line in this file
+  changes; no other behavior of FR01-FR14 is touched.
+
+This amendment does not expand the pilot's product scope (still ingestion-only, still the same
+three implementation files) — it only lets the pilot's own new function file be correctly
+recognized by an existing, unrelated legacy exposure guard. The separate, pre-existing
+`qa/instruction_layer_offline.js` full-suite failure is explicitly out of scope for this brief
+and remains a separate follow-up task.
+
 ## Auth decision (v1, locked for this brief)
 
 - TradingView's official webhook documentation provides no supported mechanism for
