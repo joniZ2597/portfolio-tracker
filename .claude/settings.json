@@ -1,6 +1,10 @@
 {
   "permissions": {
     "deny": [
+      "Edit(./.claude/settings.json)",
+      "Write(./.claude/settings.json)",
+      "Edit(./.claude/settings.local.json)",
+      "Write(./.claude/settings.local.json)",
       "Bash(git push --force*)",
       "Bash(git push -f*)",
       "Bash(git reset --hard*)",
@@ -10,6 +14,20 @@
       "Bash(git branch --delete --force*)"
     ],
     "ask": [
+      "Edit(./CLAUDE.md)",
+      "Write(./CLAUDE.md)",
+      "Edit(./AGENTS.md)",
+      "Write(./AGENTS.md)",
+      "Edit(./.gitignore)",
+      "Write(./.gitignore)",
+      "Edit(./.claude/rules/**)",
+      "Write(./.claude/rules/**)",
+      "Edit(./qa/run-offline.js)",
+      "Write(./qa/run-offline.js)",
+      "Edit(./work/*/brief.md)",
+      "Write(./work/*/brief.md)",
+      "Edit(./netlify.toml)",
+      "Write(./netlify.toml)",
       "Bash(git commit)",
       "Bash(git commit *)",
       "Bash(git push)",
@@ -33,6 +51,17 @@
       "mcp__claude_ai_Netlify__netlify-project-services-updater"
     ],
     "allow": [
+      "Bash(npm run test:*)",
+      "Bash(npm run qa:offline)",
+      "Bash(node qa/*_offline.js)",
+      "Bash(codex review --uncommitted)",
+      "Bash(git branch --show-current)",
+      "Bash(git status --short --branch)",
+      "Bash(git log --oneline -3)",
+      "Bash(git log --oneline origin/main -1)",
+      "Bash(git log --oneline origin/branch-dev -1)",
+      "Bash(git diff --stat)",
+      "Bash(git diff --cached --stat)",
       "Bash(netlify status*)",
       "Bash(netlify sites:list*)",
       "Bash(netlify env:list*)",
@@ -44,6 +73,7 @@
       "mcp__claude_ai_Netlify__netlify-team-services-reader",
       "mcp__claude_ai_Netlify__netlify-user-services-reader",
       "mcp__claude_ai_Netlify__get-netlify-coding-context"
-    ]
+    ],
+    "defaultMode": "acceptEdits"
   }
 }

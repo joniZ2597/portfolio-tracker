@@ -76,11 +76,9 @@ Cowork may not edit or claim to update the real repo unless that exact repo fold
 - Temporary harness files must be created outside the repo, deleted after use, and never committed.
 - Browser QA must capture relevant before/after state and verify no persistence, scoring, or config side effects when required.
 
-## ChatGPT handoff mode
+## Task completion report
 
-Claude cannot communicate directly with ChatGPT. The user copies reports into ChatGPT manually.
-
-At the end of each approved task, return a concise handoff report:
+At LAND-request time, return one concise report:
 
 1. Current phase and PASS / FAIL / STOP result
 2. Exact files changed
@@ -140,7 +138,10 @@ Do not duplicate or hard-code changing project state in this file.
 
 ### Agent Pre-Flight Skills & Goal Checklist
 
-Before proposing any code edits for **Client Probes** or **Server Components**, the agent must explicitly output a pre-flight evaluation covering all four items below. Do not skip, abbreviate, or defer any item. The evaluation must appear in full before any code or diff is shown.
+Produced once per task, in `work/<id>/plan.md`, before implementation begins — not before each
+edit, and not in the conversation. All four items are required; none may be skipped or
+abbreviated. Under the simplified workflow this is part of the Worker execution contract in
+`AGENTS.md`, and the Owner does not review it edit-by-edit.
 
 **[Skill - Pattern Auditing]**
 Identify and explicitly reference at least two existing code patterns in the repository that dictate the architectural style for this change. Name the function(s), file(s), and the specific structural decisions being matched (gate style, storage key, fetch shape, result structure, etc.).
