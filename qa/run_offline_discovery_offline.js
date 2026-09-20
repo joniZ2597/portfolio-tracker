@@ -73,12 +73,27 @@ function cleanup() {
 const runnerSrc = fs.readFileSync(RUNNER_PATH, 'utf8');
 
 // ── D01: live subset guard, order prefix, denylist absence ───────────────────────────
+// D01 no longer assumes OFFLINE_TESTS_BASELINE and OFFLINE_TESTS_DENYLIST are disjoint - a
+// baseline entry MAY be intentionally denylisted (quarantined). "survivingBaseline" is the
+// baseline with any denylisted members removed; every disjointness-sensitive assertion below
+// is phrased against it instead of the raw baseline, so a legitimate quarantine of a landed
+// suite does not itself look like drift.
 section('D01 live effective set');
 
-check('D01 every baseline entry is present in the live effective set',
-  OFFLINE_TESTS_BASELINE.every((e) => OFFLINE_TESTS.indexOf(e) !== -1));
-check('D01 the effective set opens with the baseline in its landed order (order prefix)',
-  OFFLINE_TESTS.slice(0, OFFLINE_TESTS_BASELINE.length).join('\n') === OFFLINE_TESTS_BASELINE.join('\n'));
+const survivingBaseline = OFFLINE_TESTS_BASELINE.filter((e) => OFFLINE_TESTS_DENYLIST.indexOf(e) === -1);
+
+check('D01 every non-denylisted baseline entry is present in the live effective set',
+  survivingBaseline.every((e) => OFFLINE_TESTS.indexOf(e) !== -1));
+check('D01 no baseline entry is absent from the live effective set unless it is explicitly denylisted',
+  OFFLINE_TESTS_BASELINE.every((e) => OFFLINE_TESTS.indexOf(e) !== -1 || OFFLINE_TESTS_DENYLIST.indexOf(e) !== -1));
+check('D01 the effective set opens with the surviving (non-denylisted) baseline in its landed order (order prefix)',
+  OFFLINE_TESTS.slice(0, survivingBaseline.length).join('\n') === survivingBaseline.join('\n'));
+check('D01 discovered additions after the surviving-baseline prefix are sorted and are neither baseline nor denylisted',
+  (() => {
+    const liveAdditions = OFFLINE_TESTS.slice(survivingBaseline.length);
+    return liveAdditions.join(',') === liveAdditions.slice().sort().join(',')
+      && liveAdditions.every((f) => OFFLINE_TESTS_BASELINE.indexOf(f) === -1 && OFFLINE_TESTS_DENYLIST.indexOf(f) === -1);
+  })());
 check('D01 no denylisted file appears in the live effective set',
   OFFLINE_TESTS_DENYLIST.every((d) => OFFLINE_TESTS.indexOf(d) === -1));
 check('D01 every live effective entry exists on disk',
@@ -212,10 +227,10 @@ check('D08 the baseline block holds exactly 41 quoted qa/ literals',
   (baselineBlock.match(/'qa\//g) || []).length === 41);
 check('D08 the exported baseline array holds exactly 41 entries',
   OFFLINE_TESTS_BASELINE.length === 41);
-check('D08 the denylist block holds exactly 2 quoted qa/ literals',
-  (denylistBlock.match(/'qa\//g) || []).length === 2);
-check('D08 the exported denylist resolves to exactly 2 entries',
-  OFFLINE_TESTS_DENYLIST.length === 2);
+check('D08 the denylist block holds exactly 11 quoted qa/ literals',
+  (denylistBlock.match(/'qa\//g) || []).length === 11);
+check('D08 the exported denylist resolves to exactly 11 entries',
+  OFFLINE_TESTS_DENYLIST.length === 11);
 check('D08 OFFLINE_TESTS is assigned from discovery, not hand-maintained',
   /const OFFLINE_TESTS = computeEffective\(\);/.test(runnerSrc));
 check('D08 the FATAL missing-baseline guard is present in the runner source',
@@ -253,15 +268,17 @@ const derivedAdditions = rediscovered
 
 check('shape the pre-slice effective count equals the landed baseline size',
   OFFLINE_TESTS_BASELINE.length === PRE_SLICE_EFFECTIVE_COUNT);
-check('shape the effective set is exactly pre-slice plus the independently re-derived additions',
-  OFFLINE_TESTS.length === PRE_SLICE_EFFECTIVE_COUNT + derivedAdditions.length);
-check('shape every pre-slice member is still present',
-  OFFLINE_TESTS_BASELINE.every((e) => OFFLINE_TESTS.indexOf(e) !== -1));
+check('shape the effective set is exactly the surviving (non-denylisted) pre-slice plus the independently re-derived additions',
+  OFFLINE_TESTS.length === survivingBaseline.length + derivedAdditions.length);
+check('shape every surviving (non-denylisted) pre-slice member is still present',
+  survivingBaseline.every((e) => OFFLINE_TESTS.indexOf(e) !== -1));
+check('shape no pre-slice member is missing from the effective set unless it is explicitly denylisted',
+  OFFLINE_TESTS_BASELINE.every((e) => OFFLINE_TESTS.indexOf(e) !== -1 || OFFLINE_TESTS_DENYLIST.indexOf(e) !== -1));
 check('shape every independently re-derived addition is present in the effective set',
   derivedAdditions.every((e) => OFFLINE_TESTS.indexOf(e) !== -1));
-check('shape no entry appears that is neither pre-slice nor an independently re-derived addition',
-  OFFLINE_TESTS.every((e) => OFFLINE_TESTS_BASELINE.indexOf(e) !== -1 || derivedAdditions.indexOf(e) !== -1));
-check('shape both denylisted filenames are absent',
+check('shape no entry appears that is neither surviving pre-slice nor an independently re-derived addition',
+  OFFLINE_TESTS.every((e) => survivingBaseline.indexOf(e) !== -1 || derivedAdditions.indexOf(e) !== -1));
+check('shape every denylisted filename is absent',
   OFFLINE_TESTS_DENYLIST.every((d) => OFFLINE_TESTS.indexOf(d) === -1));
 
 // ── summary ──────────────────────────────────────────────────────────────────────────

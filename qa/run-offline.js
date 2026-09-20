@@ -170,6 +170,9 @@ function extractConstSource(content, name) {
 // discovery pattern is appended in sorted order. The quoted 'qa/...' literals below are
 // load-bearing beyond this array: sibling suites assert their presence, their exact
 // occurrence count, and their relative ordering in this file's source text.
+// 8 of these 41 (the arc_* entries) are frozen-legacy suites also listed in
+// OFFLINE_TESTS_DENYLIST below (BACKLOG.md NEXT #2, work/quarantine-arc-qa) — kept here,
+// in their landed order, as the historical record; the denylist is what excludes them.
 const OFFLINE_TESTS_BASELINE = [
   'qa/research_evidence_contract_test.js',
   'qa/research_evidence_mock_provider_test.js',
@@ -218,9 +221,21 @@ const OFFLINE_TESTS_BASELINE = [
 // Kept as an explicit list so exclusion is a recorded decision rather than an accident of
 // naming. Removing an entry here is the mutation that proves the sibling non-membership
 // assertions can actually fail.
+// The 9 arc_*/phase_gate entries below quarantine frozen legacy ARC-skill-machinery suites
+// from the LAND gate (BACKLOG.md NEXT #2, work/quarantine-arc-qa) — none touch product code;
+// each remains on disk, in Git history, and independently runnable as historical evidence.
 const OFFLINE_TESTS_DENYLIST = [
   'qa/fund_facts_read_offline.js',
-  'qa/news_catalysts_provider_offline.js'
+  'qa/news_catalysts_provider_offline.js',
+  'qa/arc_execution_profiles_offline.js',
+  'qa/arc_multi_arc_offline.js',
+  'qa/arc_publish_profiles_offline.js',
+  'qa/arc_registry_offline.js',
+  'qa/arc_runtime_ops_offline.js',
+  'qa/arc_runtime_schemas_offline.js',
+  'qa/arc_safecheck_offline.js',
+  'qa/arc_worker_handshake_offline.js',
+  'qa/phase_gate_offline.js'
 ];
 
 // Top-level qa/ only. qa/lib/** is never discovered by construction - the walk does not
