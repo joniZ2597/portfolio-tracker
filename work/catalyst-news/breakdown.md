@@ -9,7 +9,7 @@
 > The six standard sections below are within budget; Domain logic is the addition.
 >
 > **Reconciled 2026-09-21 to the approved S1.5 brief** (`work/catalyst-news-taxonomy/brief.md`,
-> sha256 `5347fe4f…`). Owner amendments **A-1…A-4** are applied, and three statements this file
+> sha256 per that file's own header). Owner amendments **A-1…A-5** are applied, and three statements this file
 > previously made are corrected — they are marked **[corrected]** inline rather than deleted, so the
 > change is auditable. **Where this file and the approved brief differ, the brief wins.**
 
@@ -24,12 +24,12 @@ future verification path validates it.
 | Surface | Today | Change |
 |---|---|---|
 | Client | no catalyst UI | **new** — Ticker Detail card (S3) |
-| Server functions | `news-catalysts.mjs` + core landed `9d71dc1`; provider + preflight dormant-complete | **modify** — taxonomy fields in provider (S1.5); **new** read route (S2) |
+| Server functions | `news-catalysts.mjs` + core landed `9d71dc1`; provider + preflight dormant-complete | **modify** — taxonomy fields in provider + core validation guard (S1.5, A-5); **new** read route (S2) |
 | Storage / schema | `fundstore:v1:news:*` items + `news-index:*` day index, create-only | **modify** — item record gains 3 fields; identity tuple gains `eventType` (A-2); **key format unchanged** |
 | Scores / Actionable Take | no dependency | **none** — `scoringImpact:'none'` is structural |
 | Persistence | Netlify Blobs, `fund-facts-store` | **none** — **no news record has ever been written** (gate never activated), so there is no v1 generation to migrate |
 | Gates / environment | 3 env names defined, all unset | **none** in S1.5; activation is separate |
-| QA | 43 suites; NP01–NP23, NC01–NC40, core suite | **modify** — **NP01 / NP12 / NP15 / NP16** re-baseline plus the two core field-order constants; **NP24–NP32 + NW28** new *(**[corrected]** — this row previously read "NP01 only")* |
+| QA | 43 suites; NP01–NP23, NC01–NC40, core suite | **modify** — **NP01 / NP12 / NP15 / NP16** re-baseline plus the two core field-order constants; **NP24–NP32 + NW28–NW29** new, plus three added NW27 negatives (A-5) *(**[corrected]** — this row previously read "NP01 only")* |
 | Deploy / external | none | **none** |
 | Docs | none | **none** |
 
@@ -72,6 +72,14 @@ S1, future verification role only. Domain rulings DR-1…DR-17 below.
   already the seam a later verification layer writes into; **no field is added now**.
 - **A-4 — future `eventDate` on `upcoming_event` is legitimate and its freshness state is
   expected.** See the A-4 block in the S1.5 section below.
+- **A-5 — core validation, ruled after a Worker STOP-1.** `news-catalysts-core.js:331`
+  (`validateProviderResult`) rejects any non-string `direction` via
+  `isNonEmptyString`, and the rejection is **whole-envelope**, so one `upcoming_event` would fail
+  the entire fetch and write nothing. The guard becomes conditional on `eventType`, and the core
+  also validates `eventType` against `EVENT_TYPES`. **Scope widened:** the permitted
+  `news-catalysts-core.js` edit is now `ITEM_FIELDS` **and** `validateProviderResult`, nothing
+  else. Existing fail-closed cases (`direction: ''`, `null` on a `catalyst`, non-string non-null)
+  **stay rejections** — this is a narrowing with one exception, not a relaxation.
 
 ## 4 · Unknowns / Gaps
 
@@ -160,8 +168,8 @@ New assertions extend the provider suite as **NP24+**; core/storage assertions e
 ```
 netlify/functions/lib/news-catalysts-provider.js   modify   fields, enums, tuple, ladder, prompt, version value
 qa/news_catalysts_provider_offline.js              modify   NP01+NP12+NP15+NP16 re-baseline; NP24–NP32 new
-netlify/functions/lib/news-catalysts-core.js       modify   ITEM_FIELDS projection list only
-qa/news_catalysts_core_offline.js                  modify   ITEM_FIELD_ORDER / RECORD_FIELD_ORDER; NW28
+netlify/functions/lib/news-catalysts-core.js       modify   ITEM_FIELDS list + validateProviderResult guard (A-5)
+qa/news_catalysts_core_offline.js                  modify   field-order constants; NW27 negatives; NW28–NW29
 ```
 
 **Contract changes** — field names are **camelCase**, matching every existing item field.
@@ -214,15 +222,19 @@ Verified safe: `evidence-freshness.js:213` requires `contractVersion` to be an i
 `:221` pins an exact value **only for the `facts` family**. The `news` family has no value pin.
 
 **Core touch points:** `:70`, `:119` and `:320` need **no edit** under the value-only change; `:119`
-projects the value onto every stored record automatically. The only core edit is the `ITEM_FIELDS`
-list.
+projects the value onto every stored record automatically. ***[corrected]*** The core edit is
+**`ITEM_FIELDS` plus `validateProviderResult` (A-5)** — this file previously said "the only core
+edit is the `ITEM_FIELDS` list", which is what the Worker's STOP-1 disproved.
 
 **A-4 · Future event dates and the freshness evaluator**
 
-- **A-4.1** A future `eventDate` on an `upcoming_event` is legitimate, and **nothing in the write
-  path rejects it** — verified: `evidence-contract.optionalDate` is grammar + calendar-validity only
+- **A-4.1 ***[corrected]***** A future `eventDate` on an `upcoming_event` is legitimate, and no
+  **date** check rejects it — `evidence-contract.optionalDate` is grammar + calendar-validity only
   with no clock reference; the provider ladder's only date outcomes are `MISSING_`/`INVALID_EVENT_DATE`;
   the core compares `fetchedAt` and `retrievedAt` to `nowIso` but **never `eventDate`**.
+  **The earlier claim that "nothing in the write path rejects it" is withdrawn** — it generalised an
+  `eventDate` finding to the whole item shape. The accompanying `direction: null` *is* rejected by
+  `news-catalysts-core.js:331`; a Worker found it as STOP-1 and A-5 authorises the fix.
 - **A-4.2** S1.5 must **not** modify `evidence-freshness.js`. NP18's whole value is exercising the
   J7 evaluator **unmodified**.
 - **A-4.3** `TIMESTAMP_PRECEDENCE` prefers `eventDate` over `fetchedAt`, and
@@ -233,8 +245,9 @@ list.
   that condition as a data-quality failure; do not resolve it by editing the evaluator or rewriting
   `eventDate`.
 
-Pinned end to end by **NP32** (normalization) and **NW28** (persistence), which share one
-future-dated fixture.
+Pinned end to end by **NP32** (normalization) and **NW28** (**full handler** + persistence), which
+share one future-dated fixture; **NW29** proves a mixed catalyst + upcoming_event batch persists
+both rather than failing the whole envelope.
 
 **Materiality handling.** DR-12 forbids hard-coded thresholds — enforced negatively by **NP27**
 (static scan for numeric materiality constants). Materiality itself stays in the prompt.
@@ -258,7 +271,7 @@ or store — `eventType` on the existing item shape. It is now a tuple member (A
 | **NP17** store-key shape | **no** | key format unchanged; the assertion is computed, not a pinned hash literal |
 | **NP18** J7 freshness integration | **verify, do not edit** | projection carries a news-specific `contractVersion`; `validRecord` accepts any identity string for `news` |
 | core suite `ITEM_FIELD_ORDER` `:79` / `RECORD_FIELD_ORDER` `:84` | **YES** *(newly identified)* | 14 → 17 and 16 → 19; drives the NW record assertions |
-| **NP24–NP32**, **NW28** | **new** | field/enum presence, `subType` conditionality, no-threshold scan, vocabulary parity, prompt windows, scope identity-inertness, `eventType` identity-bearing, direction conditionality, future-dated persistence |
+| **NP24–NP32**, **NW28–NW29** | **new** | field/enum presence, `subType` conditionality, no-threshold scan, vocabulary parity, prompt windows, scope identity-inertness, `eventType` identity-bearing, direction conditionality, future-dated persistence |
 
 Item projection **14 → 17** fields; stored record **16 → 19**. Suite count stays **43** — no new
 file. *(This file previously claimed "only one existing pin re-baselines"; NP12, NP15, NP16 and the

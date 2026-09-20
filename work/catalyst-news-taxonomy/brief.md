@@ -7,7 +7,7 @@ brief-only commit records them unchanged. Only then may implementation begin, pe
 Source of truth: `work/catalyst-news/breakdown.md` (202 lines, sha256
 `60a7b299498396a9e178e98c65742001d7c68f9313fa27b7ba6e61e1eb5b0307`), as amended by the Owner on
 2026-09-21 — **A-1 upcoming-event direction · A-2 identity tuple · A-3 deferred Grok layer ·
-A-4 future event dates and the freshness evaluator**.
+A-4 future event dates and the freshness evaluator · A-5 core validation, after a Worker STOP-1**.
 Three further corrections to the breakdown were found while sourcing this brief; all are recorded
 under "Corrections to the breakdown" and the breakdown is amended to match if this brief is approved.
 
@@ -40,9 +40,12 @@ the S4 pilot.
 ```
 netlify/functions/lib/news-catalysts-provider.js   modify   fields, enums, tuple, ladder, prompt, version value
 qa/news_catalysts_provider_offline.js              modify   NP01 + NP12 + NP15 + NP16 re-baseline; NP24–NP32 new
-netlify/functions/lib/news-catalysts-core.js       modify   ITEM_FIELDS projection list only
-qa/news_catalysts_core_offline.js                  modify   ITEM_FIELD_ORDER / RECORD_FIELD_ORDER
+netlify/functions/lib/news-catalysts-core.js       modify   ITEM_FIELDS list + validateProviderResult direction guard (A-5)
+qa/news_catalysts_core_offline.js                  modify   ITEM_FIELD_ORDER / RECORD_FIELD_ORDER; NW27 negatives; NW28–NW29
 ```
+
+> **Amendment A-5, 2026-09-21 — scope widened by Owner ruling after a Worker STOP-1.** The core edit
+> is no longer "projection list only". See "Owner amendment A-5" below.
 
 **Explicitly out of scope:** `index.html` · `services/**` · any client code · any read route (S2) ·
 `netlify/functions/news-catalysts.mjs` · `lib/news-catalysts-preflight.js` (**frozen — not one
@@ -141,22 +144,26 @@ A future scheduled event is not forced into a sentiment before it happens.
 
 Four statements, recorded explicitly so no later actor treats any of them as a defect.
 
-### A-4.1 · A future `eventDate` is legitimate for `upcoming_event`
+### A-4.1 · A future `eventDate` is legitimate for `upcoming_event` — **[CORRECTED]**
 
 A known future event is the whole point of the `upcoming_event` type. Its `eventDate` is the date
 the event is scheduled for, which is **ahead of the fetch clock by design**.
 
-**Verified — nothing in the write path rejects it:**
+**What is true — the `eventDate` itself is never clock-checked:**
 
 | Surface | Evidence |
 |---|---|
 | `evidence-contract.optionalDate` | grammar (`/^\d{4}-\d{2}-\d{2}$/`) plus calendar-validity round-trip only. **No clock reference anywhere in the module** |
 | Provider ladder | `news-catalysts-provider.js:382-390` — `MISSING_EVENT_DATE` / `INVALID_EVENT_DATE` are the only date outcomes; neither is time-relative |
-| Core validation | `news-catalysts-core.js` compares `fetchedAt` and `retrievedAt` to `nowIso` (`:318`, `:329`). **`eventDate` is never compared to the clock** |
+| Core `eventDate` | `news-catalysts-core.js` compares `fetchedAt` and `retrievedAt` to `nowIso` (`:318`, `:329`). **`eventDate` is never compared to the clock** |
 | `NEWS_KEY_RE` | pins the date *grammar* inside the key, not its relation to now |
 
-So A-1 is unblocked end to end: a future-dated `upcoming_event` normalizes, hashes, keys and
-persists exactly like any other item.
+> **CORRECTION — the earlier claim that "nothing in the write path rejects it" was wrong, and is
+> withdrawn.** It generalised an `eventDate` finding to the whole item shape. The A-1 *shape* — not
+> the date — is rejected by the core, and a Worker found it. See A-5.
+
+**A-4.1 as it now stands:** a future `eventDate` is legitimate and passes every date check. The
+`direction: null` that accompanies it does **not** pass the core today; A-5 authorises the fix.
 
 ### A-4.2 · S1.5 must **not** modify `evidence-freshness.js`
 
@@ -183,6 +190,60 @@ Binding on the S2 read route when it is briefed:
 - S2 **must not** resolve this by editing the evaluator or by rewriting `eventDate`.
 
 *Forward-binding only — S2 is out of this task's scope and nothing here authorises S2 work.*
+
+## Owner amendment A-5 — core validation, and the Worker STOP that found it
+
+**Raised by Worker 1 as STOP-1 (brief requirement unsatisfiable as written). Owner ruling: FIX NOW.**
+
+### The guard
+
+`news-catalysts-core.js:331`, inside `validateProviderResult`:
+
+```js
+if (!isNonEmptyString(item.direction)) { return { ok: false }; }
+```
+
+with `isNonEmptyString` (`:347-349`) = `typeof v === 'string' && v !== ''`.
+
+`null` is not a string, so **every `upcoming_event` produced under A-1 is rejected by the core** —
+and the rejection is **whole-envelope, not per-item**: `validateProviderResult` returns `{ok:false}`
+at the first bad item, the handler maps that to `providerFailure()` (`:226-229`), and **a single
+upcoming event would fail the entire fetch, writing nothing at all.** A mixed batch of one catalyst
+and one upcoming event would persist neither.
+
+**The Worker was right to stop.** The brief required a shape the in-scope surface could not accept.
+
+### The authorised change
+
+Replace the unconditional guard with the A-1 conditional:
+
+```
+eventType === 'catalyst'        ⇒ direction MUST be one of DIRECTIONS
+                                  (positive | neutral | negative)
+eventType === 'upcoming_event'  ⇒ direction MUST be exactly null
+eventType anything else         ⇒ envelope rejected (fail closed, unchanged)
+```
+
+The core must also validate `eventType` itself against the provider's `EVENT_TYPES`, in the same
+fail-closed style as the existing `CATEGORIES` check at `:330`.
+
+**What must not loosen.** The core is a fail-closed boundary against a drifted provider. Every
+existing rejection stays a rejection:
+
+- `direction: ''` — still rejected, for **both** event types. `null` is permitted; empty string is not.
+- `direction: null` on a `catalyst` — rejected.
+- `direction: 'positive'` on an `upcoming_event` — rejected.
+- A non-string, non-null `direction` (number, object, array) — rejected.
+
+This is a **narrowing with one authorised exception**, not a relaxation. `qa/news_catalysts_core_offline.js`
+NW27 (`:903`, "planted 5") already pins `'empty direction'` as a negative at `:936`; that case
+stays, and the three cases above join it.
+
+### Scope consequence
+
+`news-catalysts-core.js` may now be edited beyond `ITEM_FIELDS`, for **`validateProviderResult`
+only**. Everything else in the core — `projectItemRecord`, the write order, the response envelopes,
+the index logic, `acquireNowIso` — remains untouched, and touching any of it is STOP-1.
 
 ## Owner amendment A-3 — deferred Grok layer, note only
 
@@ -316,11 +377,14 @@ The single user message at `news-catalysts-provider.js:211` is rewritten to carr
 
 `qa/news_catalysts_provider_offline.js:215` carries the identical new string.
 
-### Core — one list
+### Core — one list **and one guard** (A-5)
 
-`news-catalysts-core.js` `ITEM_FIELDS` gains the three names in the D-S15-E order.
-`projectItemRecord` (`:113-121`) is otherwise unchanged; `:70`, `:119` and `:320` need no edit under
-D-S15-D.
+1. `ITEM_FIELDS` gains the three names in the D-S15-E order.
+2. `validateProviderResult` gains the `eventType` vocabulary check and the conditional `direction`
+   rule specified in A-5, replacing the unconditional `isNonEmptyString(item.direction)` at `:331`.
+
+`projectItemRecord` (`:113-121`) is unchanged; `:70`, `:119` and `:320` need no edit under D-S15-D.
+No other core function is in scope.
 
 ## Pre-approval compatibility sweep
 
@@ -372,9 +436,21 @@ assertion being weakened.
 Core-suite additions extend the NW series from `NW27`: stored-record shape carries the three new
 fields in order, and the byte-exact `JSON.stringify` record assertion holds at 19 fields.
 
-**`NW28` — the persistence half of the A-4.1 pin.** A stored record built from the **same
-future-dated `upcoming_event` fixture NP32 uses** round-trips with `eventDate` in the future,
-`eventType: 'upcoming_event'` and `direction: null` all intact, and its key matches `NEWS_KEY_RE`.
+**`NW27` gains three negatives (A-5)** alongside the existing `'empty direction'` case at `:936`:
+`direction: null` on a `catalyst`; `direction: 'positive'` on an `upcoming_event`; a non-string,
+non-null `direction`. Each must still fail closed — `502`, zero writes.
+
+**`NW28` — future-dated `upcoming_event` through the full handler (A-4.1 / A-5).** Uses the **same
+fixture as NP32**. Drives `core.handler` end to end and asserts: `200 WRITE`, the item **persists**,
+the stored record carries `eventDate` in the future, `eventType: 'upcoming_event'` and
+`direction: null` intact, its key matches `NEWS_KEY_RE`, and the index record is written last.
+**This is handler-level, not a projection unit test** — it is the assertion that would have caught
+the STOP before the Worker did.
+
+**`NW29` — mixed batch does not fail the envelope (A-5).** One valid `catalyst` and one valid
+future-dated `upcoming_event` in a single provider result: `200 WRITE`, **both** items persist,
+`writtenKeys` holds both item keys plus the index key, and the envelope is **not** rejected. This
+pins the whole-envelope failure mode the old guard would have produced.
 
 ## Validation
 
@@ -393,6 +469,10 @@ future-dated `upcoming_event` fixture NP32 uses** round-trips with `eventDate` i
 10. Read-back: **NP32 and NW28 share one future-dated fixture** — its `eventDate` is later than the
     suite clock, `eventType` is `upcoming_event`, `direction` is `null`, and the same values survive
     into the stored record (A-4.1). `evidence-freshness.js` is **absent from the diff** (A-4.2).
+11. **A-5 read-back:** the core diff touches `ITEM_FIELDS` and `validateProviderResult` **and
+    nothing else** — `projectItemRecord`, the write order, the response envelopes, the index logic
+    and `acquireNowIso` are unchanged. NW27 still fails closed on `direction: ''`, on `null` for a
+    `catalyst`, and on a non-null non-string. NW28 and NW29 both return `200 WRITE` and persist.
 
 ## STOP conditions
 
@@ -402,6 +482,11 @@ The five standing conditions, plus these task-specific instances:
 2. `buildNewsKey` or `NEWS_KEY_RE` requires a change. **The tuple change is authorised by A-2; the
    key format change is not** — the hash is still 64 hex and the key shape is unchanged.
 3. `relevanceScope` appears necessary in the tuple to make something work — that contradicts A-2.
+3a. **Any core function other than `ITEM_FIELDS` and `validateProviderResult` requires a change**
+    (A-5). The scope widening is exactly two surfaces, not the whole module.
+3b. Making a valid `upcoming_event` pass would require **weakening** an existing fail-closed check
+    rather than making it conditional — e.g. dropping the empty-string rejection, or accepting any
+    falsy `direction`. A-5 is a narrowing with one exception, never a relaxation.
 4. `evidence-freshness.js` or `evidence-contract.js` requires a change (A-4.2). In particular
    `TIMESTAMP_AHEAD_OF_CLOCK` for upcoming events is **expected behaviour, not a defect to fix**
    (A-4.3), and a future `eventDate` must not be clamped, rewritten, or rejected (A-4.1).
@@ -420,8 +505,11 @@ value for `catalyst`. The tuple carries `eventType` and not `relevanceScope`, wi
 `IDENTITY_SCHEMA_VERSION = 'j3-identity-v2'`. `CONTRACT_VERSION` is `'news-contract-v1'` under its
 original export name. The prompt carries both windows and the DR-1…DR-14 boundaries, with no numeric
 materiality threshold. `buildNewsKey` and `NEWS_KEY_RE` are provably unchanged. No Grok surface
-exists. **A future-dated `upcoming_event` with `direction: null` is pinned end to end by NP32
-(normalization) and NW28 (persistence), and `evidence-freshness.js` is untouched.** `qa:offline`
+exists. **The core accepts `direction: null` for `upcoming_event` and only for `upcoming_event`
+(A-5), still failing closed on `''`, on `null` for a `catalyst`, and on any non-string non-null
+value. A future-dated `upcoming_event` is pinned end to end by NP32 (normalization) and NW28 (full
+handler + persistence); NW29 proves a mixed catalyst + upcoming_event batch persists both rather
+than failing the envelope. `evidence-freshness.js` is untouched.** `qa:offline`
 PASS at 43 suites; NP01–NP32 contiguous and green; `fund_facts_route_offline`
 and `instruction_layer_offline` pass unmodified. The implementation diff is exactly four files.
 `review.md` carries a `## Lessons` section, the two-row "Files changed" block, and the final-check
