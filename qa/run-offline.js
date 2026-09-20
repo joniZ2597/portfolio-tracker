@@ -3221,6 +3221,55 @@ function phaseTechScore() {
     const res2 = api.scoreTickerTech(snap2, clean210, COMPUTED_AT, POLICY);
     check('bench break: holding still scored', typeof res2.score === 'number');
     check('bench break: code echoed without fail-close', res2.reasonCodes.indexOf('SERIES_UNIT_DISCONTINUITY') !== -1);
+
+    // Benchmark self-comparison (e.g. holding QQQ vs benchmark QQQ) must be
+    // excluded, not scored as a tautological neutral 0.
+    // (a) flat series: naive computation would also net to 0 — trivial case.
+    const flatSelfHold = { symbol: 'QQQ', market: 'US', candles: mkCandles(70, { closes: Array(70).fill(100) }),
+      provenance: { adjustedBasis: 'explicit' } };
+    const flatSelfBench = { symbol: 'QQQ', candles: mkCandles(70, { closes: Array(70).fill(100) }),
+      provenance: { adjustedBasis: 'explicit' } };
+    check('self-compare flat series -> rs null',
+      api._ts1RsValue(flatSelfHold, flatSelfBench, POLICY).value === null);
+    // (b) trending (non-trivial, non-zero-return) series, identical on both
+    // sides: still nulled — not scored as if it were a real, informative
+    // (and here coincidentally net-zero) relative-strength comparison.
+    const risingCloses = []; for (let i = 0; i < 70; i++) risingCloses.push(100 + i);
+    const trendSelfHold = { symbol: 'QQQ', market: 'US', candles: mkCandles(70, { closes: risingCloses }),
+      provenance: { adjustedBasis: 'explicit' } };
+    const trendSelfBench = { symbol: 'QQQ', candles: mkCandles(70, { closes: risingCloses }),
+      provenance: { adjustedBasis: 'explicit' } };
+    check('self-compare trending series -> rs null',
+      api._ts1RsValue(trendSelfHold, trendSelfBench, POLICY).value === null);
+    // (c) divergent candle data between the two same-symbol sides — proves
+    // the guard fires on symbol identity alone, never on the two series
+    // coincidentally producing an equal (net-zero) return.
+    const divergentSelfBench = { symbol: 'QQQ', candles: mkCandles(70, { closes: Array(70).fill(50) }),
+      provenance: { adjustedBasis: 'explicit' } };
+    const divergentSelfRs = api._ts1RsValue(trendSelfHold, divergentSelfBench, POLICY);
+    check('self-compare (divergent data, same symbol) -> rs null', divergentSelfRs.value === null);
+    check('self-compare -> no integrity noise emitted', divergentSelfRs.integrity.length === 0);
+
+    // Builder: self-compared slot nulled; a distinct valid benchmark on the
+    // same snapshot still computes normally (no over-suppression).
+    const validSpyBench = { symbol: 'SPY', candles: clean210, provenance: { adjustedBasis: 'explicit' } };
+    const selfQqqBench = { symbol: 'HB', candles: clean210, provenance: { adjustedBasis: 'explicit' } };
+    const snapSelf = api._ts1BuildSnapshot(hold2, { spy: validSpyBench, qqq: selfQqqBench, sector: null }, POLICY, COMPUTED_AT);
+    check('builder: self-compared qqq nulled', snapSelf.rsQqq === null);
+    check('builder: distinct spy benchmark still computed', typeof snapSelf.rsSpy === 'number');
+    check('builder: self-comparison raises no integrity entries', !snapSelf.integrity.some(function (e) { return e.series === 'HB'; }));
+
+    // Scorer: no RS points/coverage awarded for the self-compared slot; both
+    // the component's availablePoints and subCoverage reflect only the
+    // valid (spy) benchmark's weight.
+    const resSelf = api.scoreTickerTech(snapSelf, clean210, COMPUTED_AT, POLICY);
+    const rsT = POLICY.componentTables.rs;
+    check('scorer: self-compared slot listed missing', comp(resSelf, 'rs').missingFields.indexOf('rsQqq') !== -1);
+    check('scorer: RS availablePoints reflects only the valid slot (spy weight)',
+      approx(comp(resSelf, 'rs').availablePoints, rsT.maxPoints * rsT.weights.spy));
+    check('scorer: RS subCoverage reflects only the valid slot (spy weight)',
+      approx(comp(resSelf, 'rs').subCoverage, rsT.weights.spy));
+
     // Transient spike reverts -> advisory only
     const spikeCloses = [];
     for (let i = 0; i < 20; i++) spikeCloses.push(i === 10 ? 2500 : 100);

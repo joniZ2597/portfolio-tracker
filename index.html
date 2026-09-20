@@ -1182,10 +1182,12 @@ async function computeTechnicalSnapshot(symbol, sectorEtf, currentPrice) {
     const athDist = computeATHDistance(tc, price);
 
     // Relative performance over 3M (~63 trading days)
+    // Benchmark self-comparison (sym IS the benchmark) always returns a
+    // tautological 0 return-delta — excluded, not scored/labeled as neutral.
     const LOOKBACK = 63;
-    const rsSector = etf   ? computeRelativePerf(tc, candles[etf],   LOOKBACK) : null;
-    const rsSPY    = computeRelativePerf(tc, candles['SPY'], LOOKBACK);
-    const rsQQQ    = computeRelativePerf(tc, candles['QQQ'], LOOKBACK);
+    const rsSector = (etf && etf !== sym) ? computeRelativePerf(tc, candles[etf],   LOOKBACK) : null;
+    const rsSPY    = sym !== 'SPY' ? computeRelativePerf(tc, candles['SPY'], LOOKBACK) : null;
+    const rsQQQ    = sym !== 'QQQ' ? computeRelativePerf(tc, candles['QQQ'], LOOKBACK) : null;
 
     const snap = {
       // MA levels
@@ -1743,6 +1745,9 @@ function _ts1High52w(candles, dataAsOf) {
 function _ts1RsValue(holding, bench, policy) {
   var out = { value: null, integrity: [] };
   if (!bench) return out;
+  // Benchmark self-comparison (e.g. holding QQQ vs benchmark QQQ) always
+  // returns a tautological 0 return-delta — excluded, not scored as neutral.
+  if (bench.symbol === holding.symbol) return out;
   var basis = bench.provenance ? bench.provenance.adjustedBasis : null;
   if (basis !== 'explicit' && basis !== 'documented') {
     out.integrity.push({
