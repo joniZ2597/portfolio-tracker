@@ -78,6 +78,7 @@ const EXPECTED_FUNCTIONS = [
   'fund-facts-read.mjs',
   'fund-facts.mjs',
   'market-data.js',
+  'news-catalysts.mjs',
   'perplexity-proxy.js',
   'portfolio-sync.js',
   'research-evidence.js',
