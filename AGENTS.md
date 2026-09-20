@@ -26,6 +26,10 @@ Before implementing, state in plain language: what file(s) will change, the smal
 diff that satisfies the request, and how it will be validated. See "Task folder convention"
 below for how this becomes an Owner-approved `work/<id>/brief.md`.
 
+**QA suites that read in-scope files as text:** `<list or none>`, and whether their assertions
+survive. *(Dependency sweeps that check only `require()`/import miss this class — a suite can
+read a file it never imports.)*
+
 ## Worker execution contract
 
 Once a tracked, Owner-approved `brief.md` exists, the Worker executes the whole task inside
@@ -34,6 +38,14 @@ below.
 
 **Before writing any implementation code:**
 
+0. **Worktree bootstrap — automatic, pre-authorized.** Confirm the session's cwd is the task
+   worktree on the task branch. If `node_modules/` is missing or older than
+   `package-lock.json`, run `npm ci` (it touches only the gitignored `node_modules/`). Then run
+   `npm run qa:offline` once, before any edit, and record the result and suite count on the
+   first line of `work/<id>/qa.log` as the pre-edit baseline every Definition of Done is
+   measured against. A red pre-edit baseline is an **M4** transition (diagnose first), not a
+   STOP. A harness permission prompt for any of these steps is answered under this
+   authorization; it is not an Owner decision.
 1. **Requirement → test map.** Every requirement in the brief maps to at least one named
    assertion, and every assertion maps back to a requirement. Write it to `work/<id>/plan.md`.
    An orphan test is drift; an unmapped requirement is an untested requirement.
@@ -56,10 +68,44 @@ below.
    every FIX autonomously.
 10. Run full `npm run qa:offline`.
 11. Write `work/<id>/review.md`.
-12. Run one final lightweight Codex check against the complete final diff — implementation
-    plus `review.md` itself — since `review.md`'s own content, and any late touch-ups it
-    prompts, have not yet been reviewed. Resolve any resulting finding under the same
-    FIX/DEFER/REJECT rule, re-running targeted or full QA as the fix requires.
+12. Run one final lightweight Codex check against the task diff (the sole, authoritative
+    "complete final diff" defined under "Codex as diff reviewer" above) — since `review.md`'s
+    own content, and any late touch-ups it prompts, have not yet been reviewed. Classify every
+    finding before editing.
+    - **Class I** (implementation, scope, security, correctness, or brief conflict): FIX /
+      DEFER / REJECT as above. A FIX to an implementation file re-runs the relevant QA and gets
+      one more Codex pass **scoped to the changed hunks only** — a deliberate, narrower
+      exception to "Codex must receive every part of whichever diff applies," which governs the
+      task-diff check this step opens with, not this follow-up re-pass. **This final-check
+      Codex pass, and the one scoped re-pass a Class I FIX may earn, are the only Codex rounds
+      this step performs** — step 8's earlier implementation-diff review is a separate, prior
+      round and is not counted against this limit. Findings from the scoped re-pass are
+      classified under the same FIX/DEFER/REJECT rule: DEFER and REJECT close normally. If the
+      scoped re-pass finds a new Class I FIX requiring another implementation change, do not
+      apply it and do not start a third Codex round. Record it in `review.md` as an unresolved
+      Class I finding and surface it at the existing commit-approval boundary (step 13) for
+      Owner ruling — this does not create a new return point; it is a STOP only if one of
+      STOP-1..5 independently applies. Record one line in `review.md` for a round with at least
+      one class-I finding and no class-II findings: `Final check: N rounds, M class-I findings —
+      X FIX, Y DEFER, Z REJECT, U unresolved; QA/re-pass performed where required; no class-II
+      findings.`
+    - **Class II** (documentation-only, in `review.md`): fix, then self-check — every
+      `work/<id>/` path named exists and is one of the five canonical files; every count
+      matches a line in `qa.log`; no section reads "Pending" or "TBD" (a lesson line matching
+      `[backlog] <lesson text> — pending routing` is exempt) — and record one line in
+      `review.md`: `Final check: N rounds, M class-II findings fixed, self-checked; no
+      implementation change, no QA re-run.` **No further Codex.**
+
+    A class-II fix that changes a claim about the implementation — a DoD tick flips, a file
+    count changes, a finding is reclassified — is class I by definition: it re-enters step 9's
+    FIX/DEFER/REJECT rule, including the QA re-run and the one scoped Codex re-pass a FIX earns,
+    before `review.md` is finalized. It does not resolve silently inside the class-II
+    self-check. **When a round mixes both classes, the summary line states the class-I outcome
+    instead of the class-II line above** — e.g. `Final check: N rounds, M class-II findings
+    fixed, 1 reclassified class-I (QA re-run + scoped Codex re-pass), self-checked.` **Three
+    summary-line forms exist — class-II-only (above), mixed (above), and pure class-I (in the
+    Class I bullet above)** — each used only for the round shape it names; the unmodified
+    class-II line is used only for a round with zero class-I findings or reclassifications.
 
 **Then, at the commit boundary — never autonomous:**
 
@@ -108,7 +154,7 @@ back on every MANUAL transition rebuilds the courier problem.
 | # | Trigger | → Posture | What the Worker does |
 |---|---|---|---|
 | **M1** | Task start, approach not trivial — more than one file, a new module, or any requirement without one obvious assertion | **PLAN** | Build the requirement→test map and the conventions-followed/overridden list in `plan.md`. No code. *(Trivial tasks skip straight to implementation — the map is still written, it is just short.)* |
-| **M2** | `plan.md` complete: every requirement mapped, every override named | **ACCEPT EDITS** | Failing tests first, then implement |
+| **M2** | `plan.md` complete: every requirement mapped, every override named | **ACCEPT EDITS** | Before the first implementation edit, confirm `work/<id>/brief.md` is tracked (`git ls-files work/<id>/brief.md` non-empty) and unmodified (`git status --short work/<id>/brief.md` empty). Then: failing tests first, then implement |
 | **M3** | Two consecutive fix attempts fail on the same assertion | **PLAN** | Stop editing. Re-derive the cause from source before touching anything else |
 | **M4** | An unexpected QA failure — a suite the task did not touch, or a failure class not seen before | **PLAN** | Diagnose first. Do not "fix" a suite you do not yet understand |
 | **M5** | Next edit touches an ASK-tier file, or an architecture / security / contract surface — auth or token path, gate predicate, persisted shape, public contract, scoring or persistence boundary | **MANUAL** | One edit at a time. ASK-tier files also produce a real prompt |
@@ -126,7 +172,10 @@ state file. Its purpose is that `review.md` can show why the task moved as it di
 The Worker stops and returns to the Owner **only** when one of these is true:
 
 1. A required edit falls **outside the approved scope or file set**.
-2. The **approved contract cannot be satisfied as written**.
+2. The **approved contract cannot be satisfied as written**. A brief whose *wording*
+   mis-measures a condition the implementation plainly meets is not this condition. Record the
+   reading used and continue; the Owner sees it at commit approval. STOP-2 is reserved for a
+   brief whose **intent** cannot be met.
 3. A **security assumption in the brief conflicts with repository or vendor evidence**.
 4. A required test or action needs a **live, production, deployment, or other protected
    mutation**.
@@ -256,6 +305,10 @@ additions/amendments for backlog items this task references.
 one-line additions or amendments to `BACKLOG.md` items it references, in its final commit,
 without `BACKLOG.md` appearing in `brief.md`. Every other unlisted file remains STOP-1.
 
+An explicit "not in scope" exclusion in the approved brief overrides this allowance. Under such
+a brief a `[backlog]` lesson is recorded in `review.md` as `[backlog] <lesson text> — pending
+routing` and is not acted on by the task.
+
 No standing allowance exists for `AGENTS.md`, `.claude/rules/**`, or
 `work/<capability>/breakdown.md`. Those wait for a task that owns them.
 
@@ -288,18 +341,29 @@ centrally allocated id, no lookup table, no registry.
   conventions-followed/overridden list. Written before implementation begins.
 - `codex.md` (untracked, gitignored via `work/*/codex.md`) — the raw Codex review output,
   verbatim. Never reconstructed or paraphrased; if a review was not captured, the file says so.
+  The final Codex check's raw output is appended to `codex.md` under `## Final check`.
 - `qa.log` (untracked, gitignored via `work/*/qa.log`) — raw output from targeted/full QA runs
   for this task.
 - `review.md` (tracked) — final evidence: QA result, Codex outcome, and the FIX / DEFER /
   REJECT ledger with a reason for every DEFER and REJECT. Populated after Codex reviews the
   implementation diff and any required fixes/QA re-runs are done; then one final lightweight
-  Codex check runs against the complete final diff including `review.md` itself, so the
-  complete final task diff (implementation + `review.md`) is reviewed before it is committed.
+  Codex check runs against the task diff (see "Codex as diff reviewer" for its authoritative
+  definition), so the complete final diff — including `review.md` itself — is reviewed before
+  it is committed.
   `review.md` is committed in the same commit as any final implementation touch-ups — that
   commit's Owner approval and the separate, later Owner LAND approval are two distinct events,
-  never conflated even when they happen close together.
+  never conflated even when they happen close together. `review.md`'s "Files changed" section
+  uses this fixed two-row shape:
 
-**These five files are evidence and scope. None of them carries status, state, or lifecycle.**
+  ```
+  ## Files changed
+  - Implementation (N): <paths>     ← must equal the brief's Implementation scope
+  - Evidence (tracked): work/<id>/brief.md, work/<id>/review.md
+  ```
+
+**These five files are evidence and scope, and the set is closed — no sixth evidence file, and
+no name variants (no `codex-final.md`, no `qa-post-edit.log`). None of them carries status,
+state, or lifecycle.**
 The only operational meaning of a tracked, committed `brief.md` is that implementation may
 begin within its exact approved scope. `review.md` is evidence only and authorizes nothing.
 Commit, LAND, and SHIP still require their explicit Owner decisions. No registry, claim, or
@@ -321,6 +385,39 @@ Codex reviews the actual diff, not a plan or a description of intended changes. 
 for a Codex review, make the actual implementation diff available in the task working tree or
 task branch, then give Codex the real diff (`git diff`, commit, or branch comparison). Codex
 review normally happens before LAND.
+
+**Two diffs.** Both compare `<base>` — the `branch-dev` commit named in the brief — against the
+current working tree, covering committed, staged, and unstaged tracked changes, **and** any new
+untracked in-scope files; neither diff is ever taken against `HEAD` alone, and neither omits an
+untracked file just because it is new. Untracked coverage is always scoped to named paths —
+never a repo-wide untracked scan, which would pull in unrelated local/untracked files (a stray
+`.claude/settings.local.json`, an unrelated in-progress skill folder, etc.).
+
+**Implementation diff** — tracked portion: `git diff <base> -- . ':(exclude)work/'
+':(exclude)BACKLOG.md'`; untracked portion: `git ls-files --others --exclude-standard --`
+followed by the exact paths named in the brief's Implementation scope, with each listed file's
+contents. Every "Implementation scope" and "Definition of done" statement, and the
+implementation Codex review (step 8/9), refer to this diff — tracked and untracked parts
+together.
+
+**Task diff** — the complete implementation diff, plus tracked task evidence intended for
+repository history: `git diff <base> -- work/<id>/brief.md work/<id>/review.md`; if `review.md`
+is still untracked at final-review time, its contents are included directly (this is how a
+still-untracked `review.md` reaches the final check); plus any permitted `BACKLOG.md` change.
+`plan.md`, `codex.md`, and `qa.log` stay untracked/gitignored task evidence — available as
+supporting evidence but not part of the task diff. The final Codex check (step 12), the commit
+request and the LAND request refer to the task diff; it is the sole, authoritative definition of
+"the complete final diff" wherever that phrase is used — nothing else defines it separately.
+
+**Codex must receive every part of whichever diff applies** — the tracked diff and the
+untracked in-scope files' contents — never the tracked diff alone. A brief never needs to name
+its own `brief.md` or `review.md` in its implementation scope — they are evidence, outside the
+implementation diff by definition. **This changes no permission:** `work/*/brief.md` remains
+ASK-tier and the brief-listing rule is unchanged. The governed commit shape requires a
+brief-only commit, then a final implementation + `review.md` commit (+ permitted `BACKLOG.md`
+one-liners) — this does not imply the task's history contains only two commits total;
+intermediate functional commits before the final commit are unaffected, per "Test commands"
+above.
 
 ## Owner LAND / SHIP boundaries
 
@@ -346,6 +443,7 @@ review normally happens before LAND.
 - Use plain `git worktree add <path> <branch>` for parallel tasks — no registry, claim file,
   or mutex. A worktree is just an isolated checkout; delete it (`git worktree remove`) when the
   task lands or is abandoned.
+- A new worktree has no `node_modules/`; step 0 of the Worker execution contract handles it.
 - Existing worktrees at the time of this writing (`pt-wt-panel`, `pt-wt-wft`, plus older
   `-lab-*` experiment worktrees) may continue to be used or cleaned up as their own tasks
   dictate — this convention doesn't retroactively require changing them.
