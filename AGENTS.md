@@ -208,16 +208,39 @@ Brief      locks scope
 ```
 
 **Not a mandatory stage.** The entry test is mechanical — can exact files expected to change,
-and testing coverage required, already be filled in? If yes, skip straight to a brief.
+and testing coverage required, already be filled in? If yes, skip straight to a brief. **If the
+Domain logic trigger below fires, a Breakdown is required before the brief: testing coverage
+cannot be filled in honestly until the rulings it depends on exist, so the entry test fails.**
 
 **Structure — six sections:** Outcome · Current/Change Map (mandatory whenever a Breakdown
-exists) · Decisions · Unknowns/Gaps · Split/Dependencies · Not in v1.
+exists) · Decisions · Unknowns/Gaps · Split/Dependencies · Not in v1 — **plus `## Domain
+logic` when its trigger fires (below).**
 
 **Current/Change Map — nine fixed rows, every row present** (Client · Server functions ·
 Storage/schema · Scores/Actionable Take · Persistence · Gates/environment · QA ·
 Deploy/external · Docs). `Change` must begin with exactly one of `none` · `new` · `modify` ·
 `read`, then a short noun phrase. The empty rows are the point — they are where "we never
 thought about persistence" becomes visible.
+
+**Domain logic — trigger.** Every Breakdown answers five questions. Does the capability:
+
+- create or change a user-visible category vocabulary;
+- create or change an inclusion rule — materiality, relevance, freshness, semantic dedup;
+- affect scoring, ranking, recommendations, or Actionable Take;
+- map external data into internal meaning;
+- define something competent domain readers could reasonably disagree on?
+
+Any YES → the Breakdown carries a `## Domain logic` section. All NO → the Breakdown **must**
+record this exact line in its place: `Domain logic: none, engineering-only`. Silence is not
+an answer.
+
+**`## Domain logic` — compact.** It holds: vocabulary and definitions · inclusion and boundary
+rules · overlap/precedence where two rules can both apply · numbered Owner rulings `DR-1`,
+`DR-2`, … · a positive and a negative or boundary example per ruling · and, for each ruling
+that is mechanically testable, the QA fixture or test it maps to. **A ruling that governs model
+or human judgment gets no invented fixture** — mark it `pilot` or `human review`; a unit
+fixture for a judgment rule is an over-claim, not coverage. Independent model challenge of the
+rulings is risk-based and Owner-directed, never required.
 
 **Boundary — system level, and it holds:**
 
@@ -226,7 +249,7 @@ thought about persistence" becomes visible.
 | component names | function names |
 | directory-level surfaces | line numbers |
 | one-file component names where the file *is* the component (`index.html`) | helper design |
-| dependencies | test IDs |
+| dependencies | test IDs — except the Domain logic fixture mapping |
 | Owner decisions | requirement→test map |
 | external blockers | implementation order inside a task |
 | which child touches which surface | *how* to implement |
@@ -234,16 +257,17 @@ thought about persistence" becomes visible.
 Everything in the right column belongs to Worker `/plan`.
 
 **Readiness for a child brief** — all four must hold for that child: every map row it touches
-has a concrete Change entry, not a question · every Decision it depends on has an Owner answer
-· every Unknown it depends on is resolved, or moved to Not in v1 · its dependencies are landed,
-or intentionally being briefed ahead of it. **Partial readiness is the expected case** — a
-capability does not need every child resolved before the first child starts.
+has a concrete Change entry, not a question · every Decision it depends on
+**(including every `DR-n` ruling)** has an Owner answer · every Unknown it depends on is
+resolved, or moved to Not in v1 · its dependencies are landed, or intentionally being briefed
+ahead of it. **Partial readiness is the expected case** — a capability does not need every
+child resolved before the first child starts.
 
 **The three artifacts, side by side:**
 
 | | Breakdown | Brief | Worker `/plan` |
 |---|---|---|---|
-| **Holds** | system picture · uncertainty · Owner decisions · gaps · task split · dependencies · exclusions | exact files · exact contract · exact scope · exact exclusions · exact QA coverage · resolved decisions restated as facts · context/deps refs | implementation approach · requirement→test map · precedent files · conventions followed/overridden · execution order · QA triage · implementation detail |
+| **Holds** | system picture · uncertainty · Owner decisions · **domain rulings (`DR-n`)** · gaps · task split · dependencies · exclusions | exact files · exact contract · exact scope · exact exclusions · exact QA coverage · resolved decisions restated as facts · context/deps refs | implementation approach · requirement→test map · precedent files · conventions followed/overridden · execution order · QA triage · implementation detail |
 | **Level** | system | file | function |
 | **Tracked** | yes | yes | no |
 | **Is a gate** | **no** | **yes** — the only scope approval | no |
@@ -255,12 +279,16 @@ readiness verdicts · any stored workflow state. Progress is derived from Git an
 present.
 
 **Size limits:** map rows fixed at 9 (10 only if a genuinely new surface appears); whole
-breakdown ≤ 80 lines. Over that, materially, reassess whether this is actually two
-capabilities.
+breakdown ≤ 80 lines. **`## Domain logic` stays compact: narrative short, one row per ruling.
+Its `DR` table may extend past the 80-line limit when necessary; there is no other
+exemption.** Over that, materially — in the six sections or in Domain logic — reassess whether
+this is actually two capabilities.
 
-**The gap rule:** if Worker `/plan` discovers that a surface recorded as `Change: none` must in
-fact change, that is a scope conflict, not a discovery to absorb — do not silently expand;
-route back and update the Breakdown and the affected Brief, under **STOP-1**.
+**The gap rule:** if Worker `/plan` **or implementation** discovers that a surface recorded as
+`Change: none` must in fact change, **or meets a category, materiality, overlap, or other
+domain case the approved `DR-n` rulings do not cover,** that is a scope conflict, not a
+discovery to absorb — do not silently expand **and do not guess**; route back and update the
+Breakdown and the affected Brief, under **STOP-1**.
 
 ## Lessons retention
 
