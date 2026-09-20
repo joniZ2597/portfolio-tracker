@@ -29,13 +29,29 @@ manually-invoked** server capability that persists structured catalyst evidence.
 store access and no provider I/O. Activation is a separate Owner-gated step and is **not** in this
 task.
 
-## Implementation scope — three new files, no existing file changed
+## Implementation scope — three new files, plus one single-line re-baseline of an existing QA pin
 
 ```
 netlify/functions/lib/news-catalysts-core.js      new
 netlify/functions/news-catalysts.mjs              new
 qa/news_catalysts_core_offline.js                 new
+qa/fund_facts_route_offline.js                    modified — exactly one line (see amendment below)
 ```
+
+### Scope amendment — FR06 pin re-baseline (Owner-approved addition, 2026-09-20)
+
+`qa/fund_facts_route_offline.js` is added to the implementation scope for exactly one change:
+
+- append `'news-catalysts.mjs'` to the `EXPECTED_FUNCTIONS` pin array
+  (`qa/fund_facts_route_offline.js:71-88`). This is the single intentional re-baseline the pin's own
+  comment requires whenever a new file is added to `netlify/functions/` ("A future INTENTIONAL
+  function addition therefore requires explicit re-baselining of this test — updating the pin is a
+  deliberate, reviewed act, never an incidental edit"). No other line in this file changes; no other
+  behavior of FR01–FR14 is touched. Precedent: `10b8003` (tradingview-webhook) and `a0255d5`
+  (boi-fx-proxy) each made this same one-line addition in their own commit.
+
+This amendment does not expand the task's product scope — it only lets the task's own new function
+file be correctly recognized by an existing, unrelated exposure guard that runs inside `qa:offline`.
 
 **No `package.json` change** — `qa/run-offline.js` auto-discovers any `qa/*_offline.js`; a
 convenience `test:` script is not worth the diff. *(Same reasoning as the TradingView pilot.)*
@@ -58,6 +74,7 @@ prompt is expected.
 | `require()` / import dependency | The new core imports the provider and preflight read-only; neither is modified. |
 | Fingerprint pairing rule | Not triggered — `CLAUDE.md` untouched. |
 | Expected suite-count delta | **+1** (42 → 43), from the one new auto-discovered file. |
+| Directory-enumeration pin (found at step 0, 2026-09-20) | **`qa/fund_facts_route_offline.js` FR06** pins the exact file set of `netlify/functions/` (`EXPECTED_FUNCTIONS` vs `readdirSync`, `deepStrictEqual`) and runs inside `qa:offline`. Adding `news-catalysts.mjs` moves this one assertion. Resolved by the scope amendment above — the text-read sweep in the first row does not cover this class. |
 
 ## Contract
 
@@ -176,7 +193,9 @@ no DOM, no scoring symbols, no `pt_` localStorage key.
 2. `npm run qa:offline` → PASS at **43** effective suites (42 + 1). Any other count is a finding.
 3. `node qa/news_catalysts_provider_offline.js` and `node qa/news_catalysts_preflight_offline.js`
    → PASS, unchanged — proves the two frozen modules were not touched.
-4. Implementation diff = **exactly three files**, all new:
+4. Implementation diff = **exactly four files**: three new, plus `qa/fund_facts_route_offline.js`
+   modified by exactly one added line (`+1 -0`, or `+2 -1` if the preceding entry's trailing comma
+   is added):
    `git diff --stat 20b4b31...HEAD -- . ':(exclude)work/' ':(exclude)BACKLOG.md'`
 5. `grep -c "process.env" netlify/functions/lib/news-catalysts-core.js` → env is read at the
    boundary only; the provider still receives `apiKey`/`nowIso`/`fetchImpl` by injection.
@@ -185,7 +204,8 @@ no DOM, no scoring symbols, no `pt_` localStorage key.
 
 The five standing conditions, plus these instances:
 
-1. Any file outside the three.
+1. Any file outside the four, or any change to `qa/fund_facts_route_offline.js` beyond the single
+   `EXPECTED_FUNCTIONS` entry named in the scope amendment.
 2. **Any edit to `news-catalysts-provider.js` or `news-catalysts-preflight.js`** — if the core cannot
    be built without changing either, the contract cannot be satisfied as written (STOP-2), and the
    specific incompatibility is the finding.
@@ -196,7 +216,8 @@ The five standing conditions, plus these instances:
 
 ## Definition of done
 
-Three new files, no existing file modified. `qa:offline` PASS at 43 suites. Both frozen J3 suites
+Three new files, plus the single-line `EXPECTED_FUNCTIONS` re-baseline in
+`qa/fund_facts_route_offline.js`; no other existing file modified. `qa:offline` PASS at 43 suites. Both frozen J3 suites
 still PASS. The endpoint is dormant with the gate off, and with the gate on is invokable only by a
 `POST` carrying a valid Bearer token. `review.md` carries a `## Lessons` section, the two-row
 "Files changed" block and the final-check line.
