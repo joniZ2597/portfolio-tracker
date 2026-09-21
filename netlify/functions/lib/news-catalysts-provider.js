@@ -75,6 +75,17 @@ var DEFAULT_MAX_BYTES = 4 * 1024 * 1024;
 var TICKER_RE = /^[A-Z]{1,10}$/;
 var NEWS_KEY_RE = /^fundstore:v1:news:[A-Z]{1,10}:\d{4}-\d{2}-\d{2}:[a-f0-9]{64}$/;
 
+// S1.5.1 H-B, mechanism 1 (DR-20): a fixed closed list of generic index leaf
+// segments with nothing after them — a trailing slash is the only variation
+// tolerated. The segment itself is mandatory (never optional), so this never
+// matches a bare '/' or a bare '//' — '/' is checked separately by the
+// caller. Deliberately narrow: never matches a path with any further
+// segment, so an article-specific path (e.g. /news/q3-results) never
+// collides. Codex review finding (S1.5.1 H-B pre-commit): an earlier
+// version made the segment group optional, which also matched '//' —
+// fixed by making the group mandatory.
+var GENERIC_SOURCE_PATH_RE = /^\/(news|press-release|press-releases|investors|investor-relations|newsroom|media)\/?$/i;
+
 // Closed 7-item catalyst vocabulary (spec §4). No macro/sector category in v1;
 // other_catalyst is the sole catch-all.
 var CATEGORIES = deepFreeze([
@@ -97,7 +108,9 @@ var RELEVANCE_SCOPES = deepFreeze(['company', 'sector', 'market']);
 
 // Skip reason codes (spec §2 order). One reason per skipped item; a skipped
 // item never echoes any item data. The three S1.5 additions are appended
-// after DUPLICATE_IN_BATCH so every existing index stays stable.
+// after DUPLICATE_IN_BATCH so every existing index stays stable. The two
+// S1.5.1 H-B additions (GENERIC_SOURCE_URL, FUTURE_DATED_CATALYST) are
+// appended last for the same reason — append-only, never reordered.
 var SKIP_REASONS = deepFreeze([
   'MISSING_EVENT_DATE',
   'INVALID_EVENT_DATE',
@@ -108,7 +121,9 @@ var SKIP_REASONS = deepFreeze([
   'DUPLICATE_IN_BATCH',
   'UNKNOWN_EVENT_TYPE',
   'INVALID_RELEVANCE_SCOPE',
-  'INVALID_SUB_TYPE'
+  'INVALID_SUB_TYPE',
+  'GENERIC_SOURCE_URL',
+  'FUTURE_DATED_CATALYST'
 ]);
 
 // Exact spec §7 JSON Schema literal. Sent to Sonar as a GENERATION CONSTRAINT
@@ -622,6 +637,19 @@ function normalizeNewsResponse(parsedResponse, context) {
       continue;
     }
 
+    // S1.5.1 H-B, mechanism 1 (DR-20) — narrow, deterministic, URL-shape-only
+    // rejection of a generic/container page: a bare root, or a fixed closed
+    // list of generic index leaf segments with NOTHING after them. Never a
+    // substring or prefix match, so an article-specific path under the same
+    // segment (e.g. /news/q3-results) is untouched. grounded.normalized is
+    // already a validated, previously-parsed https URL (resolveGrounded
+    // above), so re-parsing it here is safe.
+    var groundedPath = new URL(grounded.normalized).pathname;
+    if (groundedPath === '/' || GENERIC_SOURCE_PATH_RE.test(groundedPath)) {
+      skippedItems.push({ reason: 'GENERIC_SOURCE_URL' });
+      continue;
+    }
+
     // category — closed 7-item vocabulary (spec §4).
     if (CATEGORIES.indexOf(raw.category) === -1) {
       skippedItems.push({ reason: 'UNKNOWN_CATEGORY' });
@@ -633,6 +661,22 @@ function normalizeNewsResponse(parsedResponse, context) {
     // would otherwise skip every upcoming event as INVALID_DIRECTION.
     if (EVENT_TYPES.indexOf(raw.eventType) === -1) {
       skippedItems.push({ reason: 'UNKNOWN_EVENT_TYPE' });
+      continue;
+    }
+
+    // S1.5.1 H-B, mechanism 2 (DR-21a deterministic half) — a catalyst
+    // (already happened) cannot have a date after the injected clock; reuses
+    // the same raw.eventType === 'catalyst' test the very next block already
+    // performs, so no new eventType read is introduced. upcoming_event is
+    // structurally excluded — this guard never matches it, by construction
+    // (A-4.1: a future-dated upcoming_event is expected and must persist).
+    // Same-day (eventDate === dateAnchor) survives: strict '>' only.
+    // dateAnchor reuses the same injected retrievedAt clock buildRequestBody
+    // anchors on — no new clock, no wall-clock read. INVALID_EVENT_DATE is
+    // never reused: it keeps its existing, narrower meaning (malformed date
+    // grammar), distinct from a valid-but-impossible-for-this-eventType date.
+    if (raw.eventType === 'catalyst' && eventDate > ctx.retrievedAt.slice(0, 10)) {
+      skippedItems.push({ reason: 'FUTURE_DATED_CATALYST' });
       continue;
     }
 

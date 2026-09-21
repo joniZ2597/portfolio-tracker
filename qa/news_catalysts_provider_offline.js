@@ -13,7 +13,7 @@
  * below), and a throwing global.fetch guard is installed throughout to prove
  * the provider never touches the real network.
  *
- * Coverage (NP01–NP41, contiguous — the P1-xx scheme is retired):
+ * Coverage (NP01–NP45, contiguous — the P1-xx scheme is retired):
  *   NP01 full-coverage benchmark  — exact deep-equal + stringify-equal envelope
  *   NP02 Tier A transport         — throw / timeout / non-2xx ⇒ PROVIDER_FAILURE
  *   NP03 Tier B structural (7+1)  — each condition ⇒ PROVIDER_INVALID_RESPONSE
@@ -39,6 +39,10 @@
  *   NP39 Evidence Set retained but inert (9 fields, no leakage)
  *   NP40 S1.5.1 H-A: five prompt-rule markers present (presence only)
  *   NP41 S1.5.1 H-A: no numeric materiality threshold in the new wording
+ *   NP42 S1.5.1 H-B: generic/container source-URL rejection (mechanism 1)
+ *   NP43 S1.5.1 H-B: future-dated-catalyst rejection (mechanism 2)
+ *   NP44 S1.5.1 H-B: SKIP_REASONS append-only order; skippedItems shape
+ *   NP45 S1.5.1 H-B: GENERIC_SOURCE_URL boundary — '//' survives (Codex fix)
  *
  * Run: node qa/news_catalysts_provider_offline.js
  * (QA seam: NEWS_CATALYSTS_PROVIDER_PATH overrides the module under test for
@@ -1063,26 +1067,29 @@ async function runTests() {
   // ── NP31: eventType is identity-bearing (A-2) ───────────────────────────────
   await test('NP31 eventType is identity-bearing: present in the tuple after category, before direction; differs alone (direction held constant) ⇒ different hash; both valid A-1 shapes survive distinctly', async function () {
     var g = 'https://ir.jfrog.com/news/a';
-    var futureDate = '2026-11-19';
+    // S1.5.1 H-B: held at a historical date (not future) so the catalyst row
+    // is unaffected by FUTURE_DATED_CATALYST — this test isolates eventType's
+    // own tuple slot, independent of date-vs-anchor, which NP42+ covers.
+    var sharedDate = '2026-07-18';
     // Direct tuple-position proof, independent of direction: same eventDate/
     // category/direction/URL, eventType alone differs — isolates its own slot
     // (after category, before direction) rather than riding on direction's
     // existing identity-bearing effect.
-    var hashCatalyst = pinnedHash(futureDate, 'earnings_event', 'catalyst', 'positive', g, 'ir.jfrog.com');
-    var hashUpcomingSameDirection = pinnedHash(futureDate, 'earnings_event', 'upcoming_event', 'positive', g, 'ir.jfrog.com');
+    var hashCatalyst = pinnedHash(sharedDate, 'earnings_event', 'catalyst', 'positive', g, 'ir.jfrog.com');
+    var hashUpcomingSameDirection = pinnedHash(sharedDate, 'earnings_event', 'upcoming_event', 'positive', g, 'ir.jfrog.com');
     assert.notStrictEqual(hashCatalyst, hashUpcomingSameDirection,
       'eventType alone, direction held constant, changes the hash — eventType occupies its own tuple slot');
 
     // End-to-end: both A-1-valid item shapes survive as distinct, correctly-keyed records.
     var r = norm([
-      rawItem(futureDate, 'earnings_event', 'positive', g, { eventType: 'catalyst', relevanceScope: 'company' }),
-      rawItem(futureDate, 'earnings_event', null, g, { eventType: 'upcoming_event', relevanceScope: 'company' })
+      rawItem(sharedDate, 'earnings_event', 'positive', g, { eventType: 'catalyst', relevanceScope: 'company' }),
+      rawItem(sharedDate, 'earnings_event', null, g, { eventType: 'upcoming_event', relevanceScope: 'company' })
     ], [g], undefined);
     assert.strictEqual(r.items.length, 2, 'both survive');
     assert.deepStrictEqual(r.skippedItems, [], 'neither is a duplicate');
     assert.strictEqual(r.items[0].identityHash, hashCatalyst, 'catalyst item hash matches the pinned tuple order');
     assert.strictEqual(r.items[1].identityHash,
-      pinnedHash(futureDate, 'earnings_event', 'upcoming_event', null, g, 'ir.jfrog.com'),
+      pinnedHash(sharedDate, 'earnings_event', 'upcoming_event', null, g, 'ir.jfrog.com'),
       'upcoming_event item hash matches the pinned tuple order');
     assert.notStrictEqual(r.items[0].identityHash, r.items[1].identityHash, 'different hashes');
     assert.notStrictEqual(provider.buildNewsKey(r.items[0]), provider.buildNewsKey(r.items[1]), 'different keys');
@@ -1091,11 +1098,16 @@ async function runTests() {
   // ── NP32: direction conditionality on a future-dated fixture (A-1, A-4.1) ──
   await test('NP32 direction conditionality (A-1) on a future-dated fixture: mis-shaped ⇒ INVALID_DIRECTION, well-shaped survives and keys cleanly (A-4.1)', async function () {
     var g = 'https://ir.jfrog.com/news/a';
+    // S1.5.1 H-B: catalyst rows use a historical date (FUTURE_DATED_CATALYST
+    // is orthogonal to this test's direction-conditionality target); the
+    // upcoming_event rows stay future-dated — A-4.1 still requires that to
+    // survive, unconditionally, which is exactly what this test also proves.
+    var pastDate = '2026-07-18';
     var futureDate = '2026-11-19'; // after NOW_ISO (2026-07-24T00:00:00.000Z)
     var r = norm([
       rawItem(futureDate, 'earnings_event', 'positive', g, { eventType: 'upcoming_event' }),
-      rawItem(futureDate, 'earnings_event', null, g, { eventType: 'catalyst' }),
-      rawItem(futureDate, 'earnings_event', 'positive', g, { eventType: 'catalyst' }),
+      rawItem(pastDate, 'earnings_event', null, g, { eventType: 'catalyst' }),
+      rawItem(pastDate, 'earnings_event', 'positive', g, { eventType: 'catalyst' }),
       rawItem(futureDate, 'earnings_event', null, g, { eventType: 'upcoming_event' })
     ], [g], undefined);
     assert.deepStrictEqual(r.skippedItems, [{ reason: 'INVALID_DIRECTION' }, { reason: 'INVALID_DIRECTION' }]);
@@ -1382,6 +1394,87 @@ async function runTests() {
     assert.strictEqual(haText.indexOf('%'), -1, 'no percentage literal in the H-A wording');
     assert.strictEqual(haText.indexOf('$'), -1, 'no currency literal in the H-A wording');
     assert.ok(!/\d/.test(haText), 'no numeric literal (count or threshold) in the H-A wording');
+  });
+
+  // ── NP42: S1.5.1 H-B mechanism 1 — generic/container source-URL rejection (DR-20) ───
+  await test('NP42 generic/container source URL rejected (bare root, generic index, case-insensitive); article-specific URL under the same segment and a normal authoritative article URL both survive', async function () {
+    var urlRoot = 'https://ir.jfrog.com/';
+    var urlIndex = 'https://ir.jfrog.com/news';
+    var urlIndexSlash = 'https://ir.jfrog.com/press-releases/';
+    var urlIndexCaseInsensitive = 'https://ir.jfrog.com/NEWS';
+    var urlArticle = 'https://ir.jfrog.com/news/q3-results';
+    var urlReuters = 'https://www.reuters.com/markets/frog-guidance-2026-09-18/';
+    var rNP42 = norm([
+      rawItem('2026-07-18', 'earnings_event', 'positive', urlRoot),
+      rawItem('2026-07-18', 'earnings_event', 'positive', urlIndex),
+      rawItem('2026-07-18', 'earnings_event', 'positive', urlIndexSlash),
+      rawItem('2026-07-18', 'earnings_event', 'positive', urlIndexCaseInsensitive),
+      rawItem('2026-07-18', 'earnings_event', 'positive', urlArticle),
+      rawItem('2026-07-18', 'earnings_event', 'positive', urlReuters)
+    ], [urlRoot, urlIndex, urlIndexSlash, urlIndexCaseInsensitive, urlArticle, urlReuters], undefined);
+    assert.deepStrictEqual(rNP42.skippedItems, [
+      { reason: 'GENERIC_SOURCE_URL' },
+      { reason: 'GENERIC_SOURCE_URL' },
+      { reason: 'GENERIC_SOURCE_URL' },
+      { reason: 'GENERIC_SOURCE_URL' }
+    ], 'bare root, /news, /press-releases/, and case-insensitive /NEWS all rejected as generic');
+    assert.strictEqual(rNP42.items.length, 2, 'the two article-specific URLs survive');
+    assert.strictEqual(rNP42.items[0].sourceUrl, urlArticle, 'IR newsroom article-specific path survives (not a substring/prefix match)');
+    assert.strictEqual(rNP42.items[1].sourceUrl, urlReuters, 'normal authoritative article URL survives');
+  });
+
+  // ── NP43: S1.5.1 H-B mechanism 2 — future-dated-catalyst rejection (DR-21a deterministic half) ──
+  await test('NP43 catalyst with eventDate after the injected clock is rejected FUTURE_DATED_CATALYST; same-day and historical catalysts survive; future-dated upcoming_event survives unconditionally', async function () {
+    var g = 'https://ir.jfrog.com/news/a';
+    var rNP43 = norm([
+      rawItem('2026-08-01', 'earnings_event', 'positive', g, { eventType: 'catalyst' }),  // after NOW_ISO (2026-07-24) -> rejected
+      rawItem('2026-07-24', 'earnings_event', 'positive', g, { eventType: 'catalyst' }),  // same day as NOW_ISO -> survives
+      rawItem('2026-07-18', 'earnings_event', 'positive', g, { eventType: 'catalyst' }),  // historical -> survives
+      rawItem('2026-11-19', 'earnings_event', null, g, { eventType: 'upcoming_event' })   // future, but not a catalyst -> survives
+    ], [g], undefined);
+    assert.deepStrictEqual(rNP43.skippedItems, [{ reason: 'FUTURE_DATED_CATALYST' }], 'only the future-dated catalyst is rejected');
+    assert.strictEqual(rNP43.items.length, 3);
+    assert.strictEqual(rNP43.items[0].eventDate, '2026-07-24', 'same-day catalyst survives');
+    assert.strictEqual(rNP43.items[1].eventDate, '2026-07-18', 'historical catalyst survives');
+    assert.strictEqual(rNP43.items[2].eventDate, '2026-11-19', 'future-dated upcoming_event survives unconditionally');
+    assert.strictEqual(rNP43.items[2].eventType, 'upcoming_event');
+    assert.deepStrictEqual(Object.keys(rNP43.items[0]), ITEM_FIELD_ORDER, 'public 17-field contract and field order unchanged');
+    assert.ok(/^[a-f0-9]{64}$/.test(rNP43.items[0].identityHash), 'identity construction unchanged (still a sha256 hex tuple hash)');
+
+    // INVALID_EVENT_DATE keeps its existing, narrower meaning — a malformed
+    // date, never reused for a valid-but-future catalyst date.
+    var rMalformed = norm([rawItem('2026-13-40', 'earnings_event', 'positive', g)], [g], undefined);
+    assert.deepStrictEqual(rMalformed.skippedItems, [{ reason: 'INVALID_EVENT_DATE' }], 'malformed date grammar still reports INVALID_EVENT_DATE, unaffected by H-B');
+  });
+
+  // ── NP44: S1.5.1 H-B — SKIP_REASONS append-only order; skippedItems shape unchanged ──
+  await test('NP44 the ten pre-H-B skip reasons are untouched and unreordered; the two H-B reasons are appended last; a skipped item still exposes only { reason }', async function () {
+    assert.strictEqual(provider.SKIP_REASONS.length, 12, 'ten existing + exactly two H-B additions');
+    assert.deepStrictEqual(provider.SKIP_REASONS.slice(0, 10), [
+      'MISSING_EVENT_DATE', 'INVALID_EVENT_DATE', 'MISSING_SOURCE_URL', 'INVALID_SOURCE_URL',
+      'UNKNOWN_CATEGORY', 'INVALID_DIRECTION', 'DUPLICATE_IN_BATCH', 'UNKNOWN_EVENT_TYPE',
+      'INVALID_RELEVANCE_SCOPE', 'INVALID_SUB_TYPE'
+    ], 'the ten pre-H-B reasons are byte-identical and in their original order');
+    assert.deepStrictEqual(provider.SKIP_REASONS.slice(10), ['GENERIC_SOURCE_URL', 'FUTURE_DATED_CATALYST'], 'H-B reasons appended last, in the approved order');
+
+    var g = 'https://ir.jfrog.com/';
+    var rShape = norm([rawItem('2026-07-18', 'earnings_event', 'positive', g)], [g], undefined);
+    assert.strictEqual(rShape.skippedItems.length, 1);
+    assert.deepStrictEqual(Object.keys(rShape.skippedItems[0]), ['reason'], 'a GENERIC_SOURCE_URL skip still exposes only { reason } — no candidate or Evidence Set data leaks');
+  });
+
+  // ── NP45: S1.5.1 H-B — GENERIC_SOURCE_PATH_RE boundary: '//' is not '/' ────
+  await test("NP45 a grounded pathname of '//' survives GENERIC_SOURCE_URL — the generic-segment group is mandatory, never optional, so it never collides with the bare-root '/' case", async function () {
+    // Codex pre-commit finding (S1.5.1 H-B): an earlier regex made the
+    // generic-segment alternation optional, so '/' followed by an optional
+    // trailing slash also matched a literal '//' pathname. The fix makes the
+    // segment mandatory and checks '/' as its own, separate condition — this
+    // test pins exactly that boundary, isolated from every other candidate
+    // field (valid eventDate, category, direction — only the path is odd).
+    var urlDoubleSlash = 'https://example.com//';
+    var rNP45 = norm([rawItem('2026-07-18', 'earnings_event', 'positive', urlDoubleSlash)], [urlDoubleSlash], undefined);
+    assert.deepStrictEqual(rNP45.skippedItems, [], "a '//' pathname is not rejected as GENERIC_SOURCE_URL");
+    assert.strictEqual(rNP45.items.length, 1, "the '//' candidate survives to a persisted item");
   });
 
   global.fetch = _origFetch;
