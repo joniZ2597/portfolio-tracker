@@ -187,10 +187,21 @@ function rawItem(eventDate, category, direction, sourceUrl, extra) {
   };
   return Object.assign(it, extra || {});
 }
+// S1.5.2 transport-fixture adaptation (Revision 3, §8a) — the ONLY change in
+// this file. `citations` maps to url_citation annotations on the Agent
+// output_text content entry so every existing NW-series fixture keeps
+// producing a fixture the REAL, migrated provider accepts. No assertion, no
+// expected outcome, no core behaviour changes — only the shape of the bytes
+// handed to the (unmodified) provider.
 function sonarResponse(items, citations) {
-  const resp = { choices: [{ message: { content: JSON.stringify({ items: items }) } }] };
-  if (citations !== undefined) { resp.citations = citations; }
-  return resp;
+  const annotations = Array.isArray(citations)
+    ? citations.map(function (c) { return { type: 'url_citation', url: c }; })
+    : citations;
+  return {
+    status: 'completed',
+    error: null,
+    output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: items }), annotations: annotations }] }]
+  };
 }
 function jsonResponse(status, body) {
   const text = typeof body === 'string' ? body : JSON.stringify(body);

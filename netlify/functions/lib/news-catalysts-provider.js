@@ -56,8 +56,10 @@ var SOURCE_TIER = 'perplexity_retrieval';
 var PROVIDER_ID = 'j3-news-catalysts@job-model-v1';
 var IDENTITY_SCHEMA_VERSION = 'j3-identity-v2';
 
-var PPLX_ENDPOINT = 'https://api.perplexity.ai/v1/sonar';
-var PPLX_MODEL = 'sonar-pro';
+var PPLX_ENDPOINT = 'https://api.perplexity.ai/v1/agent';
+// D-M8: identifier kept for continuity; the value is now an Agent preset
+// name, not a Sonar Chat Completions model id.
+var PPLX_MODEL = 'low';
 
 var DEFAULT_TIMEOUT_MS = 22000;
 var DEFAULT_MAX_BYTES = 4 * 1024 * 1024;
@@ -183,7 +185,7 @@ async function getNewsCatalysts(request, options) {
   // Tier A — transport/fetch/timeout/non-2xx/oversize/body-read failure.
   var text;
   try {
-    text = await pplxPostText(PPLX_ENDPOINT, buildRequestBody(ticker), ctx);
+    text = await pplxPostText(PPLX_ENDPOINT, buildRequestBody(ticker, nowIso), ctx);
   } catch (_) {
     return { ok: false, reason: 'PROVIDER_FAILURE' };
   }
@@ -216,17 +218,25 @@ async function getNewsCatalysts(request, options) {
   };
 }
 
-// Deterministic request body — the ONLY interpolated value is the ticker.
-// json_schema carries only the `schema` member (spec-pinned: no name field).
-function buildRequestBody(ticker) {
+// Deterministic request body — the ONLY interpolated values are the ticker
+// and the nowIso-derived UTC date anchor (D-M4: buildRequestBody is now a
+// pure function of (ticker, nowIso), a visible amendment to the S1.5 ruling
+// that it stayed a pure function of the ticker alone). The anchor is a plain
+// string slice — no `new Date()`, no ambient-clock read of any kind, no
+// arithmetic — so
+// determinism is preserved: identical inputs still produce byte-identical
+// output. json_schema now carries BOTH `name` (the Agent API requires a
+// 1-64 alphanumeric name; Owner-ruled exact literal 'newsCatalysts', not
+// Worker discretion) and `schema` — the schema member itself is unchanged,
+// byte for byte.
+function buildRequestBody(ticker, nowIso) {
+  var dateAnchor = nowIso.slice(0, 10);
   return {
-    model: PPLX_MODEL,
-    messages: [
+    preset: PPLX_MODEL,
+    instructions: 'You are a financial news retrieval service. Return only JSON that conforms exactly to the provided schema. Include only events with a verifiable dated primary source. The current UTC date is ' + dateAnchor + '.',
+    input: [
       {
-        role: 'system',
-        content: 'You are a financial news retrieval service. Return only JSON that conforms exactly to the provided schema. Include only events with a verifiable dated primary source.'
-      },
-      {
+        type: 'message',
         role: 'user',
         content: 'Cover the U.S. equity ticker ' + ticker + '. Report catalysts from the previous 30 calendar days ' +
           'and known upcoming events over the next 60 calendar days. For each item provide: eventDate (ISO ' +
@@ -278,7 +288,8 @@ function buildRequestBody(ticker) {
           'direction. Only include events you can source. Do not include commentary, titles, or summaries.'
       }
     ],
-    response_format: { type: 'json_schema', json_schema: { schema: REQUEST_SCHEMA } }
+    tools: [{ type: 'web_search' }],
+    response_format: { type: 'json_schema', json_schema: { name: 'newsCatalysts', schema: REQUEST_SCHEMA } }
   };
 }
 
@@ -353,16 +364,133 @@ async function pplxPostText(url, bodyObj, ctx) {
   }
 }
 
+// ── Agent-shape adapter (non-exported seam, brief §1) ────────────────────────
+// The ONLY function that knows about output[], status, error, item `type`
+// strings, fetch_url_results, or url_citation annotations. No other function
+// in this module learns the Agent response shape. Returns null for any
+// Tier-B-equivalent structural defect (mapped to PROVIDER_INVALID_RESPONSE by
+// the caller) or { content, evidenceSet } on success — from there down, the
+// ladder, grounding correlation, identity construction and projection are
+// UNCHANGED: they receive exactly the two things they always received under
+// Sonar, a generated-content string and an ordered grounding list.
+function adaptAgentResponse(parsedResponse) {
+  // status must fail closed (brief §4.3) — new condition, no Sonar equivalent.
+  if (parsedResponse.status !== 'completed') {
+    return null;
+  }
+  var output = parsedResponse.output;
+  if (!Array.isArray(output)) {
+    return null;
+  }
+
+  // Generated content: the item with type:'message' -> content[] -> the
+  // first entry with type:'output_text' -> .text. Found by TYPE, never by
+  // index — output[] is an execution trace; order and membership are not
+  // guaranteed. An output[] item of an unrecognised type elsewhere is simply
+  // not matched here; it is not itself a failure. The 'message'/'output_text'
+  // literals and the `.type` field read live in these predicates, defined
+  // HERE inside the adapter — findFirst itself is a transport-agnostic
+  // predicate-matcher with no knowledge of any field name or value.
+  var messageItem = findFirst(output, function (item) { return isObject(item) && item.type === 'message'; });
+  if (!isObject(messageItem) || !Array.isArray(messageItem.content)) {
+    return null;
+  }
+  var textEntry = findFirst(messageItem.content, function (item) { return isObject(item) && item.type === 'output_text'; });
+  if (!isObject(textEntry) || typeof textEntry.text !== 'string') {
+    return null;
+  }
+
+  // Condition-6 equivalent: every grounding-bearing field actually present is
+  // null or an array, checked BEFORE any candidate is extracted from it.
+  var i;
+  for (i = 0; i < output.length; i++) {
+    var outItem = output[i];
+    if (!isObject(outItem)) {
+      continue;
+    }
+    if ((outItem.type === 'search_results' || outItem.type === 'fetch_url_results') &&
+        !validGroundingField(outItem.results)) {
+      return null;
+    }
+  }
+  if (!validGroundingField(textEntry.annotations)) {
+    return null;
+  }
+
+  // Evidence Set construction (brief §5, D-M2) — the fixed traversal order:
+  //   1  every output[] item of type 'search_results'   -> its results[]  (array order)
+  //   2  every output[] item of type 'fetch_url_results' -> its results[]  (array order)
+  //   3  url_citation annotations on the output_text content item          (array order)
+  // Outer traversal follows output[] order; inner traversal follows each
+  // array's own order. First occurrence in this fixed order wins (existing
+  // rule, preserved — NP08). This is the only place in the module that reads
+  // an output[] item's `type`, `results` or `annotations` field, or the
+  // `search_results` / `fetch_url_results` / `url_citation` literals — kept
+  // here, in the adapter, rather than in a second function, so a future
+  // transport change touches exactly one place (brief §1).
+  var evidenceSet = [];
+  var j, item;
+  for (i = 0; i < output.length; i++) {
+    item = output[i];
+    if (isObject(item) && item.type === 'search_results' && Array.isArray(item.results)) {
+      for (j = 0; j < item.results.length; j++) {
+        appendEvidenceEntry(evidenceSet, item.results[j], 'search_result');
+      }
+    }
+  }
+  for (i = 0; i < output.length; i++) {
+    item = output[i];
+    if (isObject(item) && item.type === 'fetch_url_results' && Array.isArray(item.results)) {
+      for (j = 0; j < item.results.length; j++) {
+        appendEvidenceEntry(evidenceSet, item.results[j], 'fetch_url_result');
+      }
+    }
+  }
+  var annotations = textEntry.annotations;
+  if (Array.isArray(annotations)) {
+    for (i = 0; i < annotations.length; i++) {
+      var ann = annotations[i];
+      if (isObject(ann) && ann.type === 'url_citation') {
+        // A url_citation annotation is tolerated in either a nested-object
+        // shape ({ type, url_citation: { url, title, ... } }) or a flat
+        // shape (the fields directly on the annotation).
+        appendEvidenceEntry(evidenceSet, isObject(ann.url_citation) ? ann.url_citation : ann, 'url_citation');
+      }
+    }
+  }
+
+  return { content: textEntry.text, evidenceSet: evidenceSet };
+}
+
+// Fully transport-agnostic: takes a predicate, never a field name or a
+// value to compare against, so it carries no knowledge of `.type` or any
+// Agent-specific literal itself — that knowledge lives only in the
+// predicates callers pass in (brief §1's single-adapter invariant). Finds
+// the first entry an array matches, by value — never by index (NP35: a
+// reordered output[] must produce byte-identical output).
+function findFirst(list, predicate) {
+  for (var i = 0; i < list.length; i++) {
+    if (predicate(list[i])) {
+      return list[i];
+    }
+  }
+  return null;
+}
+
 // ── pure Tier-B / Tier-C core (no I/O, no clock of its own) ──────────────────
 //
 // Tier B (whole-response structural failure) is EXACTLY these seven
-// conditions — nothing else (spec §7 classification rule):
-//   1 choices[0].message.content missing or malformed
+// conditions — nothing else (spec §7 classification rule, re-expressed for
+// the Agent API per brief §4.5; conditions 4, 5 and 7 are untouched):
+//   1 the message/output_text content location missing or malformed, or
+//     status !== 'completed'                        (adaptAgentResponse)
 //   2 content does not parse as JSON
 //   3 parsed content is not an object
 //   4 items missing, or present but not an array
 //   5 an items[] element is not an object
-//   6 citations / search_results present but neither null nor an array
+//   6 a grounding-bearing output item's results (or the text entry's
+//     annotations) field is present but neither null nor an array
+//                                                     (adaptAgentResponse)
 //   7 the parsed content object has an unknown property besides items
 // Everything past these — including an item's own missing/invalid fields and
 // any unknown item-level field — is Tier C (per item, valid siblings
@@ -378,15 +506,12 @@ function normalizeNewsResponse(parsedResponse, context) {
     return invalid;
   }
 
-  // Condition 1 — structured content location (spec §7).
-  var choices = parsedResponse.choices;
-  if (!Array.isArray(choices) || choices.length < 1 || !isObject(choices[0]) || !isObject(choices[0].message)) {
+  // Conditions 1 + 6 are handled by the Agent-shape adapter seam above.
+  var adapted = adaptAgentResponse(parsedResponse);
+  if (adapted === null) {
     return invalid;
   }
-  var content = choices[0].message.content;
-  if (typeof content !== 'string') {
-    return invalid;
-  }
+  var content = adapted.content;
 
   // Condition 2.
   var parsed;
@@ -423,14 +548,9 @@ function normalizeNewsResponse(parsedResponse, context) {
     }
   }
 
-  // Condition 6 — grounding fields live on the outer response, beside choices.
-  if (!validGroundingField(parsedResponse.citations) || !validGroundingField(parsedResponse.search_results)) {
-    return invalid;
-  }
-
   // Tier C from here on: every element is an object; each is validated
   // independently in the spec §2 reason order; one reason per skipped item.
-  var grounding = buildGroundingList(parsedResponse.citations, parsedResponse.search_results);
+  var grounding = adapted.evidenceSet;
 
   var items = [];
   var skippedItems = [];
@@ -564,41 +684,46 @@ function normalizeNewsResponse(parsedResponse, context) {
   return { ok: true, items: items, skippedItems: skippedItems };
 }
 
-// ── grounding correlation (spec §5, deterministic) ───────────────────────────
+// ── grounding correlation (Agent API three-source union, brief §§4-6) ────────
+// Both helpers below are shape-agnostic: neither references output[], an
+// item `type` string, `results`, `annotations`, or any of the three D-M2
+// source names. The Evidence Set traversal that DOES know those things lives
+// entirely inside adaptAgentResponse (brief §1's single-adapter invariant).
 
-// A grounding field is a valid envelope member when null, absent, or an array.
+// A grounding-bearing field is valid when null, absent, or an array.
 function validGroundingField(value) {
   return value === null || value === undefined || Array.isArray(value);
 }
 
-// One fixed traversal order, always: every citations[] entry first (given
-// array order), then every search_results[].url (given array order).
-// Malformed individual entries are silently excluded — never a failure,
-// never a match. Each kept entry carries { raw, normalized, domain }.
-function buildGroundingList(citations, searchResults) {
-  var list = [];
-  var i;
-  if (Array.isArray(citations)) {
-    for (i = 0; i < citations.length; i++) {
-      appendGroundingEntry(list, citations[i]);
-    }
+// A candidate is usable only if its URL resolves (existing rule, unchanged).
+// Every other field (brief §6) is retained verbatim when present and simply
+// omitted when absent — absence is normal and never itself a rejection
+// reason. `evidenceKind` is assigned by the caller (bookkeeping only; never
+// validated since this module is the sole source of the value). Each kept
+// entry is the internal Evidence Set representation: the three existing keys
+// (raw, normalized, domain — identity-tuple-adjacent, never renamed) plus
+// six provider-internal fields, retained but read by no decision anywhere.
+function appendEvidenceEntry(list, raw, evidenceKind) {
+  if (!isObject(raw)) {
+    return;
   }
-  if (Array.isArray(searchResults)) {
-    for (i = 0; i < searchResults.length; i++) {
-      var entry = searchResults[i];
-      appendGroundingEntry(list, isObject(entry) ? entry.url : undefined);
-    }
-  }
-  return list;
-}
-
-function appendGroundingEntry(list, value) {
-  var checked = contract.optionalHttpsUrl(value);
+  var checked = contract.optionalHttpsUrl(raw.url);
   if (checked === null || checked === contract.INVALID) {
     return;
   }
   var normalized = normalizeHttpsUrl(checked);
-  list.push({ raw: checked, normalized: normalized, domain: new URL(normalized).hostname });
+  var entry = {
+    raw: checked,
+    normalized: normalized,
+    domain: new URL(normalized).hostname,
+    evidenceKind: evidenceKind
+  };
+  if (raw.id !== undefined) { entry.id = raw.id; }
+  if (raw.title !== undefined) { entry.title = raw.title; }
+  if (raw.date !== undefined) { entry.date = raw.date; }
+  if (raw.last_updated !== undefined) { entry.lastUpdated = raw.last_updated; }
+  if (raw.snippet !== undefined) { entry.snippet = raw.snippet; }
+  list.push(entry);
 }
 
 // Normalized-form match; first occurrence in the fixed order wins. On a match

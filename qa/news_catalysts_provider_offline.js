@@ -7,25 +7,36 @@
  *
  * Proves the pure provider lib (netlify/functions/lib/news-catalysts-provider.js)
  * with ZERO real network / Blob / env / store / DOM / production. Every
- * upstream call is served by an INJECTED fetch over inline Sonar-style
- * response fixtures, and a throwing global.fetch guard is installed
- * throughout to prove the provider never touches the real network.
+ * upstream call is served by an INJECTED fetch over inline Agent-API-style
+ * response fixtures (S1.5.2 transport migration — Sonar Chat Completions ->
+ * Perplexity Agent API; see the `agentResponse`/`agentShell` fixture builders
+ * below), and a throwing global.fetch guard is installed throughout to prove
+ * the provider never touches the real network.
  *
- * Coverage (NP01–NP23, contiguous — the P1-xx scheme is retired):
+ * Coverage (NP01–NP39, contiguous — the P1-xx scheme is retired):
  *   NP01 full-coverage benchmark  — exact deep-equal + stringify-equal envelope
  *   NP02 Tier A transport         — throw / timeout / non-2xx ⇒ PROVIDER_FAILURE
  *   NP03 Tier B structural (7+1)  — each condition ⇒ PROVIDER_INVALID_RESPONSE
  *   NP04 mixed batch              — valid items survive; invalid siblings skip
  *   NP05 eventDate missing/invalid            NP06 sourceUrl missing/invalid
- *   NP07 grounding miss                       NP08 grounded-value persistence
+ *   NP07 grounding miss                       NP08 grounded-value persistence + D-M2 order
  *   NP09 malformed grounding entries excluded NP10 duplicate identity in batch
  *   NP11 unknown category                     NP12 invalid direction
  *   NP13 zero-item success                    NP14 URL normalization (3 only)
  *   NP15 deterministic identity               NP16 title/summary hash-inert
  *   NP17 store-key shape                      NP18 J7 freshness integration
  *   NP19 evidence-contract reuse              NP20 fail-closed injection order
- *   NP21 purity + determinism                 NP22 malformed values never throw
+ *   NP21 purity + determinism (+ nowIso anchor) NP22 malformed values never throw
  *   NP23 forbidden-surface scan of the TARGET module
+ *   NP24 eventType vocabulary                 NP25 relevanceScope vocabulary
+ *   NP26 subType conditionality               NP27 no numeric materiality/%
+ *   NP28 category vocabulary parity           NP29 prompt windows, no "recent"
+ *   NP30 relevanceScope identity-inert        NP31 eventType identity-bearing
+ *   NP32 direction conditionality, future-dated fixture
+ *   NP33 status must fail closed              NP34 three-source grounding union
+ *   NP35 lookup by type, not index            NP36 unrecognised item type ignored
+ *   NP37 zero grounding candidates ⇒ NONE      NP38 endpoint literal
+ *   NP39 Evidence Set retained but inert (9 fields, no leakage)
  *
  * Run: node qa/news_catalysts_provider_offline.js
  * (QA seam: NEWS_CATALYSTS_PROVIDER_PATH overrides the module under test for
@@ -78,13 +89,51 @@ function rawItem(eventDate, category, direction, sourceUrl, extra) {
   return Object.assign(it, extra || {});
 }
 
-// Sonar-style response envelope. citations/search_results: undefined ⇒ key
-// absent from the response entirely.
-function sonarResponse(items, citations, searchResults) {
-  var resp = { choices: [{ message: { content: JSON.stringify({ items: items }) } }] };
-  if (citations !== undefined) { resp.citations = citations; }
-  if (searchResults !== undefined) { resp.search_results = searchResults; }
-  return resp;
+// Agent-style response envelope (S1.5.2 transport migration). The legacy
+// `citations` parameter maps to url_citation annotations on the output_text
+// content entry; the legacy `searchResults` parameter maps to a single
+// search_results output item's results[]. This lets every pre-migration
+// two-argument fixture keep working after the wire-format flip — only NP08
+// (whose specific cross-source priority pin depended on the OLD two-source
+// order: citations-before-searchResults) and NP33-NP39 (the new three-source
+// D-M2 coverage, including fetch_url_results) construct Agent shapes
+// directly. `citations`/`searchResults`: undefined ⇒ that source is omitted
+// entirely; a non-array, non-null value is passed through verbatim so the
+// Tier-B condition-6 fixtures still exercise the malformed-field path.
+function agentResponse(items, citations, searchResults, opts) {
+  opts = opts || {};
+  var output = [];
+  if (searchResults !== undefined) {
+    output.push({ type: 'search_results', results: searchResults, queries: [] });
+  }
+  var annotations;
+  if (citations === undefined) {
+    annotations = undefined;
+  } else if (citations === null || !Array.isArray(citations)) {
+    annotations = citations;
+  } else {
+    annotations = citations.map(function (c) {
+      return (c && typeof c === 'object') ? Object.assign({ type: 'url_citation' }, c) : { type: 'url_citation', url: c };
+    });
+  }
+  output.push({
+    type: 'message',
+    role: 'assistant',
+    content: [{ type: 'output_text', text: JSON.stringify({ items: items }), annotations: annotations }]
+  });
+  return { status: opts.status !== undefined ? opts.status : 'completed', error: null, output: output };
+}
+
+// A minimal valid Agent envelope wrapping an arbitrary content string —
+// exercises Tier-B conditions 2/3/4/5/7, which operate on the JSON payload
+// inside the generated text and are untouched by the transport migration.
+function agentShell(contentText, opts) {
+  opts = opts || {};
+  return {
+    status: opts.status !== undefined ? opts.status : 'completed',
+    error: null,
+    output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: contentText, annotations: opts.annotations }] }]
+  };
 }
 
 function jsonResponse(status, body) {
@@ -109,7 +158,7 @@ function liveGuard() { throw new Error('LIVE_NETWORK_FORBIDDEN'); }
 
 // Direct pure-core invocation with the standard context.
 function norm(items, citations, searchResults) {
-  return provider.normalizeNewsResponse(sonarResponse(items, citations, searchResults), { ticker: TICKER, retrievedAt: NOW_ISO });
+  return provider.normalizeNewsResponse(agentResponse(items, citations, searchResults), { ticker: TICKER, retrievedAt: NOW_ISO });
 }
 function normRaw(parsedResponse) {
   return provider.normalizeNewsResponse(parsedResponse, { ticker: TICKER, retrievedAt: NOW_ISO });
@@ -186,7 +235,7 @@ async function runTests() {
   await test('NP01 benchmark envelope deep-equals AND stringify-equals; exact upstream request asserted', async function () {
     var url1 = 'https://ir.jfrog.com/news/q2-results?src=wire';
     var url2 = 'https://www.reuters.com/markets/frog-guidance-2026-07-20/';
-    var resp = sonarResponse(
+    var resp = agentResponse(
       [
         rawItem('2026-07-18', 'earnings_event', 'positive', 'https://IR.JFROG.COM:443/news/q2-results?src=wire#top'),
         rawItem('2026-07-20', 'guidance_update', 'neutral', url2)
@@ -217,11 +266,13 @@ async function runTests() {
     assert.strictEqual(JSON.stringify(out).indexOf('title'), -1, 'no title anywhere in the output');
     assert.strictEqual(JSON.stringify(out).indexOf('summary'), -1, 'no summary anywhere in the output');
 
-    // Exact upstream request (spec §7 + GO package §3).
+    // Exact upstream request (D-M2..D-M8: endpoint, preset, instructions with
+    // the nowIso-derived date anchor, input, explicit web_search tool, and a
+    // json_schema carrying both `name` and `schema`).
     assert.strictEqual(spy.calls.length, 1, 'exactly one upstream call');
     var call = spy.calls[0];
     assert.strictEqual(call.url, provider.PPLX_ENDPOINT, 'canonical endpoint used');
-    assert.strictEqual(call.url, 'https://api.perplexity.ai/v1/sonar', 'endpoint literal');
+    assert.strictEqual(call.url, 'https://api.perplexity.ai/v1/agent', 'endpoint literal');
     assert.strictEqual(call.init.method, 'POST', 'POST method');
     assert.deepStrictEqual(call.init.headers, {
       'Authorization': 'Bearer test-key-123',
@@ -230,13 +281,11 @@ async function runTests() {
     }, 'all three headers, injected key only');
     var body = JSON.parse(call.init.body);
     assert.deepStrictEqual(body, {
-      model: 'sonar-pro',
-      messages: [
+      preset: 'low',
+      instructions: 'You are a financial news retrieval service. Return only JSON that conforms exactly to the provided schema. Include only events with a verifiable dated primary source. The current UTC date is 2026-07-24.',
+      input: [
         {
-          role: 'system',
-          content: 'You are a financial news retrieval service. Return only JSON that conforms exactly to the provided schema. Include only events with a verifiable dated primary source.'
-        },
-        {
+          type: 'message',
           role: 'user',
           content: 'Cover the U.S. equity ticker ' + TICKER + '. Report catalysts from the previous 30 calendar days ' +
             'and known upcoming events over the next 60 calendar days. For each item provide: eventDate (ISO ' +
@@ -288,8 +337,10 @@ async function runTests() {
             'direction. Only include events you can source. Do not include commentary, titles, or summaries.'
         }
       ],
-      response_format: { type: 'json_schema', json_schema: { schema: provider.REQUEST_SCHEMA } }
-    }, 'deterministic body: model/messages/response_format with REQUEST_SCHEMA, schema member only');
+      tools: [{ type: 'web_search' }],
+      response_format: { type: 'json_schema', json_schema: { name: 'newsCatalysts', schema: provider.REQUEST_SCHEMA } }
+    }, 'deterministic body: preset/instructions/input/tools/response_format with REQUEST_SCHEMA, name+schema members only, no strict');
+    assert.ok(!('strict' in body.response_format.json_schema), 'strict omitted entirely (Q-MIG-2)');
   });
 
   // ── NP02: Tier A — transport failures ⇒ PROVIDER_FAILURE ────────────────────
@@ -308,32 +359,43 @@ async function runTests() {
   });
 
   // ── NP03: Tier B — each structural condition individually ──────────────────
-  await test('NP03 all seven Tier-B conditions + 2xx-body-not-JSON ⇒ PROVIDER_INVALID_RESPONSE (restores former P1-03/NC03)', async function () {
-    // condition 1 — choices[0].message.content missing/malformed
-    [{}, { choices: [] }, { choices: ['x'] }, { choices: [{}] }, { choices: [{ message: null }] }, { choices: [{ message: { content: 42 } }] }]
-      .forEach(function (resp, i) {
-        assert.deepStrictEqual(normRaw(resp), TIER_B, 'cond1 case ' + i);
-      });
+  await test('NP03 all seven Tier-B conditions (re-expressed for the Agent shape, §4.5) + 2xx-body-not-JSON ⇒ PROVIDER_INVALID_RESPONSE', async function () {
+    // condition 1 — status/output/message/output_text location missing or malformed
+    [
+      {},                                                                                    // no status at all
+      { status: 'in_progress', output: [] },                                                 // wrong status
+      { status: 'completed' },                                                                // output missing
+      { status: 'completed', output: 'x' },                                                   // output not an array
+      { status: 'completed', output: [] },                                                    // no message item
+      { status: 'completed', output: [{ type: 'message', role: 'assistant' }] },               // content missing
+      { status: 'completed', output: [{ type: 'message', role: 'assistant', content: 'x' }] }, // content not an array
+      { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [] }] },  // no output_text entry
+      { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text' }] }] },      // text missing
+      { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 42 }] }] } // text not a string
+    ].forEach(function (resp, i) {
+      assert.deepStrictEqual(normRaw(resp), TIER_B, 'cond1 case ' + i);
+    });
     // condition 2 — content not parseable JSON
-    assert.deepStrictEqual(normRaw({ choices: [{ message: { content: 'not-json{{' } }] }), TIER_B, 'cond2');
+    assert.deepStrictEqual(normRaw(agentShell('not-json{{')), TIER_B, 'cond2');
     // condition 3 — parsed content not an object
     ['"a string"', '[1,2]', '42', 'null'].forEach(function (content, i) {
-      assert.deepStrictEqual(normRaw({ choices: [{ message: { content: content } }] }), TIER_B, 'cond3 case ' + i);
+      assert.deepStrictEqual(normRaw(agentShell(content)), TIER_B, 'cond3 case ' + i);
     });
     // condition 4 — items missing or not an array
     ['{}', '{"items":{}}', '{"items":"x"}', '{"items":null}'].forEach(function (content, i) {
-      assert.deepStrictEqual(normRaw({ choices: [{ message: { content: content } }] }), TIER_B, 'cond4 case ' + i);
+      assert.deepStrictEqual(normRaw(agentShell(content)), TIER_B, 'cond4 case ' + i);
     });
     // condition 5 — an items[] element is not an object
     ['{"items":[1]}', '{"items":["x"]}', '{"items":[null]}', '{"items":[["a"]]}', '{"items":[{},"x"]}'].forEach(function (content, i) {
-      assert.deepStrictEqual(normRaw({ choices: [{ message: { content: content } }] }), TIER_B, 'cond5 case ' + i);
+      assert.deepStrictEqual(normRaw(agentShell(content)), TIER_B, 'cond5 case ' + i);
     });
-    // condition 6 — grounding field present but neither null nor array
-    assert.deepStrictEqual(norm([], 'nope', undefined), TIER_B, 'cond6 citations string');
-    assert.deepStrictEqual(norm([], {}, undefined), TIER_B, 'cond6 citations object');
-    assert.deepStrictEqual(norm([], undefined, 42), TIER_B, 'cond6 search_results number');
+    // condition 6 — a grounding-bearing output item's results, or the text
+    // entry's annotations, present but neither null nor an array
+    assert.deepStrictEqual(norm([], 'nope', undefined), TIER_B, 'cond6 annotations string');
+    assert.deepStrictEqual(norm([], {}, undefined), TIER_B, 'cond6 annotations object');
+    assert.deepStrictEqual(norm([], undefined, 42), TIER_B, 'cond6 search_results.results number');
     // condition 7 — unknown top-level property besides items
-    assert.deepStrictEqual(normRaw({ choices: [{ message: { content: '{"items":[],"extra":1}' } }] }), TIER_B, 'cond7');
+    assert.deepStrictEqual(normRaw(agentShell('{"items":[],"extra":1}')), TIER_B, 'cond7');
     // whole-response 2xx body not JSON (wrapper-level Tier B)
     var spyBad = makeFetch('garbage{{');
     var out = await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spyBad));
@@ -404,22 +466,51 @@ async function runTests() {
     assert.deepStrictEqual(r4.skippedItems, [{ reason: 'INVALID_SOURCE_URL' }], 'empty grounding arrays');
   });
 
-  // ── NP08: grounded-value persistence + first-occurrence precedence ──────────
-  await test('NP08 persisted sourceUrl is the grounding entry\'s own raw URL; first occurrence in the fixed order wins', async function () {
+  // ── NP08: grounded-value persistence + D-M2 fixed-order precedence ─────────
+  await test('NP08 persisted sourceUrl is the grounding entry\'s own raw URL; D-M2 fixed order wins: search_results > fetch_url_results > url_citation', async function () {
     var cand = 'HTTPS://IR.JFROG.COM/news/x?q=1';
-    var citRaw = 'https://ir.jfrog.com/news/x?q=1#frag';
     var srRaw = 'https://IR.JFROG.COM/news/x?q=1';
-    var r = norm([rawItem('2026-07-18', 'earnings_event', 'positive', cand)], [citRaw], [{ url: srRaw }]);
+    var furRaw = 'https://ir.jfrog.com/news/x?q=1#fur';
+    var citRaw = 'https://ir.jfrog.com/news/x?q=1#frag';
+
+    var resp = {
+      status: 'completed', error: null,
+      output: [
+        { type: 'search_results', results: [{ url: srRaw }] },
+        { type: 'fetch_url_results', results: [{ url: furRaw }] },
+        { type: 'message', role: 'assistant', content: [{
+          type: 'output_text',
+          text: JSON.stringify({ items: [rawItem('2026-07-18', 'earnings_event', 'positive', cand)] }),
+          annotations: [{ type: 'url_citation', url: citRaw }]
+        }] }
+      ]
+    };
+    var r = provider.normalizeNewsResponse(resp, { ticker: TICKER, retrievedAt: NOW_ISO });
     assert.strictEqual(r.items.length, 1);
-    assert.strictEqual(r.items[0].sourceUrl, citRaw, 'citations entry (first in fixed order) wins, raw text verbatim');
+    assert.strictEqual(r.items[0].sourceUrl, srRaw, 'search_results (1st in D-M2 order) wins over fetch_url_results and url_citation, raw text verbatim');
     assert.strictEqual(r.items[0].normalizedSourceUrl, 'https://ir.jfrog.com/news/x?q=1', 'normalized from the grounded URL');
     assert.strictEqual(r.items[0].sourceDomain, 'ir.jfrog.com');
 
-    // duplicate normalized forms within ONE array: earliest index wins
+    // fetch_url_results (2nd) wins over url_citation (3rd) when search_results is absent.
+    var resp2 = {
+      status: 'completed', error: null,
+      output: [
+        { type: 'fetch_url_results', results: [{ url: furRaw }] },
+        { type: 'message', role: 'assistant', content: [{
+          type: 'output_text',
+          text: JSON.stringify({ items: [rawItem('2026-07-19', 'earnings_event', 'positive', cand)] }),
+          annotations: [{ type: 'url_citation', url: citRaw }]
+        }] }
+      ]
+    };
+    var r2 = provider.normalizeNewsResponse(resp2, { ticker: TICKER, retrievedAt: NOW_ISO });
+    assert.strictEqual(r2.items[0].sourceUrl, furRaw, 'fetch_url_results (2nd) wins over url_citation (3rd) when search_results is absent');
+
+    // duplicate normalized forms within ONE source array: earliest index wins.
     var dupA = 'https://ir.jfrog.com/news/y?q=2#a';
     var dupB = 'https://IR.JFROG.COM/news/y?q=2';
-    var r2 = norm([rawItem('2026-07-19', 'earnings_event', 'positive', dupB)], [dupA, dupB], undefined);
-    assert.strictEqual(r2.items[0].sourceUrl, dupA, 'first occurrence within citations wins');
+    var r3 = norm([rawItem('2026-07-20', 'earnings_event', 'positive', dupB)], [dupA, dupB], undefined);
+    assert.strictEqual(r3.items[0].sourceUrl, dupA, 'first occurrence within one source array wins');
   });
 
   // ── NP09: malformed grounding entries ───────────────────────────────────────
@@ -484,7 +575,7 @@ async function runTests() {
 
   // ── NP13: zero-item success ─────────────────────────────────────────────────
   await test('NP13 items:[] is a valid, successful empty retrieval (endpoint later maps it to 200 NONE)', async function () {
-    var spy = makeFetch(sonarResponse([], undefined, undefined));
+    var spy = makeFetch(agentResponse([], undefined, undefined));
     var out = await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spy));
     assert.deepStrictEqual(out, {
       ok: true,
@@ -627,7 +718,7 @@ async function runTests() {
 
   // ── NP20: fail-closed injection order ───────────────────────────────────────
   await test('NP20 missing apiKey/fetchImpl/nowIso throw typed errors with ZERO fetch; strict UTC-Z clock grammar; invalid ticker ⇒ null', async function () {
-    var spy1 = makeFetch(sonarResponse([]));
+    var spy1 = makeFetch(agentResponse([]));
     var threw = '';
     try { await provider.getNewsCatalysts({ ticker: TICKER }, { fetchImpl: spy1.fn, nowIso: NOW_ISO }); }
     catch (e) { threw = e && e.message; }
@@ -639,7 +730,7 @@ async function runTests() {
     catch (e) { threw = e && e.message; }
     assert.strictEqual(threw, 'PPLX_FETCH_UNAVAILABLE');
 
-    var spy2 = makeFetch(sonarResponse([]));
+    var spy2 = makeFetch(agentResponse([]));
     threw = '';
     try { await provider.getNewsCatalysts({ ticker: TICKER }, { apiKey: 'k', fetchImpl: spy2.fn }); }
     catch (e) { threw = e && e.message; }
@@ -651,7 +742,7 @@ async function runTests() {
     assert.strictEqual(spy2.calls.length, 0, 'no fetch before the clock gate');
 
     // Invalid ticker is graceful and checked FIRST — even with empty options.
-    var spy3 = makeFetch(sonarResponse([]));
+    var spy3 = makeFetch(agentResponse([]));
     assert.strictEqual(await provider.getNewsCatalysts({ ticker: 'frog' }, wrapperOpts(spy3)), null, 'lowercase rejected (non-normalized)');
     assert.strictEqual(await provider.getNewsCatalysts({ ticker: ' FROG' }, wrapperOpts(spy3)), null, 'padding rejected');
     assert.strictEqual(await provider.getNewsCatalysts({ ticker: 'TOOLONGTICKR' }, wrapperOpts(spy3)), null, 'over-length rejected');
@@ -663,7 +754,7 @@ async function runTests() {
     // Strict injected-clock grammar (the J7-ratified UTC-Z instant form):
     // values a permissive parser accepts but the exact grammar does not are
     // rejected with CLOCK_NOT_INJECTED before any fetch.
-    var spy4 = makeFetch(sonarResponse([]));
+    var spy4 = makeFetch(agentResponse([]));
     var disallowedClocks = [
       '2026-07-24',                     // date-only (parseable, not an instant)
       '2026-07-24T00:00:00',            // no trailing Z
@@ -685,7 +776,7 @@ async function runTests() {
     // Valid boundary forms of the exact grammar are accepted verbatim.
     var validClocks = ['2026-07-24T23:59:59Z', '2026-07-24T12:00:00.5Z', '2024-02-29T00:00:00.999Z'];
     for (var v = 0; v < validClocks.length; v++) {
-      var spyV = makeFetch(sonarResponse([]));
+      var spyV = makeFetch(agentResponse([]));
       var outV = await provider.getNewsCatalysts({ ticker: TICKER }, { apiKey: 'k', fetchImpl: spyV.fn, nowIso: validClocks[v] });
       assert.strictEqual(outV.ok, true, 'accepted: ' + validClocks[v]);
       assert.strictEqual(outV.envelope.fetchedAt, validClocks[v], 'fetchedAt echoes the injected instant verbatim');
@@ -697,7 +788,7 @@ async function runTests() {
   await test('NP21 injected-fetch only (throwing guard), identical input ⇒ byte-identical output, upstream response never mutated', async function () {
     assert.strictEqual(global.fetch, liveGuard, 'guard installed');
     var g = 'https://ir.jfrog.com/news/a';
-    var parsed = sonarResponse([rawItem('2026-07-18', 'earnings_event', 'positive', g,
+    var parsed = agentResponse([rawItem('2026-07-18', 'earnings_event', 'positive', g,
       { title: 'kept on the input, never on the output' })], [g], undefined);
     var snap = JSON.stringify(parsed);
     var r1 = provider.normalizeNewsResponse(parsed, { ticker: TICKER, retrievedAt: NOW_ISO });
@@ -705,11 +796,24 @@ async function runTests() {
     assert.strictEqual(JSON.stringify(r1), JSON.stringify(r2), 'deterministic');
     assert.strictEqual(JSON.stringify(parsed), snap, 'input response object never mutated');
 
-    var spyA = makeFetch(sonarResponse([rawItem('2026-07-18', 'earnings_event', 'positive', g)], [g], undefined));
-    var spyB = makeFetch(sonarResponse([rawItem('2026-07-18', 'earnings_event', 'positive', g)], [g], undefined));
+    var spyA = makeFetch(agentResponse([rawItem('2026-07-18', 'earnings_event', 'positive', g)], [g], undefined));
+    var spyB = makeFetch(agentResponse([rawItem('2026-07-18', 'earnings_event', 'positive', g)], [g], undefined));
     var o1 = await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spyA));
     var o2 = await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spyB));
     assert.strictEqual(JSON.stringify(o1), JSON.stringify(o2), 'wrapper deterministic end-to-end');
+
+    // D-M4: a different nowIso changes ONLY the date token in the
+    // instructions — proving the anchor is derived from the injected clock,
+    // not hard-coded, without otherwise disturbing determinism.
+    var spyC = makeFetch(agentResponse([], undefined, undefined));
+    var spyD = makeFetch(agentResponse([], undefined, undefined));
+    await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spyC));
+    await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spyD, { nowIso: '2027-01-05T09:15:00.000Z' }));
+    var instrC = JSON.parse(spyC.calls[0].init.body).instructions;
+    var instrD = JSON.parse(spyD.calls[0].init.body).instructions;
+    assert.notStrictEqual(instrC, instrD, 'a different nowIso changes the instructions');
+    assert.strictEqual(instrC.replace('2026-07-24', 'X'), instrD.replace('2027-01-05', 'X'),
+      'the only difference is the date token itself');
   });
 
   // ── NP22: malformed item VALUES never throw ─────────────────────────────────
@@ -877,9 +981,9 @@ async function runTests() {
     // `raw.<field>` and so do not match.
     assert.ok(!/raw\.\w+\s*[<>]=?\s*-?\d/.test(ladder), 'no item field compared against a numeric threshold');
     assert.ok(!/-?\d+(\.\d+)?\s*[<>]=?\s*raw\.\w+/.test(ladder), 'no numeric threshold compared against an item field');
-    var spy = makeFetch(sonarResponse([]));
+    var spy = makeFetch(agentResponse([]));
     await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spy));
-    var promptText = JSON.parse(spy.calls[0].init.body).messages[1].content;
+    var promptText = JSON.parse(spy.calls[0].init.body).input[0].content;
     assert.strictEqual(promptText.indexOf('%'), -1, 'no percentage literal in the prompt');
     var digits = promptText.match(/\d+/g) || [];
     digits.forEach(function (d) { assert.ok(d === '30' || d === '60', 'unexpected numeric literal in the prompt: ' + d); });
@@ -889,9 +993,9 @@ async function runTests() {
   await test('NP28 category vocabulary parity across CATEGORIES, the REQUEST_SCHEMA enum, and the prompt list', async function () {
     var schemaEnum = provider.REQUEST_SCHEMA.properties.items.items.properties.category.enum;
     assert.deepStrictEqual(schemaEnum.slice().sort(), provider.CATEGORIES.slice().sort(), 'schema enum matches CATEGORIES');
-    var spy = makeFetch(sonarResponse([]));
+    var spy = makeFetch(agentResponse([]));
     await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spy));
-    var promptText = JSON.parse(spy.calls[0].init.body).messages[1].content;
+    var promptText = JSON.parse(spy.calls[0].init.body).input[0].content;
     provider.CATEGORIES.forEach(function (cat) {
       assert.ok(promptText.indexOf(cat) !== -1, 'prompt names category: ' + cat);
     });
@@ -899,9 +1003,9 @@ async function runTests() {
 
   // ── NP29: prompt windows in words, no standalone 'recent' (Q-S15-4) ─────────
   await test('NP29 prompt states both windows explicitly in calendar days; no standalone "recent" literal', async function () {
-    var spy = makeFetch(sonarResponse([]));
+    var spy = makeFetch(agentResponse([]));
     await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spy));
-    var promptText = JSON.parse(spy.calls[0].init.body).messages[1].content;
+    var promptText = JSON.parse(spy.calls[0].init.body).input[0].content;
     assert.ok(promptText.indexOf('the previous 30 calendar days') !== -1, 'previous-30 window phrase present');
     assert.ok(promptText.indexOf('the next 60 calendar days') !== -1, 'next-60 window phrase present');
     assert.ok(!/\brecent\b/i.test(promptText), 'no standalone "recent" literal');
@@ -964,6 +1068,182 @@ async function runTests() {
     assert.strictEqual(r.items[1].direction, null);
     assert.strictEqual(r.items[1].eventType, 'upcoming_event');
     assert.ok(provider.NEWS_KEY_RE.test(provider.buildNewsKey(r.items[1])), 'future-dated upcoming_event key matches NEWS_KEY_RE');
+  });
+
+  // ── NP33: status must fail closed ───────────────────────────────────────────
+  await test('NP33 status !== "completed" ⇒ PROVIDER_INVALID_RESPONSE, zero items, zero partial output', async function () {
+    var g = 'https://ir.jfrog.com/news/a';
+    ['in_progress', 'failed', 'incomplete', 'queued'].forEach(function (status) {
+      var resp = agentResponse([rawItem('2026-07-18', 'earnings_event', 'positive', g)], [g], undefined, { status: status });
+      assert.deepStrictEqual(normRaw(resp), TIER_B, 'status: ' + status);
+    });
+    var spy = makeFetch(agentResponse([rawItem('2026-07-18', 'earnings_event', 'positive', g)], [g], undefined, { status: 'in_progress' }));
+    var out = await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spy));
+    assert.deepStrictEqual(out, TIER_B, 'wrapper level: non-completed status is Tier B, not a partial envelope');
+  });
+
+  // ── NP34: three-source grounding union ──────────────────────────────────────
+  await test('NP34 grounding unions all three D-M2 sources; each source alone also works', async function () {
+    var urlSR = 'https://a.example.com/sr';
+    var urlFUR = 'https://b.example.com/fur';
+    var urlCite = 'https://c.example.com/cite';
+
+    function threeSourceResp(items) {
+      return {
+        status: 'completed', error: null,
+        output: [
+          { type: 'search_results', results: [{ url: urlSR }] },
+          { type: 'fetch_url_results', results: [{ url: urlFUR }] },
+          { type: 'message', role: 'assistant', content: [{
+            type: 'output_text', text: JSON.stringify({ items: items }),
+            annotations: [{ type: 'url_citation', url: urlCite }]
+          }] }
+        ]
+      };
+    }
+    var items = [
+      rawItem('2026-07-18', 'earnings_event', 'positive', urlSR),
+      rawItem('2026-07-19', 'earnings_event', 'positive', urlFUR),
+      rawItem('2026-07-20', 'earnings_event', 'positive', urlCite)
+    ];
+    var r = provider.normalizeNewsResponse(threeSourceResp(items), { ticker: TICKER, retrievedAt: NOW_ISO });
+    assert.strictEqual(r.items.length, 3, 'all three sources resolve their own item');
+    assert.deepStrictEqual(r.skippedItems, []);
+
+    // Each source alone also works.
+    ['search_results', 'fetch_url_results'].forEach(function (type) {
+      var url = type === 'search_results' ? urlSR : urlFUR;
+      var resp = {
+        status: 'completed', error: null,
+        output: [
+          { type: type, results: [{ url: url }] },
+          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [rawItem('2026-07-21', 'earnings_event', 'positive', url)] }), annotations: [] }] }
+        ]
+      };
+      var rr = provider.normalizeNewsResponse(resp, { ticker: TICKER, retrievedAt: NOW_ISO });
+      assert.strictEqual(rr.items.length, 1, type + ' alone resolves');
+    });
+    var citeOnly = {
+      status: 'completed', error: null,
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [rawItem('2026-07-22', 'earnings_event', 'positive', urlCite)] }), annotations: [{ type: 'url_citation', url: urlCite }] }] }]
+    };
+    var rCite = provider.normalizeNewsResponse(citeOnly, { ticker: TICKER, retrievedAt: NOW_ISO });
+    assert.strictEqual(rCite.items.length, 1, 'url_citation alone resolves');
+  });
+
+  // ── NP35: lookup by type, not index ─────────────────────────────────────────
+  await test('NP35 a reordered output[] produces byte-identical output — proves lookup by type, never by index', async function () {
+    var g = 'https://ir.jfrog.com/news/a';
+    var searchItem = { type: 'search_results', results: [{ url: g }] };
+    var messageItem = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [rawItem('2026-07-18', 'earnings_event', 'positive', g)] }), annotations: [] }] };
+    var respA = { status: 'completed', error: null, output: [searchItem, messageItem] };
+    var respB = { status: 'completed', error: null, output: [messageItem, searchItem] };
+    var rA = provider.normalizeNewsResponse(respA, { ticker: TICKER, retrievedAt: NOW_ISO });
+    var rB = provider.normalizeNewsResponse(respB, { ticker: TICKER, retrievedAt: NOW_ISO });
+    assert.strictEqual(JSON.stringify(rA), JSON.stringify(rB), 'output[] order does not matter');
+    assert.strictEqual(rA.items.length, 1);
+  });
+
+  // ── NP36: unrecognised item types are ignored ───────────────────────────────
+  await test('NP36 an output[] item of an unrecognised type is ignored, not a failure', async function () {
+    var g = 'https://ir.jfrog.com/news/a';
+    var resp = {
+      status: 'completed', error: null,
+      output: [
+        { type: 'reasoning', summary: 'thinking...' },
+        { type: 'tool_call', name: 'web_search', args: {} },
+        { type: 'search_results', results: [{ url: g }] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [rawItem('2026-07-18', 'earnings_event', 'positive', g)] }), annotations: [] }] }
+      ]
+    };
+    var r = provider.normalizeNewsResponse(resp, { ticker: TICKER, retrievedAt: NOW_ISO });
+    assert.strictEqual(r.ok, true, 'unrecognised item types do not cause Tier B');
+    assert.strictEqual(r.items.length, 1);
+  });
+
+  // ── NP37: zero grounding candidates ─────────────────────────────────────────
+  await test('NP37 zero grounding candidates ⇒ all items skipped INVALID_SOURCE_URL, zero-item envelope, not Tier B', async function () {
+    var g = 'https://ir.jfrog.com/news/a';
+    var resp = {
+      status: 'completed', error: null,
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [rawItem('2026-07-18', 'earnings_event', 'positive', g)] }), annotations: [] }] }]
+    };
+    var r = provider.normalizeNewsResponse(resp, { ticker: TICKER, retrievedAt: NOW_ISO });
+    assert.strictEqual(r.ok, true, 'not Tier B');
+    assert.strictEqual(r.items.length, 0);
+    assert.deepStrictEqual(r.skippedItems, [{ reason: 'INVALID_SOURCE_URL' }]);
+
+    var spy = makeFetch(resp);
+    var out = await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spy));
+    assert.strictEqual(out.ok, true);
+    assert.strictEqual(out.envelope.items.length, 0, 'zero-item envelope, not a failure');
+  });
+
+  // ── NP38: endpoint literal ───────────────────────────────────────────────────
+  await test('NP38 PPLX_ENDPOINT equals the literal https://api.perplexity.ai/v1/agent', async function () {
+    assert.strictEqual(provider.PPLX_ENDPOINT, 'https://api.perplexity.ai/v1/agent');
+  });
+
+  // ── NP39: Evidence Set retained but inert ───────────────────────────────────
+  await test('NP39 Evidence Set carries all nine fields when supplied and tolerates their absence; no item field or stored record gains any of them', async function () {
+    // Private structural proof that appendEvidenceEntry actually retains all
+    // nine Evidence Set fields — without exporting the internal shape (the
+    // export surface stays at exactly 16). If any of these assignments were
+    // silently removed, the behavioral assertions below would still pass
+    // (the fields are never read by any public output), so this mechanical,
+    // source-scoped check is the only thing that would catch that
+    // regression. Scoped to appendEvidenceEntry's own body only, extracted
+    // by brace-depth, never a whole-file keyword scan.
+    var srcNP39 = fs.readFileSync(SRC, 'utf8');
+    var fnStartNP39 = srcNP39.indexOf('function appendEvidenceEntry(');
+    assert.ok(fnStartNP39 !== -1, 'appendEvidenceEntry function located for the scan');
+    var depthNP39 = 0, startedNP39 = false, fnEndNP39 = fnStartNP39;
+    for (; fnEndNP39 < srcNP39.length; fnEndNP39++) {
+      if (srcNP39[fnEndNP39] === '{') { depthNP39++; startedNP39 = true; }
+      else if (srcNP39[fnEndNP39] === '}') { depthNP39--; if (startedNP39 && depthNP39 === 0) { fnEndNP39++; break; } }
+    }
+    var fnBodyNP39 = srcNP39.slice(fnStartNP39, fnEndNP39);
+    var requiredFieldAssignments = [
+      ['raw', /\braw:\s*checked\b/],
+      ['normalized', /\bnormalized:\s*normalized\b/],
+      ['domain', /\bdomain:\s*new URL\(/],
+      ['evidenceKind', /\bevidenceKind:\s*evidenceKind\b/],
+      ['id', /entry\.id\s*=\s*raw\.id\b/],
+      ['title', /entry\.title\s*=\s*raw\.title\b/],
+      ['date', /entry\.date\s*=\s*raw\.date\b/],
+      ['lastUpdated', /entry\.lastUpdated\s*=\s*raw\.last_updated\b/],
+      ['snippet', /entry\.snippet\s*=\s*raw\.snippet\b/]
+    ];
+    requiredFieldAssignments.forEach(function (pair) {
+      assert.ok(pair[1].test(fnBodyNP39), 'appendEvidenceEntry must assign the "' + pair[0] + '" Evidence Set field');
+    });
+
+    var g = 'https://ir.jfrog.com/news/a';
+    var fullEntry = { id: 'SENTINEL_ID', url: g, title: 'SENTINEL_TITLE', date: 'SENTINEL_DATE', last_updated: 'SENTINEL_LASTUPDATED', snippet: 'SENTINEL_SNIPPET' };
+    var respFull = {
+      status: 'completed', error: null,
+      output: [
+        { type: 'search_results', results: [fullEntry] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [rawItem('2026-07-18', 'earnings_event', 'positive', g)] }), annotations: [] }] }
+      ]
+    };
+    var rFull = provider.normalizeNewsResponse(respFull, { ticker: TICKER, retrievedAt: NOW_ISO });
+    assert.strictEqual(rFull.items.length, 1, 'resolves with all nine fields supplied');
+    var textFull = JSON.stringify(rFull);
+    ['SENTINEL_ID', 'SENTINEL_TITLE', 'SENTINEL_DATE', 'SENTINEL_LASTUPDATED', 'SENTINEL_SNIPPET', 'evidenceKind', 'search_result'].forEach(function (needle) {
+      assert.strictEqual(textFull.indexOf(needle), -1, 'no leak of ' + needle);
+    });
+    assert.deepStrictEqual(Object.keys(rFull.items[0]), ITEM_FIELD_ORDER, 'still exactly 17 fields, exact order');
+
+    // url_citation-only fixture, the case with the least metadata — must
+    // still resolve, not merely tolerate absence.
+    var respMinimal = {
+      status: 'completed', error: null,
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [rawItem('2026-07-19', 'earnings_event', 'positive', g)] }), annotations: [{ type: 'url_citation', url: g }] }] }]
+    };
+    var rMinimal = provider.normalizeNewsResponse(respMinimal, { ticker: TICKER, retrievedAt: NOW_ISO });
+    assert.strictEqual(rMinimal.items.length, 1, 'url_citation-only, least-metadata fixture resolves');
+    assert.deepStrictEqual(Object.keys(rMinimal.items[0]), ITEM_FIELD_ORDER);
   });
 
   global.fetch = _origFetch;
