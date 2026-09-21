@@ -394,6 +394,12 @@ async function runTests() {
     assert.deepStrictEqual(norm([], 'nope', undefined), TIER_B, 'cond6 annotations string');
     assert.deepStrictEqual(norm([], {}, undefined), TIER_B, 'cond6 annotations object');
     assert.deepStrictEqual(norm([], undefined, 42), TIER_B, 'cond6 search_results.results number');
+    // fetch_url_results carries contents[] (live + documented shape) — a
+    // malformed contents value fails closed exactly like a malformed
+    // search_results.results value.
+    var shellFUR = agentShell('{"items":[]}');
+    shellFUR.output.unshift({ type: 'fetch_url_results', contents: 42 });
+    assert.deepStrictEqual(normRaw(shellFUR), TIER_B, 'cond6 fetch_url_results.contents number');
     // condition 7 — unknown top-level property besides items
     assert.deepStrictEqual(normRaw(agentShell('{"items":[],"extra":1}')), TIER_B, 'cond7');
     // whole-response 2xx body not JSON (wrapper-level Tier B)
@@ -477,7 +483,7 @@ async function runTests() {
       status: 'completed', error: null,
       output: [
         { type: 'search_results', results: [{ url: srRaw }] },
-        { type: 'fetch_url_results', results: [{ url: furRaw }] },
+        { type: 'fetch_url_results', contents: [{ url: furRaw }] },
         { type: 'message', role: 'assistant', content: [{
           type: 'output_text',
           text: JSON.stringify({ items: [rawItem('2026-07-18', 'earnings_event', 'positive', cand)] }),
@@ -495,7 +501,7 @@ async function runTests() {
     var resp2 = {
       status: 'completed', error: null,
       output: [
-        { type: 'fetch_url_results', results: [{ url: furRaw }] },
+        { type: 'fetch_url_results', contents: [{ url: furRaw }] },
         { type: 'message', role: 'assistant', content: [{
           type: 'output_text',
           text: JSON.stringify({ items: [rawItem('2026-07-19', 'earnings_event', 'positive', cand)] }),
@@ -1093,7 +1099,7 @@ async function runTests() {
         status: 'completed', error: null,
         output: [
           { type: 'search_results', results: [{ url: urlSR }] },
-          { type: 'fetch_url_results', results: [{ url: urlFUR }] },
+          { type: 'fetch_url_results', contents: [{ url: urlFUR }] },
           { type: 'message', role: 'assistant', content: [{
             type: 'output_text', text: JSON.stringify({ items: items }),
             annotations: [{ type: 'url_citation', url: urlCite }]
@@ -1110,19 +1116,31 @@ async function runTests() {
     assert.strictEqual(r.items.length, 3, 'all three sources resolve their own item');
     assert.deepStrictEqual(r.skippedItems, []);
 
-    // Each source alone also works.
-    ['search_results', 'fetch_url_results'].forEach(function (type) {
-      var url = type === 'search_results' ? urlSR : urlFUR;
-      var resp = {
+    // Each source alone also works — on its OWN field name: search_results
+    // carries results[], fetch_url_results carries contents[] (the live and
+    // documented Agent shape; S1.5.2 F-1).
+    function aloneResp(groundingItem, url) {
+      return {
         status: 'completed', error: null,
         output: [
-          { type: type, results: [{ url: url }] },
+          groundingItem,
           { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [rawItem('2026-07-21', 'earnings_event', 'positive', url)] }), annotations: [] }] }
         ]
       };
-      var rr = provider.normalizeNewsResponse(resp, { ticker: TICKER, retrievedAt: NOW_ISO });
-      assert.strictEqual(rr.items.length, 1, type + ' alone resolves');
-    });
+    }
+    var rSR = provider.normalizeNewsResponse(aloneResp({ type: 'search_results', results: [{ url: urlSR }] }, urlSR), { ticker: TICKER, retrievedAt: NOW_ISO });
+    assert.strictEqual(rSR.items.length, 1, 'search_results alone resolves');
+    var rFUR = provider.normalizeNewsResponse(aloneResp({ type: 'fetch_url_results', contents: [{ url: urlFUR }] }, urlFUR), { ticker: TICKER, retrievedAt: NOW_ISO });
+    assert.strictEqual(rFUR.items.length, 1, 'fetch_url_results alone resolves — a URL available ONLY through contents[] grounds its item');
+    assert.strictEqual(rFUR.items[0].sourceUrl, urlFUR, 'persisted sourceUrl is the contents[] entry\'s own raw URL');
+
+    // Planted negative: the same URL offered only under a results[] field on a
+    // fetch_url_results item is NOT a grounding candidate — the adapter reads
+    // contents[] on that type and never results[] — so the item fails closed.
+    var rWrongField = provider.normalizeNewsResponse(aloneResp({ type: 'fetch_url_results', results: [{ url: urlFUR }] }, urlFUR), { ticker: TICKER, retrievedAt: NOW_ISO });
+    assert.strictEqual(rWrongField.ok, true, 'results[] on fetch_url_results is not a grounding field: no Tier B');
+    assert.strictEqual(rWrongField.items.length, 0, 'results[] on fetch_url_results is ignored — nothing grounds');
+    assert.deepStrictEqual(rWrongField.skippedItems, [{ reason: 'INVALID_SOURCE_URL' }], 'the item fails closed as INVALID_SOURCE_URL');
     var citeOnly = {
       status: 'completed', error: null,
       output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [rawItem('2026-07-22', 'earnings_event', 'positive', urlCite)] }), annotations: [{ type: 'url_citation', url: urlCite }] }] }]
@@ -1234,6 +1252,56 @@ async function runTests() {
       assert.strictEqual(textFull.indexOf(needle), -1, 'no leak of ' + needle);
     });
     assert.deepStrictEqual(Object.keys(rFull.items[0]), ITEM_FIELD_ORDER, 'still exactly 17 fields, exact order');
+
+    // fetch_url_result fixture (S1.5.2 F-1; live + documented shape): a
+    // contents[] entry carries url / title / snippet and NO id, date or
+    // last_updated. Available metadata is retained, absent metadata is not
+    // fabricated, and nothing leaks into the public item.
+    //   - retention/no-fabrication, mechanically: appendEvidenceEntry copies
+    //     each optional field only behind its `!== undefined` guard (checked
+    //     below on the real source, same brace-depth scope as above), and the
+    //     adapter hands the contents[] entry to it verbatim — no literal
+    //     constructs an id, date or last_updated for this source.
+    //   - leak-proof, behaviourally: sentinel title/snippet absent from output.
+    var requiredFieldGuards = [
+      ['id', /if\s*\(raw\.id\s*!==\s*undefined\)/],
+      ['title', /if\s*\(raw\.title\s*!==\s*undefined\)/],
+      ['date', /if\s*\(raw\.date\s*!==\s*undefined\)/],
+      ['lastUpdated', /if\s*\(raw\.last_updated\s*!==\s*undefined\)/],
+      ['snippet', /if\s*\(raw\.snippet\s*!==\s*undefined\)/]
+    ];
+    requiredFieldGuards.forEach(function (pair) {
+      assert.ok(pair[1].test(fnBodyNP39), 'appendEvidenceEntry must guard the optional "' + pair[0] + '" field with an undefined check (absence ⇒ omitted, never fabricated)');
+    });
+    var adStartNP39 = srcNP39.indexOf('function adaptAgentResponse(');
+    assert.ok(adStartNP39 !== -1, 'adaptAgentResponse function located for the scan');
+    var adDepth = 0, adStarted = false, adEnd = adStartNP39;
+    for (; adEnd < srcNP39.length; adEnd++) {
+      if (srcNP39[adEnd] === '{') { adDepth++; adStarted = true; }
+      else if (srcNP39[adEnd] === '}') { adDepth--; if (adStarted && adDepth === 0) { adEnd++; break; } }
+    }
+    var adBodyNP39 = srcNP39.slice(adStartNP39, adEnd);
+    assert.ok(/item\.type === 'fetch_url_results' && Array\.isArray\(item\.contents\)/.test(adBodyNP39), 'adapter reads contents[] on fetch_url_results');
+    assert.ok(/appendEvidenceEntry\(evidenceSet,\s*item\.contents\[j\],\s*'fetch_url_result'\)/.test(adBodyNP39), 'adapter passes each contents[] entry verbatim as a fetch_url_result');
+    assert.ok(!/fetch_url_results'[^;]*\.results\b/.test(adBodyNP39), 'adapter never reads results on a fetch_url_results item');
+
+    var gFur = 'https://ir.jfrog.com/news/fetched';
+    var furEntry = { url: gFur, title: 'SENTINEL_FUR_TITLE', snippet: 'SENTINEL_FUR_SNIPPET' };
+    var respFur = {
+      status: 'completed', error: null,
+      output: [
+        { type: 'fetch_url_results', contents: [furEntry] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [rawItem('2026-07-20', 'earnings_event', 'positive', gFur)] }), annotations: [] }] }
+      ]
+    };
+    var rFur = provider.normalizeNewsResponse(respFur, { ticker: TICKER, retrievedAt: NOW_ISO });
+    assert.strictEqual(rFur.items.length, 1, 'fetch_url_result entry with partial metadata resolves');
+    assert.strictEqual(rFur.items[0].sourceUrl, gFur, 'grounded on the fetch_url_result entry\'s own raw URL');
+    var textFur = JSON.stringify(rFur);
+    ['SENTINEL_FUR_TITLE', 'SENTINEL_FUR_SNIPPET', 'evidenceKind', 'fetch_url_result'].forEach(function (needle) {
+      assert.strictEqual(textFur.indexOf(needle), -1, 'no leak of ' + needle);
+    });
+    assert.deepStrictEqual(Object.keys(rFur.items[0]), ITEM_FIELD_ORDER, 'fetch_url_result-grounded item: still exactly 17 fields, exact order');
 
     // url_citation-only fixture, the case with the least metadata — must
     // still resolve, not merely tolerate absence.

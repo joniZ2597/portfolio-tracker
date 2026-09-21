@@ -401,15 +401,21 @@ function adaptAgentResponse(parsedResponse) {
   }
 
   // Condition-6 equivalent: every grounding-bearing field actually present is
-  // null or an array, checked BEFORE any candidate is extracted from it.
+  // null or an array, checked BEFORE any candidate is extracted from it. Each
+  // item type carries its grounding list under its OWN field name (F-1, live
+  // and documented Agent shape): search_results -> results[],
+  // fetch_url_results -> contents[]. `results` is never read on a
+  // fetch_url_results item.
   var i;
   for (i = 0; i < output.length; i++) {
     var outItem = output[i];
     if (!isObject(outItem)) {
       continue;
     }
-    if ((outItem.type === 'search_results' || outItem.type === 'fetch_url_results') &&
-        !validGroundingField(outItem.results)) {
+    if (outItem.type === 'search_results' && !validGroundingField(outItem.results)) {
+      return null;
+    }
+    if (outItem.type === 'fetch_url_results' && !validGroundingField(outItem.contents)) {
       return null;
     }
   }
@@ -418,13 +424,16 @@ function adaptAgentResponse(parsedResponse) {
   }
 
   // Evidence Set construction (brief §5, D-M2) — the fixed traversal order:
-  //   1  every output[] item of type 'search_results'   -> its results[]  (array order)
-  //   2  every output[] item of type 'fetch_url_results' -> its results[]  (array order)
-  //   3  url_citation annotations on the output_text content item          (array order)
+  //   1  every output[] item of type 'search_results'   -> its results[]   (array order)
+  //   2  every output[] item of type 'fetch_url_results' -> its contents[]  (array order)
+  //   3  url_citation annotations on the output_text content item           (array order)
   // Outer traversal follows output[] order; inner traversal follows each
   // array's own order. First occurrence in this fixed order wins (existing
-  // rule, preserved — NP08). This is the only place in the module that reads
-  // an output[] item's `type`, `results` or `annotations` field, or the
+  // rule, preserved — NP08). A fetch_url_results contents[] entry carries
+  // url / title / snippet only (no id, date or last_updated); it is handed to
+  // appendEvidenceEntry verbatim, which omits absent fields — nothing is
+  // fabricated. This is the only place in the module that reads an output[]
+  // item's `type`, `results`, `contents` or `annotations` field, or the
   // `search_results` / `fetch_url_results` / `url_citation` literals — kept
   // here, in the adapter, rather than in a second function, so a future
   // transport change touches exactly one place (brief §1).
@@ -440,9 +449,9 @@ function adaptAgentResponse(parsedResponse) {
   }
   for (i = 0; i < output.length; i++) {
     item = output[i];
-    if (isObject(item) && item.type === 'fetch_url_results' && Array.isArray(item.results)) {
-      for (j = 0; j < item.results.length; j++) {
-        appendEvidenceEntry(evidenceSet, item.results[j], 'fetch_url_result');
+    if (isObject(item) && item.type === 'fetch_url_results' && Array.isArray(item.contents)) {
+      for (j = 0; j < item.contents.length; j++) {
+        appendEvidenceEntry(evidenceSet, item.contents[j], 'fetch_url_result');
       }
     }
   }
