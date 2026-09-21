@@ -356,6 +356,18 @@ async function runTests() {
     var spy500 = makeFetch({ error: 'upstream' }, 500);
     var out500 = await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spy500));
     assert.deepStrictEqual(out500, TIER_A, 'non-2xx');
+
+    // F-2 (Owner ruling 2026-09-21): the DEFAULT timeout the seam falls back to
+    // is pinned at the source — a behavioural default-timeout test would need
+    // a 45 s hang in an offline suite; the injected `timeoutMs: 25` case above
+    // already proves the timeout path itself. Same source-scoped literal-pin
+    // technique as NP38 (endpoint) and NP27 (static scan). DEFAULT_TIMEOUT_MS
+    // is module-private (export surface stays 16), so the source is the only
+    // place the value is observable.
+    var srcNP02 = fs.readFileSync(SRC, 'utf8');
+    assert.ok(/^var DEFAULT_TIMEOUT_MS = 45000;\r?$/m.test(srcNP02), 'DEFAULT_TIMEOUT_MS is declared as exactly the literal 45000 (F-2)');
+    assert.ok(/timeoutMs:\s*posInt\(opts\.timeoutMs,\s*DEFAULT_TIMEOUT_MS\)/.test(srcNP02), 'injected override seam posInt(opts.timeoutMs, DEFAULT_TIMEOUT_MS) is intact');
+    assert.strictEqual(srcNP02.indexOf('22000'), -1, 'the pre-F-2 literal 22000 no longer appears anywhere in the provider source');
   });
 
   // ── NP03: Tier B — each structural condition individually ──────────────────

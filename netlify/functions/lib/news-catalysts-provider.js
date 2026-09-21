@@ -61,7 +61,15 @@ var PPLX_ENDPOINT = 'https://api.perplexity.ai/v1/agent';
 // name, not a Sonar Chat Completions model id.
 var PPLX_MODEL = 'low';
 
-var DEFAULT_TIMEOUT_MS = 22000;
+// F-2 (Owner ruling 2026-09-21): raised from the Sonar-era house value after
+// live Agent measurements (Pilot 2 / 2B) showed successful calls at 21.9–32.9 s
+// and one call beyond 35 s — the old default timed out a live call. 45 s sits
+// intentionally below the recorded 60 s synchronous Netlify ceiling for this
+// route; the execution mode is unchanged and the full ceiling is not consumed.
+// The injected `timeoutMs` override below still wins; no retry exists; a
+// timeout still fails closed (PPLX_TIMEOUT -> Tier A PROVIDER_FAILURE).
+// fund-facts-provider.js keeps its own separate default.
+var DEFAULT_TIMEOUT_MS = 45000;
 var DEFAULT_MAX_BYTES = 4 * 1024 * 1024;
 
 var TICKER_RE = /^[A-Z]{1,10}$/;
