@@ -271,6 +271,10 @@ function buildRequestBody(ticker, nowIso) {
           'keep the event\'s natural category and use this field to express broader scope — never force sector- ' +
           'or market-wide news into other_catalyst), subType (a short label required only when category is ' +
           'other_catalyst, otherwise null), and sourceUrl (the https URL of the source reporting the event). ' +
+          'sourceUrl must be copied exactly from a URL actually returned to you by search or page fetch for ' +
+          'this event. Do not construct, infer, guess, shorten, normalise or recall a URL from memory, even if ' +
+          'you are confident the page exists. If no retrieved URL supports the event, omit the event rather ' +
+          'than substituting a different real URL. ' +
           'earnings_event covers actual results, material revenue, EPS, margin or profitability outcomes, profit ' +
           'warnings, material disclosures during the earnings process, and material earnings delays or ' +
           'restatements; it excludes a future earnings-date announcement (report that as upcoming_event), ' +
@@ -314,7 +318,13 @@ function buildRequestBody(ticker, nowIso) {
           'meaningful announcement, decision, or pricing date when that is the event described by the catalyst, ' +
           'and do not substitute a later completion or closing date merely because the later source was ' +
           'retrieved — a later completion may be a separate catalyst only when it is itself materially ' +
-          'distinct. A routine analyst reiteration with no substantive change in rating, price target, ' +
+          'distinct. For a multi-stage financing or corporate action — for example a convertible or debt ' +
+          'offering, an equity offering, a tender or exchange offer, or a merger or acquisition — the catalyst ' +
+          'is the announcement, pricing or decision, and eventDate is that date. A later closing, completion, ' +
+          'settlement, indenture or effectiveness date is not the catalyst\'s date, and must not be used merely ' +
+          'because a later filing or article carried it. If the completion is itself materially distinct — ' +
+          'terms changed, size changed, the transaction failed — it is a separate catalyst with its own date. ' +
+          'A routine analyst reiteration with no substantive change in rating, price target, ' +
           'estimates, thesis, or another material analyst action is not a catalyst. When the company impact is ' +
           'genuinely ambiguous, use neutral rather than inventing a bullish or bearish direction, but neutral ' +
           'must not be used to rescue an event that is not material enough to be a catalyst in the first place ' +

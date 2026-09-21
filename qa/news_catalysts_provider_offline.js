@@ -303,6 +303,10 @@ async function runTests() {
             'keep the event\'s natural category and use this field to express broader scope — never force sector- ' +
             'or market-wide news into other_catalyst), subType (a short label required only when category is ' +
             'other_catalyst, otherwise null), and sourceUrl (the https URL of the source reporting the event). ' +
+            'sourceUrl must be copied exactly from a URL actually returned to you by search or page fetch for ' +
+            'this event. Do not construct, infer, guess, shorten, normalise or recall a URL from memory, even if ' +
+            'you are confident the page exists. If no retrieved URL supports the event, omit the event rather ' +
+            'than substituting a different real URL. ' +
             'earnings_event covers actual results, material revenue, EPS, margin or profitability outcomes, profit ' +
             'warnings, material disclosures during the earnings process, and material earnings delays or ' +
             'restatements; it excludes a future earnings-date announcement (report that as upcoming_event), ' +
@@ -346,7 +350,13 @@ async function runTests() {
             'meaningful announcement, decision, or pricing date when that is the event described by the catalyst, ' +
             'and do not substitute a later completion or closing date merely because the later source was ' +
             'retrieved — a later completion may be a separate catalyst only when it is itself materially ' +
-            'distinct. A routine analyst reiteration with no substantive change in rating, price target, ' +
+            'distinct. For a multi-stage financing or corporate action — for example a convertible or debt ' +
+            'offering, an equity offering, a tender or exchange offer, or a merger or acquisition — the catalyst ' +
+            'is the announcement, pricing or decision, and eventDate is that date. A later closing, completion, ' +
+            'settlement, indenture or effectiveness date is not the catalyst\'s date, and must not be used merely ' +
+            'because a later filing or article carried it. If the completion is itself materially distinct — ' +
+            'terms changed, size changed, the transaction failed — it is a separate catalyst with its own date. ' +
+            'A routine analyst reiteration with no substantive change in rating, price target, ' +
             'estimates, thesis, or another material analyst action is not a catalyst. When the company impact is ' +
             'genuinely ambiguous, use neutral rather than inventing a bullish or bearish direction, but neutral ' +
             'must not be used to rescue an event that is not material enough to be a catalyst in the first place ' +
@@ -1475,6 +1485,107 @@ async function runTests() {
     var rNP45 = norm([rawItem('2026-07-18', 'earnings_event', 'positive', urlDoubleSlash)], [urlDoubleSlash], undefined);
     assert.deepStrictEqual(rNP45.skippedItems, [], "a '//' pathname is not rejected as GENERIC_SOURCE_URL");
     assert.strictEqual(rNP45.items.length, 1, "the '//' candidate survives to a persisted item");
+  });
+
+  // ── NP46: S1.5.1 H-C C-1 — multi-stage date reinforcement EXTENDS R-1 (presence only) ───
+  await test('NP46 shipped prompt carries the C-1 multi-stage date rule with all seven trap terms, placed AFTER the retained R-1 wording (presence only, not a behaviour proof)', async function () {
+    // Presence check on the shipped instruction text (the NP40 technique).
+    // Pilot 3 reproduced the MRNA convertible-notes date regression against
+    // the shipped R-1 sentence, so C-1 ADDS concrete event classes and the
+    // completion-date vocabulary AFTER R-1 — it never replaces R-1. Whether
+    // the model obeys either sentence is Pilot 4's job (brief §5, §8).
+    var spyNP46 = makeFetch(agentResponse([]));
+    await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spyNP46));
+    var promptNP46 = JSON.parse(spyNP46.calls[0].init.body).input[0].content;
+
+    // (a) the original R-1 sentence is still present, verbatim and contiguous —
+    // one literal, exactly as shipped at 336ff96 (Codex round-1 finding: three
+    // separate substrings would let text be altered or inserted between them).
+    var r1Sentence = 'For eventDate, use the date of the material event described by the catalyst, not a ' +
+      'platform or search metadata date, and not a publication date unless that publication date is itself ' +
+      'the date of the material announcement or event; for a multi-stage event, use the economically ' +
+      'meaningful announcement, decision, or pricing date when that is the event described by the catalyst, ' +
+      'and do not substitute a later completion or closing date merely because the later source was ' +
+      'retrieved — a later completion may be a separate catalyst only when it is itself materially ' +
+      'distinct.';
+    var r1Start = promptNP46.indexOf(r1Sentence);
+    assert.ok(r1Start !== -1, 'original R-1 sentence missing or altered (must survive verbatim and contiguous)');
+    assert.strictEqual(promptNP46.indexOf(r1Sentence, r1Start + 1), -1, 'R-1 sentence appears exactly once');
+
+    // (b) the C-1 rule is present, and it starts AFTER the retained R-1 sentence.
+    var c1Start = promptNP46.indexOf('For a multi-stage financing or corporate action');
+    var c1End = promptNP46.indexOf('it is a separate catalyst with its own date.');
+    assert.ok(c1Start !== -1 && c1End !== -1 && c1End > c1Start, 'C-1 multi-stage rule span located in the shipped prompt');
+    var r1End = r1Start + r1Sentence.length;
+    assert.ok(c1Start > r1End, 'C-1 is placed after the retained R-1 sentence (extends, never replaces)');
+    var c1Text = promptNP46.slice(c1Start, c1End);
+
+    // (c) the concrete event classes and every completion-date trap term.
+    ['convertible', 'debt offering', 'equity offering', 'tender', 'merger or acquisition'].forEach(function (term) {
+      assert.ok(c1Text.indexOf(term) !== -1, 'C-1 missing event class: ' + term);
+    });
+    ['closing', 'completion', 'settlement', 'indenture', 'effectiveness'].forEach(function (term) {
+      assert.ok(c1Text.indexOf(term) !== -1, 'C-1 missing trap term: ' + term);
+    });
+    assert.ok(c1Text.indexOf('the catalyst is the announcement, pricing or decision, and eventDate is that date') !== -1, 'C-1 names the economically meaningful date');
+    assert.ok(c1Text.indexOf('must not be used merely because a later filing or article carried it') !== -1, 'C-1 forbids the retrieved-later-date substitution');
+
+    // (d) no numeric threshold, count, percentage or currency literal in C-1 (DR-12 / DR-30).
+    assert.ok(!/[\d%$]/.test(c1Text), 'C-1 wording carries no numeric, percentage or currency literal');
+  });
+
+  // ── NP47: S1.5.1 H-C C-2 — sourceUrl provenance + omit-rather-than-substitute (presence only) ─
+  await test('NP47 shipped prompt carries the C-2 sourceUrl provenance rule inside the sourceUrl field instruction, including the omit-rather-than-substitute clause (presence only, not a behaviour proof)', async function () {
+    // Pilot 3 Q-3: a correct, material event was lost because the model
+    // supplied a sourceUrl it had never retrieved, and resolveGrounded
+    // (correctly) rejected it. C-2 tells the model about that hard
+    // constraint. The omit clause is load-bearing: without it, "use a real
+    // URL" invites substituting a DIFFERENT real URL — a mis-grounded
+    // survivor, which is strictly worse than an INVALID_SOURCE_URL skip.
+    var spyNP47 = makeFetch(agentResponse([]));
+    await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spyNP47));
+    var promptNP47 = JSON.parse(spyNP47.calls[0].init.body).input[0].content;
+
+    var fieldStart = promptNP47.indexOf('and sourceUrl (the https URL of the source reporting the event).');
+    var fieldEnd = promptNP47.indexOf('earnings_event covers actual results');
+    assert.ok(fieldStart !== -1 && fieldEnd !== -1 && fieldEnd > fieldStart, 'sourceUrl field instruction and the following category definition both located');
+    var c2Text = promptNP47.slice(fieldStart, fieldEnd);
+
+    [
+      'sourceUrl must be copied exactly from a URL actually returned to you by search or page fetch for this event',
+      'Do not construct, infer, guess, shorten, normalise or recall a URL from memory',
+      'even if you are confident the page exists',
+      'If no retrieved URL supports the event, omit the event rather than substituting a different real URL'
+    ].forEach(function (marker) {
+      assert.ok(c2Text.indexOf(marker) !== -1, 'C-2 provenance wording missing from the sourceUrl field instruction: ' + marker);
+    });
+    assert.ok(!/[\d%$]/.test(c2Text), 'C-2 wording carries no numeric, percentage or currency literal');
+  });
+
+  // ── NP49: S1.5.1 H-C — Q-3 regression pin: grounding stays fail-closed ─────
+  await test('NP49 a well-formed, plausible, same-domain sourceUrl absent from the Evidence Set is still skipped INVALID_SOURCE_URL after H-C; the identical candidate survives once retrieved — grounding is not weakened', async function () {
+    // Q-3 is fixed by INSTRUCTING the model (C-2), never by accepting an
+    // unretrieved URL. This pins the thing a future edit must not do:
+    // loosen resolveGrounded to domain-, prefix- or similarity-matching.
+    // Shape mirrors the Pilot 3 NVDA Q2 FY27 case: the model's URL is a
+    // plausible sibling of a retrieved URL on the same host, and a second
+    // retrieved page (a different host) covers the same event.
+    var retrievedSibling = 'https://nvidianews.nvidia.com/news/nvidia-announces-financial-results-for-second-quarter-fiscal-2026?page=4';
+    var retrievedOtherHost = 'https://investor.nvidia.com/events-and-presentations/event-details/2026/NVIDIA-2nd-Quarter-FY27-Financial-Results/default.aspx';
+    var unretrieved = 'https://nvidianews.nvidia.com/news/nvidia-announces-financial-results-for-second-quarter-fiscal-2027';
+    var candidate = rawItem('2026-07-18', 'earnings_event', 'positive', unretrieved);
+
+    // Grounding unions url_citation + search_results (NP34); neither carries the candidate.
+    var rAbsent = norm([candidate], [retrievedSibling], [{ url: retrievedOtherHost, title: 'never persisted' }]);
+    assert.deepStrictEqual(rAbsent.items, [], 'the unretrieved same-domain URL never survives');
+    assert.deepStrictEqual(rAbsent.skippedItems, [{ reason: 'INVALID_SOURCE_URL' }], 'skipped INVALID_SOURCE_URL — not GENERIC_SOURCE_URL, not any other reason');
+
+    // Control: byte-identical candidate, now actually retrieved ⇒ survives,
+    // so the rejection above is grounding-driven, not URL-shape-driven.
+    var rPresent = norm([candidate], [retrievedSibling, unretrieved], [{ url: retrievedOtherHost }]);
+    assert.deepStrictEqual(rPresent.skippedItems, [], 'once retrieved, the same candidate is not skipped');
+    assert.strictEqual(rPresent.items.length, 1, 'once retrieved, the same candidate survives');
+    assert.strictEqual(rPresent.items[0].sourceUrl, unretrieved, 'persisted sourceUrl is the grounding entry\'s own raw URL');
   });
 
   global.fetch = _origFetch;
