@@ -13,7 +13,7 @@
  * below), and a throwing global.fetch guard is installed throughout to prove
  * the provider never touches the real network.
  *
- * Coverage (NP01–NP39, contiguous — the P1-xx scheme is retired):
+ * Coverage (NP01–NP41, contiguous — the P1-xx scheme is retired):
  *   NP01 full-coverage benchmark  — exact deep-equal + stringify-equal envelope
  *   NP02 Tier A transport         — throw / timeout / non-2xx ⇒ PROVIDER_FAILURE
  *   NP03 Tier B structural (7+1)  — each condition ⇒ PROVIDER_INVALID_RESPONSE
@@ -37,6 +37,8 @@
  *   NP35 lookup by type, not index            NP36 unrecognised item type ignored
  *   NP37 zero grounding candidates ⇒ NONE      NP38 endpoint literal
  *   NP39 Evidence Set retained but inert (9 fields, no leakage)
+ *   NP40 S1.5.1 H-A: five prompt-rule markers present (presence only)
+ *   NP41 S1.5.1 H-A: no numeric materiality threshold in the new wording
  *
  * Run: node qa/news_catalysts_provider_offline.js
  * (QA seam: NEWS_CATALYSTS_PROVIDER_PATH overrides the module under test for
@@ -334,7 +336,24 @@ async function runTests() {
             'strategically important customer can make a relatively small contract material. For guidance_update ' +
             'specifically, weigh direction against the company\'s own prior guidance and analyst consensus where ' +
             'reliable evidence exists; do not treat every guidance change in one direction as automatically that ' +
-            'direction. Only include events you can source. Do not include commentary, titles, or summaries.'
+            'direction. For eventDate, use the date of the material event described by the catalyst, not a ' +
+            'platform or search metadata date, and not a publication date unless that publication date is itself ' +
+            'the date of the material announcement or event; for a multi-stage event, use the economically ' +
+            'meaningful announcement, decision, or pricing date when that is the event described by the catalyst, ' +
+            'and do not substitute a later completion or closing date merely because the later source was ' +
+            'retrieved — a later completion may be a separate catalyst only when it is itself materially ' +
+            'distinct. A routine analyst reiteration with no substantive change in rating, price target, ' +
+            'estimates, thesis, or another material analyst action is not a catalyst. When the company impact is ' +
+            'genuinely ambiguous, use neutral rather than inventing a bullish or bearish direction, but neutral ' +
+            'must not be used to rescue an event that is not material enough to be a catalyst in the first place ' +
+            '— such an event is simply not emitted. Prefer primary and authoritative sources — company releases, ' +
+            'regulatory filings, and regulator publications — over secondary aggregation, when both report the ' +
+            'same event. Ordinary conference attendance or an appearance alone is not a catalyst; incremental ' +
+            'product public relations without a meaningfully changed state or material consequence is not ' +
+            'automatically a catalyst; repeated releases about the same underlying development are not each ' +
+            'emitted merely because separate releases exist — materiality comes from the underlying development, ' +
+            'not from public-relations volume. Only include events you can source. Do not include commentary, ' +
+            'titles, or summaries.'
         }
       ],
       tools: [{ type: 'web_search' }],
@@ -1324,6 +1343,45 @@ async function runTests() {
     var rMinimal = provider.normalizeNewsResponse(respMinimal, { ticker: TICKER, retrievedAt: NOW_ISO });
     assert.strictEqual(rMinimal.items.length, 1, 'url_citation-only, least-metadata fixture resolves');
     assert.deepStrictEqual(Object.keys(rMinimal.items[0]), ITEM_FIELD_ORDER);
+  });
+
+  // ── NP40: S1.5.1 H-A prompt-rule presence (DR-21a prompt half, DR-22, DR-24, DR-26, DR-30) ──
+  await test('NP40 shipped prompt carries all five H-A rule markers (presence only, not a behaviour proof)', async function () {
+    // This is a PRESENCE check on the shipped instruction text, not a proof
+    // that the model obeys it — that is Pilot 3's job (see brief §3). It
+    // exists so a later edit cannot silently drop one of the five rules.
+    var spyNP40 = makeFetch(agentResponse([]));
+    await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spyNP40));
+    var promptNP40 = JSON.parse(spyNP40.calls[0].init.body).input[0].content;
+    var markersNP40 = [
+      'use the date of the material event described by the catalyst',
+      'routine analyst reiteration with no substantive change',
+      'neutral must not be used to rescue an event that is not material enough',
+      'Prefer primary and authoritative sources',
+      'materiality comes from the underlying development, not from public-relations volume'
+    ];
+    markersNP40.forEach(function (marker) {
+      assert.ok(promptNP40.indexOf(marker) !== -1, 'prompt missing R-rule marker: ' + marker);
+    });
+  });
+
+  // ── NP41: no numeric materiality threshold in the H-A wording (DR-30, DR-12) ────────────────
+  await test('NP41 static scan: the H-A materiality/reiteration wording introduces no numeric threshold', async function () {
+    // Extends NP27's static scan to the new H-A sentences specifically —
+    // isolated by slicing between the guidance_update tail (the last
+    // unchanged sentence) and the closing "Only include events" sentence,
+    // so this test fails on the added wording alone, not on the pre-existing
+    // "30/60 calendar days" windows NP27 already tolerates.
+    var spyNP41 = makeFetch(agentResponse([]));
+    await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spyNP41));
+    var promptNP41 = JSON.parse(spyNP41.calls[0].init.body).input[0].content;
+    var haStart = promptNP41.indexOf('For eventDate, use the date of the material event');
+    var haEnd = promptNP41.indexOf('Only include events you can source.');
+    assert.ok(haStart !== -1 && haEnd !== -1 && haEnd > haStart, 'H-A wording span located in the shipped prompt');
+    var haText = promptNP41.slice(haStart, haEnd);
+    assert.strictEqual(haText.indexOf('%'), -1, 'no percentage literal in the H-A wording');
+    assert.strictEqual(haText.indexOf('$'), -1, 'no currency literal in the H-A wording');
+    assert.ok(!/\d/.test(haText), 'no numeric literal (count or threshold) in the H-A wording');
   });
 
   global.fetch = _origFetch;

@@ -293,7 +293,24 @@ function buildRequestBody(ticker, nowIso) {
           'strategically important customer can make a relatively small contract material. For guidance_update ' +
           'specifically, weigh direction against the company\'s own prior guidance and analyst consensus where ' +
           'reliable evidence exists; do not treat every guidance change in one direction as automatically that ' +
-          'direction. Only include events you can source. Do not include commentary, titles, or summaries.'
+          'direction. For eventDate, use the date of the material event described by the catalyst, not a ' +
+          'platform or search metadata date, and not a publication date unless that publication date is itself ' +
+          'the date of the material announcement or event; for a multi-stage event, use the economically ' +
+          'meaningful announcement, decision, or pricing date when that is the event described by the catalyst, ' +
+          'and do not substitute a later completion or closing date merely because the later source was ' +
+          'retrieved — a later completion may be a separate catalyst only when it is itself materially ' +
+          'distinct. A routine analyst reiteration with no substantive change in rating, price target, ' +
+          'estimates, thesis, or another material analyst action is not a catalyst. When the company impact is ' +
+          'genuinely ambiguous, use neutral rather than inventing a bullish or bearish direction, but neutral ' +
+          'must not be used to rescue an event that is not material enough to be a catalyst in the first place ' +
+          '— such an event is simply not emitted. Prefer primary and authoritative sources — company releases, ' +
+          'regulatory filings, and regulator publications — over secondary aggregation, when both report the ' +
+          'same event. Ordinary conference attendance or an appearance alone is not a catalyst; incremental ' +
+          'product public relations without a meaningfully changed state or material consequence is not ' +
+          'automatically a catalyst; repeated releases about the same underlying development are not each ' +
+          'emitted merely because separate releases exist — materiality comes from the underlying development, ' +
+          'not from public-relations volume. Only include events you can source. Do not include commentary, ' +
+          'titles, or summaries.'
       }
     ],
     tools: [{ type: 'web_search' }],
