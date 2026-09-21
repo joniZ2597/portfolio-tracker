@@ -7,7 +7,8 @@ brief-only commit records them unchanged. Only then may implementation begin, pe
 Source of truth: `work/catalyst-news/breakdown.md` (202 lines, sha256
 `60a7b299498396a9e178e98c65742001d7c68f9313fa27b7ba6e61e1eb5b0307`), as amended by the Owner on
 2026-09-21 — **A-1 upcoming-event direction · A-2 identity tuple · A-3 deferred Grok layer ·
-A-4 future event dates and the freshness evaluator · A-5 core validation, after a Worker STOP-1**.
+A-4 future event dates and the freshness evaluator · A-5 core validation, after a Worker STOP-1 ·
+A-5.1 core boundary validation for relevanceScope/subType, after a step-8 Codex finding**.
 Three further corrections to the breakdown were found while sourcing this brief; all are recorded
 under "Corrections to the breakdown" and the breakdown is amended to match if this brief is approved.
 
@@ -40,7 +41,7 @@ the S4 pilot.
 ```
 netlify/functions/lib/news-catalysts-provider.js   modify   fields, enums, tuple, ladder, prompt, version value
 qa/news_catalysts_provider_offline.js              modify   NP01 + NP12 + NP15 + NP16 re-baseline; NP24–NP32 new
-netlify/functions/lib/news-catalysts-core.js       modify   ITEM_FIELDS list + validateProviderResult direction guard (A-5)
+netlify/functions/lib/news-catalysts-core.js       modify   ITEM_FIELDS list + validateProviderResult guard (A-5, A-5.1)
 qa/news_catalysts_core_offline.js                  modify   ITEM_FIELD_ORDER / RECORD_FIELD_ORDER; NW27 negatives; NW28–NW29
 ```
 
@@ -245,6 +246,33 @@ stays, and the three cases above join it.
 only**. Everything else in the core — `projectItemRecord`, the write order, the response envelopes,
 the index logic, `acquireNowIso` — remains untouched, and touching any of it is STOP-1.
 
+## Owner amendment A-5.1 — core boundary validation for relevanceScope/subType
+
+**Raised by the step-8 Codex review over the implementation diff.** `validateProviderResult`
+validates `eventType` and the conditional `direction` (A-5), but has no check at all for
+`relevanceScope` or `subType`. Under an injected/drifted `providerImpl` (the test-only, event-only
+seam — unreachable from any real request), an item missing or wrong-shaped in either field still
+returns `ok: true`; `projectItemRecord` then persists an off-contract value, or `JSON.stringify`
+silently drops an `undefined` field, producing fewer than the required 19-field record. This is
+unreachable via the real, frozen provider (whose own ladder already guarantees both fields —
+NP25/NP26/NP30), but it is the same defense-in-depth this function already applies to every other
+write-relevant field (`category`, `direction`, `sourceDomain`, etc.).
+
+**Owner ruling: FIX NOW**, as a narrow amendment — not implicitly covered by A-5's original wording,
+which named only `eventType`/`direction`.
+
+**The authorised change**, inside `validateProviderResult` only:
+
+1. `relevanceScope` must be one of `RELEVANCE_SCOPES`.
+2. `subType` — `category === 'other_catalyst'` ⇒ a trimmed non-empty string; every other category
+   ⇒ exactly `null`.
+
+**Scope, exactly:** `validateProviderResult`, plus the minimum provider export/import
+destructuring needed (`RELEVANCE_SCOPES`, already exported from the provider for QA use), plus
+targeted NW27-style negative QA for these two invariants. **Not in scope:** `projectItemRecord`,
+write ordering, response envelopes, index logic, `acquireNowIso`, or any provider production
+semantics — all unchanged. Fail-closed throughout, same as every existing check in this function.
+
 ## Owner amendment A-3 — deferred Grok layer, note only
 
 **No Grok code, no Grok fields, no Grok config in S1.5.** The following is recorded as a deferred
@@ -328,13 +356,33 @@ leads with `schemaVersion` and omits `sourceUrl`/`retrievedAt`). Each is normati
 
 Two new frozen vocabularies beside `CATEGORIES`: `EVENT_TYPES` and `RELEVANCE_SCOPES`.
 
-### `REQUEST_SCHEMA`
+### `REQUEST_SCHEMA` — **[CORRECTED, real-time Owner ruling during implementation]**
 
-- `properties` gains `eventType` (enum), `relevanceScope` (enum), `subType` (string)
+`subType` is **always present** on the item — never a sometimes-absent key (D-S15-C). The schema
+must therefore require it like every other always-present field; making it conditionally required
+is not expressible cleanly in JSON Schema without `if/then`, and the field's presence itself is
+never conditional — only its *value* is.
+
+- `properties` gains `eventType` (enum), `relevanceScope` (enum), `subType` (schema-level
+  `type: ['string', 'null']` — both a string and `null` are syntactically valid at this level)
 - `direction` becomes `{ enum: ['positive', 'neutral', 'negative', null] }`
-- `required` gains `eventType` and `relevanceScope`; `direction` stays. **`subType` is not in
-  `required`** — it is conditional and the ladder enforces it
+- `required` gains `eventType`, `relevanceScope`, **and `subType`** — all three are always-present
+  fields at the schema level
 - `additionalProperties: false` stays at both levels
+
+**Semantic conditionality:** `category === 'other_catalyst'` ⇒ `subType` must be a trimmed
+non-empty string; every other category ⇒ `subType` must be exactly `null`. The schema only pins
+that the *key* is present and its *type* is string-or-null. The provider's own validation ladder is
+where this category-dependent rule is enforced during normalization (the primary, production
+enforcement point). Under **A-5.1**, the core's `validateProviderResult` independently re-validates
+the identical invariant at the persistence boundary, as defense-in-depth against an injected or
+drifted provider — not as the primary enforcement point, which remains the ladder.
+
+> **Correction, recorded 2026-09-21.** This section originally said `subType` is *not* in
+> `required`. That was wrong: it conflated "value is conditional" with "field may be absent," and
+> D-S15-C already says the opposite ("always present ... a sometimes-absent key would break every
+> `Object.keys` field-order pin"). The Owner corrected this in real time during implementation,
+> before the schema was authored, and the correction is applied as written above.
 
 ### Validation ladder — order is load-bearing
 
@@ -377,11 +425,13 @@ The single user message at `news-catalysts-provider.js:211` is rewritten to carr
 
 `qa/news_catalysts_provider_offline.js:215` carries the identical new string.
 
-### Core — one list **and one guard** (A-5)
+### Core — one list and four validation checks (A-5, A-5.1)
 
 1. `ITEM_FIELDS` gains the three names in the D-S15-E order.
 2. `validateProviderResult` gains the `eventType` vocabulary check and the conditional `direction`
    rule specified in A-5, replacing the unconditional `isNonEmptyString(item.direction)` at `:331`.
+3. `validateProviderResult` also gains the `relevanceScope` vocabulary check specified in A-5.1.
+4. `validateProviderResult` also gains the category-dependent `subType` rule specified in A-5.1.
 
 `projectItemRecord` (`:113-121`) is unchanged; `:70`, `:119` and `:320` need no edit under D-S15-D.
 No other core function is in scope.
