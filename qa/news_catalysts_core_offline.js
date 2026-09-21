@@ -79,7 +79,8 @@ const ALLOWED_IMPORTS = ['@netlify/blobs', '@netlify/aws-lambda-compat', './lib/
 const ITEM_FIELD_ORDER = [
   'ticker', 'eventDate', 'category', 'direction', 'sourceUrl',
   'normalizedSourceUrl', 'sourceDomain', 'provider', 'retrievedAt',
-  'identityHash', 'provenance', 'confidence', 'requiresVerification', 'scoringImpact'
+  'identityHash', 'provenance', 'confidence', 'requiresVerification', 'scoringImpact',
+  'eventType', 'relevanceScope', 'subType'
 ];
 const RECORD_FIELD_ORDER = ITEM_FIELD_ORDER.concat(['sourceTier', 'contractVersion']);
 
@@ -168,8 +169,23 @@ function poisonedStore(state) {
 }
 
 // ── provider fixtures (borrowed from the NP suite) ────────────────────────────
-function rawItem(eventDate, category, direction, sourceUrl) {
-  return { eventDate: eventDate, category: category, direction: direction, sourceUrl: sourceUrl };
+// Taxonomy defaults (eventType: 'catalyst', relevanceScope: 'company') so
+// every pre-S1.5 fixture keeps satisfying the REAL, frozen provider's ladder
+// without touching each call site individually. subType defaults to a
+// non-empty value ('general') when category is 'other_catalyst' (D-S15-C
+// requires one) and to null otherwise. `extra` lets a test override any of
+// these explicitly (e.g. an upcoming_event or an invalid-shape fixture).
+function rawItem(eventDate, category, direction, sourceUrl, extra) {
+  var it = {
+    eventDate: eventDate,
+    category: category,
+    eventType: 'catalyst',
+    direction: direction,
+    relevanceScope: 'company',
+    subType: category === 'other_catalyst' ? 'general' : null,
+    sourceUrl: sourceUrl
+  };
+  return Object.assign(it, extra || {});
 }
 function sonarResponse(items, citations) {
   const resp = { choices: [{ message: { content: JSON.stringify({ items: items }) } }] };
@@ -525,7 +541,7 @@ async function runTests() {
         // stored item records: provider item + sourceTier + contractVersion, exact order
         items.forEach(function (item, i) {
           const stored = JSON.parse(store.data[itemKeys[i]]);
-          assert.deepStrictEqual(Object.keys(stored), RECORD_FIELD_ORDER, 'exact 16-field record order');
+          assert.deepStrictEqual(Object.keys(stored), RECORD_FIELD_ORDER, 'exact 19-field record order');
           assert.deepStrictEqual(stored, expectedRecord(item), 'record ' + i);
           assert.strictEqual(store.data[itemKeys[i]], JSON.stringify(expectedRecord(item)), 'byte-exact record ' + i);
         });
@@ -946,6 +962,16 @@ async function runTests() {
           ['requiresVerification false', mutItem(function (it) { it.requiresVerification = false; })],
           ['scoringImpact set', mutItem(function (it) { it.scoringImpact = 'positive'; })],
           ['grammar-invalid eventDate', mutItem(function (it) { it.eventDate = '2026/09/17'; })],
+          ['direction null on catalyst (A-5)', mutItem(function (it) { it.direction = null; })],
+          ['direction non-null on upcoming_event (A-5)', mutItem(function (it) { it.eventType = 'upcoming_event'; it.direction = 'positive'; })],
+          ['direction non-string non-null (A-5)', mutItem(function (it) { it.direction = 42; })],
+          ['unknown eventType (A-5)', mutItem(function (it) { it.eventType = 'rumor'; })],
+          ['unknown relevanceScope (A-5.1)', mutItem(function (it) { it.relevanceScope = 'global'; })],
+          ['missing relevanceScope (A-5.1)', mutItem(function (it) { delete it.relevanceScope; })],
+          ['subType present when forbidden (A-5.1)', mutItem(function (it) { it.subType = 'extra'; })],
+          ['subType missing (undefined) on other_catalyst (A-5.1)', mutItem(function (it) { it.category = 'other_catalyst'; delete it.subType; })],
+          ['subType null on other_catalyst (A-5.1)', mutItem(function (it) { it.category = 'other_catalyst'; it.subType = null; })],
+          ['subType whitespace-only on other_catalyst (A-5.1)', mutItem(function (it) { it.category = 'other_catalyst'; it.subType = '   '; })],
           ['item not an object', okEnvelope([null])],
           ['envelope fetchedAt != clock', mutEnv(function (e) { e.fetchedAt = '2026-09-19T00:00:00Z'; })],
           ['envelope foreign provider', mutEnv(function (e) { e.provider = 'someone-else@v1'; })],
@@ -964,6 +990,59 @@ async function runTests() {
           assert.strictEqual(core.validateProviderResult(pair[1], TICKER, NOW_ISO).ok, false, 'validator rejects: ' + pair[0]);
         }
         assert.strictEqual(core.validateProviderResult(okEnvelope(items), TICKER, NOW_ISO).ok, true, 'validator accepts the exact shape');
+      });
+    });
+
+    // ── NW28 ───────────────────────────────────────────────────────────────────
+    await test('NW28 future-dated upcoming_event through the full handler (A-4.1 / A-5): WRITE, persists, direction stays exactly null', async function () {
+      await withEnv(armedEnv(), async function () {
+        const store = makeStore();
+        const futureDate = '2026-11-19'; // after NOW_ISO / FETCH_DATE (2026-09-20) — the Nov-19 example (A-1)
+        const url = 'https://ir.jfrog.com/news/q4-preview';
+        const fixture = sonarResponse(
+          [{ eventDate: futureDate, category: 'earnings_event', eventType: 'upcoming_event', direction: null, relevanceScope: 'company', subType: null, sourceUrl: url }],
+          [url]
+        );
+        const items = expectedItems(fixture);
+        assert.strictEqual(items.length, 1, 'fixture normalizes to one item');
+        const itemKey = provider.buildNewsKey(items[0]);
+        const fetchSpy = makeFetch(fixture);
+        const r = await core.handler(makeEvent({ auth: AUTH, body: '{"ticker":"FROG"}', store: store, fetchImpl: fetchSpy.fn }));
+        assert.strictEqual(r.statusCode, 200);
+        assertExactBody(r, { status: 'WRITE', ticker: TICKER, fetchedAt: NOW_ISO, writtenKeys: [itemKey, INDEX_KEY] }, 'future-dated upcoming_event WRITE');
+        const stored = JSON.parse(store.data[itemKey]);
+        assert.strictEqual(stored.eventDate, futureDate, 'future eventDate persists unmodified (A-4.1)');
+        assert.strictEqual(stored.eventType, 'upcoming_event');
+        assert.strictEqual(stored.direction, null, 'direction stays exactly null');
+        assert.ok(provider.NEWS_KEY_RE.test(itemKey), 'key matches NEWS_KEY_RE');
+        assert.deepStrictEqual(Object.keys(stored), RECORD_FIELD_ORDER, 'exact 19-field record order');
+        assert.deepStrictEqual(stored, expectedRecord(items[0]), 'byte-exact stored record');
+      });
+    });
+
+    // ── NW29 ───────────────────────────────────────────────────────────────────
+    await test('NW29 mixed batch (A-5): one catalyst + one future-dated upcoming_event both persist; the envelope is never rejected', async function () {
+      await withEnv(armedEnv(), async function () {
+        const store = makeStore();
+        const futureDate = '2026-11-19';
+        const urlA = 'https://ir.jfrog.com/news/q3-results';
+        const urlB = 'https://ir.jfrog.com/news/q4-preview';
+        const fixture = sonarResponse(
+          [
+            { eventDate: '2026-09-17', category: 'earnings_event', eventType: 'catalyst', direction: 'positive', relevanceScope: 'company', subType: null, sourceUrl: urlA },
+            { eventDate: futureDate, category: 'earnings_event', eventType: 'upcoming_event', direction: null, relevanceScope: 'company', subType: null, sourceUrl: urlB }
+          ],
+          [urlA, urlB]
+        );
+        const items = expectedItems(fixture);
+        assert.strictEqual(items.length, 2, 'both items normalize');
+        const itemKeys = items.map(provider.buildNewsKey);
+        const fetchSpy = makeFetch(fixture);
+        const r = await core.handler(makeEvent({ auth: AUTH, body: '{"ticker":"FROG"}', store: store, fetchImpl: fetchSpy.fn }));
+        assert.strictEqual(r.statusCode, 200);
+        assertExactBody(r, { status: 'WRITE', ticker: TICKER, fetchedAt: NOW_ISO, writtenKeys: itemKeys.concat([INDEX_KEY]) }, 'mixed batch WRITE, envelope not rejected');
+        itemKeys.forEach(function (k) { assert.ok(Object.prototype.hasOwnProperty.call(store.data, k), 'item persisted: ' + k); });
+        assert.strictEqual(setOps(store).length, 3, 'both items plus the index, nothing dropped from a whole-envelope rejection');
       });
     });
 

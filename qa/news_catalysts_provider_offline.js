@@ -53,13 +53,24 @@ const PROVIDER_ID = 'j3-news-catalysts@job-model-v1';
 const ITEM_FIELD_ORDER = [
   'ticker', 'eventDate', 'category', 'direction', 'sourceUrl',
   'normalizedSourceUrl', 'sourceDomain', 'provider', 'retrievedAt',
-  'identityHash', 'provenance', 'confidence', 'requiresVerification', 'scoringImpact'
+  'identityHash', 'provenance', 'confidence', 'requiresVerification', 'scoringImpact',
+  'eventType', 'relevanceScope', 'subType'
 ];
 
 // ── fixture builders ─────────────────────────────────────────────────────────
 
+// Taxonomy defaults (eventType: 'catalyst', relevanceScope: 'company') apply
+// unless a test overrides them via `extra` — this keeps every pre-S1.5 call
+// site valid under the new required fields without touching each one
+// individually. subType defaults to a non-empty string when the category is
+// 'other_catalyst' (D-S15-C requires one) and to null otherwise; a test
+// exercising INVALID_SUB_TYPE overrides it explicitly via `extra`.
 function rawItem(eventDate, category, direction, sourceUrl, extra) {
-  var it = {};
+  var it = {
+    eventType: 'catalyst',
+    relevanceScope: 'company',
+    subType: category === 'other_catalyst' ? 'general' : null
+  };
   if (eventDate !== undefined) { it.eventDate = eventDate; }
   if (category !== undefined) { it.category = category; }
   if (direction !== undefined) { it.direction = direction; }
@@ -108,15 +119,27 @@ const TIER_B = { ok: false, reason: 'PROVIDER_INVALID_RESPONSE' };
 const TIER_A = { ok: false, reason: 'PROVIDER_FAILURE' };
 
 // Pinned identity: sha256 over the byte-exact tuple JSON literal (key
-// insertion order normative, spec §3) — computed independently of the module.
-function pinnedHash(eventDate, category, direction, normalizedSourceUrl, sourceDomain) {
-  var json = '{"schemaVersion":"j3-identity-v1","ticker":"' + TICKER + '","eventDate":"' + eventDate +
-    '","category":"' + category + '","direction":"' + direction + '","normalizedSourceUrl":"' + normalizedSourceUrl +
-    '","sourceDomain":"' + sourceDomain + '","provider":"' + PROVIDER_ID + '"}';
+// insertion order normative, spec §3) — computed independently of the
+// module. eventType is inserted after category, before direction (A-2);
+// schemaVersion is 'j3-identity-v2'. direction serializes as the bare
+// literal null for an upcoming_event (A-1).
+function pinnedHash(eventDate, category, eventType, direction, normalizedSourceUrl, sourceDomain) {
+  var directionLiteral = direction === null ? 'null' : '"' + direction + '"';
+  var json = '{"schemaVersion":"j3-identity-v2","ticker":"' + TICKER + '","eventDate":"' + eventDate +
+    '","category":"' + category + '","eventType":"' + eventType + '","direction":' + directionLiteral +
+    ',"normalizedSourceUrl":"' + normalizedSourceUrl + '","sourceDomain":"' + sourceDomain + '","provider":"' + PROVIDER_ID + '"}';
   return crypto.createHash('sha256').update(json, 'utf8').digest('hex');
 }
 
-function expectedItem(eventDate, category, direction, sourceUrl, normalizedSourceUrl, sourceDomain) {
+// eventType/relevanceScope default to 'catalyst'/'company' so every pre-S1.5
+// call site (fixed 6-arg positional form) keeps working; a test exercising
+// the taxonomy fields passes the trailing args. subType: an explicit value
+// always wins; otherwise 'other_catalyst' defaults to a non-empty value
+// ('general'), and every other category defaults to null.
+function expectedItem(eventDate, category, direction, sourceUrl, normalizedSourceUrl, sourceDomain, eventType, relevanceScope, subType) {
+  var et = eventType === undefined ? 'catalyst' : eventType;
+  var rs = relevanceScope === undefined ? 'company' : relevanceScope;
+  var st = subType !== undefined ? subType : (category === 'other_catalyst' ? 'general' : null);
   return {
     ticker: TICKER,
     eventDate: eventDate,
@@ -127,11 +150,14 @@ function expectedItem(eventDate, category, direction, sourceUrl, normalizedSourc
     sourceDomain: sourceDomain,
     provider: PROVIDER_ID,
     retrievedAt: NOW_ISO,
-    identityHash: pinnedHash(eventDate, category, direction, normalizedSourceUrl, sourceDomain),
+    identityHash: pinnedHash(eventDate, category, et, direction, normalizedSourceUrl, sourceDomain),
     provenance: 'retrieval_unverified',
     confidence: null,
     requiresVerification: true,
-    scoringImpact: 'none'
+    scoringImpact: 'none',
+    eventType: et,
+    relevanceScope: rs,
+    subType: st
   };
 }
 
@@ -176,7 +202,7 @@ async function runTests() {
         ticker: TICKER,
         fetchedAt: NOW_ISO,
         sourceTier: 'perplexity_retrieval',
-        contractVersion: 'fund-contract-v1',
+        contractVersion: 'news-contract-v1',
         provider: PROVIDER_ID,
         items: [
           expectedItem('2026-07-18', 'earnings_event', 'positive', url1, url1, 'ir.jfrog.com'),
@@ -212,12 +238,54 @@ async function runTests() {
         },
         {
           role: 'user',
-          content: 'List recent dated news and catalyst events for the U.S. equity ticker ' + TICKER +
-            '. For each event provide: eventDate (ISO YYYY-MM-DD, the event\'s own date), category (one of: ' +
-            'earnings_event, guidance_update, analyst_action, corporate_action, product_customer_partnership, ' +
-            'regulatory_legal, other_catalyst), direction (positive, neutral, or negative for the company), and ' +
-            'sourceUrl (the https URL of the source reporting the event). Only include events you can source. ' +
-            'Do not include commentary, titles, or summaries.'
+          content: 'Cover the U.S. equity ticker ' + TICKER + '. Report catalysts from the previous 30 calendar days ' +
+            'and known upcoming events over the next 60 calendar days. For each item provide: eventDate (ISO ' +
+            'YYYY-MM-DD, the event\'s own date), category (one of: earnings_event, guidance_update, analyst_action, ' +
+            'corporate_action, product_customer_partnership, regulatory_legal, other_catalyst), eventType (catalyst ' +
+            'for an event that has already happened, or upcoming_event for a known event scheduled to happen ' +
+            'later), direction (positive, neutral, or negative for the company; must be null when eventType is ' +
+            'upcoming_event, since the event has not happened yet), relevanceScope (company, sector, or market: ' +
+            'keep the event\'s natural category and use this field to express broader scope — never force sector- ' +
+            'or market-wide news into other_catalyst), subType (a short label required only when category is ' +
+            'other_catalyst, otherwise null), and sourceUrl (the https URL of the source reporting the event). ' +
+            'earnings_event covers actual results, material revenue, EPS, margin or profitability outcomes, profit ' +
+            'warnings, material disclosures during the earnings process, and material earnings delays or ' +
+            'restatements; it excludes a future earnings-date announcement (report that as upcoming_event), ' +
+            'management guidance, and analyst reaction. guidance_update covers management guidance only — raised, ' +
+            'lowered, new, withdrawn or suspended guidance and material changes to revenue, EPS, margin, growth, ' +
+            'free cash flow, capital expenditure or other outlook metrics, including a material qualitative change ' +
+            'with no number; a routine reaffirmation with no new information is not a catalyst, and an analyst ' +
+            'forecast is never guidance_update. analyst_action covers an upgrade, downgrade, rating change, ' +
+            'initiation, or a material price-target or estimate revision; a small technical revision is not a ' +
+            'catalyst. corporate_action covers capital allocation and capital-structure events — merger or ' +
+            'acquisition offers, definitive agreements or terminations, buybacks, dividend initiation, cut, ' +
+            'suspension or special dividends, splits, spin-offs, material equity or debt issuance or refinancing, ' +
+            'bankruptcy, a major capital-structure change, or a material strategic-alternatives or poison-pill ' +
+            'action; it excludes ordinary management change, routine operating restructuring, and on-schedule ' +
+            'completion of an already-announced deal. An equity-ownership or capital-structure change routes to ' +
+            'corporate_action. product_customer_partnership covers material commercial traction — a product ' +
+            'launch, a major customer win, a significant contract, a strategic partnership, a material expansion, ' +
+            'a meaningful distribution or integration deal, or a design win; it excludes routine public relations ' +
+            'such as a non-binding memorandum of understanding, ordinary co-marketing, a routine product update, ' +
+            'or an immaterial customer announcement. regulatory_legal covers an approval, rejection, investigation, ' +
+            'enforcement action, lawsuit, ruling, fine, settlement, antitrust matter, license or permit, export or ' +
+            'import restriction, sanction, injunction, or recall or sales restriction; it excludes routine legal or ' +
+            'regulatory noise, and relevanceScope separates a direct company event from sector- or market-wide ' +
+            'regulation. A regulatory approval or a regulatory-triggered event routes to regulatory_legal, and ' +
+            'where regulation is the primary cause of an event, regulatory_legal may take precedence over ' +
+            'corporate_action or product_customer_partnership. An investigation is not automatically negative — ' +
+            'direction follows the actual company impact. other_catalyst is a true last resort, used only when no ' +
+            'other category applies, and always requires subType — for example a cyber incident, a supply-chain ' +
+            'disruption, a short-seller report, a credit-rating action, a major management change, a force ' +
+            'majeure event, a trading halt, or another material operating event with no better category. A ' +
+            'scheduled future event stays upcoming_event unless it is delayed, cancelled, changed, or otherwise ' +
+            'becomes material now — that change, not the original schedule, is the catalyst. One source may ' +
+            'produce more than one item, such as an earnings release that carries both results and new guidance. ' +
+            'Judge materiality relative to the company and its business impact, without any fixed threshold — a ' +
+            'strategically important customer can make a relatively small contract material. For guidance_update ' +
+            'specifically, weigh direction against the company\'s own prior guidance and analyst consensus where ' +
+            'reliable evidence exists; do not treat every guidance change in one direction as automatically that ' +
+            'direction. Only include events you can source. Do not include commentary, titles, or summaries.'
         }
       ],
       response_format: { type: 'json_schema', json_schema: { schema: provider.REQUEST_SCHEMA } }
@@ -400,13 +468,18 @@ async function runTests() {
   });
 
   // ── NP12: invalid direction ─────────────────────────────────────────────────
-  await test('NP12 direction outside DIRECTIONS (incl. missing) ⇒ INVALID_DIRECTION', async function () {
+  await test('NP12 direction validity is conditional on eventType (A-1): outside DIRECTIONS/missing on catalyst, non-null on upcoming_event, null on catalyst ⇒ INVALID_DIRECTION', async function () {
     var g = 'https://ir.jfrog.com/news/a';
     var r = norm([
       rawItem('2026-07-18', 'earnings_event', 'bullish', g),
-      rawItem('2026-07-18', 'earnings_event', undefined, g)
+      rawItem('2026-07-18', 'earnings_event', undefined, g),
+      rawItem('2026-07-18', 'earnings_event', null, g),
+      rawItem('2026-07-18', 'earnings_event', 'positive', g, { eventType: 'upcoming_event' })
     ], [g], undefined);
-    assert.deepStrictEqual(r.skippedItems, [{ reason: 'INVALID_DIRECTION' }, { reason: 'INVALID_DIRECTION' }]);
+    assert.deepStrictEqual(r.skippedItems, [
+      { reason: 'INVALID_DIRECTION' }, { reason: 'INVALID_DIRECTION' },
+      { reason: 'INVALID_DIRECTION' }, { reason: 'INVALID_DIRECTION' }
+    ]);
   });
 
   // ── NP13: zero-item success ─────────────────────────────────────────────────
@@ -419,7 +492,7 @@ async function runTests() {
         ticker: TICKER,
         fetchedAt: NOW_ISO,
         sourceTier: 'perplexity_retrieval',
-        contractVersion: 'fund-contract-v1',
+        contractVersion: 'news-contract-v1',
         provider: PROVIDER_ID,
         items: [],
         skippedItems: [],
@@ -453,8 +526,8 @@ async function runTests() {
     assert.strictEqual(JSON.stringify(r1), JSON.stringify(r2), 'byte-identical results');
     var hash = r1.items[0].identityHash;
     assert.ok(/^[a-f0-9]{64}$/.test(hash), 'lowercase 64-hex');
-    assert.strictEqual(hash, pinnedHash('2026-07-18', 'earnings_event', 'positive', g, 'ir.jfrog.com'),
-      'hash equals sha256 of the byte-exact pinned tuple literal (key order normative)');
+    assert.strictEqual(hash, pinnedHash('2026-07-18', 'earnings_event', 'catalyst', 'positive', g, 'ir.jfrog.com'),
+      'hash equals sha256 of the byte-exact pinned tuple literal (key order normative, j3-identity-v2)');
   });
 
   // ── NP16: title/summary discarded, hash-inert ───────────────────────────────
@@ -465,7 +538,7 @@ async function runTests() {
     var plain = rawItem('2026-07-18', 'earnings_event', 'positive', g);
     var rA = norm([withExtras], [g], undefined);
     var rB = norm([plain], [g], undefined);
-    assert.deepStrictEqual(Object.keys(rA.items[0]), ITEM_FIELD_ORDER, 'exact 14-field projection, exact order');
+    assert.deepStrictEqual(Object.keys(rA.items[0]), ITEM_FIELD_ORDER, 'exact 17-field projection, exact order');
     var textA = JSON.stringify(rA);
     assert.strictEqual(textA.indexOf('title'), -1, 'no title');
     assert.strictEqual(textA.indexOf('summary'), -1, 'no summary');
@@ -721,10 +794,176 @@ async function runTests() {
     assert.strictEqual(typeof provider.buildNewsKey, 'function', 'buildNewsKey exported');
     assert.ok(/ctx\.fetchImpl\s*\(/.test(s), 'uses injected ctx.fetchImpl');
     assert.strictEqual(provider.PROVIDER_ID, PROVIDER_ID, 'fixed provider literal');
-    assert.strictEqual(provider.IDENTITY_SCHEMA_VERSION, 'j3-identity-v1', 'independent identity version tag');
+    assert.strictEqual(provider.IDENTITY_SCHEMA_VERSION, 'j3-identity-v2', 'independent identity version tag (A-2)');
     assert.ok(Object.isFrozen(provider.REQUEST_SCHEMA), 'REQUEST_SCHEMA frozen');
     assert.ok(Object.isFrozen(provider.CATEGORIES), 'CATEGORIES frozen');
+    assert.ok(Object.isFrozen(provider.EVENT_TYPES), 'EVENT_TYPES frozen');
+    assert.ok(Object.isFrozen(provider.RELEVANCE_SCOPES), 'RELEVANCE_SCOPES frozen');
     assert.ok(Object.isFrozen(provider.SKIP_REASONS), 'SKIP_REASONS frozen');
+  });
+
+  // ── NP24: eventType vocabulary ──────────────────────────────────────────────
+  await test('NP24 eventType always present and in EVENT_TYPES; out-of-vocabulary/missing ⇒ UNKNOWN_EVENT_TYPE, siblings survive', async function () {
+    var g = 'https://ir.jfrog.com/news/a';
+    var r = norm([
+      rawItem('2026-07-18', 'earnings_event', 'positive', g, { eventType: 'rumor' }),
+      rawItem('2026-07-19', 'earnings_event', 'positive', g, { eventType: undefined }),
+      rawItem('2026-07-20', 'earnings_event', 'positive', g, { eventType: 'catalyst' })
+    ], [g], undefined);
+    assert.deepStrictEqual(r.skippedItems, [{ reason: 'UNKNOWN_EVENT_TYPE' }, { reason: 'UNKNOWN_EVENT_TYPE' }], 'unknown/missing eventType skipped, sibling unaffected');
+    assert.strictEqual(r.items.length, 1);
+    assert.strictEqual(r.items[0].eventType, 'catalyst');
+    assert.deepStrictEqual(provider.EVENT_TYPES.slice(), ['catalyst', 'upcoming_event'], 'exported vocabulary is exactly the A-1 set');
+  });
+
+  // ── NP25: relevanceScope vocabulary ─────────────────────────────────────────
+  await test('NP25 relevanceScope always present and in RELEVANCE_SCOPES; out-of-vocabulary/missing ⇒ INVALID_RELEVANCE_SCOPE', async function () {
+    var g = 'https://ir.jfrog.com/news/a';
+    var r = norm([
+      rawItem('2026-07-18', 'earnings_event', 'positive', g, { relevanceScope: 'global' }),
+      rawItem('2026-07-19', 'earnings_event', 'positive', g, { relevanceScope: undefined }),
+      rawItem('2026-07-20', 'earnings_event', 'positive', g, { relevanceScope: 'sector' })
+    ], [g], undefined);
+    assert.deepStrictEqual(r.skippedItems, [{ reason: 'INVALID_RELEVANCE_SCOPE' }, { reason: 'INVALID_RELEVANCE_SCOPE' }]);
+    assert.strictEqual(r.items.length, 1);
+    assert.strictEqual(r.items[0].relevanceScope, 'sector');
+    assert.deepStrictEqual(provider.RELEVANCE_SCOPES.slice(), ['company', 'sector', 'market'], 'exported vocabulary is exactly the DR-3 set');
+  });
+
+  // ── NP26: subType conditionality ────────────────────────────────────────────
+  await test('NP26 subType non-empty (trimmed) string iff category is other_catalyst, else null; violations (missing/undefined/empty/whitespace-only/present-when-forbidden) ⇒ INVALID_SUB_TYPE; key present on every survivor', async function () {
+    var g = 'https://ir.jfrog.com/news/a';
+    var r = norm([
+      rawItem('2026-07-18', 'other_catalyst', 'positive', g, { subType: null }),
+      rawItem('2026-07-19', 'other_catalyst', 'positive', g, { subType: '' }),
+      rawItem('2026-07-23', 'other_catalyst', 'positive', g, { subType: '   ' }),
+      rawItem('2026-07-24', 'other_catalyst', 'positive', g, { subType: undefined }),
+      rawItem('2026-07-20', 'earnings_event', 'positive', g, { subType: 'extra' }),
+      rawItem('2026-07-21', 'other_catalyst', 'positive', g, { subType: 'trading_halt' }),
+      rawItem('2026-07-22', 'earnings_event', 'positive', g)
+    ], [g], undefined);
+    assert.deepStrictEqual(r.skippedItems, [
+      { reason: 'INVALID_SUB_TYPE' }, { reason: 'INVALID_SUB_TYPE' }, { reason: 'INVALID_SUB_TYPE' },
+      { reason: 'INVALID_SUB_TYPE' }, { reason: 'INVALID_SUB_TYPE' }
+    ]);
+    assert.strictEqual(r.items.length, 2);
+    assert.strictEqual(r.items[0].subType, 'trading_halt');
+    assert.strictEqual(r.items[1].subType, null);
+    r.items.forEach(function (it) { assert.ok(Object.prototype.hasOwnProperty.call(it, 'subType'), 'subType key present on every surviving item'); });
+  });
+
+  // ── NP27: no numeric materiality / percentage literal (DR-12) ───────────────
+  await test('NP27 static scan: no numeric materiality threshold or percentage literal in the ladder or the prompt', async function () {
+    var s = fs.readFileSync(SRC, 'utf8');
+    // Scope the scan to the validation ladder function only, extracted by
+    // brace-depth so it isn't truncated by a nested block — the module's OWN
+    // leap-year clock-grammar check legitimately uses '%' as the modulo
+    // operator, which is unrelated to DR-12 materiality and must not trip
+    // this scan, and its for-loop counters (`i < rawItems.length`) are
+    // ordinary iteration, not a materiality gate.
+    var fnStart = s.indexOf('function normalizeNewsResponse(');
+    assert.ok(fnStart !== -1, 'normalizeNewsResponse function located for the scan');
+    var depth = 0, started = false, fnEnd = fnStart;
+    for (; fnEnd < s.length; fnEnd++) {
+      if (s[fnEnd] === '{') { depth++; started = true; }
+      else if (s[fnEnd] === '}') { depth--; if (started && depth === 0) { fnEnd++; break; } }
+    }
+    var ladder = s.slice(fnStart, fnEnd);
+    assert.strictEqual(ladder.indexOf('%'), -1, 'no percentage literal in the validation ladder');
+    // The real DR-12 proof: the ladder never gates on a numeric magnitude
+    // derived from an item's own field — that would be a hardcoded
+    // materiality threshold. Ordinary loop counters (`i < rawItems.length`)
+    // and the fixed Tier-B `choices.length < 1` check do not reference
+    // `raw.<field>` and so do not match.
+    assert.ok(!/raw\.\w+\s*[<>]=?\s*-?\d/.test(ladder), 'no item field compared against a numeric threshold');
+    assert.ok(!/-?\d+(\.\d+)?\s*[<>]=?\s*raw\.\w+/.test(ladder), 'no numeric threshold compared against an item field');
+    var spy = makeFetch(sonarResponse([]));
+    await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spy));
+    var promptText = JSON.parse(spy.calls[0].init.body).messages[1].content;
+    assert.strictEqual(promptText.indexOf('%'), -1, 'no percentage literal in the prompt');
+    var digits = promptText.match(/\d+/g) || [];
+    digits.forEach(function (d) { assert.ok(d === '30' || d === '60', 'unexpected numeric literal in the prompt: ' + d); });
+  });
+
+  // ── NP28: three-site category vocabulary parity (DR-14) ─────────────────────
+  await test('NP28 category vocabulary parity across CATEGORIES, the REQUEST_SCHEMA enum, and the prompt list', async function () {
+    var schemaEnum = provider.REQUEST_SCHEMA.properties.items.items.properties.category.enum;
+    assert.deepStrictEqual(schemaEnum.slice().sort(), provider.CATEGORIES.slice().sort(), 'schema enum matches CATEGORIES');
+    var spy = makeFetch(sonarResponse([]));
+    await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spy));
+    var promptText = JSON.parse(spy.calls[0].init.body).messages[1].content;
+    provider.CATEGORIES.forEach(function (cat) {
+      assert.ok(promptText.indexOf(cat) !== -1, 'prompt names category: ' + cat);
+    });
+  });
+
+  // ── NP29: prompt windows in words, no standalone 'recent' (Q-S15-4) ─────────
+  await test('NP29 prompt states both windows explicitly in calendar days; no standalone "recent" literal', async function () {
+    var spy = makeFetch(sonarResponse([]));
+    await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spy));
+    var promptText = JSON.parse(spy.calls[0].init.body).messages[1].content;
+    assert.ok(promptText.indexOf('the previous 30 calendar days') !== -1, 'previous-30 window phrase present');
+    assert.ok(promptText.indexOf('the next 60 calendar days') !== -1, 'next-60 window phrase present');
+    assert.ok(!/\brecent\b/i.test(promptText), 'no standalone "recent" literal');
+  });
+
+  // ── NP30: relevanceScope is identity-inert (A-2) ────────────────────────────
+  await test('NP30 relevanceScope is identity-inert: two items differing only in relevanceScope collide ⇒ DUPLICATE_IN_BATCH', async function () {
+    var g = 'https://ir.jfrog.com/news/a';
+    var r = norm([
+      rawItem('2026-07-18', 'earnings_event', 'positive', g, { relevanceScope: 'company' }),
+      rawItem('2026-07-18', 'earnings_event', 'positive', g, { relevanceScope: 'market' })
+    ], [g], undefined);
+    assert.strictEqual(r.items.length, 1, 'first kept');
+    assert.strictEqual(r.items[0].relevanceScope, 'company');
+    assert.deepStrictEqual(r.skippedItems, [{ reason: 'DUPLICATE_IN_BATCH' }], 'second dropped — scope does not affect identity');
+  });
+
+  // ── NP31: eventType is identity-bearing (A-2) ───────────────────────────────
+  await test('NP31 eventType is identity-bearing: present in the tuple after category, before direction; differs alone (direction held constant) ⇒ different hash; both valid A-1 shapes survive distinctly', async function () {
+    var g = 'https://ir.jfrog.com/news/a';
+    var futureDate = '2026-11-19';
+    // Direct tuple-position proof, independent of direction: same eventDate/
+    // category/direction/URL, eventType alone differs — isolates its own slot
+    // (after category, before direction) rather than riding on direction's
+    // existing identity-bearing effect.
+    var hashCatalyst = pinnedHash(futureDate, 'earnings_event', 'catalyst', 'positive', g, 'ir.jfrog.com');
+    var hashUpcomingSameDirection = pinnedHash(futureDate, 'earnings_event', 'upcoming_event', 'positive', g, 'ir.jfrog.com');
+    assert.notStrictEqual(hashCatalyst, hashUpcomingSameDirection,
+      'eventType alone, direction held constant, changes the hash — eventType occupies its own tuple slot');
+
+    // End-to-end: both A-1-valid item shapes survive as distinct, correctly-keyed records.
+    var r = norm([
+      rawItem(futureDate, 'earnings_event', 'positive', g, { eventType: 'catalyst', relevanceScope: 'company' }),
+      rawItem(futureDate, 'earnings_event', null, g, { eventType: 'upcoming_event', relevanceScope: 'company' })
+    ], [g], undefined);
+    assert.strictEqual(r.items.length, 2, 'both survive');
+    assert.deepStrictEqual(r.skippedItems, [], 'neither is a duplicate');
+    assert.strictEqual(r.items[0].identityHash, hashCatalyst, 'catalyst item hash matches the pinned tuple order');
+    assert.strictEqual(r.items[1].identityHash,
+      pinnedHash(futureDate, 'earnings_event', 'upcoming_event', null, g, 'ir.jfrog.com'),
+      'upcoming_event item hash matches the pinned tuple order');
+    assert.notStrictEqual(r.items[0].identityHash, r.items[1].identityHash, 'different hashes');
+    assert.notStrictEqual(provider.buildNewsKey(r.items[0]), provider.buildNewsKey(r.items[1]), 'different keys');
+  });
+
+  // ── NP32: direction conditionality on a future-dated fixture (A-1, A-4.1) ──
+  await test('NP32 direction conditionality (A-1) on a future-dated fixture: mis-shaped ⇒ INVALID_DIRECTION, well-shaped survives and keys cleanly (A-4.1)', async function () {
+    var g = 'https://ir.jfrog.com/news/a';
+    var futureDate = '2026-11-19'; // after NOW_ISO (2026-07-24T00:00:00.000Z)
+    var r = norm([
+      rawItem(futureDate, 'earnings_event', 'positive', g, { eventType: 'upcoming_event' }),
+      rawItem(futureDate, 'earnings_event', null, g, { eventType: 'catalyst' }),
+      rawItem(futureDate, 'earnings_event', 'positive', g, { eventType: 'catalyst' }),
+      rawItem(futureDate, 'earnings_event', null, g, { eventType: 'upcoming_event' })
+    ], [g], undefined);
+    assert.deepStrictEqual(r.skippedItems, [{ reason: 'INVALID_DIRECTION' }, { reason: 'INVALID_DIRECTION' }]);
+    assert.strictEqual(r.items.length, 2);
+    assert.strictEqual(r.items[0].direction, 'positive');
+    assert.strictEqual(r.items[0].eventType, 'catalyst');
+    assert.strictEqual(r.items[1].direction, null);
+    assert.strictEqual(r.items[1].eventType, 'upcoming_event');
+    assert.ok(provider.NEWS_KEY_RE.test(provider.buildNewsKey(r.items[1])), 'future-dated upcoming_event key matches NEWS_KEY_RE');
   });
 
   global.fetch = _origFetch;

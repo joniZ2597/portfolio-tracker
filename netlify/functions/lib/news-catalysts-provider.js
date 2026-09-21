@@ -5,7 +5,7 @@
  *
  * EG-25C-3 · C3-S1 — J3 News/Catalysts provider (PURE LIB, OFFLINE-ONLY).
  *
- * Deterministic Perplexity Sonar retrieval → fund-contract-v1 NewsItem
+ * Deterministic Perplexity Sonar retrieval → news-contract-v1 NewsItem
  * normalizer. Dormant-by-construction: nothing imports this module yet, it
  * reads no ambient environment, and every upstream contact goes through an
  * INJECTED fetch implementation with an INJECTED clock — so the whole module
@@ -51,10 +51,10 @@ var contract = require('./evidence-contract');
 
 // ── constants ────────────────────────────────────────────────────────────────
 
-var CONTRACT_VERSION = 'fund-contract-v1';
+var CONTRACT_VERSION = 'news-contract-v1';
 var SOURCE_TIER = 'perplexity_retrieval';
 var PROVIDER_ID = 'j3-news-catalysts@job-model-v1';
-var IDENTITY_SCHEMA_VERSION = 'j3-identity-v1';
+var IDENTITY_SCHEMA_VERSION = 'j3-identity-v2';
 
 var PPLX_ENDPOINT = 'https://api.perplexity.ai/v1/sonar';
 var PPLX_MODEL = 'sonar-pro';
@@ -77,8 +77,17 @@ var CATEGORIES = deepFreeze([
   'other_catalyst'
 ]);
 
+// A-1 · A-2: catalyst = already happened, carries a direction; upcoming_event
+// = known future event, direction must be null. Identity-bearing (A-2).
+var EVENT_TYPES = deepFreeze(['catalyst', 'upcoming_event']);
+
+// DR-3: breadth of an event, independent of its natural category.
+// Identity-inert (A-2) — never a tuple member.
+var RELEVANCE_SCOPES = deepFreeze(['company', 'sector', 'market']);
+
 // Skip reason codes (spec §2 order). One reason per skipped item; a skipped
-// item never echoes any item data.
+// item never echoes any item data. The three S1.5 additions are appended
+// after DUPLICATE_IN_BATCH so every existing index stays stable.
 var SKIP_REASONS = deepFreeze([
   'MISSING_EVENT_DATE',
   'INVALID_EVENT_DATE',
@@ -86,7 +95,10 @@ var SKIP_REASONS = deepFreeze([
   'INVALID_SOURCE_URL',
   'UNKNOWN_CATEGORY',
   'INVALID_DIRECTION',
-  'DUPLICATE_IN_BATCH'
+  'DUPLICATE_IN_BATCH',
+  'UNKNOWN_EVENT_TYPE',
+  'INVALID_RELEVANCE_SCOPE',
+  'INVALID_SUB_TYPE'
 ]);
 
 // Exact spec §7 JSON Schema literal. Sent to Sonar as a GENERATION CONSTRAINT
@@ -103,7 +115,7 @@ var REQUEST_SCHEMA = deepFreeze({
       type: 'array',
       items: {
         type: 'object',
-        required: ['eventDate', 'category', 'direction', 'sourceUrl'],
+        required: ['eventDate', 'category', 'eventType', 'direction', 'relevanceScope', 'subType', 'sourceUrl'],
         additionalProperties: false,
         properties: {
           eventDate: { type: 'string' },
@@ -115,7 +127,15 @@ var REQUEST_SCHEMA = deepFreeze({
               'regulatory_legal', 'other_catalyst'
             ]
           },
-          direction: { type: 'string', enum: ['positive', 'neutral', 'negative'] },
+          eventType: { type: 'string', enum: ['catalyst', 'upcoming_event'] },
+          // A-1: null validates only when the 'type' keyword is dropped —
+          // conditionality (catalyst requires a value, upcoming_event
+          // requires null) is enforced by the ladder, not this schema.
+          direction: { enum: ['positive', 'neutral', 'negative', null] },
+          relevanceScope: { type: 'string', enum: ['company', 'sector', 'market'] },
+          // D-S15-C: always present — a non-empty string iff category is
+          // 'other_catalyst', else null. The conditionality is ladder-enforced.
+          subType: { type: ['string', 'null'] },
           sourceUrl: { type: 'string' }
         }
       }
@@ -208,12 +228,54 @@ function buildRequestBody(ticker) {
       },
       {
         role: 'user',
-        content: 'List recent dated news and catalyst events for the U.S. equity ticker ' + ticker +
-          '. For each event provide: eventDate (ISO YYYY-MM-DD, the event\'s own date), category (one of: ' +
-          'earnings_event, guidance_update, analyst_action, corporate_action, product_customer_partnership, ' +
-          'regulatory_legal, other_catalyst), direction (positive, neutral, or negative for the company), and ' +
-          'sourceUrl (the https URL of the source reporting the event). Only include events you can source. ' +
-          'Do not include commentary, titles, or summaries.'
+        content: 'Cover the U.S. equity ticker ' + ticker + '. Report catalysts from the previous 30 calendar days ' +
+          'and known upcoming events over the next 60 calendar days. For each item provide: eventDate (ISO ' +
+          'YYYY-MM-DD, the event\'s own date), category (one of: earnings_event, guidance_update, analyst_action, ' +
+          'corporate_action, product_customer_partnership, regulatory_legal, other_catalyst), eventType (catalyst ' +
+          'for an event that has already happened, or upcoming_event for a known event scheduled to happen ' +
+          'later), direction (positive, neutral, or negative for the company; must be null when eventType is ' +
+          'upcoming_event, since the event has not happened yet), relevanceScope (company, sector, or market: ' +
+          'keep the event\'s natural category and use this field to express broader scope — never force sector- ' +
+          'or market-wide news into other_catalyst), subType (a short label required only when category is ' +
+          'other_catalyst, otherwise null), and sourceUrl (the https URL of the source reporting the event). ' +
+          'earnings_event covers actual results, material revenue, EPS, margin or profitability outcomes, profit ' +
+          'warnings, material disclosures during the earnings process, and material earnings delays or ' +
+          'restatements; it excludes a future earnings-date announcement (report that as upcoming_event), ' +
+          'management guidance, and analyst reaction. guidance_update covers management guidance only — raised, ' +
+          'lowered, new, withdrawn or suspended guidance and material changes to revenue, EPS, margin, growth, ' +
+          'free cash flow, capital expenditure or other outlook metrics, including a material qualitative change ' +
+          'with no number; a routine reaffirmation with no new information is not a catalyst, and an analyst ' +
+          'forecast is never guidance_update. analyst_action covers an upgrade, downgrade, rating change, ' +
+          'initiation, or a material price-target or estimate revision; a small technical revision is not a ' +
+          'catalyst. corporate_action covers capital allocation and capital-structure events — merger or ' +
+          'acquisition offers, definitive agreements or terminations, buybacks, dividend initiation, cut, ' +
+          'suspension or special dividends, splits, spin-offs, material equity or debt issuance or refinancing, ' +
+          'bankruptcy, a major capital-structure change, or a material strategic-alternatives or poison-pill ' +
+          'action; it excludes ordinary management change, routine operating restructuring, and on-schedule ' +
+          'completion of an already-announced deal. An equity-ownership or capital-structure change routes to ' +
+          'corporate_action. product_customer_partnership covers material commercial traction — a product ' +
+          'launch, a major customer win, a significant contract, a strategic partnership, a material expansion, ' +
+          'a meaningful distribution or integration deal, or a design win; it excludes routine public relations ' +
+          'such as a non-binding memorandum of understanding, ordinary co-marketing, a routine product update, ' +
+          'or an immaterial customer announcement. regulatory_legal covers an approval, rejection, investigation, ' +
+          'enforcement action, lawsuit, ruling, fine, settlement, antitrust matter, license or permit, export or ' +
+          'import restriction, sanction, injunction, or recall or sales restriction; it excludes routine legal or ' +
+          'regulatory noise, and relevanceScope separates a direct company event from sector- or market-wide ' +
+          'regulation. A regulatory approval or a regulatory-triggered event routes to regulatory_legal, and ' +
+          'where regulation is the primary cause of an event, regulatory_legal may take precedence over ' +
+          'corporate_action or product_customer_partnership. An investigation is not automatically negative — ' +
+          'direction follows the actual company impact. other_catalyst is a true last resort, used only when no ' +
+          'other category applies, and always requires subType — for example a cyber incident, a supply-chain ' +
+          'disruption, a short-seller report, a credit-rating action, a major management change, a force ' +
+          'majeure event, a trading halt, or another material operating event with no better category. A ' +
+          'scheduled future event stays upcoming_event unless it is delayed, cancelled, changed, or otherwise ' +
+          'becomes material now — that change, not the original schedule, is the catalyst. One source may ' +
+          'produce more than one item, such as an earnings release that carries both results and new guidance. ' +
+          'Judge materiality relative to the company and its business impact, without any fixed threshold — a ' +
+          'strategically important customer can make a relatively small contract material. For guidance_update ' +
+          'specifically, weigh direction against the company\'s own prior guidance and analyst consensus where ' +
+          'reliable evidence exists; do not treat every guidance change in one direction as automatically that ' +
+          'direction. Only include events you can source. Do not include commentary, titles, or summaries.'
       }
     ],
     response_format: { type: 'json_schema', json_schema: { schema: REQUEST_SCHEMA } }
@@ -412,21 +474,55 @@ function normalizeNewsResponse(parsedResponse, context) {
       continue;
     }
 
-    // direction — the shared DIRECTIONS vocabulary, verbatim.
-    if (contract.DIRECTIONS.indexOf(raw.direction) === -1) {
+    // eventType — the identity-bearing catalyst/upcoming_event vocabulary
+    // (A-1, A-2). Validated BEFORE direction: null is outside DIRECTIONS and
+    // would otherwise skip every upcoming event as INVALID_DIRECTION.
+    if (EVENT_TYPES.indexOf(raw.eventType) === -1) {
+      skippedItems.push({ reason: 'UNKNOWN_EVENT_TYPE' });
+      continue;
+    }
+
+    // direction — conditional on eventType (A-1): catalyst requires a
+    // DIRECTIONS value; upcoming_event requires direction to be exactly
+    // null. A wrong-shaped direction for the event type reuses the existing
+    // INVALID_DIRECTION reason rather than adding a new one.
+    if (raw.eventType === 'catalyst') {
+      if (contract.DIRECTIONS.indexOf(raw.direction) === -1) {
+        skippedItems.push({ reason: 'INVALID_DIRECTION' });
+        continue;
+      }
+    } else if (raw.direction !== null) {
       skippedItems.push({ reason: 'INVALID_DIRECTION' });
+      continue;
+    }
+
+    // relevanceScope — DR-3 breadth vocabulary; identity-inert (A-2).
+    if (RELEVANCE_SCOPES.indexOf(raw.relevanceScope) === -1) {
+      skippedItems.push({ reason: 'INVALID_RELEVANCE_SCOPE' });
+      continue;
+    }
+
+    // subType — D-S15-C: always present; a genuinely non-empty (trimmed)
+    // string iff category is 'other_catalyst', exactly null otherwise.
+    var subTypeValid = raw.category === 'other_catalyst'
+      ? (typeof raw.subType === 'string' && raw.subType.trim() !== '')
+      : raw.subType === null;
+    if (!subTypeValid) {
+      skippedItems.push({ reason: 'INVALID_SUB_TYPE' });
       continue;
     }
 
     // Identity tuple (spec §3) — this object literal's key insertion order is
     // NORMATIVE: JSON.stringify serializes string keys in insertion order and
     // the hash is deterministic only because this exact order is reproduced.
-    // Narrative fields never reach this tuple.
+    // Narrative fields never reach this tuple. eventType IS a member (A-2,
+    // inserted after category, before direction); relevanceScope is not.
     var tuple = {
       schemaVersion: IDENTITY_SCHEMA_VERSION,
       ticker: ticker,
       eventDate: eventDate,
       category: raw.category,
+      eventType: raw.eventType,
       direction: raw.direction,
       normalizedSourceUrl: grounded.normalized,
       sourceDomain: grounded.domain,
@@ -442,7 +538,8 @@ function normalizeNewsResponse(parsedResponse, context) {
 
     // Projection (spec §2): exact persisted field list AND insertion order.
     // Unknown fields on the raw candidate (title, summary, any free text) are
-    // discarded here — they never reach this literal.
+    // discarded here — they never reach this literal. eventType,
+    // relevanceScope and subType are appended after scoringImpact (D-S15-E).
     items.push({
       ticker: ticker,
       eventDate: eventDate,
@@ -457,7 +554,10 @@ function normalizeNewsResponse(parsedResponse, context) {
       provenance: 'retrieval_unverified',
       confidence: null,
       requiresVerification: true,
-      scoringImpact: 'none'
+      scoringImpact: 'none',
+      eventType: raw.eventType,
+      relevanceScope: raw.relevanceScope,
+      subType: raw.subType
     });
   }
 
@@ -599,6 +699,12 @@ module.exports = {
   PPLX_ENDPOINT: PPLX_ENDPOINT,
   PPLX_MODEL: PPLX_MODEL,
   CATEGORIES: CATEGORIES,
+  EVENT_TYPES: EVENT_TYPES,
+  RELEVANCE_SCOPES: RELEVANCE_SCOPES,
+  // Re-exported verbatim from evidence-contract so a consumer (the core
+  // boundary's A-5 direction guard) reads the one canonical vocabulary
+  // rather than duplicating it.
+  DIRECTIONS: contract.DIRECTIONS,
   SKIP_REASONS: SKIP_REASONS,
   NEWS_KEY_RE: NEWS_KEY_RE
 };

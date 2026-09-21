@@ -71,17 +71,21 @@ const {
   SOURCE_TIER,
   PROVIDER_ID,
   CATEGORIES,
+  EVENT_TYPES,
+  RELEVANCE_SCOPES,
+  DIRECTIONS,
   NEWS_KEY_RE
 } = require('./news-catalysts-provider');
 
-// The provider item's 14 persisted fields, in the persisted order. Used to
+// The provider item's 17 persisted fields, in the persisted order. Used to
 // CONSTRUCT every stored record field by field (so the persisted bytes are
 // order-stable whatever the input object's property order) and to require
 // each field's presence — never to reject an input on key order or key set.
 const ITEM_FIELDS = [
   'ticker', 'eventDate', 'category', 'direction', 'sourceUrl',
   'normalizedSourceUrl', 'sourceDomain', 'provider', 'retrievedAt',
-  'identityHash', 'provenance', 'confidence', 'requiresVerification', 'scoringImpact'
+  'identityHash', 'provenance', 'confidence', 'requiresVerification', 'scoringImpact',
+  'eventType', 'relevanceScope', 'subType'
 ];
 
 // Same Blob store as the fund-facts write/read cores; the index key lives in
@@ -328,7 +332,28 @@ function validateProviderResult(result, ticker, nowIso) {
     if (item.provider !== PROVIDER_ID) { return { ok: false }; }
     if (item.retrievedAt !== nowIso) { return { ok: false }; }
     if (CATEGORIES.indexOf(item.category) === -1) { return { ok: false }; }
-    if (!isNonEmptyString(item.direction)) { return { ok: false }; }
+    // A-5: eventType is validated as its own fail-closed check, in the same
+    // style as CATEGORIES above. direction is then conditional on it —
+    // catalyst requires a DIRECTIONS value; upcoming_event requires direction
+    // to be exactly null. Every prior rejection stays a rejection: '' still
+    // fails both event types, null still fails catalyst, 'sideways' still
+    // fails catalyst, and a non-null value still fails upcoming_event.
+    if (EVENT_TYPES.indexOf(item.eventType) === -1) { return { ok: false }; }
+    if (item.eventType === 'catalyst') {
+      if (DIRECTIONS.indexOf(item.direction) === -1) { return { ok: false }; }
+    } else if (item.direction !== null) {
+      return { ok: false };
+    }
+    // A-5.1: relevanceScope and subType get the same defense-in-depth as
+    // every other write-relevant field. subType mirrors the provider ladder's
+    // own conditionality exactly — a trimmed non-empty string iff category is
+    // 'other_catalyst', else exactly null.
+    if (RELEVANCE_SCOPES.indexOf(item.relevanceScope) === -1) { return { ok: false }; }
+    if (item.category === 'other_catalyst') {
+      if (typeof item.subType !== 'string' || item.subType.trim() === '') { return { ok: false }; }
+    } else if (item.subType !== null) {
+      return { ok: false };
+    }
     if (!isHttpsString(item.sourceUrl) || !isHttpsString(item.normalizedSourceUrl)) { return { ok: false }; }
     if (!isNonEmptyString(item.sourceDomain)) { return { ok: false }; }
     if (typeof item.identityHash !== 'string' || !HASH_RE.test(item.identityHash)) { return { ok: false }; }
