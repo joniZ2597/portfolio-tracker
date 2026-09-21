@@ -12,6 +12,21 @@ adapter's grounding entry becomes an **internal Evidence Set** carrying nine pro
 fields instead of the previous four (§6). **No new task, no architectural redesign, no scope
 growth** — still two implementation files, still a transport migration, still nothing persisted.
 
+**Revision 3, 2026-09-21 — narrow discovered-dependency amendment.** The Worker fired **STOP-1**
+during implementation, correctly. `qa/news_catalysts_core_offline.js` `require`s the **real**
+provider (`:60`) and builds **Sonar-shaped** fixtures through a helper literally named
+`sonarResponse` (`:190`, emitting `{choices:[{message:{content}}]}`), then feeds them to
+`provider.normalizeNewsResponse` (`:217`). It is a provider-integration suite wearing a core-suite
+name. Migrating the transport necessarily breaks its fixtures — 14 of 30 — while the **production
+core needs no change at all**. Scope becomes **three files**, the third strictly limited to
+transport-fixture adaptation (§8a). Nothing else reopens.
+
+> **This was a gap in the pre-approval sweep, and it is mine.** The sweep asked which suites *read
+> in-scope files as text* (NP23 / NC40 static scans). It never asked which suites ***`require` and
+> call*** the module under test. Those are different questions, and only the second one catches
+> this. Recorded for the brief convention in `AGENTS.md` — not fixed here, since `AGENTS.md` is out
+> of scope.
+
 **This is a port, not an improvement.** Retrieval quality is not an acceptance criterion. Every
 hardening question — coverage tuning, grounding sufficiency, date/materiality judgment, dedup and
 identity — stays in S1.5.1 and is **STOP-1** here.
@@ -32,21 +47,22 @@ identity — stays in S1.5.1 and is **STOP-1** here.
 Move the landed S1.5 provider from Sonar Chat Completions to the Perplexity Agent API, preserving
 the Portfolio Tracker contract and behaviour exactly, with the transport as the only moving part.
 
-## Implementation scope — exactly two files
+## Implementation scope — exactly three files
 
 ```
 netlify/functions/lib/news-catalysts-provider.js   modify
 qa/news_catalysts_provider_offline.js              modify
+qa/news_catalysts_core_offline.js                  modify — TRANSPORT FIXTURES ONLY (§8a)
 ```
 
-**Everything else is STOP-1.** Named explicitly: `news-catalysts-core.js` ·
-`qa/news_catalysts_core_offline.js` · `news-catalysts-preflight.js` (**frozen**) ·
+**Everything else is STOP-1.** Named explicitly: **`news-catalysts-core.js` (the production core —
+not one byte)** · `news-catalysts-preflight.js` (**frozen**) ·
 `evidence-contract.js` · `evidence-freshness.js` · `news-catalysts.mjs` · `index.html` ·
 `services/**` · `qa/run-offline.js` · `netlify.toml` · `package.json` · `CLAUDE.md` · `AGENTS.md` ·
 `BACKLOG.md`.
 
 **No ASK-tier file is in scope** — no brief-listing entry required, no MANUAL prompt expected.
-Posture **ACCEPT EDITS** across the two files.
+Posture **ACCEPT EDITS** across the three files.
 
 **No env, Netlify, gate or credential change.** Same bearer token, same `PERPLEXITY_API_KEY`. The
 three gate env names stay unset. **No activation.**
@@ -323,12 +339,62 @@ NP14  URL normalization          NP15  deterministic identity + pinned tuple has
 NP16  17-field projection        NP17  store-key shape
 NP18  J7 freshness integration   NP19  shared-validator reuse
 NP23  forbidden-surface scan     NP24–NP32  every taxonomy assertion
-the ENTIRE core suite (qa/news_catalysts_core_offline.js)
+NW01–NW30  every core behavioural assertion and expected outcome
 ```
 
 **If any test in this list moves, the port changed behaviour — STOP-1.**
 
+### Clarification to "the entire core suite must not move" (Revision 3)
+
+Revision 2 said the entire core suite must not move. That was too broad, and the Worker was right to
+stop rather than reinterpret it. The rule is now split along the line that actually matters:
+
+| **Must not move — STOP-1** | **May move — and only because the wire format intentionally changed** |
+|---|---|
+| Every NW01–NW30 behavioural assertion | The local transport fixture helper(s), e.g. `sonarResponse` (`:190`) |
+| Every expected outcome, status code and reason | The minimum fixture plumbing needed for those same assertions to keep running |
+| Identity, persistence, write-ordering and contract expectations | — |
+| The number of tests — **30**, none removed, skipped or weakened | — |
+
+**The test cases stay behaviourally pinned. Only the shape of the bytes handed to them changes.**
+
 **Suite count: 43, unchanged.** No new file, no `package.json` change.
+
+---
+
+## 8a · Third-file permission — strictly bounded
+
+`qa/news_catalysts_core_offline.js` is in scope for **transport-fixture adaptation only.**
+
+**Allowed:**
+
+- Update the local Sonar response / fixture-building helper(s) so they construct **Agent-shaped**
+  provider responses.
+- Make **only the minimum** fixture plumbing changes required for the existing core assertions to
+  continue exercising the same behaviour.
+
+**Not allowed — each is STOP-1:**
+
+- Changing `news-catalysts-core.js`.
+- Changing any core assertion semantics.
+- Changing expected identity behaviour.
+- Changing persistence behaviour.
+- Changing write ordering.
+- Changing contract fields.
+- Weakening, removing or skipping any test.
+- **Changing production behaviour to preserve compatibility with Sonar fixtures** — the fixtures
+  follow the transport, never the reverse.
+
+### Regression requirement (Revision 3)
+
+After fixture migration, all four must hold:
+
+| | |
+|---|---|
+| Core QA | **30/30 PASS** |
+| Provider QA | **39/39 PASS** |
+| `npm run qa:offline` | **PASS, 43 effective suites** |
+| Production core files changed | **zero** — `news-catalysts-core.js` absent from the diff |
 
 ---
 
@@ -350,10 +416,13 @@ route · **execution mode**.
 1. `npm run qa:offline` → **PASS, 43 effective suites**, identical to the step-0 baseline. Any delta
    is a finding, not a warning.
 2. `node qa/news_catalysts_provider_offline.js` → PASS, **NP01–NP39 contiguous**.
-3. `node qa/news_catalysts_core_offline.js` → PASS, **unmodified**.
+3. `node qa/news_catalysts_core_offline.js` → **PASS, 30/30** — same 30 tests, none removed or
+   skipped; fixtures Agent-shaped, assertions untouched.
+3a. `node qa/news_catalysts_provider_offline.js` → **PASS, 39/39**.
 4. `node qa/fund_facts_route_offline.js` → PASS, **unmodified**.
 5. `node qa/instruction_layer_offline.js` → PASS, **unmodified**.
-6. Implementation diff is **exactly two files**:
+6. Implementation diff is **exactly three files**, and `news-catalysts-core.js` is **not** among
+   them:
    `git diff --stat 463e1c8...HEAD -- . ':(exclude)work/' ':(exclude)BACKLOG.md'`
 7. Read-back: the prompt string in the provider and its copy in the suite are **character-identical**,
    and differ from `463e1c8` **only** by the date anchor.
@@ -370,7 +439,9 @@ route · **execution mode**.
 
 The five standing conditions, plus:
 
-1. Any file beyond the two in scope.
+1. Any file beyond the three in scope — and **`news-catalysts-core.js` is not one of them**.
+1a. Any core-suite change beyond transport fixtures (§8a).
+1b. Any production change made to keep Sonar-shaped fixtures working.
 2. Any change to the identity tuple, `IDENTITY_SCHEMA_VERSION`, `buildNewsKey`, `NEWS_KEY_RE`,
    `CONTRACT_VERSION`, `SOURCE_TIER` or `PROVIDER_ID`.
 3. Any prompt change beyond the D-M4 date anchor.
@@ -401,7 +472,9 @@ date anchor, `input`, an explicit `web_search` tool, and a `json_schema` named e
 at 16. `output[]` is read by `type`, `status` fails closed, unknown item types are ignored, and
 grounding unions the three D-M2 sources in the ruled order with first-occurrence-wins. The internal
 Evidence Set carries all nine fields with `evidenceKind` recorded, tolerates missing metadata, and
-**no decision reads any of it**; the raw / normalized / domain keys are unrenamed. Identity, the 17-field item
+**no decision reads any of it**; the raw / normalized / domain keys are unrenamed. The core suite's
+transport fixtures are Agent-shaped with **all 30 behavioural assertions untouched**, core QA is
+30/30 and provider QA 39/39, and **`news-catalysts-core.js` is unchanged**. Identity, the 17-field item
 contract, the 19-field record, `SOURCE_TIER`, `PROVIDER_ID` and `DEFAULT_TIMEOUT_MS` are provably
 unchanged. `qa:offline` PASS at 43; NP01–NP39 contiguous and green; every must-not-move test green;
 core, route and instruction-layer suites pass **unmodified**. The implementation diff is exactly two
