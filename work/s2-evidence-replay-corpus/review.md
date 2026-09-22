@@ -3,22 +3,36 @@
 Task: `task/s2-evidence-replay-corpus` (worktree `pt-wt-s2-evidence-replay-corpus`).
 Brief: `work/s2-evidence-replay-corpus/brief.md` (Owner-approved, hash `1825dc29dd250532e23469eabc21a273fb39b65256b64fa51810c1500b4ff8bf`).
 
-**Pre-commit sync provenance:** implementation and all QA above originated at `branch-dev`
-`2e00bc1`. Immediately before task-branch commit, the task branch was fast-forwarded
+**Pre-commit sync provenance:** implementation and all QA originated at `branch-dev`
+`2e00bc1`. Before task-branch commit, the task branch was fast-forwarded
 (`git merge --ff-only branch-dev`, no merge commit) to `87e45a6`, whose sole intervening
-change vs `2e00bc1` was `work/parser-render-integrity/brief.md` (docs-only, unrelated to A1,
-zero overlap with the A1 file set). Full QA re-run against this post-sync base (`87e45a6`)
-confirms no regression from the sync: replay suite **10/10 PASS**; `qa:offline` **PASS, 44
-spawned suites**; provider **48/48 PASS**; core **30/30 PASS** — identical results to the
-pre-sync run at `2e00bc1`.
+change vs `2e00bc1` was `work/parser-render-integrity/brief.md` (docs-only, unrelated to A1).
+Committed at `3f4ef88`. Per Owner approval, the single A1 commit was then **rebased**
+(`git rebase branch-dev`, no conflict, no merge commit) onto branch-dev's subsequent advance
+to `9f8171d` (the 8a rating-regex-dedup task, 5 files: `index.html`, `qa/run-offline.js`,
+`qa/ui1b_cards_offline.js`, `qa/vis_score_caliper_offline.js`,
+`work/parser-render-integrity/review.md` — zero file overlap with A1). New SHA `6e242fb`; the
+A1 patch body is byte-identical to `3f4ef88` (differs only in the commit-SHA header).
+
+**Post-rebase EOL finding and fix:** the rebase's checkout triggered this Windows host's
+`core.autocrlf=true` to rewrite the 9 fixture JSON files' **working-tree** copies from LF to
+CRLF. The new R-9 fixture-hash-chain check (correctly) caught this: `git show
+HEAD:qa/fixtures/replay/p3-20260921T2045Z-NVDA.json | sha256sum` matched the committed
+`fixtureSha256` exactly, proving the **committed git blobs were never altered** — only the
+local working-tree materialization was affected. Owner-approved fix: a narrowly-scoped
+`.gitattributes` rule (`qa/fixtures/replay/*.json text eol=lf`) forces LF checkout for this
+corpus only; `core.autocrlf` itself, R-9's raw-byte comparison, and every other file's EOL
+behaviour are untouched. All 9 fixture blob SHA256s were re-verified identical before and
+after applying the fix — no fixture payload changed. See "EOL portability fix" below.
 
 ## Result
 
 **PASS.** All approved implementation paths created exactly as scoped; no production file
 touched; full `qa:offline` gate PASS at **44** spawned suites (43 → 44, exactly +1); provider
-**48/48**; core **30/30**; the new suite's own 10 assertions (R-1…R-10) all PASS. Includes a
-second, Owner-reviewed correction round (§"Owner-review correction round" below) — apply
-this review, do not treat the earlier one as final.
+**48/48**; core **30/30**; the new suite's own 10 assertions (R-1…R-10) all PASS, including
+R-9's fixture-hash-chain check on LF-materialized working-tree files. Includes an Owner-review
+correction round and a post-rebase EOL portability fix (both below) — apply this review, not
+an earlier version.
 
 ## Implementation base note
 
@@ -31,7 +45,10 @@ the pre-implementation gap check and the Owner ruled it does not require rewriti
 
 ## Files changed
 
-**Implementation paths (approved scope — exactly 3 path patterns, 11 files):**
+**Total effective A1 task file set: 13 files**, across two commits:
+
+**Commit 1 (`6e242fb`, post-rebase) — implementation paths (approved scope — 3 path patterns,
+11 files):**
 
 - `qa/news_catalysts_replay_offline.js` — NEW, 533 lines. Replay + attribution suite.
 - `qa/fixtures/replay/index.json` — NEW. Corpus manifest (9 cases) + 5-entry curated
@@ -41,11 +58,17 @@ the pre-implementation gap check and the Owner ruled it does not require rewriti
 
 **Task evidence (not implementation scope, per the Brief's finalization allowance):**
 
-- `work/s2-evidence-replay-corpus/review.md` — this file.
+- `work/s2-evidence-replay-corpus/review.md` — this file (1 file).
 
-**No production file in the diff.** `git status --short` in the worktree shows exactly these
-three untracked paths (`qa/fixtures/`, `qa/news_catalysts_replay_offline.js`,
-`work/s2-evidence-replay-corpus/review.md`); `git diff --stat` against tracked files is empty.
+**Commit 2 (follow-up, post-EOL-fix) — narrow repo-policy addition (1 file):**
+
+- `.gitattributes` — NEW. Single line: `qa/fixtures/replay/*.json text eol=lf`. No repo-wide
+  EOL policy change; every other tracked file's attributes remain `unspecified` (verified via
+  `git check-attr`).
+
+**No production file in the diff, in either commit.** `git status --short` in the worktree
+shows only untracked paths that resolve to this 13-file set; `git diff --stat` against tracked
+files outside this set is empty.
 
 ## Fixture/corpus inventory
 
@@ -199,6 +222,41 @@ corrections before LAND-request, all applied and re-verified (still no productio
    files) from task evidence (this file) explicitly, corrected the untracked-path count, and
    the R-6 coverage description above now matches exactly what the final suite tests.
 
+## EOL portability fix (post-rebase, separate follow-up commit)
+
+After the Owner-approved rebase onto `9f8171d` (see the provenance note at the top), R-9's new
+fixture-hash-chain check failed for all 9 fixtures. Root cause, isolated before any fix was
+applied: the rebase's checkout caused this Windows host's `core.autocrlf=true` to rewrite the
+fixture JSON files' **working-tree** materialization from LF to CRLF — `git show
+HEAD:<fixture> | sha256sum` matched the committed `fixtureSha256` exactly for every one of the
+9 fixtures both before and after the fix, proving the **committed blobs were never altered**.
+
+**Fix applied (Owner-approved, narrow scope):**
+
+- Added `.gitattributes` with a single line: `qa/fixtures/replay/*.json text eol=lf`. Verified
+  via `git check-attr` that this rule applies **only** to the 10 files under
+  `qa/fixtures/replay/` and leaves every other file (including
+  `qa/news_catalysts_replay_offline.js` itself) `unspecified` — no repo-wide EOL policy change.
+- `core.autocrlf` was **not** disabled or modified. R-9's raw-byte comparison logic was
+  **not** changed — it still does a plain `sha256(fs.readFileSync(path))` with no
+  normalization; the fix works entirely by making Git materialize the correct bytes on disk,
+  not by loosening the check.
+- A first `git checkout HEAD -- qa/fixtures/replay/` was a no-op (Git's internal CRLF/LF
+  normalization considered the working-tree copies "unchanged" relative to the index and
+  skipped rewriting them). The working-tree files were then deleted and re-checked-out from
+  HEAD, which forced fresh materialization under the new attribute.
+- **Verified before running QA:** `git status --short` showed no fixture modifications (only
+  the new `.gitattributes` as untracked); all 9 fixture blob SHA256s
+  (`git show HEAD:<path> | sha256sum`) were byte-identical to their pre-fix values; the
+  working-tree SHA256 of every fixture now matches its `fixtureSha256` in `index.json`;
+  `git ls-files --eol` reports `i/lf w/lf attr/text eol=lf` for all 10 replay JSON files.
+- Full QA re-run after the fix: replay suite **10/10 PASS** (R-9 included); `qa:offline`
+  **PASS, 44 spawned suites**; provider **48/48 PASS**; core **30/30 PASS**.
+
+This fix was committed separately from the A1 implementation commit. `6e242fb` remains
+untouched — no amend and no further rebase. The follow-up commit stages only
+`.gitattributes` and this `review.md`.
+
 ## Secret / provenance verification
 
 R-8 scans every fixture file for API-key, `Bearer`, `Authorization:`, Google-key, and
@@ -249,11 +307,16 @@ still 44/44/48/30 PASS — see above).
 
 ## Next single recommended step
 
-Owner review of this `review.md` and the 11 implementation files (the suite +
-`qa/fixtures/replay/index.json` + 9 case fixtures), then task-branch commit decision.
+The A1 implementation commit (`6e242fb`, 11 implementation files + this `review.md`) is
+committed to the task branch, rebased cleanly onto `branch-dev` `9f8171d`.
 
-LAND to `branch-dev` is a separate later Owner decision after the task commit is verified.
+The follow-up EOL portability fix — `.gitattributes` plus this `review.md` update, and nothing
+else — is committed separately on the same task branch. `6e242fb` remains untouched throughout
+(no amend, no further rebase). Both A1 commits are now committed and verified on the task
+branch.
 
-Push is also separate and requires explicit Owner approval.
+The next step is an Owner LAND decision (LAND to `branch-dev`).
 
-No further implementation, commit, LAND, or push has been performed.
+Push remains separate and requires explicit Owner approval.
+
+No LAND or push has been performed.
