@@ -36,7 +36,11 @@
  *   NP33 status must fail closed              NP34 three-source grounding union
  *   NP35 lookup by type, not index            NP36 unrecognised item type ignored
  *   NP37 zero grounding candidates ⇒ NONE      NP38 endpoint literal
- *   NP39 Evidence Set retained but inert (9 fields, no leakage)
+ *   NP39 Evidence Set retained, metadata inert on items/skippedItems (9
+ *        fields, no leakage into the public item or skip shape); S2-A2
+ *        (Owner-ruled): evidenceKind/source-kind literals MAY and SHOULD
+ *        appear in the envelope's evidenceBindings sidecar — that is the
+ *        intentional observability surface, not a leak
  *   NP40 S1.5.1 H-A: five prompt-rule markers present (presence only)
  *   NP41 S1.5.1 H-A: no numeric materiality threshold in the new wording
  *   NP42 S1.5.1 H-B: generic/container source-URL rejection (mechanism 1)
@@ -264,6 +268,15 @@ async function runTests() {
           expectedItem('2026-07-20', 'guidance_update', 'neutral', url2, url2, 'www.reuters.com')
         ],
         skippedItems: [],
+        // S2-A2 (§C.8): sidecar binding — traversal order is [search_result,
+        // url_citation] (D-M2: search_results before url_citation), so url2
+        // (the search_results entry) is evidenceIndex 0 and url1 (the
+        // url_citation entry) is evidenceIndex 1.
+        evidenceBindings: [
+          { itemIndex: 0, evidenceIndex: 1, evidenceKind: 'url_citation', normalizedSourceUrl: url1 },
+          { itemIndex: 1, evidenceIndex: 0, evidenceKind: 'search_result', normalizedSourceUrl: url2 }
+        ],
+        evidenceSetSize: 2,
         writtenKeys: []
       }
     };
@@ -638,6 +651,8 @@ async function runTests() {
         provider: PROVIDER_ID,
         items: [],
         skippedItems: [],
+        evidenceBindings: [],
+        evidenceSetSize: 0,
         writtenKeys: []
       }
     });
@@ -1255,8 +1270,15 @@ async function runTests() {
     assert.strictEqual(provider.PPLX_ENDPOINT, 'https://api.perplexity.ai/v1/agent');
   });
 
-  // ── NP39: Evidence Set retained but inert ───────────────────────────────────
-  await test('NP39 Evidence Set carries all nine fields when supplied and tolerates their absence; no item field or stored record gains any of them', async function () {
+  // ── NP39: Evidence Set retained, metadata inert on items/skippedItems ──────
+  // S2-A2 (Owner-ruled): the old whole-envelope inertness guarantee is
+  // narrowed. evidenceKind/source-kind literals now intentionally appear in
+  // the envelope's evidenceBindings sidecar (the A2 observability surface);
+  // they remain forbidden on items, skippedItems, and the 17-field public
+  // item/stored-record contract. APPROVED_EVIDENCE_KINDS below is the exact
+  // §C.5 vocabulary — the same three literals adaptAgentResponse assigns.
+  var APPROVED_EVIDENCE_KINDS = ['search_result', 'fetch_url_result', 'url_citation'];
+  await test('NP39 Evidence Set carries all nine fields when supplied and tolerates their absence; metadata never leaks onto items/skippedItems; evidenceKind appears only in the evidenceBindings sidecar, restricted to the approved kinds', async function () {
     // Private structural proof that appendEvidenceEntry actually retains all
     // nine Evidence Set fields — without exporting the internal shape (the
     // export surface stays at exactly 16). If any of these assignments were
@@ -1300,11 +1322,22 @@ async function runTests() {
     };
     var rFull = provider.normalizeNewsResponse(respFull, { ticker: TICKER, retrievedAt: NOW_ISO });
     assert.strictEqual(rFull.items.length, 1, 'resolves with all nine fields supplied');
-    var textFull = JSON.stringify(rFull);
+    // FORBIDDEN: Evidence Set metadata leaking onto the public item /
+    // skipped-item shape. Scoped to items+skippedItems only — NOT the whole
+    // rFull object, which now intentionally carries evidenceBindings.
+    var textFullPublic = JSON.stringify({ items: rFull.items, skippedItems: rFull.skippedItems });
     ['SENTINEL_ID', 'SENTINEL_TITLE', 'SENTINEL_DATE', 'SENTINEL_LASTUPDATED', 'SENTINEL_SNIPPET', 'evidenceKind', 'search_result'].forEach(function (needle) {
-      assert.strictEqual(textFull.indexOf(needle), -1, 'no leak of ' + needle);
+      assert.strictEqual(textFullPublic.indexOf(needle), -1, 'no leak of ' + needle + ' onto items/skippedItems');
     });
     assert.deepStrictEqual(Object.keys(rFull.items[0]), ITEM_FIELD_ORDER, 'still exactly 17 fields, exact order');
+
+    // ALLOWED: the S2-A2 observability sidecar. evidenceKind MUST appear
+    // here, restricted to the approved source-kind vocabulary.
+    assert.ok(Array.isArray(rFull.evidenceBindings), 'evidenceBindings must be present on the normalizeNewsResponse result');
+    assert.strictEqual(rFull.evidenceBindings.length, 1, 'exactly one binding for the one surviving item');
+    assert.strictEqual(rFull.evidenceBindings[0].evidenceKind, 'search_result', 'the search_results entry is the one grounding source here');
+    assert.ok(APPROVED_EVIDENCE_KINDS.indexOf(rFull.evidenceBindings[0].evidenceKind) !== -1, 'evidenceKind restricted to the approved source kinds');
+    assert.strictEqual(rFull.evidenceSetSize, 1, 'evidenceSetSize matches the single supplied search_results entry');
 
     // fetch_url_result fixture (S1.5.2 F-1; live + documented shape): a
     // contents[] entry carries url / title / snippet and NO id, date or
@@ -1350,11 +1383,18 @@ async function runTests() {
     var rFur = provider.normalizeNewsResponse(respFur, { ticker: TICKER, retrievedAt: NOW_ISO });
     assert.strictEqual(rFur.items.length, 1, 'fetch_url_result entry with partial metadata resolves');
     assert.strictEqual(rFur.items[0].sourceUrl, gFur, 'grounded on the fetch_url_result entry\'s own raw URL');
-    var textFur = JSON.stringify(rFur);
+    // FORBIDDEN, scoped to items+skippedItems only (see rFull above).
+    var textFurPublic = JSON.stringify({ items: rFur.items, skippedItems: rFur.skippedItems });
     ['SENTINEL_FUR_TITLE', 'SENTINEL_FUR_SNIPPET', 'evidenceKind', 'fetch_url_result'].forEach(function (needle) {
-      assert.strictEqual(textFur.indexOf(needle), -1, 'no leak of ' + needle);
+      assert.strictEqual(textFurPublic.indexOf(needle), -1, 'no leak of ' + needle + ' onto items/skippedItems');
     });
     assert.deepStrictEqual(Object.keys(rFur.items[0]), ITEM_FIELD_ORDER, 'fetch_url_result-grounded item: still exactly 17 fields, exact order');
+
+    // ALLOWED: sidecar carries the fetch_url_result kind.
+    assert.strictEqual(rFur.evidenceBindings.length, 1, 'exactly one binding for the one surviving item');
+    assert.strictEqual(rFur.evidenceBindings[0].evidenceKind, 'fetch_url_result', 'the fetch_url_results entry is the one grounding source here');
+    assert.ok(APPROVED_EVIDENCE_KINDS.indexOf(rFur.evidenceBindings[0].evidenceKind) !== -1, 'evidenceKind restricted to the approved source kinds');
+    assert.strictEqual(rFur.evidenceSetSize, 1, 'evidenceSetSize matches the single supplied fetch_url_results entry');
 
     // url_citation-only fixture, the case with the least metadata — must
     // still resolve, not merely tolerate absence.
@@ -1365,6 +1405,12 @@ async function runTests() {
     var rMinimal = provider.normalizeNewsResponse(respMinimal, { ticker: TICKER, retrievedAt: NOW_ISO });
     assert.strictEqual(rMinimal.items.length, 1, 'url_citation-only, least-metadata fixture resolves');
     assert.deepStrictEqual(Object.keys(rMinimal.items[0]), ITEM_FIELD_ORDER);
+    // ALLOWED: sidecar carries the url_citation kind, the third and last
+    // approved literal.
+    assert.strictEqual(rMinimal.evidenceBindings.length, 1, 'exactly one binding for the one surviving item');
+    assert.strictEqual(rMinimal.evidenceBindings[0].evidenceKind, 'url_citation', 'the url_citation annotation is the one grounding source here');
+    assert.ok(APPROVED_EVIDENCE_KINDS.indexOf(rMinimal.evidenceBindings[0].evidenceKind) !== -1, 'evidenceKind restricted to the approved source kinds');
+    assert.strictEqual(rMinimal.evidenceSetSize, 1, 'evidenceSetSize matches the single supplied url_citation annotation');
   });
 
   // ── NP40: S1.5.1 H-A prompt-rule presence (DR-21a prompt half, DR-22, DR-24, DR-26, DR-30) ──

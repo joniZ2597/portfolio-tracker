@@ -236,6 +236,8 @@ async function getNewsCatalysts(request, options) {
       provider: PROVIDER_ID,
       items: normalized.items,
       skippedItems: normalized.skippedItems,
+      evidenceBindings: normalized.evidenceBindings,
+      evidenceSetSize: normalized.evidenceSetSize,
       writtenKeys: []
     }
   };
@@ -613,6 +615,7 @@ function normalizeNewsResponse(parsedResponse, context) {
 
   var items = [];
   var skippedItems = [];
+  var evidenceBindings = [];
   var seenHashes = Object.create(null);
 
   for (var i = 0; i < rawItems.length; i++) {
@@ -641,11 +644,12 @@ function normalizeNewsResponse(parsedResponse, context) {
       skippedItems.push({ reason: 'INVALID_SOURCE_URL' });
       continue;
     }
-    var grounded = resolveGrounded(candidate, grounding);
-    if (grounded === null) {
+    var groundedIndex = resolveGrounded(candidate, grounding);
+    if (groundedIndex === -1) {
       skippedItems.push({ reason: 'INVALID_SOURCE_URL' });
       continue;
     }
+    var grounded = grounding[groundedIndex];
 
     // S1.5.1 H-B, mechanism 1 (DR-20) — narrow, deterministic, URL-shape-only
     // rejection of a generic/container page: a bare root, or a fixed closed
@@ -748,6 +752,16 @@ function normalizeNewsResponse(parsedResponse, context) {
     // Unknown fields on the raw candidate (title, summary, any free text) are
     // discarded here — they never reach this literal. eventType,
     // relevanceScope and subType are appended after scoringImpact (D-S15-E).
+    // S2-A2 (§C.8): the binding sidecar is appended in this SAME iteration,
+    // beside items — never onto it — so position alone already pairs
+    // evidenceBindings[k] with items[k]; itemIndex is carried explicitly and
+    // redundantly (§C.8) rather than relied on implicitly.
+    evidenceBindings.push({
+      itemIndex: items.length,
+      evidenceIndex: groundedIndex,
+      evidenceKind: grounded.evidenceKind,
+      normalizedSourceUrl: grounded.normalized
+    });
     items.push({
       ticker: ticker,
       eventDate: eventDate,
@@ -769,7 +783,7 @@ function normalizeNewsResponse(parsedResponse, context) {
     });
   }
 
-  return { ok: true, items: items, skippedItems: skippedItems };
+  return { ok: true, items: items, skippedItems: skippedItems, evidenceBindings: evidenceBindings, evidenceSetSize: grounding.length };
 }
 
 // ── grounding correlation (Agent API three-source union, brief §§4-6) ────────
@@ -816,15 +830,17 @@ function appendEvidenceEntry(list, raw, evidenceKind) {
 
 // Normalized-form match; first occurrence in the fixed order wins. On a match
 // the persisted source URL is the grounding entry's own raw text — never the
-// model's originally-claimed string (spec §5.5).
+// model's originally-claimed string (spec §5.5). Returns the matched entry's
+// position in `grounding` (S2-A2 §C.1: evidenceIndex is that exact position,
+// duplicates included), or -1 on a grounding miss.
 function resolveGrounded(candidate, grounding) {
   var normalizedCandidate = normalizeHttpsUrl(candidate);
   for (var i = 0; i < grounding.length; i++) {
     if (grounding[i].normalized === normalizedCandidate) {
-      return grounding[i];
+      return i;
     }
   }
-  return null;
+  return -1;
 }
 
 // Exactly three transforms (spec §5): hostname lowercased (the URL parser

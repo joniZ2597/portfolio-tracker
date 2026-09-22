@@ -72,19 +72,32 @@ function tryNormalizeUrl(value) {
   var u = new URL(value);
   return { normalized: 'https://' + u.hostname + (u.port ? ':' + u.port : '') + u.pathname + u.search, domain: u.hostname };
 }
-function appendEvidenceEntry(entries, seenNormalized, raw, evidenceKind) {
+function appendEvidenceEntry(entries, raw, evidenceKind) {
   if (!raw || typeof raw !== 'object') { return; }
   var rawUrl = typeof raw.url === 'string' ? raw.url : null;
   if (!rawUrl) { return; }
   var norm = tryNormalizeUrl(rawUrl);
   if (!norm) { return; }
-  if (seenNormalized.has(norm.normalized)) { return; } // D-M2 first-occurrence-wins
-  seenNormalized.add(norm.normalized);
-  entries.push({ normalized: norm.normalized, domain: norm.domain, evidenceKind: evidenceKind });
+  // S2-A2 (§D.2): no insertion-time dedup — production performs none
+  // (provider.js appendEvidenceEntry:794 has no `seen` set), so this
+  // reconstruction must preserve duplicate entries and production's exact
+  // cardinality for evidenceIndex to be canonical (brief §C.1/§C.2).
+  // S2-A2 (Owner-ruled, narrow STOP 7a exception): `raw` is the exact
+  // candidate URL string this entry was built from — production's own
+  // contract.optionalHttpsUrl (evidence-contract.js:143-159) returns the
+  // input `value` unchanged on success, never a reparsed/reconstructed
+  // form, and isAcceptableSourceUrl above enforces the identical https/
+  // no-userinfo/hostname/length/whitespace gate — so `rawUrl` here is
+  // byte-identical to what provider.js would store as `.raw`. Added for
+  // B-2's raw-URL invariant only; no traversal, dedup, normalization,
+  // acceptance, or survival-rule change, and still exactly one
+  // reconstruction (STOP 7b unchanged).
+  entries.push({ raw: rawUrl, normalized: norm.normalized, domain: norm.domain, evidenceKind: evidenceKind });
 }
 // D-M2 order: search_results.results[] (array order), then
 // fetch_url_results.contents[] (array order), then url_citation annotations
-// on the output_text content entry (array order). First occurrence wins.
+// on the output_text content entry (array order). First occurrence wins
+// (unchanged — D-A2-3): duplicates are retained, never collapsed.
 function reconstructEvidenceSet(rawParsedEnvelope) {
   var byKind = { search_result: 0, fetch_url_result: 0, url_citation: 0 };
   var entries = [];
@@ -92,18 +105,17 @@ function reconstructEvidenceSet(rawParsedEnvelope) {
     return { total: 0, byKind: byKind, entries: entries };
   }
   var output = Array.isArray(rawParsedEnvelope.output) ? rawParsedEnvelope.output : [];
-  var seen = new Set();
   var i, j;
   for (i = 0; i < output.length; i++) {
     var s = output[i];
     if (s && s.type === 'search_results' && Array.isArray(s.results)) {
-      for (j = 0; j < s.results.length; j++) { appendEvidenceEntry(entries, seen, s.results[j], 'search_result'); }
+      for (j = 0; j < s.results.length; j++) { appendEvidenceEntry(entries, s.results[j], 'search_result'); }
     }
   }
   for (i = 0; i < output.length; i++) {
     var f = output[i];
     if (f && f.type === 'fetch_url_results' && Array.isArray(f.contents)) {
-      for (j = 0; j < f.contents.length; j++) { appendEvidenceEntry(entries, seen, f.contents[j], 'fetch_url_result'); }
+      for (j = 0; j < f.contents.length; j++) { appendEvidenceEntry(entries, f.contents[j], 'fetch_url_result'); }
     }
   }
   var messageItem = output.find(function (item) { return item && item.type === 'message'; });
@@ -115,7 +127,7 @@ function reconstructEvidenceSet(rawParsedEnvelope) {
     var ann = annotations[i];
     if (ann && ann.type === 'url_citation') {
       var raw = ann.url_citation && typeof ann.url_citation === 'object' ? ann.url_citation : ann;
-      appendEvidenceEntry(entries, seen, raw, 'url_citation');
+      appendEvidenceEntry(entries, raw, 'url_citation');
     }
   }
   for (i = 0; i < entries.length; i++) { byKind[entries[i].evidenceKind]++; }
@@ -217,7 +229,12 @@ async function replay(fixture) {
     { fetchImpl: makeFetchStub(fixture.input.rawResponseBody), apiKey: 'offline-replay-key', nowIso: fixture.input.nowIso }
   );
   if (!result.ok) { throw new Error('replay did not succeed: ' + JSON.stringify(result)); }
-  return { items: result.envelope.items, skippedItems: result.envelope.skippedItems.map(function (s) { return { reason: s.reason }; }) };
+  return {
+    items: result.envelope.items,
+    skippedItems: result.envelope.skippedItems.map(function (s) { return { reason: s.reason }; }),
+    evidenceBindings: result.envelope.evidenceBindings,
+    evidenceSetSize: result.envelope.evidenceSetSize
+  };
 }
 
 // ── runner (mirrors qa/fund_facts_provider_offline.js) ───────────────────
@@ -260,7 +277,7 @@ async function runTests() {
       'const fixture = JSON.parse(require("fs").readFileSync(' + JSON.stringify(path.join(FIXTURES_DIR, 'p4-20260921T2312Z-FROG.json')) + ', "utf8"));' +
       'async function fetchImpl(){ return { status: 200, headers: { get: () => null }, text: async () => fixture.input.rawResponseBody }; }' +
       'provider.getNewsCatalysts({ ticker: fixture.input.ticker }, { fetchImpl, apiKey: "x", nowIso: fixture.input.nowIso })' +
-      '.then(r => { process.stdout.write(JSON.stringify({ items: r.envelope.items, skippedItems: r.envelope.skippedItems.map(s => ({reason: s.reason})) })); });';
+      '.then(r => { process.stdout.write(JSON.stringify({ items: r.envelope.items, skippedItems: r.envelope.skippedItems.map(s => ({reason: s.reason})), evidenceBindings: r.envelope.evidenceBindings, evidenceSetSize: r.envelope.evidenceSetSize })); });';
     var child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
     assert.strictEqual(child.status, 0, 'child process failed: ' + child.stderr);
     var crossProcess = JSON.parse(child.stdout);
@@ -518,6 +535,233 @@ async function runTests() {
     // early loop exit.
     assert.strictEqual(actualVisits, expectedVisits, 'reference-manifest reconciliation failed: visited ' + actualVisits + ' of ' + expectedVisits + ' configured (refId, runKey) mappings');
     assert.strictEqual(actualVisits, 15, 'expected exactly 5 refIds × 3 runs = 15 configured mappings');
+  });
+
+  // ── S2-A2 — evidence-index binding (work/s2-evidence-index-binding/brief.md) ─
+  // B-1..B-11 below never reimplement provider grounding (brief §D.2/§M
+  // idiom, matching R-1..R-10 above): they replay through the REAL provider
+  // and cross-check its evidenceBindings/evidenceSetSize sidecar against
+  // reconstructEvidenceSet — the same duplicate-preserving, production-order
+  // reconstruction R-7/R-10 already use, now corrected by §D.2 to retain
+  // duplicates. §C.1: the production Evidence Set is the singular
+  // definition; this reconstruction is a check against it. The combined
+  // B-4/B-10/B-11 checks validate the ordering properties that are
+  // load-bearing for A2 binding: first-occurrence selection, the four known
+  // duplicate-divergence cases, and total cardinality. They do not claim
+  // full entry-by-entry equivalence of the entire Evidence Set.
+  var APPROVED_EVIDENCE_KINDS = ['search_result', 'fetch_url_result', 'url_citation'];
+  var BINDING_FIELD_ORDER = ['itemIndex', 'evidenceIndex', 'evidenceKind', 'normalizedSourceUrl'];
+
+  // Full (unmapped) provider envelope — used only where a test needs the
+  // provider's OWN skippedItems shape (B-6) rather than the suite's
+  // {reason}-only projection that `replay()` returns for R-1..R-10 parity.
+  async function replayEnvelope(fixture) {
+    var result = await provider.getNewsCatalysts(
+      { ticker: fixture.input.ticker },
+      { fetchImpl: makeFetchStub(fixture.input.rawResponseBody), apiKey: 'offline-replay-key', nowIso: fixture.input.nowIso }
+    );
+    if (!result.ok) { throw new Error('replay did not succeed: ' + JSON.stringify(result)); }
+    return result.envelope;
+  }
+
+  // ── B-1: cardinality + itemIndex shape ──────────────────────────────────
+  await test('B-1 evidenceBindings.length === items.length every case; itemIndex is 0..n-1, ascending, no gaps, no repeats', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var replayed = await replay(fixture);
+      assert.strictEqual(replayed.evidenceBindings.length, replayed.items.length, fixture.caseId + ': evidenceBindings.length must equal items.length');
+      for (var k = 0; k < replayed.evidenceBindings.length; k++) {
+        assert.strictEqual(replayed.evidenceBindings[k].itemIndex, k, fixture.caseId + ': itemIndex ' + k + ' out of order');
+      }
+    }
+  });
+
+  // ── B-2: binding shape + binding agrees with the reconstruction at that
+  // exact index (§C.7 invariant #4, in full). The Owner-approved narrow
+  // STOP 7a exception adds `raw` to the QA reconstruction specifically so
+  // this suite can independently verify the raw-URL half of §C.7 invariant
+  // #4 (item.sourceUrl === evidenceSet[evidenceIndex].raw), not just the
+  // normalized half. ─────────────────────────────────────────────────────
+  await test('B-2 exact §C.8 binding shape; binding.normalizedSourceUrl === item.normalizedSourceUrl === evidenceSet[evidenceIndex].normalized; item.sourceUrl === evidenceSet[evidenceIndex].raw, every surviving item, every case', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var envelope = JSON.parse(fixture.input.rawResponseBody);
+      var evidenceSet = reconstructEvidenceSet(envelope);
+      var replayed = await replay(fixture);
+      for (var j = 0; j < replayed.items.length; j++) {
+        var binding = replayed.evidenceBindings[j];
+        assert.deepStrictEqual(Object.keys(binding), BINDING_FIELD_ORDER, fixture.caseId + ' item ' + j + ': binding must carry exactly the §C.8 sidecar shape');
+        var entry = evidenceSet.entries[binding.evidenceIndex];
+        assert.ok(entry, fixture.caseId + ' item ' + j + ': evidenceIndex ' + binding.evidenceIndex + ' out of range of the reconstruction');
+        assert.strictEqual(binding.normalizedSourceUrl, replayed.items[j].normalizedSourceUrl, fixture.caseId + ' item ' + j + ': binding.normalizedSourceUrl must equal the item\'s normalizedSourceUrl');
+        assert.strictEqual(binding.normalizedSourceUrl, entry.normalized, fixture.caseId + ' item ' + j + ': binding.normalizedSourceUrl must equal the reconstruction entry at evidenceIndex');
+        assert.strictEqual(replayed.items[j].sourceUrl, entry.raw, fixture.caseId + ' item ' + j + ': item.sourceUrl must equal the reconstruction entry\'s raw text at evidenceIndex (§C.7 invariant #4)');
+      }
+    }
+  });
+
+  // ── B-3: evidenceKind matches the entry AT THAT EXACT INDEX ────────────
+  await test('B-3 evidenceKind is one of the three approved literals and equals the reconstruction entry\'s kind at that exact evidenceIndex — not merely a kind present somewhere for the URL', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var envelope = JSON.parse(fixture.input.rawResponseBody);
+      var evidenceSet = reconstructEvidenceSet(envelope);
+      var replayed = await replay(fixture);
+      for (var j = 0; j < replayed.evidenceBindings.length; j++) {
+        var binding = replayed.evidenceBindings[j];
+        assert.ok(APPROVED_EVIDENCE_KINDS.indexOf(binding.evidenceKind) !== -1, fixture.caseId + ' binding ' + j + ': evidenceKind outside the approved vocabulary');
+        assert.strictEqual(binding.evidenceKind, evidenceSet.entries[binding.evidenceIndex].evidenceKind, fixture.caseId + ' binding ' + j + ': evidenceKind does not match the reconstruction entry at that exact index');
+      }
+    }
+  });
+
+  // ── B-4: evidenceIndex is independently re-derivable as first-occurrence ─
+  await test('B-4 evidenceIndex equals the first index in the duplicate-preserving reconstruction whose normalized matches — independently re-derived, proving first-occurrence-wins actually happened', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var envelope = JSON.parse(fixture.input.rawResponseBody);
+      var evidenceSet = reconstructEvidenceSet(envelope);
+      var replayed = await replay(fixture);
+      for (var j = 0; j < replayed.items.length; j++) {
+        var binding = replayed.evidenceBindings[j];
+        var expectedIndex = evidenceSet.entries.findIndex(function (e) { return e.normalized === replayed.items[j].normalizedSourceUrl; });
+        assert.strictEqual(binding.evidenceIndex, expectedIndex, fixture.caseId + ' item ' + j + ': evidenceIndex is not the first occurrence in the reconstruction');
+      }
+    }
+  });
+
+  // ── B-5: binding determinism ────────────────────────────────────────────
+  await test('B-5 replaying a case twice yields identical binding records (extends R-1 determinism to bindings)', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var r1 = await replay(fixture);
+      var r2 = await replay(fixture);
+      assert.strictEqual(JSON.stringify(r1.evidenceBindings), JSON.stringify(r2.evidenceBindings), fixture.caseId + ': evidenceBindings not deterministic across replays');
+      assert.strictEqual(r1.evidenceSetSize, r2.evidenceSetSize, fixture.caseId + ': evidenceSetSize not deterministic across replays');
+    }
+  });
+
+  // ── B-6: no partial/placeholder binding; skippedItems shape untouched ──
+  await test('B-6 no item survives without a binding; no skippedItems entry carries one; skippedItems keeps its {reason}-only shape', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var envelope = await replayEnvelope(fixture);
+      assert.strictEqual(envelope.evidenceBindings.length, envelope.items.length, fixture.caseId + ': every surviving item must carry exactly one binding');
+      for (var k = 0; k < envelope.evidenceBindings.length; k++) {
+        var b = envelope.evidenceBindings[k];
+        assert.notStrictEqual(b.evidenceIndex, null, fixture.caseId + ' binding ' + k + ': evidenceIndex must not be null');
+        assert.notStrictEqual(b.evidenceIndex, -1, fixture.caseId + ' binding ' + k + ': evidenceIndex must not be -1');
+        assert.ok(b.evidenceIndex >= 0, fixture.caseId + ' binding ' + k + ': evidenceIndex must not be a placeholder');
+      }
+      for (var s = 0; s < envelope.skippedItems.length; s++) {
+        assert.deepStrictEqual(Object.keys(envelope.skippedItems[s]), ['reason'], fixture.caseId + ' skippedItems[' + s + ']: must carry only { reason }, never a binding');
+      }
+    }
+  });
+
+  // ── B-7: synthetic — search_results outranks fetch_url_results ─────────
+  await test('B-7 same URL in search_results and fetch_url_results binds to the search_results index, evidenceKind search_result — pins the ordering rule with a minimal deterministic synthetic case', async function () {
+    var url = 'https://example-news.test/press-release-both-sources';
+    var envelope = {
+      status: 'completed', error: null,
+      output: [
+        { type: 'search_results', results: [{ url: url, title: 'search hit' }], queries: [] },
+        { type: 'fetch_url_results', contents: [{ url: url, title: 'fetched page' }] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [{ eventDate: '2026-09-01', category: 'corporate_action', direction: 'positive', eventType: 'catalyst', relevanceScope: 'company', subType: null, sourceUrl: url }] }) }] }
+      ]
+    };
+    var result = await provider.getNewsCatalysts({ ticker: 'ZZZZ' }, { fetchImpl: makeFetchStub(JSON.stringify(envelope)), apiKey: 'x', nowIso: '2026-09-01T00:00:00.000Z' });
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.envelope.items.length, 1);
+    assert.strictEqual(result.envelope.evidenceBindings[0].evidenceIndex, 0, 'search_results is traversed first — index 0');
+    assert.strictEqual(result.envelope.evidenceBindings[0].evidenceKind, 'search_result', 'search_results outranks fetch_url_results (D-A2-3: unchanged)');
+  });
+
+  // ── B-8: synthetic — url_citation-only binding ──────────────────────────
+  await test('B-8 an envelope whose only occurrence of the URL is a url_citation binds with evidenceKind url_citation — documents current behaviour, never endorses it (brief §J R-2)', async function () {
+    var url = 'https://example-news.test/press-release-citation-only';
+    var envelope = {
+      status: 'completed', error: null,
+      output: [
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [{ eventDate: '2026-09-01', category: 'corporate_action', direction: 'positive', eventType: 'catalyst', relevanceScope: 'company', subType: null, sourceUrl: url }] }), annotations: [{ type: 'url_citation', url: url }] }] }
+      ]
+    };
+    var result = await provider.getNewsCatalysts({ ticker: 'ZZZZ' }, { fetchImpl: makeFetchStub(JSON.stringify(envelope)), apiKey: 'x', nowIso: '2026-09-01T00:00:00.000Z' });
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.envelope.items.length, 1);
+    assert.strictEqual(result.envelope.evidenceBindings[0].evidenceKind, 'url_citation');
+  });
+
+  // ── B-9: multi-binding is observational, never a failure ───────────────
+  await test('B-9 multi-binding (several items sharing one evidenceIndex) is counted and reported, never a failure', async function () {
+    var totalGroups = 0;
+    var perCase = {};
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var replayed = await replay(fixture);
+      var byIndex = {};
+      for (var k = 0; k < replayed.evidenceBindings.length; k++) {
+        var idx = replayed.evidenceBindings[k].evidenceIndex;
+        byIndex[idx] = (byIndex[idx] || 0) + 1;
+        assert.ok(idx >= 0, fixture.caseId + ': grouped binding has an invalid evidenceIndex');
+      }
+      var groupsHere = Object.keys(byIndex).filter(function (key) { return byIndex[key] > 1; }).length;
+      if (groupsHere > 0) { perCase[fixture.caseId] = groupsHere; }
+      totalGroups += groupsHere;
+    }
+    // OBSERVATIONAL ONLY (brief §E B-9, §C.8): multi-binding is valid and
+    // expected. Measured and reported for visibility, deliberately never
+    // asserted against a fixed baseline.
+    process.stdout.write('    (multi-binding groups observed: ' + totalGroups + ' — ' + JSON.stringify(perCase) + ')\n');
+  });
+
+  // ── B-10: the duplicate-divergence acceptance test (load-bearing) ──────
+  // Genuinely depends on §D.2's correction: the expected index below is
+  // derived from THIS test's own reconstructEvidenceSet call on the raw
+  // fixture, not hardcoded from the brief alone — so reverting §D.2 (the
+  // seenNormalized dedup) makes the reconstruction itself regress to the
+  // deduplicated index, which this test would then catch directly.
+  await test('B-10 the four known duplicate-divergence items record the PRODUCTION evidenceIndex, not the deduplicated one — fails against the pre-correction reconstruction by design', async function () {
+    var DIVERGENT_CASES = [
+      { caseId: 'p4-20260921T2307Z-MRNA', urlPattern: /fda\.gov\/media\/194510\/download/, productionIndex: 35, deduplicatedIndex: 34 },
+      { caseId: 'p4-20260921T2312Z-NVDA', urlPattern: /aws-and-nvidia-to-deliver/, productionIndex: 50, deduplicatedIndex: 38 },
+      { caseId: 'p4-20260921T2312Z-NVDA', urlPattern: /nvidia-expands-ai-infrast/, productionIndex: 32, deduplicatedIndex: 28 },
+      { caseId: 'p4-20260921T2312Z-MRNA', urlPattern: /sec\.gov\/Archives\/edgar\/data\/1682852/, productionIndex: 45, deduplicatedIndex: 41 }
+    ];
+    var found = 0;
+    for (var d = 0; d < DIVERGENT_CASES.length; d++) {
+      var spec = DIVERGENT_CASES[d];
+      var fixture = loadCase(spec.caseId);
+      var envelope = JSON.parse(fixture.input.rawResponseBody);
+      var evidenceSet = reconstructEvidenceSet(envelope);
+      var replayed = await replay(fixture);
+      var matched = false;
+      for (var j = 0; j < replayed.items.length; j++) {
+        if (spec.urlPattern.test(replayed.items[j].sourceUrl)) {
+          matched = true;
+          found += 1;
+          var reconstructedIndex = evidenceSet.entries.findIndex(function (e) { return e.normalized === replayed.items[j].normalizedSourceUrl; });
+          assert.strictEqual(reconstructedIndex, spec.productionIndex, spec.caseId + ' ' + spec.urlPattern + ': THIS SUITE\'S OWN reconstruction must independently derive the production index ' + spec.productionIndex + ' — a regressed (dedup) reconstruction would derive ' + spec.deduplicatedIndex + ' instead');
+          assert.notStrictEqual(reconstructedIndex, spec.deduplicatedIndex, spec.caseId + ' ' + spec.urlPattern + ': reconstruction must not regress to the deduplicated index — this is the defect §D.2 corrects');
+          var binding = replayed.evidenceBindings[j];
+          assert.strictEqual(binding.evidenceIndex, spec.productionIndex, spec.caseId + ' ' + spec.urlPattern + ': provider binding must record the PRODUCTION index ' + spec.productionIndex);
+          assert.notStrictEqual(binding.evidenceIndex, spec.deduplicatedIndex, spec.caseId + ' ' + spec.urlPattern + ': provider binding must NOT record the deduplicated index ' + spec.deduplicatedIndex);
+        }
+      }
+      assert.ok(matched, spec.caseId + ': known divergent item not found in this case\'s surviving items — corpus drift');
+    }
+    assert.strictEqual(found, 4, 'expected exactly the four known duplicate-divergence items');
+  });
+
+  // ── B-11: reconstruction cardinality equals production evidenceSetSize ─
+  await test('B-11 evidenceSetSize from the envelope equals the reconstruction\'s entry count, every case — retires A1\'s declared-duplication assumption', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var envelope = JSON.parse(fixture.input.rawResponseBody);
+      var evidenceSet = reconstructEvidenceSet(envelope);
+      var replayed = await replay(fixture);
+      assert.strictEqual(replayed.evidenceSetSize, evidenceSet.total, fixture.caseId + ': evidenceSetSize does not equal the reconstruction\'s entry count');
+    }
   });
 
   global.fetch = _origFetch;
