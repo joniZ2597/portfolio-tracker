@@ -4720,6 +4720,7 @@ if (typeof module !== 'undefined' && module.exports) {
   };
 }
 // ═══ END-VERBATIM services/fund-facts-read-client.js ═══
+var RATING_SUMMARY_RE = /Rating:\s*(Buy|Neutral|Sell)/i;
 
 
 
@@ -6422,7 +6423,7 @@ function _ptScoreDial(v, color) {
 
 function _srGroupResults(source) {
   const rRank = r => {
-    const m = (r.summary || '').match(/Rating:\s*(Buy|Neutral|Sell)/i);
+    const m = (r.summary || '').match(RATING_SUMMARY_RE);
     const v = r.rating || (m ? m[1] : 'Neutral');
     return v.toLowerCase() === 'buy' ? 0 : v.toLowerCase() === 'sell' ? 2 : 1;
   };
@@ -6472,7 +6473,7 @@ function _srRenderGrouped(source, tbody) {
       const chg    = typeof r._verifiedChangePct === 'number' ? r._verifiedChangePct : null;
       const chgStr = chg !== null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
       const chgCls = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
-      const rM     = (r.summary || '').match(/Rating:\s*(Buy|Neutral|Sell)/i);
+      const rM     = (r.summary || '').match(RATING_SUMMARY_RE);
       const rating = r.rating || (rM ? rM[1] : 'Neutral');
       const rCls   = rating.toLowerCase() === 'buy' ? 'pos' : rating.toLowerCase() === 'sell' ? 'neg' : 'neutral-v';
       const [setupLbl, setupCls] = tfMap[r.technical_setup] || ['—', 'neutral-v'];
@@ -6670,7 +6671,7 @@ function openScanResultsOverlay() {
       const chgStr = chg !== null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
       const chgCls = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
       // Use explicit r.rating field if present; fallback to summary regex (same method as renderMainPanel)
-      const rM     = (r.summary || '').match(/Rating:\s*(Buy|Neutral|Sell)/i);
+      const rM     = (r.summary || '').match(RATING_SUMMARY_RE);
       const rating = r.rating || (rM ? rM[1] : 'Neutral');
       const rCls   = rating.toLowerCase() === 'buy' ? 'pos' : rating.toLowerCase() === 'sell' ? 'neg' : 'neutral-v';
       const [setupLbl, setupCls] = tfMap[r.technical_setup] || ['—', 'neutral-v'];
@@ -7375,7 +7376,7 @@ function renderMainPanel(item) {
   const actionable = getS('ACTIONABLE TAKE');
   const keyEvent   = getS('KEY EVENT');
 
-  const rM = sum.match(/Rating:\s*(Buy|Neutral|Sell)/i);
+  const rM = sum.match(RATING_SUMMARY_RE);
   const pM = sum.match(/PT:\s*\$?([\d,.]+|consensus unavailable)/i);
   const rating = rM?rM[1]:'Neutral';
   const pt     = pM&&pM[1]!=='consensus unavailable'?'$'+pM[1]:'—';
@@ -9988,7 +9989,7 @@ function _renderPortfolioPanel() {
             scEl.textContent = 'Score —';
           }
           resRow.appendChild(scEl);
-          var rM = (res.summary || '').match(/Rating:\s*(Buy|Neutral|Sell)/i);
+          var rM = (res.summary || '').match(RATING_SUMMARY_RE);
           if (rM) {
             var rCls = rM[1].toLowerCase() === 'buy' ? 'pos' : rM[1].toLowerCase() === 'sell' ? 'neg' : 'neutral-v';
             var rEl = document.createElement('span');

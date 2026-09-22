@@ -3558,7 +3558,8 @@ function phaseScoreContract() {
   try {
     pieces = {
       bullTier: extractConstSource(content, '_SR_BULLISH_TIER'),
-      bearTier: extractConstSource(content, '_SR_BEARISH_TIER')
+      bearTier: extractConstSource(content, '_SR_BEARISH_TIER'),
+      ratingRe: extractVarSource(content, 'RATING_SUMMARY_RE')
     };
     HELPERS.concat(REAL_FNS).forEach(function (n) { pieces[n] = extractFunctionSource(content, n); });
     const missingPieces = Object.keys(pieces).filter(function (k) { return !pieces[k]; });
@@ -3569,6 +3570,7 @@ function phaseScoreContract() {
     const ALL = HELPERS.concat(REAL_FNS);
     // eslint-disable-next-line no-new-func
     const factory = new Function(
+      pieces.ratingRe + '\n' +
       pieces.bullTier + '\n' + pieces.bearTier + '\n' +
       ALL.map(function (n) { return pieces[n]; }).join('\n') +
       '\nreturn { ' + ALL.map(function (n) { return n + ': ' + n; }).join(', ') + ' };'

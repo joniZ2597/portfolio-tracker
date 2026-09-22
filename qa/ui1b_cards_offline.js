@@ -25,6 +25,7 @@
  *   U14  collapse contract: each _init*Card binds toggle + class + chevron
  *   U15  collapse contract: card markup wires the collapsed-class + chevron
  *   U16  collapse contract: all three init functions are invoked
+ *   U17  drift pin: single shared Rating parser regex definition (RATING_SUMMARY_RE)
  */
 
 const assert = require('assert');
@@ -206,6 +207,16 @@ async function main() {
     ok(/\b_initSigCard\(\)\s*;/.test(html), '_initSigCard() invoked');
     ok(/\b_initCmpCard\(\)\s*;/.test(html), '_initCmpCard() invoked');
     ok(/\b_initKlCard\(\)\s*;/.test(html), '_initKlCard() invoked');
+  });
+
+  await test('U17: drift pin - single Rating parser regex definition', function () {
+    const RATING_LITERAL = '/Rating:\\s*(Buy|Neutral|Sell)/i';
+    const RATING_DEF = 'var RATING_SUMMARY_RE = ' + RATING_LITERAL + ';';
+    // The shared definition is the one legitimate carrier of the literal; excise it, then no inline copy may remain.
+    ok(html.split(RATING_DEF).join('').split(RATING_LITERAL).length - 1 === 0, 'no inline Rating parser regex literal remains outside the shared definition (expected 0)');
+    ok(html.split('RATING_SUMMARY_RE').length - 1 === 6, 'RATING_SUMMARY_RE appears exactly 6 times (1 definition + 5 uses)');
+    ok(html.split(RATING_DEF).length - 1 === 1, 'shared definition present exactly once');
+    ok(html.indexOf('/Rating:.*$/s') !== -1, 'tail-strip /Rating:.*$/s still present (the sweep did not over-reach)');
   });
 
   console.log('');

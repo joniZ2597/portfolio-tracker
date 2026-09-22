@@ -91,9 +91,9 @@ const PROTECTED_FN_HASHES = {
   _ptScoreStates: '41968b418333e8a95f8fa6c15225351b9b7d73196bd808e7dd4ac6b7e3d83771',
   _ptScoreFillHtml: 'dfeb1959f3ca9f877d7158db68d5109c64bf36eb4f3f23eb300b735ae69f5a23',
   _ptScoreDial: '4092f243120f5c6bdf3269a02e599f3ad68afcd4a8afe8d766724879b0ef4bce',
-  _srGroupResults: 'b15709ae85df5dd9caba39c80bc421ea21733cf02fc3ed5401d05f9c6d26df57',
-  _srRenderGrouped: 'f4372e1fb53c45ba9c50339834d4bd7e1e64cb4c32694e4074e5c5743a5b9aea',
-  renderMainPanel: 'cd15e31cf2dff77165744ca4aa64d8e676796521115a9dc808b9a23dc2dd1e55'
+  _srGroupResults: '192d7dd36905c72cde459091569e0d9749a2d4b5a861c86d09c54c762078ddb1',
+  _srRenderGrouped: '02a0784614a0ab60ddafaf1a319dc0b89cdb7bcc8670161f527d5c18564c71a4',
+  renderMainPanel: '6d98820eab986afe5d64ad77b36faf00b538aab74e7b112314569f212666c7a5'
 };
 for (const fnName of Object.keys(PROTECTED_FN_HASHES)) {
   const src = extractFunctionSource(content, fnName);
