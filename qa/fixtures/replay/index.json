@@ -1,0 +1,205 @@
+{
+  "corpusId": "s2-a1-evidence-replay-corpus",
+  "brief": "work/s2-evidence-replay-corpus/brief.md",
+  "extractedAtUtc": "2026-09-22T09:29:39.256Z",
+  "extractedBy": "s2-a1",
+  "cases": [
+    {
+      "caseId": "p3-20260921T2045Z-NVDA",
+      "file": "p3-20260921T2045Z-NVDA.json",
+      "pilot": "pilot3",
+      "runId": "20260921T2045Z",
+      "ticker": "NVDA",
+      "captureSha256": "3ef102912caf0ae4ba1a50d74776940c0513a3d341516a29d1f2c77a7353b5e5",
+      "fixtureSha256": "070723345ceb2cf697137099d9ddb2afe9af8597e7f24687736fbb56e5898f74"
+    },
+    {
+      "caseId": "p3-20260921T2045Z-FROG",
+      "file": "p3-20260921T2045Z-FROG.json",
+      "pilot": "pilot3",
+      "runId": "20260921T2045Z",
+      "ticker": "FROG",
+      "captureSha256": "3abd2aaff402e213bd8d1c9adfd77d66cea4c7547ca2802500a37319f0ec7bfe",
+      "fixtureSha256": "ba7373a82aa1e952fff051c9b11873fa26bebbf1df74189eca6bc56d2283b25f"
+    },
+    {
+      "caseId": "p3-20260921T2045Z-MRNA",
+      "file": "p3-20260921T2045Z-MRNA.json",
+      "pilot": "pilot3",
+      "runId": "20260921T2045Z",
+      "ticker": "MRNA",
+      "captureSha256": "3277f9ee76fdab2e986d36e0ab7992579a9d842da302fa985fc3d685a7e45477",
+      "fixtureSha256": "f5d9bc6e49c3c244cbebcc44ac87e1bab85f8647ed7019b3ac631db839b33744"
+    },
+    {
+      "caseId": "p4-20260921T2307Z-NVDA",
+      "file": "p4-20260921T2307Z-NVDA.json",
+      "pilot": "pilot4",
+      "runId": "p4-20260921T2307Z",
+      "ticker": "NVDA",
+      "captureSha256": "5acf251fbe68f5d14bfd85e942c2df121d0d074941c0065c8df002635860796e",
+      "fixtureSha256": "44ac820d0c6895f6565a5358736a3156a6b0b0fb627b49af2600a285c63a6313"
+    },
+    {
+      "caseId": "p4-20260921T2307Z-FROG",
+      "file": "p4-20260921T2307Z-FROG.json",
+      "pilot": "pilot4",
+      "runId": "p4-20260921T2307Z",
+      "ticker": "FROG",
+      "captureSha256": "dad468c64c5b84ddd2ed66166673ba1356bcd1c70b981b9047dd9c2b66b10346",
+      "fixtureSha256": "4531a070e5b11ed0b8b07bbf212bb040f652e594a7c966bbce04f1456fda9f53"
+    },
+    {
+      "caseId": "p4-20260921T2307Z-MRNA",
+      "file": "p4-20260921T2307Z-MRNA.json",
+      "pilot": "pilot4",
+      "runId": "p4-20260921T2307Z",
+      "ticker": "MRNA",
+      "captureSha256": "a9814b234251f7e9764eda7c7eb4124d2d3021ec02de275e88594ef54129de31",
+      "fixtureSha256": "40f1d5cb668b11e3cc07f3a28df9f35d0b7e3c6a33f6c044be0041500d109e4e"
+    },
+    {
+      "caseId": "p4-20260921T2312Z-NVDA",
+      "file": "p4-20260921T2312Z-NVDA.json",
+      "pilot": "pilot4",
+      "runId": "p4-20260921T2312Z",
+      "ticker": "NVDA",
+      "captureSha256": "acaf4c3f08980f68012ea94f898b734e65a26947f74879fcdb324cf0f7088b2c",
+      "fixtureSha256": "94c8c15041379c315e3317f3a905c6a360d9ea2e897171ef720ec9d01ccac3fb"
+    },
+    {
+      "caseId": "p4-20260921T2312Z-FROG",
+      "file": "p4-20260921T2312Z-FROG.json",
+      "pilot": "pilot4",
+      "runId": "p4-20260921T2312Z",
+      "ticker": "FROG",
+      "captureSha256": "ecdbfd2f6537bd567e897204ed74daa770b595032b55fd2ee0bffb51d9bb672b",
+      "fixtureSha256": "0eeee186041a83a0d042374440544d42b4ec8012eb202dd5092e0f59557829e7"
+    },
+    {
+      "caseId": "p4-20260921T2312Z-MRNA",
+      "file": "p4-20260921T2312Z-MRNA.json",
+      "pilot": "pilot4",
+      "runId": "p4-20260921T2312Z",
+      "ticker": "MRNA",
+      "captureSha256": "80526d1e3a6d23210a01a56b81003a62bb5f0d7910277d06050ce67583957901",
+      "fixtureSha256": "647ab1139634137becdb0e82f1b9d2e8f2dcdee048683c0807a8b0f02a1d9f35"
+    }
+  ],
+  "referenceManifest": [
+    {
+      "refId": "mrna-fda-covid-2026-27",
+      "ticker": "MRNA",
+      "event": "FDA approval of the 2026-27 COVID vaccine",
+      "classificationBasis": "Evidence Set presence, then emission",
+      "assertedBy": "Owner",
+      "assertedOn": "2026-09-21",
+      "perRun": {
+        "p3-20260921T2045Z": {
+          "outcome": "RESOLVED_EMITTED",
+          "matchedItemSourceUrl": "https://www.nasdaq.com/press-release/moderna-receives-us-fda-approval-updated-2026-2027-covid-19-vaccines-2026-08-27"
+        },
+        "p4-20260921T2307Z": {
+          "outcome": "RESOLVED_EMITTED",
+          "matchedItemSourceUrl": "https://www.fda.gov/media/194510/download"
+        },
+        "p4-20260921T2312Z": {
+          "outcome": "NOT_ASSESSED",
+          "note": "Evidence Set carries only pre-existing (2025) mNEXSPIKE approval pages and generic covid resource pages; no 2026-27-approval-specific entry found with confidence."
+        }
+      }
+    },
+    {
+      "refId": "mrna-interpath-ph3",
+      "ticker": "MRNA",
+      "event": "INTerpath Phase 3 readout",
+      "classificationBasis": "Evidence Set presence, then emission",
+      "assertedBy": "Owner",
+      "assertedOn": "2026-09-21",
+      "perRun": {
+        "p3-20260921T2045Z": {
+          "outcome": "RESOLVED_EMITTED",
+          "matchedItemSourceUrl": "https://finance.yahoo.com/healthcare/articles/moderna-announces-breaking-data-presented-141200784.html",
+          "note": "ESMO/melanoma Phase 3 data release; report’s stated caveat carried forward from the Pilot 3 ruling."
+        },
+        "p4-20260921T2307Z": {
+          "outcome": "RESOLVED_EMITTED",
+          "matchedItemSourceUrl": "https://investingnews.com/moderna-announces-late-breaking-data-to-be-presented-at-esmo-congress-2026/"
+        },
+        "p4-20260921T2312Z": {
+          "outcome": "Q-1",
+          "matchedEvidenceUrl": "https://news.modernatx.com/merck-and-moderna-announce-phase-3-interpath-001-trial-of-intismeran-plus-keytruda-met-endpoints-of-rfs-and-dmfs-in-melanoma",
+          "note": "In the reconstructed Evidence Set; no survived item corresponds to it."
+        }
+      }
+    },
+    {
+      "refId": "nvda-doj-probe",
+      "ticker": "NVDA",
+      "event": "DOJ probe",
+      "classificationBasis": "Evidence Set presence, then emission",
+      "assertedBy": "Owner",
+      "assertedOn": "2026-09-21",
+      "perRun": {
+        "p3-20260921T2045Z": {
+          "outcome": "Q-2",
+          "note": "No DOJ/antitrust/probe/investigation keyword hit in the reconstructed Evidence Set."
+        },
+        "p4-20260921T2307Z": {
+          "outcome": "Q-2",
+          "note": "No DOJ/antitrust/probe/investigation keyword hit in the reconstructed Evidence Set."
+        },
+        "p4-20260921T2312Z": {
+          "outcome": "Q-2",
+          "note": "No DOJ/antitrust/probe/investigation keyword hit in the reconstructed Evidence Set."
+        }
+      }
+    },
+    {
+      "refId": "nvda-q2-fy27-earnings",
+      "ticker": "NVDA",
+      "event": "Q2 FY27 earnings",
+      "classificationBasis": "Q-3 check — emitted, then lost at grounding because sourceUrl was not retrieved",
+      "assertedBy": "Owner",
+      "assertedOn": "2026-09-21",
+      "perRun": {
+        "p3-20260921T2045Z": {
+          "outcome": "Q-3",
+          "note": "Candidate-level: three unretrieved nvidianews.nvidia.com Q2 FY27 candidates skipped INVALID_SOURCE_URL (order-zip attributed to Q3_UNRETRIEVED_SOURCE_URL)."
+        },
+        "p4-20260921T2307Z": {
+          "outcome": "RESOLVED_EMITTED",
+          "matchedItemSourceUrl": "https://investor.nvidia.com/news/press-release-details/2026/NVIDIA-Announces-Financial-Results-for-Second-Quarter-Fiscal-2027/default.aspx"
+        },
+        "p4-20260921T2312Z": {
+          "outcome": "Q-1",
+          "matchedEvidenceUrl": "https://www.marketbeat.com/earnings/reports/2026-8-26-nvidia-co-stock/",
+          "note": "In the reconstructed Evidence Set (“NVIDIA Q2 2027 Earnings Report”); no raw candidate was even generated for it this run — no survived item corresponds to it."
+        }
+      }
+    },
+    {
+      "refId": "mrna-convertible-notes",
+      "ticker": "MRNA",
+      "event": "≈$2.6B convertible-notes offering",
+      "classificationBasis": "C-1 date check — announcement/pricing vs completion/indenture date",
+      "assertedBy": "Owner",
+      "assertedOn": "2026-09-21",
+      "perRun": {
+        "p3-20260921T2045Z": {
+          "outcome": "C-1_OBSERVED",
+          "matchedItemSourceUrl": "https://www.sec.gov/Archives/edgar/data/1682852/000119312526378505/d108896d8k.htm",
+          "note": "Regression reproduced at the 2026-09-01 completion date (survived, but flagged as a date-choice observation, not a Q-1/Q-2 label)."
+        },
+        "p4-20260921T2307Z": {
+          "outcome": "C-1_NOT_OBSERVED",
+          "note": "No convertible-notes-related entry in the reconstructed Evidence Set."
+        },
+        "p4-20260921T2312Z": {
+          "outcome": "C-1_NOT_OBSERVED",
+          "note": "No convertible-notes-related entry in the reconstructed Evidence Set."
+        }
+      }
+    }
+  ]
+}
