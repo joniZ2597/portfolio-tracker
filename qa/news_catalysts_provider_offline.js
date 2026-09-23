@@ -58,6 +58,7 @@ const assert = require('assert');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const SRC = process.env.NEWS_CATALYSTS_PROVIDER_PATH
   ? path.resolve(process.env.NEWS_CATALYSTS_PROVIDER_PATH)
@@ -1632,6 +1633,144 @@ async function runTests() {
     assert.deepStrictEqual(rPresent.skippedItems, [], 'once retrieved, the same candidate is not skipped');
     assert.strictEqual(rPresent.items.length, 1, 'once retrieved, the same candidate survives');
     assert.strictEqual(rPresent.items[0].sourceUrl, unretrieved, 'persisted sourceUrl is the grounding entry\'s own raw URL');
+  });
+
+  // ── NP50: S2 A5 Rule S — trailing index-document filename is transparent (positive) ───
+  await test('NP50 /news/default.aspx is rejected GENERIC_SOURCE_URL — the index-document leaf strips to the generic /news segment', async function () {
+    var url = 'https://investors.jfrog.com/news/default.aspx';
+    var rNP50 = norm([rawItem('2026-07-18', 'earnings_event', 'positive', url)], [url], undefined);
+    assert.deepStrictEqual(rNP50.skippedItems, [{ reason: 'GENERIC_SOURCE_URL' }], 'strips to /news, which GENERIC_SOURCE_PATH_RE matches');
+    assert.strictEqual(rNP50.items.length, 0);
+  });
+
+  // ── NP51: S2 A5 Rule S — other index-document extensions and generic segments (positive) ───
+  await test('NP51 /investors/index.aspx, /newsroom/index.html and /media/default.php are all rejected GENERIC_SOURCE_URL', async function () {
+    var urlAspx = 'https://ir.example.com/investors/index.aspx';
+    var urlHtml = 'https://ir.example.com/newsroom/index.html';
+    var urlPhp = 'https://ir.example.com/media/default.php';
+    var rNP51 = norm([
+      rawItem('2026-07-18', 'earnings_event', 'positive', urlAspx),
+      rawItem('2026-07-18', 'earnings_event', 'positive', urlHtml),
+      rawItem('2026-07-18', 'earnings_event', 'positive', urlPhp)
+    ], [urlAspx, urlHtml, urlPhp], undefined);
+    assert.deepStrictEqual(rNP51.skippedItems, [
+      { reason: 'GENERIC_SOURCE_URL' },
+      { reason: 'GENERIC_SOURCE_URL' },
+      { reason: 'GENERIC_SOURCE_URL' }
+    ], 'all three index-document extensions strip to a generic segment');
+    assert.strictEqual(rNP51.items.length, 0);
+  });
+
+  // ── NP52: S2 A5 Rule S — bare root index document strips to '' (positive, the '' branch) ───
+  await test("NP52 /default.aspx (bare root index document) is rejected GENERIC_SOURCE_URL — stripping the leaf yields '', which is explicitly checked", async function () {
+    var url = 'https://ir.example.com/default.aspx';
+    var rNP52 = norm([rawItem('2026-07-18', 'earnings_event', 'positive', url)], [url], undefined);
+    assert.deepStrictEqual(rNP52.skippedItems, [{ reason: 'GENERIC_SOURCE_URL' }], "strips to '', rejected by the explicit '' check");
+    assert.strictEqual(rNP52.items.length, 0);
+  });
+
+  // ── NP53: S2 A5 Rule S — negative control: JFrog article-specific default.aspx survives ───
+  await test('NP53 negative control: /news/news-details/2026/JFrog-Introduces-Zero-Touch-Remediation.../default.aspx survives — the stripped path is still article-specific', async function () {
+    var url = 'https://investors.jfrog.com/news/news-details/2026/JFrog-Introduces-Zero-Touch-Remediation-for-Kubernetes/default.aspx';
+    var rNP53 = norm([rawItem('2026-07-18', 'earnings_event', 'positive', url)], [url], undefined);
+    assert.deepStrictEqual(rNP53.skippedItems, [], 'article-specific path under /news survives Rule S');
+    assert.strictEqual(rNP53.items.length, 1);
+    assert.strictEqual(rNP53.items[0].sourceUrl, url);
+  });
+
+  // ── NP54: S2 A5 Rule S — negative control: NVIDIA article-specific default.aspx survives ───
+  await test('NP54 negative control: /news/press-release-details/2026/NVIDIA-Announces-Financial-Results.../default.aspx survives — the stripped path is still article-specific', async function () {
+    var url = 'https://investor.nvidia.com/news/press-release-details/2026/NVIDIA-Announces-Financial-Results-for-Second-Quarter-Fiscal-2027/default.aspx';
+    var rNP54 = norm([rawItem('2026-07-18', 'earnings_event', 'positive', url)], [url], undefined);
+    assert.deepStrictEqual(rNP54.skippedItems, [], 'article-specific path under /news survives Rule S');
+    assert.strictEqual(rNP54.items.length, 1);
+    assert.strictEqual(rNP54.items[0].sourceUrl, url);
+  });
+
+  // ── NP55: S2 A5 Rule S — negative control: pre-existing article paths with no index-document leaf ───
+  await test('NP55 negative control: /news/q3-results and /news/2026/some-article survive unaffected — no index-document leaf to strip, pre-existing behaviour preserved', async function () {
+    var urlA = 'https://ir.example.com/news/q3-results';
+    var urlB = 'https://ir.example.com/news/2026/some-article';
+    var rNP55 = norm([
+      rawItem('2026-07-18', 'earnings_event', 'positive', urlA),
+      rawItem('2026-07-18', 'earnings_event', 'positive', urlB)
+    ], [urlA, urlB], undefined);
+    assert.deepStrictEqual(rNP55.skippedItems, [], 'neither path ends in an index-document leaf');
+    assert.strictEqual(rNP55.items.length, 2);
+  });
+
+  // ── NP56: S2 A5 Rule S — negative control: 'news-details' is not a generic segment ───
+  await test("NP56 negative control: /news-details/default.aspx survives — 'news-details' is not in GENERIC_SOURCE_PATH_RE's segment list, proving the list was not widened", async function () {
+    var url = 'https://ir.example.com/news-details/default.aspx';
+    var rNP56 = norm([rawItem('2026-07-18', 'earnings_event', 'positive', url)], [url], undefined);
+    assert.deepStrictEqual(rNP56.skippedItems, [], 'stripped path /news-details is not a generic segment');
+    assert.strictEqual(rNP56.items.length, 1);
+    assert.strictEqual(rNP56.items[0].sourceUrl, url);
+  });
+
+  // ── NP57: S2 A5 Rule S — regression pin: SKIP_REASONS count unchanged, no new reason ───
+  await test('NP57 SKIP_REASONS.length is still 12 and still contains exactly one GENERIC_SOURCE_URL entry — Rule S reuses the existing reason, it does not add a new one', function () {
+    assert.strictEqual(provider.SKIP_REASONS.length, 12, 'Rule S reuses GENERIC_SOURCE_URL; no new skip reason');
+    var genericCount = provider.SKIP_REASONS.filter(function (r) { return r === 'GENERIC_SOURCE_URL'; }).length;
+    assert.strictEqual(genericCount, 1, 'exactly one GENERIC_SOURCE_URL entry — not duplicated, not renamed');
+
+    // Codex review (S2 A5): NP56/NP57 alone proved only that 'news-details'
+    // wasn't added and that SKIP_REASONS is still 12 — neither pinned the
+    // GENERIC_SOURCE_PATH_RE segment list itself, so a future widening of
+    // that regex (e.g. adding 'events') would pass every existing test here
+    // while silently rejecting legitimate article paths under the new
+    // segment. GENERIC_SOURCE_PATH_RE is deliberately not exported (it is
+    // an internal implementation detail), so this pin compares the
+    // DECLARATION LINE's source text directly: the current provider file on
+    // disk against the same file at the approved A5 baseline (52c322b),
+    // read via `git show`. This proves the regex source is byte-unchanged
+    // without exporting it and without re-running/reinterpreting the
+    // generic-path policy.
+    //
+    // Codex review round 2: a single-line-anchored regex still matched a
+    // `//`-commented copy of the OLD declaration left directly above a
+    // widened real one. Codex review round 3: even after anchoring, a
+    // `/* ... */` block comment containing the old declaration at column 0
+    // (with the real widened declaration indented) still defeated a purely
+    // line-based match, since a block comment's content is not excluded by
+    // `^...$` line anchoring alone. Fixed by stripping BOTH block and line
+    // comments first, via this repo's own established `stripComments`
+    // pattern (reused verbatim from qa/fund_facts_route_offline.js:124 —
+    // same two-step `/\*[\s\S]*?\*\//g` then `/\/\/[^\n]*/g` replacement
+    // used across qa/fund_facts_teardown_offline.js,
+    // qa/evidence_freshness_offline.js, qa/batch_pull_wiring_offline.js,
+    // qa/batch_owner_script_offline.js), so no comment of either form can
+    // hide a decoy declaration for the line-anchored match to find. The
+    // regex itself never contains a literal `//` (every slash in the
+    // pattern is escaped as `\/`), so line-comment stripping cannot
+    // truncate it.
+    function stripComments(src) { return src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' '); }
+    // Line-anchored (^...$ with /m) and requires the line start with the
+    // literal declaration keyword at column 0 — after comment-stripping, a
+    // decoy copy of this text can no longer appear at all (comments are
+    // gone), and an indented real declaration (a mutation attempting to
+    // dodge column-0 anchoring) fails loudly via the exact-count assertion
+    // below rather than silently matching the wrong text. The 'g' flag plus
+    // a match-count assertion additionally guards against more than one
+    // such line existing (which would make "the" declaration ambiguous).
+    var DECL_RE = /^var GENERIC_SOURCE_PATH_RE = (\/.*\/[a-z]*);$/m;
+    var DECL_RE_G = /^var GENERIC_SOURCE_PATH_RE = \/.*\/[a-z]*;$/mg;
+    var currentSource = stripComments(fs.readFileSync(SRC, 'utf8'));
+    var currentMatches = currentSource.match(DECL_RE_G) || [];
+    assert.strictEqual(currentMatches.length, 1, 'expected exactly one GENERIC_SOURCE_PATH_RE declaration line in the current provider source (comment-stripped), found ' + currentMatches.length);
+    var currentMatch = DECL_RE.exec(currentSource);
+    assert.ok(currentMatch, 'GENERIC_SOURCE_PATH_RE declaration not found in the current provider source (comment-stripped)');
+
+    var relPath = path.relative(path.resolve(__dirname, '..'), SRC).split(path.sep).join('/');
+    var child = spawnSync('git', ['show', '52c322b:' + relPath], { cwd: path.resolve(__dirname, '..'), encoding: 'utf8' });
+    assert.strictEqual(child.status, 0, 'git show 52c322b:' + relPath + ' failed: ' + child.stderr);
+    var baselineSource = stripComments(child.stdout);
+    var baselineMatches = baselineSource.match(DECL_RE_G) || [];
+    assert.strictEqual(baselineMatches.length, 1, 'expected exactly one GENERIC_SOURCE_PATH_RE declaration line in the 52c322b baseline provider source (comment-stripped), found ' + baselineMatches.length);
+    var baselineMatch = DECL_RE.exec(baselineSource);
+    assert.ok(baselineMatch, 'GENERIC_SOURCE_PATH_RE declaration not found in the 52c322b baseline provider source (comment-stripped)');
+
+    assert.strictEqual(currentMatch[1], baselineMatch[1], 'GENERIC_SOURCE_PATH_RE source has changed since the approved A5 baseline (52c322b) — the generic-segment list must not be widened or altered by this task');
   });
 
   global.fetch = _origFetch;

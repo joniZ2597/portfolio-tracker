@@ -270,11 +270,15 @@ async function runTests() {
     // Cross-process: one representative case (spawning a process per case
     // would be slow; determinism within-process for all 9 plus one
     // cross-process check on a case with both survivors and skips is
-    // sufficient to catch an ambient-state dependency).
-    var repFixture = loadCase('p4-20260921T2312Z-FROG');
+    // sufficient to catch an ambient-state dependency). S2 A5: re-pointed
+    // from FROG to NVDA — Rule S makes FROG a 0-item/all-skip case, which
+    // would no longer exercise items, bindings or evidenceSetSize; NVDA
+    // retains both survivors (5 items) and a skip (1 INVALID_SOURCE_URL)
+    // and is unaffected by Rule S.
+    var repFixture = loadCase('p4-20260921T2312Z-NVDA');
     var inProcess = await replay(repFixture);
     var script = 'const provider = require(' + JSON.stringify(PROVIDER_PATH) + ');' +
-      'const fixture = JSON.parse(require("fs").readFileSync(' + JSON.stringify(path.join(FIXTURES_DIR, 'p4-20260921T2312Z-FROG.json')) + ', "utf8"));' +
+      'const fixture = JSON.parse(require("fs").readFileSync(' + JSON.stringify(path.join(FIXTURES_DIR, 'p4-20260921T2312Z-NVDA.json')) + ', "utf8"));' +
       'async function fetchImpl(){ return { status: 200, headers: { get: () => null }, text: async () => fixture.input.rawResponseBody }; }' +
       'provider.getNewsCatalysts({ ticker: fixture.input.ticker }, { fetchImpl, apiKey: "x", nowIso: fixture.input.nowIso })' +
       '.then(r => { process.stdout.write(JSON.stringify({ items: r.envelope.items, skippedItems: r.envelope.skippedItems.map(s => ({reason: s.reason})), evidenceBindings: r.envelope.evidenceBindings, evidenceSetSize: r.envelope.evidenceSetSize })); });';
@@ -761,6 +765,76 @@ async function runTests() {
       var evidenceSet = reconstructEvidenceSet(envelope);
       var replayed = await replay(fixture);
       assert.strictEqual(replayed.evidenceSetSize, evidenceSet.total, fixture.caseId + ': evidenceSetSize does not equal the reconstruction\'s entry count');
+    }
+  });
+
+  // S2 A5 (Rule S) — R-12..R-15 verify the measured, single-case survivor
+  // delta against the 52c322b baseline (brief §4). The baseline is read via
+  // `git show 52c322b:<path>` rather than hardcoded, so these tests fail
+  // honestly if the actual pre-A5 fixture differs from what the brief
+  // measured.
+  function toLf(text) {
+    return text.replace(/\r\n/g, '\n');
+  }
+  function baselineFixture(caseId) {
+    var relPath = 'qa/fixtures/replay/' + caseId + '.json';
+    var child = spawnSync('git', ['show', '52c322b:' + relPath], { cwd: ROOT, encoding: 'utf8' });
+    assert.strictEqual(child.status, 0, 'git show 52c322b:' + relPath + ' failed: ' + child.stderr);
+    return JSON.parse(child.stdout);
+  }
+  function baselineFixtureRaw(caseId) {
+    var relPath = 'qa/fixtures/replay/' + caseId + '.json';
+    var child = spawnSync('git', ['show', '52c322b:' + relPath], { cwd: ROOT, encoding: 'utf8' });
+    assert.strictEqual(child.status, 0, 'git show 52c322b:' + relPath + ' failed: ' + child.stderr);
+    return child.stdout;
+  }
+
+  // ── R-12: exactly one case differs from the 52c322b baseline — p4-2312-FROG ──
+  await test('R-12 exactly one case\'s expected {items, skippedItems} differs from the 52c322b baseline, and it is p4-20260921T2312Z-FROG', function () {
+    var diverged = [];
+    for (var i = 0; i < index.cases.length; i++) {
+      var caseId = index.cases[i].caseId;
+      var current = loadCase(caseId);
+      var baseline = baselineFixture(caseId);
+      var currentSnapshot = JSON.stringify({ items: current.expected.items, skippedItems: current.expected.skippedItems });
+      var baselineSnapshot = JSON.stringify({ items: baseline.expected.items, skippedItems: baseline.expected.skippedItems });
+      if (currentSnapshot !== baselineSnapshot) { diverged.push(caseId); }
+    }
+    assert.deepStrictEqual(diverged, ['p4-20260921T2312Z-FROG'], 'exactly one case must diverge from baseline, and it must be the FROG hub case');
+  });
+
+  // ── R-13: p4-2312-FROG is 0 items / 5 × GENERIC_SOURCE_URL ─────────────
+  await test('R-13 p4-20260921T2312Z-FROG replays to 0 items and exactly 5 GENERIC_SOURCE_URL skips', async function () {
+    var fixture = loadCase('p4-20260921T2312Z-FROG');
+    var replayed = await replay(fixture);
+    assert.strictEqual(replayed.items.length, 0, 'the hub case is now a zero-item case');
+    assert.strictEqual(replayed.skippedItems.length, 5, 'all five candidates are skipped');
+    replayed.skippedItems.forEach(function (s) {
+      assert.strictEqual(s.reason, 'GENERIC_SOURCE_URL', 'every skip on this case is GENERIC_SOURCE_URL, not DUPLICATE_IN_BATCH — the generic check now runs first in the ladder');
+    });
+  });
+
+  // ── R-14: the other eight fixture files are unchanged from the 52c322b baseline ──
+  await test('R-14 the eight non-FROG fixture files are unchanged from the 52c322b baseline (content compared with CRLF normalized to LF, so a checkout line-ending difference is never reported as a divergence)', function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var caseId = index.cases[i].caseId;
+      if (caseId === 'p4-20260921T2312Z-FROG') { continue; }
+      var currentRaw = fs.readFileSync(path.join(FIXTURES_DIR, caseId + '.json'), 'utf8');
+      var baselineRaw = baselineFixtureRaw(caseId);
+      assert.strictEqual(toLf(currentRaw), toLf(baselineRaw), caseId + ': fixture file content diverged from the 52c322b baseline');
+    }
+  });
+
+  // ── R-15: rule and corpus agree — no surviving item binds a hub index-document path ──
+  var HUB_INDEX_DOC_RE = /\/(news|press-release|press-releases|investors|investor-relations|newsroom|media)\/(?:default|index)\.(?:aspx|html?|php)$/i;
+  await test('R-15 no surviving item in any case binds a source URL whose path is a generic hub segment plus an index-document leaf — rule and corpus agree', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var replayed = await replay(fixture);
+      replayed.items.forEach(function (item) {
+        var p = new URL(item.normalizedSourceUrl).pathname;
+        assert.ok(!HUB_INDEX_DOC_RE.test(p), fixture.caseId + ': surviving item binds a hub index-document path Rule S should have rejected: ' + item.normalizedSourceUrl);
+      });
     }
   });
 

@@ -20,66 +20,33 @@
   "expected": {
     "kind": "SNAPSHOT",
     "providerVersion": "1eda72c",
-    "items": [
-      {
-        "ticker": "FROG",
-        "eventDate": "2026-08-27",
-        "category": "product_customer_partnership",
-        "direction": "positive",
-        "sourceUrl": "https://investors.jfrog.com/news/default.aspx",
-        "normalizedSourceUrl": "https://investors.jfrog.com/news/default.aspx",
-        "sourceDomain": "investors.jfrog.com",
-        "provider": "j3-news-catalysts@job-model-v1",
-        "retrievedAt": "2026-09-21T23:12:55.621Z",
-        "identityHash": "7aa5027f2fad7cd036cd811aeb98698c86cbff588f917baa0553b79afed2a011",
-        "provenance": "retrieval_unverified",
-        "confidence": null,
-        "requiresVerification": true,
-        "scoringImpact": "none",
-        "eventType": "catalyst",
-        "relevanceScope": "company",
-        "subType": null
-      },
-      {
-        "ticker": "FROG",
-        "eventDate": "2026-09-02",
-        "category": "product_customer_partnership",
-        "direction": "positive",
-        "sourceUrl": "https://investors.jfrog.com/news/default.aspx",
-        "normalizedSourceUrl": "https://investors.jfrog.com/news/default.aspx",
-        "sourceDomain": "investors.jfrog.com",
-        "provider": "j3-news-catalysts@job-model-v1",
-        "retrievedAt": "2026-09-21T23:12:55.621Z",
-        "identityHash": "fdddfd86c1ece47c6d00318acdd3643d8d13e61a1c695cce420afc8cfb4c82b2",
-        "provenance": "retrieval_unverified",
-        "confidence": null,
-        "requiresVerification": true,
-        "scoringImpact": "none",
-        "eventType": "catalyst",
-        "relevanceScope": "company",
-        "subType": null
-      }
-    ],
+    "items": [],
     "skippedItems": [
       {
-        "reason": "DUPLICATE_IN_BATCH"
+        "reason": "GENERIC_SOURCE_URL"
       },
       {
-        "reason": "DUPLICATE_IN_BATCH"
+        "reason": "GENERIC_SOURCE_URL"
       },
       {
-        "reason": "DUPLICATE_IN_BATCH"
+        "reason": "GENERIC_SOURCE_URL"
+      },
+      {
+        "reason": "GENERIC_SOURCE_URL"
+      },
+      {
+        "reason": "GENERIC_SOURCE_URL"
       }
     ],
     "attribution": {
       "rawCandidates": 5,
       "buckets": {
-        "SURVIVED": 2,
+        "SURVIVED": 0,
         "MALFORMED_CANDIDATE": 0,
         "Q3_UNRETRIEVED_SOURCE_URL": 0,
-        "GROUNDING_REJECTION": 0,
+        "GROUNDING_REJECTION": 5,
         "DETERMINISTIC_VALIDATION_REJECTION": 0,
-        "DUPLICATE_IN_BATCH": 3
+        "DUPLICATE_IN_BATCH": 0
       }
     }
   }

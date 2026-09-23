@@ -86,6 +86,12 @@ var NEWS_KEY_RE = /^fundstore:v1:news:[A-Z]{1,10}:\d{4}-\d{2}-\d{2}:[a-f0-9]{64}
 // fixed by making the group mandatory.
 var GENERIC_SOURCE_PATH_RE = /^\/(news|press-release|press-releases|investors|investor-relations|newsroom|media)\/?$/i;
 
+// S2 A5, Rule S: strip a trailing index/default document filename before
+// applying GENERIC_SOURCE_PATH_RE unchanged. Article-specific paths may also
+// use such filenames; they remain valid because the stripped path is still
+// specific and does not match the generic-path rule.
+var INDEX_DOC_LEAF_RE = /\/(?:default|index)\.(?:aspx|html?|php)$/i;
+
 // Closed 7-item catalyst vocabulary (spec §4). No macro/sector category in v1;
 // other_catalyst is the sole catch-all.
 var CATEGORIES = deepFreeze([
@@ -658,8 +664,8 @@ function normalizeNewsResponse(parsedResponse, context) {
     // segment (e.g. /news/q3-results) is untouched. grounded.normalized is
     // already a validated, previously-parsed https URL (resolveGrounded
     // above), so re-parsing it here is safe.
-    var groundedPath = new URL(grounded.normalized).pathname;
-    if (groundedPath === '/' || GENERIC_SOURCE_PATH_RE.test(groundedPath)) {
+    var groundedPath = new URL(grounded.normalized).pathname.replace(INDEX_DOC_LEAF_RE, '');
+    if (groundedPath === '' || groundedPath === '/' || GENERIC_SOURCE_PATH_RE.test(groundedPath)) {
       skippedItems.push({ reason: 'GENERIC_SOURCE_URL' });
       continue;
     }
