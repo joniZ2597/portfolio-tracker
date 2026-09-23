@@ -2987,7 +2987,7 @@ function phaseNeedsAttention() {
 // fingerprint vector, correlation fail-closed, rsMinPairedCloses invariance,
 // determinism, isolation. Policy validity is asserted against the shipped
 // TS1_POLICY_V1 constant (caller-side validation per rev-2 §3.13).
-function phaseTechScore() {
+async function phaseTechScore() {
   header('Phase 12 - Technical Score (SCORE-V1-S1)');
 
   const content = read('index.html');
@@ -3520,10 +3520,133 @@ function phaseTechScore() {
       check('scorer source clean of ' + pat.source, !pat.test(scorerSrc));
     }
     const callCount = content.split('runTechScoreV1(').length - 1;
-    check('runTechScoreV1 structurally uncalled (comment + definition only)', callCount === 2);
+    check('runTechScoreV1 has exactly one call site (comment + definition + _ts1FillRow)', callCount === 3);
     check('no GATE_OFF in any scorer fixture output', [r1, r2].every(function (r) {
       return r.reasonCodes.indexOf('GATE_OFF') === -1;
     }));
+  })();
+
+  // ── Task 6: Tech Score v1 surfacing — gated #ts-card row, async post-render fill ──
+  // Executes the REAL _ts1RowText / _ts1FillRow sources in a sandbox with a fixture
+  // window / document / engine (no network, no storage). Structural checks run
+  // against the real renderMainPanel source. Gate mutations land on the fixture
+  // window (the production input), never on the test.
+  await (async function () {
+    const fillSrc = extractFunctionSource(content, '_ts1FillRow');
+    const textSrc = extractFunctionSource(content, '_ts1RowText');
+    const panelSrc = extractFunctionSource(content, 'renderMainPanel');
+    check('T6: _ts1FillRow / _ts1RowText / renderMainPanel extractable', !!fillSrc && !!textSrc && !!panelSrc);
+    check('T6: _ts1RowMemo declared as a module-level in-memory object', /^const _ts1RowMemo = \{\};$/m.test(content));
+    if (!fillSrc || !textSrc || !panelSrc) return;
+
+    function harness(engineImpl) {
+      const calls = [];
+      const elements = {};
+      const win = {};
+      const doc = { getElementById: function (id) { return elements[id] || null; } };
+      const engine = function (sym) { calls.push(sym); return engineImpl(sym); };
+      // eslint-disable-next-line no-new-func
+      const factory = new Function('window', 'document', 'runTechScoreV1',
+        'var _ts1RowMemo = {};\n' + textSrc + '\n' + fillSrc +
+        '\nreturn { fill: _ts1FillRow, memo: _ts1RowMemo };');
+      return { win: win, elements: elements, calls: calls, api: factory(win, doc, engine) };
+    }
+    function el(text) { return { textContent: text }; }
+    const SCORED = { score: 72, coveragePct: 100, components: [], reasonCodes: [] };
+
+    // T6-1 / T6-2: gate absent, string 'true', numeric 1 → zero engine calls, empty memo, DOM untouched
+    for (const gateVal of [undefined, 'true', 1]) {
+      const h = harness(function () { return Promise.resolve(SCORED); });
+      if (gateVal !== undefined) h.win.PT_ENABLE_TECH_SCORE = gateVal;
+      h.elements['ts1-val-AAPL'] = el('…');
+      await h.api.fill('AAPL');
+      check('T6 gate ' + JSON.stringify(gateVal) + ': zero engine calls', h.calls.length === 0);
+      check('T6 gate ' + JSON.stringify(gateVal) + ': memo stays empty', Object.keys(h.api.memo).length === 0);
+      check('T6 gate ' + JSON.stringify(gateVal) + ': DOM untouched', h.elements['ts1-val-AAPL'].textContent === '…');
+    }
+
+    // T6-3 / T6-4 / T6-5: gate ON → one call, filled text; memo prevents refetch; concurrent fills share one call
+    (await (async function () {
+      const h = harness(function () { return Promise.resolve(SCORED); });
+      h.win.PT_ENABLE_TECH_SCORE = true;
+      h.elements['ts1-val-AAPL'] = el('…');
+      await Promise.all([h.api.fill('AAPL'), h.api.fill('AAPL')]);
+      check('T6 gate ON: concurrent fills share exactly one engine call', h.calls.length === 1 && h.calls[0] === 'AAPL');
+      check('T6 gate ON: row text = score / 100 · coveragePct% coverage', h.elements['ts1-val-AAPL'].textContent === '72 / 100 · 100% coverage');
+      h.elements['ts1-val-AAPL'] = el('…');
+      await h.api.fill('AAPL');
+      check('T6 memo: re-render does not refetch the same symbol', h.calls.length === 1);
+      check('T6 memo: re-render still fills from the memo', h.elements['ts1-val-AAPL'].textContent === '72 / 100 · 100% coverage');
+      h.elements['ts1-val-MSFT'] = el('…');
+      await h.api.fill('MSFT');
+      check('T6 memo: a different symbol fetches once more', h.calls.length === 2 && h.calls[1] === 'MSFT');
+      check('T6 memo: keyed per symbol', Object.keys(h.api.memo).sort().join(',') === 'AAPL,MSFT');
+    })());
+
+    // T6-6 / T6-7 / T6-8: UNAVAILABLE, rejection, null score → quiet degrade (no error text where a score would go)
+    (await (async function () {
+      const h = harness(function (sym) {
+        if (sym === 'UNAV') return Promise.resolve({ status: 'UNAVAILABLE', reason: 'FETCH_FAILED', detail: 'boom' });
+        if (sym === 'REJ') return Promise.reject(new Error('network down'));
+        if (sym === 'GOFF') return Promise.resolve({ status: 'GATE_OFF', reason: 'GATE_OFF' });
+        return Promise.resolve({ score: null, coveragePct: 35, reasonCodes: ['SMA_COMPONENT_UNAVAILABLE'] });
+      });
+      h.win.PT_ENABLE_TECH_SCORE = true;
+      for (const sym of ['UNAV', 'REJ', 'GOFF', 'NULL']) h.elements['ts1-val-' + sym] = el('…');
+      let threw = false;
+      try { await Promise.all(['UNAV', 'REJ', 'GOFF', 'NULL'].map(function (s) { return h.api.fill(s); })); } catch (e) { threw = true; }
+      check('T6 degrade: no fill ever throws', threw === false);
+      check('T6 degrade: UNAVAILABLE renders an em dash', h.elements['ts1-val-UNAV'].textContent === '—');
+      check('T6 degrade: rejected engine promise renders an em dash', h.elements['ts1-val-REJ'].textContent === '—');
+      check('T6 degrade: GATE_OFF result renders an em dash', h.elements['ts1-val-GOFF'].textContent === '—');
+      check('T6 degrade: null score keeps coverage', h.elements['ts1-val-NULL'].textContent === '— · 35% coverage');
+      const joined = ['UNAV', 'REJ', 'GOFF'].map(function (s) { return h.elements['ts1-val-' + s].textContent; }).join('|');
+      check('T6 degrade: no reason / error text where a score would go', !/UNAVAILABLE|FETCH_FAILED|boom|network|error|GATE_OFF/i.test(joined));
+    })());
+
+    // T6-9 / T6-16: memo is in-memory only — helper sources free of storage / network globals (positive control)
+    const helperSrc = textSrc + '\n' + fillSrc;
+    const storagePats = [/localStorage/, /sessionStorage/, /\bfetch\s*\(/, /document\.cookie/, /indexedDB/];
+    const storageControl = 'localStorage sessionStorage fetch( document.cookie indexedDB';
+    for (const pat of storagePats) {
+      check('T6 positive control fires: ' + pat.source, pat.test(storageControl));
+      check('T6 helper sources clean of ' + pat.source, !pat.test(helperSrc));
+    }
+    check('T6: _ts1RowMemo never shares a line with localStorage', !/localStorage[^\n]*_ts1RowMemo|_ts1RowMemo[^\n]*localStorage/.test(content));
+
+    // T6-10: the literal label appears exactly once in index.html, inside renderMainPanel
+    check('T6 label: "Tech Score v1" appears exactly once in index.html', content.split('Tech Score v1').length - 1 === 1);
+    check('T6 label: the single "Tech Score v1" literal is inside renderMainPanel', panelSrc.indexOf('Tech Score v1') !== -1);
+
+    // T6-11: no second generic "Score" label
+    check('T6 label: renderMainPanel still carries exactly one generic rr-lbl "Score" row', panelSrc.split('<span class="rr-lbl">Score</span>').length - 1 === 1);
+
+    // T6-12 / T6-13: neutral value span, no breakdown, gate-conditional row, byte-identical gate-off template
+    const rowHtmlMatch = panelSrc.match(/const _ts1RowHtml = (window\.PT_ENABLE_TECH_SCORE === true\s*\?[\s\S]*?:\s*'');/);
+    check('T6 row: _ts1RowHtml is the strict gate ternary with an empty-string fallback', !!rowHtmlMatch);
+    if (rowHtmlMatch) {
+      const rowExpr = rowHtmlMatch[1];
+      check('T6 row: value span is class="rr-val" with no state class', /<span class="rr-val" id="ts1-val-\$\{item\.ticker\}">/.test(rowExpr));
+      check('T6 row: no pos / neg / warn / neutral-v class in the row markup', !/\b(pos|neg|warn|neutral-v)\b/.test(rowExpr));
+      check('T6 row: no four-component breakdown in the row markup', !/components|high52w|\bsma\b|\brs\b|\bvolume\b/.test(rowExpr));
+      // eslint-disable-next-line no-new-func
+      const rowFn = new Function('window', 'item', 'return ' + rowExpr + ';');
+      check('T6 row: gate OFF evaluates to the empty string (card bytes unchanged)', rowFn({}, { ticker: 'AAPL' }) === '');
+      check('T6 row: gate "true" (string) evaluates to the empty string', rowFn({ PT_ENABLE_TECH_SCORE: 'true' }, { ticker: 'AAPL' }) === '');
+      const on = rowFn({ PT_ENABLE_TECH_SCORE: true }, { ticker: 'AAPL' });
+      check('T6 row: gate ON renders the labelled row with the per-ticker value id', on.indexOf('Tech Score v1') !== -1 && on.indexOf('id="ts1-val-AAPL"') !== -1);
+    }
+    check('T6 row: interpolated immediately after _tsAssessHtml (no template whitespace added)', panelSrc.indexOf('${_tsAssessHtml}`}${_ts1RowHtml}') !== -1);
+    check('T6 row: _ts1RowHtml interpolated exactly once', panelSrc.split('${_ts1RowHtml}').length - 1 === 1);
+    check('T6 breakdown: _ts1RowText never reaches result.components', textSrc.indexOf('components') === -1);
+
+    // T6-14: async post-render fill — never inline
+    check('T6 async: renderMainPanel never calls runTechScoreV1 inline', panelSrc.indexOf('runTechScoreV1(') === -1);
+    const iInit = panelSrc.indexOf('_initDd0Card();');
+    const iFill = panelSrc.indexOf('_ts1FillRow(item.ticker);');
+    check('T6 async: renderMainPanel kicks off _ts1FillRow(item.ticker) after the card init calls', iInit !== -1 && iFill !== -1 && iFill > iInit);
+    check('T6 async: _ts1FillRow is the only caller of the engine outside the comment/definition', (fillSrc.split('runTechScoreV1(').length - 1) === 1);
+    check('T6 async: _ts1FillRow checks the strict gate before anything else', /^async function _ts1FillRow\([^)]*\)\s*\{\s*\r?\n\s*if \(window\.PT_ENABLE_TECH_SCORE !== true\) return;/.test(fillSrc));
   })();
 
   if (okCount === total) {

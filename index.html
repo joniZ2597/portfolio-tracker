@@ -1405,15 +1405,17 @@ function getHistoricalCacheStats() {
 // Pipeline: _ts1FetchRawSeries (adapter) → _ts1NormalizeCandles (A4 +
 // official-calendar completed-session selection) → _ts1ValidateContinuity
 // (unit-break guard) → _ts1BuildSnapshot → scoreTickerTech (pure). Reached
-// ONLY via runTechScoreV1(), invoked manually (console) behind the strict
-// client gate window.PT_ENABLE_TECH_SCORE === true — structurally uncalled
-// otherwise.
+// ONLY via runTechScoreV1(), behind the strict client gate
+// window.PT_ENABLE_TECH_SCORE === true — from the console or from the gated
+// #ts-card surfacing row (_ts1FillRow, backlog task 6); structurally
+// uncalled otherwise.
 //
 // Isolation (SC-0): no read/write of pt_* except one read-only pt_tickers
 // parse in the caller for the approved sectorEtf mapping; no writes to any
 // persisted key; output only to the memory-only sidecar
 // window._techScoreDebug; no coupling to orchestrate/analyzeChunk/
-// enforceScoreConsistency/_techCache/historicalCache; no display surface.
+// enforceScoreConsistency/_techCache/historicalCache; the only display
+// surface is the gated, display-only #ts-card row (backlog task 6).
 //
 // Exchange calendars are RATIFIED OFFICIAL POLICY DATA (NYSE + TASE official
 // publications, provenance below). Provider bars are never calendar
@@ -7350,6 +7352,38 @@ async function refreshTechPanel(symbol, sectorEtf, currentPrice) {
   }
 }
 
+// ── Technical Score v1 surfacing (backlog task 6): async post-render fill ──
+// Display-only surface for the gated SCORE-V1-S1 engine on #ts-card. Mirrors
+// refreshTechPanel: renderMainPanel emits a placeholder row (gate ON only) and
+// this fills it once the engine settles. Per-symbol session memo, in-memory
+// like _techCache (never persisted): the memo holds the engine promise so
+// ordinary re-renders never refetch the symbol + benchmarks and concurrent
+// renders share one in-flight call. A rejected call drops its entry so a later
+// render may retry (no retry loop here). No ranking, persistence, or scoring
+// influence. Score and coverage are rendered as the engine returns them.
+const _ts1RowMemo = {};
+
+function _ts1RowText(result) {
+  if (!result || result.status === 'GATE_OFF' || result.status === 'UNAVAILABLE') return '—';
+  const score = typeof result.score === 'number' && isFinite(result.score) ? result.score + ' / 100' : '—';
+  const cov   = typeof result.coveragePct === 'number' && isFinite(result.coveragePct) ? result.coveragePct + '% coverage' : '';
+  return cov ? score + ' · ' + cov : score;
+}
+
+async function _ts1FillRow(symbol) {
+  if (window.PT_ENABLE_TECH_SCORE !== true) return;
+  if (!_ts1RowMemo[symbol]) _ts1RowMemo[symbol] = runTechScoreV1(symbol);
+  const pending = _ts1RowMemo[symbol];
+  let result = null;
+  try {
+    result = await pending;
+  } catch (e) {
+    if (_ts1RowMemo[symbol] === pending) delete _ts1RowMemo[symbol];
+  }
+  const el = document.getElementById('ts1-val-' + symbol);
+  if (el) el.textContent = _ts1RowText(result);
+}
+
 // ── Data-quality guard ────────────────────────────────────────────────────
 function hasVerifiedMarketData(item) {
   return (
@@ -7704,6 +7738,12 @@ function renderMainPanel(item) {
   const _tsAssess = hasData && item.technical_setup ? (_tsAssessMap[item.technical_setup] || '') : '';
   const _tsAssessHtml = _tsAssess ? `<div class="ts-assess">${_tsAssess}</div>` : '';
 
+  // Backlog task 6 — gated row, filled post-render by _ts1FillRow. Gate OFF yields '' so the
+  // card bytes are unchanged; the value span carries no state class by Owner ruling.
+  const _ts1RowHtml = window.PT_ENABLE_TECH_SCORE === true
+    ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px"><div class="rr-row"><span class="rr-lbl">Tech Score v1</span><span class="rr-val" id="ts1-val-${item.ticker}">…</span></div></div>`
+    : '';
+
   const _dialColor = rCls === 'pos' ? 'var(--green2)' : rCls === 'neg' ? 'var(--red2)' : 'var(--blue2)';
   const _dial      = _ptScoreDial(score, _dialColor); // missing -> dashed no-score dial, no numeric fill
   const _dialHtml  = (item.action || actionable)
@@ -7838,7 +7878,7 @@ function renderMainPanel(item) {
           <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase}</span></div>
           <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score>=65?'pos':score>=40?'warn':'neg'}">${score} / 100</span></div>
         </div>
-        ${_tsAssessHtml}`}
+        ${_tsAssessHtml}`}${_ts1RowHtml}
       </div>
 
       <!-- SIGNALS (Volume + Catalysts) — span 6 -->
@@ -8059,6 +8099,7 @@ ${window.PT_ENABLE_DEEP_DIVE === true ? `
   _initCmpCard();
   _initKlCard();
   _initDd0Card();
+  _ts1FillRow(item.ticker); // backlog task 6: async post-render fill of the gated row (no-op when the gate is off)
 }
 
 function _initTsCard() {
