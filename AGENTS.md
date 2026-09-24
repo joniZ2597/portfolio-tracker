@@ -64,6 +64,11 @@ below.
    for the first time, against the requirement→test map. Record what changed as a result.
 8. **Codex review on the real diff** (never on a plan or a description). Capture the raw
    response verbatim in `work/<id>/codex.md`.
+    - **The Worker launches the separate Codex read-only review process itself.** The review is
+      independent and read-only; it inspects the actual diff, the brief, the review artifact and
+      the QA evidence. **This is the default for every Worker task.** If a task genuinely cannot
+      launch a separate Codex review process, **the brief must state that exception and its
+      reason** — it is not decided at execution time.
 9. Classify every finding **FIX / DEFER / REJECT** (see "Codex findings" below) and resolve
    every FIX autonomously.
 10. Run full `npm run qa:offline`.
@@ -107,6 +112,12 @@ below.
     Class I bullet above)** — each used only for the round shape it names; the unmodified
     class-II line is used only for a round with zero class-I findings or reclassifications.
 
+12a. **STOP BEFORE COMMIT.** When the final Codex check returns **PASS**, report the final
+     implementation / QA / Codex state to the Owner and **halt**. This is a return point, not a
+     pause inside a continuous run: the Worker does not carry on into step 13 as one motion.
+     The commit gate itself is unchanged and lives in step 13 and "Protected actions" — **12a
+     adds the halt and the report; it does not restate the commit rule.**
+
 **Then, at the commit boundary — never autonomous:**
 
 13. Prepare the task for its final commit (implementation + `review.md`), then request Owner
@@ -117,6 +128,10 @@ below.
 findings, or decide ordinary in-scope implementation questions — commit approval and LAND
 approval remain the Owner's, as they already are under "Protected actions" and "Owner LAND /
 SHIP boundaries" below.**
+
+**The Owner is never a relay for review context.** Diff, brief, QA evidence, `codex.md` and any
+other review material are provided by the Worker directly to the Codex review process. The Owner
+is not asked to copy them into a separate conversation when the Worker can supply them itself.
 
 ## Worker mode policy
 
