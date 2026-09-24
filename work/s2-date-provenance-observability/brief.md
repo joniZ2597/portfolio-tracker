@@ -29,9 +29,9 @@ date on the evidence entry it bound to. **Observation only. Nothing is rejected.
 **O-5 — `upcoming_event` is excluded** from the eventDate-vs-evidence-date comparison.
 
 > **Why O-5 is load-bearing, not a detail.** For an `upcoming_event` the source legitimately
-> *predates* the event — that is what announcing a future event means. Measured over all 37 corpus
-> survivors, including upcoming events produces **8 "differences" and 6 "evidence earlier" cases**;
-> restricted to the 31 catalysts it is **3 and 1**. Including them would manufacture violations and
+> *predates* the event — that is what announcing a future event means. Measured over all 35 corpus
+> survivors, including upcoming events produces **7 "differences" and 6 "evidence earlier" cases**;
+> restricted to the 29 catalysts it is **2 and 1**. Including them would manufacture violations and
 > corrupt the very evidence A3b would later be ruled from.
 
 **A3b enforcement must not be pulled into this slice.**
@@ -42,8 +42,8 @@ date on the evidence entry it bound to. **Observation only. Nothing is rejected.
 |---|---|
 | A2 `evidenceBindings` | landed at `52c322b` — `{itemIndex, evidenceIndex, evidenceKind, normalizedSourceUrl}` per surviving item, plus `evidenceSetSize` |
 | Bound-entry metadata | `appendEvidenceEntry` retains `date` and `lastUpdated` when present — **currently read by no decision anywhere** |
-| Replay corpus | 9 fixtures, byte-pinned; 37 survivors, **31 catalysts + 6 upcoming_event** |
-| Measured baseline (catalysts only) | **26 equal · 3 differ · 2 no evidence date**; of the 3, **1 has evidence EARLIER** than `eventDate` |
+| Replay corpus | 9 fixtures, byte-pinned; 35 survivors, **29 catalysts + 6 upcoming_event** |
+| Measured baseline (catalysts only) | **25 equal · 2 differ · 2 no evidence date**; the 2 differ cases are **1 evidence-later** and **1 evidence-earlier** than `eventDate` |
 | `fetch_url_result` date coverage | **0 / 10** — the richer entry kind carries no date at all; `search_result` is 333/411 |
 
 **Conclusion: the measurement is fully determined by the pinned corpus.** No live call, no new data
@@ -102,7 +102,7 @@ S2 QA suites.
 | **DP-3** | INVARIANT | **`items[]` and `skippedItems[]` byte-identical to the baseline in all 9 cases** — zero survival change |
 | **DP-4** | INVARIANT | **all 9 `fixtureSha256` values unchanged** |
 | **DP-5** | INVARIANT | replaying a case twice yields identical classifications |
-| **DP-6** | SNAPSHOT | the corpus totals are reported (baseline: 26 / 3 / 2 over 31 catalysts) — **labelled SNAPSHOT, never presented as a rule** |
+| **DP-6** | SNAPSHOT | the corpus totals are reported (baseline: 25 / 2 / 2 over 29 catalysts) — **labelled SNAPSHOT, never presented as a rule** |
 | **DP-7** | SYNTHETIC | `lastUpdated` present and `date` absent ⇒ classified **no-evidence-date**, never substituted |
 | **DP-8** | NEGATIVE | no `pt_*`, no store write, no persisted field added |
 
@@ -158,7 +158,7 @@ distribution is good or bad**; that judgement belongs to A3b.
 not depend on M1's outcome.
 
 **Revalidation trigger.** After S2-M1 lands: re-verify the A2 sidecar shape is unchanged · the 9
-`fixtureSha256` values · the §2 baseline distribution (26/3/2 over 31 catalysts) · `SKIP_REASONS` is
+`fixtureSha256` values · the §2 baseline distribution (25/2/2 over 29 catalysts) · `SKIP_REASONS` is
 13 and the two emit sites are distinct. **Any drift in the baseline distribution updates §2 before
 execution.**
 
