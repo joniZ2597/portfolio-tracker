@@ -2915,6 +2915,78 @@ function _eodPacketToMarkdown(packet) {
   return lines.join('\n');
 }
 
+// ═══ NC-M1: Daily briefing projection (deterministic, offline, no network) ═
+// Wording the briefing projector must author itself — never sourced verbatim
+// from the packet — lives in this one table (brief §3 "State wording rule").
+// Adopting a later vocabulary (e.g. DH-M0b) is then a table edit here, never
+// a rewrite of the projector.
+var NC_BRIEFING_VOCAB = {
+  weightUnavailable: {
+    'reporting-incomplete': 'weight cannot be computed because portfolio totals are incomplete',
+    'denominator-zero': 'weight cannot be computed because the portfolio has no valid allocation base',
+    'holding-ils-value-unavailable': "weight cannot be computed because this holding's value could not be converted"
+  },
+  marketStale: 'market data for this holding is stale',
+  marketUnavailable: 'market data was not retrieved for this holding'
+};
+
+// One frozen, version-tagged prompt constant (brief §1 standing ruling, §3
+// scope). Static placeholder text only — no NotebookLM API schema, no
+// request/response contract, no bridge behavior, no network call. Never
+// read, sent, or otherwise acted on in this phase.
+var NOTEBOOK_BRIEFING_PROMPT = {
+  version: 'nc-briefing-prompt-v1',
+  text: 'You are narrating a daily spoken portfolio briefing from the attached document only. ' +
+    'State every limitation aloud before any figure. When a value is marked unavailable, speak ' +
+    'the stated reason as a full sentence, never a blank, a dash, or zero. Do not add any fact, ' +
+    'number, or claim that is not present in the document.'
+};
+
+// Pure sibling of _eodPacketToMarkdown — a separate projector, never an
+// extension or replacement (brief Ruling #1). Same purity contract: no
+// storage, no clock, no re-derivation of any figure, derives solely from the
+// JSON packet. Every packet.limitations[] entry and every holding's
+// research.coverage is transported verbatim; the only wording this function
+// adds of its own comes from NC_BRIEFING_VOCAB above.
+function _eodPacketToBriefing(packet) {
+  var lines = [];
+  lines.push('# Daily Portfolio Briefing');
+  lines.push('');
+  lines.push('As of: ' + packet.asOf);
+  lines.push('Status: ' + packet.status);
+  lines.push('');
+  lines.push('## Limitations');
+  packet.limitations.forEach(function(l) { lines.push('- ' + l.text); });
+  lines.push('');
+  if (packet.portfolio && packet.portfolio.needsAttention && packet.portfolio.needsAttention.length > 0) {
+    lines.push('## Needs Attention (' + packet.portfolio.needsAttention.length + ')');
+    packet.portfolio.needsAttention.forEach(function(item) {
+      lines.push('- [' + item.severity + '] ' + item.title + ' — ' + item.detail);
+    });
+    lines.push('');
+  }
+  lines.push('## Holdings (' + packet.holdings.length + ')');
+  packet.holdings.forEach(function(h) {
+    lines.push('### ' + h.symbol);
+    lines.push('- Coverage: ' + h.research.coverage);
+    var w = h.eod.weight;
+    if (w.pct === null) {
+      var reasonProse = NC_BRIEFING_VOCAB.weightUnavailable[w.unavailableReason];
+      lines.push('- Weight: ' + h.symbol + ' ' + reasonProse + '.');
+    } else {
+      lines.push('- Weight: ' + w.pct.toFixed(2) + '%');
+    }
+    var m = h.eod.market;
+    if (m && m.eodStale === true) {
+      lines.push('- Note: ' + NC_BRIEFING_VOCAB.marketStale + ' for ' + h.symbol + '.');
+    } else if (!m || m.present !== true) {
+      lines.push('- Note: ' + NC_BRIEFING_VOCAB.marketUnavailable + ' for ' + h.symbol + '.');
+    }
+    lines.push('');
+  });
+  return lines.join('\n');
+}
+
 // Button handler — the only function performing the ordered I/O: one
 // preload, one packet-snapshot read, then the pure builder + Markdown
 // projection, then download. No research triggered; no pt_* write.
@@ -2928,9 +3000,11 @@ function _eodExportPacket() {
   var packet = _eodBuildPacket({ asOf: asOf, nowMs: nowMs, packetsBySymbol: packetsBySymbol,
     preload: preload, reconState: reconState });
   var md = _eodPacketToMarkdown(packet);
+  var briefing = _eodPacketToBriefing(packet);
   var ts = _ptTimestamp();
   _ptDownload(new Blob([JSON.stringify(packet, null, 2)], { type: 'application/json' }), 'eod_packet_' + ts + '.json');
   _ptDownload(new Blob([md], { type: 'text/markdown' }), 'eod_packet_' + ts + '.md');
+  _ptDownload(new Blob([briefing], { type: 'text/markdown' }), 'eod_briefing_' + ts + '.md');
 }
 
 // ── Step 3 (P5-3 §11): call-1 wiring — perplexity-proxy → validator → news ──
