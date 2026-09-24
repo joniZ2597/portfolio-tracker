@@ -60,7 +60,7 @@ const TOKEN = 'tok-fund-facts-route-qa-1';
 const AUTH = 'Bearer ' + TOKEN;
 const ALLOWED_IMPORTS = ['@netlify/blobs', '@netlify/aws-lambda-compat', './lib/fund-facts-core.js'];
 
-// FR06 exposure pin — BASELINE-SPECIFIC. This exact 14-entry list is pinned to
+// FR06 exposure pin — BASELINE-SPECIFIC. This exact 18-entry list is pinned to
 // branch-dev baseline 93bcfb0 (the 12 function-eligible top-level entries
 // shipped there) plus fund-facts.mjs (C1-S4) and boi-fx-proxy.js (P-2B —
 // gated-OFF-by-default Bank of Israel FX proxy). Its job is to DETECT
@@ -79,6 +79,7 @@ const EXPECTED_FUNCTIONS = [
   'fund-facts.mjs',
   'market-data.js',
   'news-catalysts.mjs',
+  'news-catalysts-read.mjs',
   'perplexity-proxy.js',
   'portfolio-sync.js',
   'research-evidence.js',
@@ -197,7 +198,7 @@ async function runTests() {
     });
 
     // ── FR06: syntax + baseline-specific endpoint-exposure pin ───────────────
-    await test('FR06 .mjs parses (node --check); netlify/functions exposes ONLY the 14 pinned entries (baseline 93bcfb0 + fund-facts.mjs + boi-fx-proxy.js; intentional additions require re-baselining)', async function () {
+    await test('FR06 .mjs parses (node --check); netlify/functions exposes ONLY the 18 pinned entries (baseline 93bcfb0 + fund-facts.mjs + boi-fx-proxy.js; intentional additions require re-baselining)', async function () {
       const r = spawnSync(process.execPath, ['--check', MJS_ABS], { encoding: 'utf8' });
       assert.strictEqual(r.status, 0, 'node --check failed: ' + ((r.stderr || '') + (r.stdout || '')).trim());
       const eligible = fs.readdirSync(path.join(ROOT, 'netlify/functions'), { withFileTypes: true })
