@@ -20,11 +20,10 @@
  * shared original fields, and — because the provider's single forward pass
  * never reorders either output array — zips the REMAINING (unmatched) raw
  * candidates, in original order, against the REAL skippedItems array, also
- * in original order. The only extra predicate applied is the same
- * syntax-only https check the D-M2 reconstruction already uses, to split the
- * single INVALID_SOURCE_URL reason string into its two real emission sites
- * (provider :641 malformed vs :646 grounding-miss) — never a re-run of the
- * ladder itself.
+ * in original order. S2-M1 made the provider itself emit distinct reasons at
+ * its two INVALID_SOURCE_URL emission sites (provider :649 malformed vs :654
+ * grounding-miss, now UNRETRIEVED_SOURCE_URL) — the classifier reads that
+ * production reason directly, never a re-run of the ladder itself.
  *
  * R-1..R-8 are INVARIANT. R-9/R-10 are SNAPSHOT (labelled with
  * providerVersion) and curated respectively — never presented with
@@ -183,13 +182,11 @@ function attributeCandidates(rawCandidates, items, skippedItems) {
   var q3Candidates = [];
   for (var k = 0; k < unmatchedRaw.length; k++) {
     var reason = skippedItems[k].reason;
-    if (reason === 'INVALID_SOURCE_URL') {
-      if (isAcceptableSourceUrl(unmatchedRaw[k].sourceUrl)) {
-        buckets.Q3_UNRETRIEVED_SOURCE_URL++;
-        q3Candidates.push(unmatchedRaw[k]);
-      } else {
-        buckets.MALFORMED_CANDIDATE++;
-      }
+    if (reason === 'UNRETRIEVED_SOURCE_URL') {
+      buckets.Q3_UNRETRIEVED_SOURCE_URL++;
+      q3Candidates.push(unmatchedRaw[k]);
+    } else if (reason === 'INVALID_SOURCE_URL') {
+      buckets.MALFORMED_CANDIDATE++;
     } else if (reason === 'GENERIC_SOURCE_URL') {
       buckets.GROUNDING_REJECTION++;
     } else if (reason === 'FUTURE_DATED_CATALYST') {
@@ -273,7 +270,7 @@ async function runTests() {
     // sufficient to catch an ambient-state dependency). S2 A5: re-pointed
     // from FROG to NVDA — Rule S makes FROG a 0-item/all-skip case, which
     // would no longer exercise items, bindings or evidenceSetSize; NVDA
-    // retains both survivors (5 items) and a skip (1 INVALID_SOURCE_URL)
+    // retains both survivors (5 items) and a skip (1 UNRETRIEVED_SOURCE_URL)
     // and is unaffected by Rule S.
     var repFixture = loadCase('p4-20260921T2312Z-NVDA');
     var inProcess = await replay(repFixture);
@@ -373,7 +370,7 @@ async function runTests() {
     var envA = syntheticEnvelope([candidate(ungroundedUrl)], [{ url: groundedUrl, title: 'unrelated' }]);
     var resultA = await provider.getNewsCatalysts({ ticker: 'ZZZZ' }, { fetchImpl: makeFetchStub(JSON.stringify(envA)), apiKey: 'x', nowIso: NOW_ISO });
     assert.strictEqual(resultA.ok, true);
-    assert.deepStrictEqual(resultA.envelope.skippedItems.map(function (s) { return s.reason; }), ['INVALID_SOURCE_URL'], 'synthetic Q-3 candidate must be skipped INVALID_SOURCE_URL');
+    assert.deepStrictEqual(resultA.envelope.skippedItems.map(function (s) { return s.reason; }), ['UNRETRIEVED_SOURCE_URL'], 'synthetic Q-3 candidate must be skipped UNRETRIEVED_SOURCE_URL');
     var rawA = extractRawCandidates(JSON.stringify(envA));
     var attrA = attributeCandidates(rawA, resultA.envelope.items, resultA.envelope.skippedItems.map(function (s) { return { reason: s.reason }; }));
     assert.strictEqual(attrA.buckets.Q3_UNRETRIEVED_SOURCE_URL, 1, 'synthetic well-formed-but-unretrieved candidate must attribute to Q3');
@@ -442,7 +439,7 @@ async function runTests() {
     }
 
     // The three known Q-3 candidates from this case must be ABSENT from the
-    // reconstruction (they were skipped INVALID_SOURCE_URL by grounding-miss).
+    // reconstruction (they were skipped UNRETRIEVED_SOURCE_URL by grounding-miss).
     var rawCandidates = extractRawCandidates(fixture.input.rawResponseBody);
     var attribution = attributeCandidates(rawCandidates, replayed.items, replayed.skippedItems);
     assert.strictEqual(attribution.q3Candidates.length, 3, 'expected 3 known Q-3 candidates in this case');
@@ -789,8 +786,15 @@ async function runTests() {
     return child.stdout;
   }
 
-  // ── R-12: exactly one case differs from the 52c322b baseline — p4-2312-FROG ──
-  await test('R-12 exactly one case\'s expected {items, skippedItems} differs from the 52c322b baseline, and it is p4-20260921T2312Z-FROG', function () {
+  // S2-M1 additionally relabels the Site-B (grounding-miss) skips in these
+  // two cases from INVALID_SOURCE_URL to UNRETRIEVED_SOURCE_URL (brief §4) —
+  // the 52c322b baseline predates that split, so these two now also diverge
+  // from it on {items, skippedItems}, alongside the pre-existing Rule S
+  // (A5) FROG divergence. R-16 below pins that this is the ONLY difference.
+  var S2_M1_RELABELED_CASES = ['p3-20260921T2045Z-NVDA', 'p4-20260921T2312Z-NVDA'];
+
+  // ── R-12: exactly three cases differ from the 52c322b baseline — Rule S's FROG case plus S2-M1's two relabeled NVDA cases ──
+  await test('R-12 exactly three cases\' expected {items, skippedItems} differ from the 52c322b baseline: p4-20260921T2312Z-FROG (Rule S) and the two S2-M1 relabeled NVDA cases', function () {
     var diverged = [];
     for (var i = 0; i < index.cases.length; i++) {
       var caseId = index.cases[i].caseId;
@@ -800,7 +804,7 @@ async function runTests() {
       var baselineSnapshot = JSON.stringify({ items: baseline.expected.items, skippedItems: baseline.expected.skippedItems });
       if (currentSnapshot !== baselineSnapshot) { diverged.push(caseId); }
     }
-    assert.deepStrictEqual(diverged, ['p4-20260921T2312Z-FROG'], 'exactly one case must diverge from baseline, and it must be the FROG hub case');
+    assert.deepStrictEqual(diverged.slice().sort(), S2_M1_RELABELED_CASES.concat(['p4-20260921T2312Z-FROG']).sort(), 'exactly three cases must diverge from baseline: the FROG hub case and the two S2-M1 relabeled NVDA cases');
   });
 
   // ── R-13: p4-2312-FROG is 0 items / 5 × GENERIC_SOURCE_URL ─────────────
@@ -814,15 +818,43 @@ async function runTests() {
     });
   });
 
-  // ── R-14: the other eight fixture files are unchanged from the 52c322b baseline ──
-  await test('R-14 the eight non-FROG fixture files are unchanged from the 52c322b baseline (content compared with CRLF normalized to LF, so a checkout line-ending difference is never reported as a divergence)', function () {
+  // ── R-14: the other six fixture files are unchanged from the 52c322b baseline ──
+  await test('R-14 the six non-FROG, non-S2-M1 fixture files are unchanged from the 52c322b baseline (content compared with CRLF normalized to LF, so a checkout line-ending difference is never reported as a divergence)', function () {
+    var EXCLUDED = ['p4-20260921T2312Z-FROG'].concat(S2_M1_RELABELED_CASES);
     for (var i = 0; i < index.cases.length; i++) {
       var caseId = index.cases[i].caseId;
-      if (caseId === 'p4-20260921T2312Z-FROG') { continue; }
+      if (EXCLUDED.indexOf(caseId) !== -1) { continue; }
       var currentRaw = fs.readFileSync(path.join(FIXTURES_DIR, caseId + '.json'), 'utf8');
       var baselineRaw = baselineFixtureRaw(caseId);
       assert.strictEqual(toLf(currentRaw), toLf(baselineRaw), caseId + ': fixture file content diverged from the 52c322b baseline');
     }
+  });
+
+  // ── R-16: the two S2-M1 relabeled NVDA cases diverge from the 52c322b baseline in EXACTLY the reason values, nothing else ──
+  // Codex review (S2-M1, round 1): a hand-picked subset of field-by-field
+  // checks (items/attribution/input/provenance) closes most of the gap R-14's
+  // exclusion of these two cases opens, but not all of it — it silently
+  // permits drift in fields it doesn't name (caseId, expected.kind,
+  // expected.providerVersion, any future added key). Fixed by reverting the
+  // current fixture's skippedItems reasons to their baseline value and then
+  // deep-comparing the ENTIRE fixture object against baseline — every key is
+  // covered, not just the ones this test happens to enumerate.
+  await test('R-16 the two S2-M1 relabeled NVDA cases diverge from the 52c322b baseline in exactly their skippedItems[].reason values — with those reasons reverted, the WHOLE fixture object is deep-equal to baseline, in every field', function () {
+    S2_M1_RELABELED_CASES.forEach(function (caseId) {
+      var current = loadCase(caseId);
+      var baseline = baselineFixture(caseId);
+      assert.strictEqual(current.expected.skippedItems.length, baseline.expected.skippedItems.length, caseId + ': skippedItems length must be unchanged');
+      var baselineReasons = baseline.expected.skippedItems.map(function (s) { return s.reason; });
+      assert.ok(baselineReasons.every(function (r) { return r === 'INVALID_SOURCE_URL'; }), caseId + ': baseline reasons expected all INVALID_SOURCE_URL (pre-S2-M1)');
+      var currentReasons = current.expected.skippedItems.map(function (s) { return s.reason; });
+      assert.ok(currentReasons.every(function (r) { return r === 'UNRETRIEVED_SOURCE_URL'; }), caseId + ': current reasons expected all UNRETRIEVED_SOURCE_URL (post-S2-M1 Site-B relabel)');
+      var reconstructed = JSON.parse(JSON.stringify(current));
+      reconstructed.expected.skippedItems.forEach(function (item, idx) {
+        assert.deepStrictEqual(Object.keys(item), ['reason'], caseId + ': skippedItems[' + idx + '] must carry only { reason } — nothing else to revert or miss');
+        item.reason = 'INVALID_SOURCE_URL'; // mutate the existing object in place — never replace it, or an unexpected extra property on this entry would be silently erased rather than caught below
+      });
+      assert.deepStrictEqual(reconstructed, baseline, caseId + ': with skippedItems reasons reverted to their baseline value, the fixture must be deep-equal to the 52c322b baseline in EVERY other field, including caseId, expected.kind and expected.providerVersion');
+    });
   });
 
   // ── R-15: rule and corpus agree — no surviving item binds a hub index-document path ──

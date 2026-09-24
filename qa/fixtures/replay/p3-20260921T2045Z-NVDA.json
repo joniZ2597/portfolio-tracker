@@ -100,13 +100,13 @@
     ],
     "skippedItems": [
       {
-        "reason": "INVALID_SOURCE_URL"
+        "reason": "UNRETRIEVED_SOURCE_URL"
       },
       {
-        "reason": "INVALID_SOURCE_URL"
+        "reason": "UNRETRIEVED_SOURCE_URL"
       },
       {
-        "reason": "INVALID_SOURCE_URL"
+        "reason": "UNRETRIEVED_SOURCE_URL"
       }
     ],
     "attribution": {

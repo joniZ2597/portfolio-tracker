@@ -499,14 +499,22 @@ async function runTests() {
   });
 
   // ── NP06: sourceUrl syntax ──────────────────────────────────────────────────
-  await test('NP06 sourceUrl absent ⇒ MISSING_SOURCE_URL; http/credentials/whitespace/no-host ⇒ INVALID_SOURCE_URL', async function () {
+  // S2-M1 finding: 'https:///no-host' (three slashes then a path-looking
+  // segment) is NOT actually a no-host string under WHATWG URL parsing — the
+  // segment after '///' is consumed as the hostname (new URL('https:///no-host').hostname
+  // === 'no-host'), so it is a syntactically VALID https URL and was always a
+  // Site B (grounding-miss) case, not Site A — it just happened to share
+  // INVALID_SOURCE_URL's label before this slice split the two sites. Genuine
+  // no-host/unparseable strings ('https://', 'https:///') throw in `new URL()`
+  // and are used below in its place for true Site-A coverage.
+  await test('NP06 sourceUrl absent ⇒ MISSING_SOURCE_URL; http/credentials/whitespace/empty-authority ⇒ INVALID_SOURCE_URL', async function () {
     var g = 'https://ir.jfrog.com/news/a';
     var r = norm([
       rawItem('2026-07-18', 'earnings_event', 'positive', undefined),
       rawItem('2026-07-18', 'earnings_event', 'positive', 'http://ir.jfrog.com/news/a'),
       rawItem('2026-07-18', 'earnings_event', 'positive', 'https://user:pw@ir.jfrog.com/news/a'),
       rawItem('2026-07-18', 'earnings_event', 'positive', 'https://ir.jfrog.com/news/a b'),
-      rawItem('2026-07-18', 'earnings_event', 'positive', 'https:///no-host')
+      rawItem('2026-07-18', 'earnings_event', 'positive', 'https:///')
     ], [g], undefined);
     assert.strictEqual(r.items.length, 0);
     assert.deepStrictEqual(r.skippedItems, [
@@ -518,17 +526,25 @@ async function runTests() {
     ]);
   });
 
+  // ── NP06b: S2-M1 — 'https:///no-host' is syntactically valid (hostname
+  // 'no-host'), so it is Site B, not Site A ──────────────────────────────────
+  await test("NP06b 'https:///no-host' parses to a valid https URL with hostname 'no-host' — it passes syntax and is skipped UNRETRIEVED_SOURCE_URL only at grounding, never INVALID_SOURCE_URL", async function () {
+    var g = 'https://ir.jfrog.com/news/a';
+    var r = norm([rawItem('2026-07-18', 'earnings_event', 'positive', 'https:///no-host')], [g], undefined);
+    assert.deepStrictEqual(r.skippedItems, [{ reason: 'UNRETRIEVED_SOURCE_URL' }], "'https:///no-host' is syntactically valid; it fails only at grounding");
+  });
+
   // ── NP07: grounding miss ────────────────────────────────────────────────────
-  await test('NP07 syntactically valid candidate absent from grounding ⇒ INVALID_SOURCE_URL (incl. empty/null/absent grounding)', async function () {
+  await test('NP07 syntactically valid candidate absent from grounding ⇒ UNRETRIEVED_SOURCE_URL (incl. empty/null/absent grounding)', async function () {
     var cand = 'https://ir.jfrog.com/news/a';
     var r1 = norm([rawItem('2026-07-18', 'earnings_event', 'positive', cand)], ['https://ir.jfrog.com/news/other'], undefined);
-    assert.deepStrictEqual(r1.skippedItems, [{ reason: 'INVALID_SOURCE_URL' }], 'no normalized match');
+    assert.deepStrictEqual(r1.skippedItems, [{ reason: 'UNRETRIEVED_SOURCE_URL' }], 'no normalized match');
     var r2 = norm([rawItem('2026-07-18', 'earnings_event', 'positive', cand)], null, null);
-    assert.deepStrictEqual(r2.skippedItems, [{ reason: 'INVALID_SOURCE_URL' }], 'null grounding');
+    assert.deepStrictEqual(r2.skippedItems, [{ reason: 'UNRETRIEVED_SOURCE_URL' }], 'null grounding');
     var r3 = norm([rawItem('2026-07-18', 'earnings_event', 'positive', cand)], undefined, undefined);
-    assert.deepStrictEqual(r3.skippedItems, [{ reason: 'INVALID_SOURCE_URL' }], 'absent grounding');
+    assert.deepStrictEqual(r3.skippedItems, [{ reason: 'UNRETRIEVED_SOURCE_URL' }], 'absent grounding');
     var r4 = norm([rawItem('2026-07-18', 'earnings_event', 'positive', cand)], [], []);
-    assert.deepStrictEqual(r4.skippedItems, [{ reason: 'INVALID_SOURCE_URL' }], 'empty grounding arrays');
+    assert.deepStrictEqual(r4.skippedItems, [{ reason: 'UNRETRIEVED_SOURCE_URL' }], 'empty grounding arrays');
   });
 
   // ── NP08: grounded-value persistence + D-M2 fixed-order precedence ─────────
@@ -1209,7 +1225,7 @@ async function runTests() {
     var rWrongField = provider.normalizeNewsResponse(aloneResp({ type: 'fetch_url_results', results: [{ url: urlFUR }] }, urlFUR), { ticker: TICKER, retrievedAt: NOW_ISO });
     assert.strictEqual(rWrongField.ok, true, 'results[] on fetch_url_results is not a grounding field: no Tier B');
     assert.strictEqual(rWrongField.items.length, 0, 'results[] on fetch_url_results is ignored — nothing grounds');
-    assert.deepStrictEqual(rWrongField.skippedItems, [{ reason: 'INVALID_SOURCE_URL' }], 'the item fails closed as INVALID_SOURCE_URL');
+    assert.deepStrictEqual(rWrongField.skippedItems, [{ reason: 'UNRETRIEVED_SOURCE_URL' }], 'the item fails closed as UNRETRIEVED_SOURCE_URL');
     var citeOnly = {
       status: 'completed', error: null,
       output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [rawItem('2026-07-22', 'earnings_event', 'positive', urlCite)] }), annotations: [{ type: 'url_citation', url: urlCite }] }] }]
@@ -1249,7 +1265,7 @@ async function runTests() {
   });
 
   // ── NP37: zero grounding candidates ─────────────────────────────────────────
-  await test('NP37 zero grounding candidates ⇒ all items skipped INVALID_SOURCE_URL, zero-item envelope, not Tier B', async function () {
+  await test('NP37 zero grounding candidates ⇒ all items skipped UNRETRIEVED_SOURCE_URL, zero-item envelope, not Tier B', async function () {
     var g = 'https://ir.jfrog.com/news/a';
     var resp = {
       status: 'completed', error: null,
@@ -1258,7 +1274,7 @@ async function runTests() {
     var r = provider.normalizeNewsResponse(resp, { ticker: TICKER, retrievedAt: NOW_ISO });
     assert.strictEqual(r.ok, true, 'not Tier B');
     assert.strictEqual(r.items.length, 0);
-    assert.deepStrictEqual(r.skippedItems, [{ reason: 'INVALID_SOURCE_URL' }]);
+    assert.deepStrictEqual(r.skippedItems, [{ reason: 'UNRETRIEVED_SOURCE_URL' }]);
 
     var spy = makeFetch(resp);
     var out = await provider.getNewsCatalysts({ ticker: TICKER }, wrapperOpts(spy));
@@ -1504,15 +1520,15 @@ async function runTests() {
     assert.deepStrictEqual(rMalformed.skippedItems, [{ reason: 'INVALID_EVENT_DATE' }], 'malformed date grammar still reports INVALID_EVENT_DATE, unaffected by H-B');
   });
 
-  // ── NP44: S1.5.1 H-B — SKIP_REASONS append-only order; skippedItems shape unchanged ──
-  await test('NP44 the ten pre-H-B skip reasons are untouched and unreordered; the two H-B reasons are appended last; a skipped item still exposes only { reason }', async function () {
-    assert.strictEqual(provider.SKIP_REASONS.length, 12, 'ten existing + exactly two H-B additions');
+  // ── NP44: S1.5.1 H-B + S2-M1 — SKIP_REASONS append-only order; skippedItems shape unchanged ──
+  await test('NP44 the ten pre-H-B skip reasons are untouched and unreordered; the three appended reasons (two H-B, one S2-M1) are appended last; a skipped item still exposes only { reason }', async function () {
+    assert.strictEqual(provider.SKIP_REASONS.length, 13, 'ten existing + two H-B additions + one S2-M1 addition');
     assert.deepStrictEqual(provider.SKIP_REASONS.slice(0, 10), [
       'MISSING_EVENT_DATE', 'INVALID_EVENT_DATE', 'MISSING_SOURCE_URL', 'INVALID_SOURCE_URL',
       'UNKNOWN_CATEGORY', 'INVALID_DIRECTION', 'DUPLICATE_IN_BATCH', 'UNKNOWN_EVENT_TYPE',
       'INVALID_RELEVANCE_SCOPE', 'INVALID_SUB_TYPE'
     ], 'the ten pre-H-B reasons are byte-identical and in their original order');
-    assert.deepStrictEqual(provider.SKIP_REASONS.slice(10), ['GENERIC_SOURCE_URL', 'FUTURE_DATED_CATALYST'], 'H-B reasons appended last, in the approved order');
+    assert.deepStrictEqual(provider.SKIP_REASONS.slice(10), ['GENERIC_SOURCE_URL', 'FUTURE_DATED_CATALYST', 'UNRETRIEVED_SOURCE_URL'], 'the three appended reasons, in the approved order');
 
     var g = 'https://ir.jfrog.com/';
     var rShape = norm([rawItem('2026-07-18', 'earnings_event', 'positive', g)], [g], undefined);
@@ -1610,7 +1626,7 @@ async function runTests() {
   });
 
   // ── NP49: S1.5.1 H-C — Q-3 regression pin: grounding stays fail-closed ─────
-  await test('NP49 a well-formed, plausible, same-domain sourceUrl absent from the Evidence Set is still skipped INVALID_SOURCE_URL after H-C; the identical candidate survives once retrieved — grounding is not weakened', async function () {
+  await test('NP49 a well-formed, plausible, same-domain sourceUrl absent from the Evidence Set is still skipped UNRETRIEVED_SOURCE_URL after H-C; the identical candidate survives once retrieved — grounding is not weakened', async function () {
     // Q-3 is fixed by INSTRUCTING the model (C-2), never by accepting an
     // unretrieved URL. This pins the thing a future edit must not do:
     // loosen resolveGrounded to domain-, prefix- or similarity-matching.
@@ -1625,7 +1641,7 @@ async function runTests() {
     // Grounding unions url_citation + search_results (NP34); neither carries the candidate.
     var rAbsent = norm([candidate], [retrievedSibling], [{ url: retrievedOtherHost, title: 'never persisted' }]);
     assert.deepStrictEqual(rAbsent.items, [], 'the unretrieved same-domain URL never survives');
-    assert.deepStrictEqual(rAbsent.skippedItems, [{ reason: 'INVALID_SOURCE_URL' }], 'skipped INVALID_SOURCE_URL — not GENERIC_SOURCE_URL, not any other reason');
+    assert.deepStrictEqual(rAbsent.skippedItems, [{ reason: 'UNRETRIEVED_SOURCE_URL' }], 'skipped UNRETRIEVED_SOURCE_URL — not GENERIC_SOURCE_URL, not any other reason');
 
     // Control: byte-identical candidate, now actually retrieved ⇒ survives,
     // so the rejection above is grounding-driven, not URL-shape-driven.
@@ -1708,14 +1724,15 @@ async function runTests() {
     assert.strictEqual(rNP56.items[0].sourceUrl, url);
   });
 
-  // ── NP57: S2 A5 Rule S — regression pin: SKIP_REASONS count unchanged, no new reason ───
-  await test('NP57 SKIP_REASONS.length is still 12 and still contains exactly one GENERIC_SOURCE_URL entry — Rule S reuses the existing reason, it does not add a new one', function () {
-    assert.strictEqual(provider.SKIP_REASONS.length, 12, 'Rule S reuses GENERIC_SOURCE_URL; no new skip reason');
+  // ── NP57: S2 A5 Rule S — regression pin: Rule S itself adds no reason (S2-M1 is the only length change since A5) ───
+  await test('NP57 SKIP_REASONS.length is 13 (the S2-M1 UNRETRIEVED_SOURCE_URL addition only) and still contains exactly one GENERIC_SOURCE_URL entry — Rule S reuses the existing reason, it does not add a new one', function () {
+    assert.strictEqual(provider.SKIP_REASONS.length, 13, 'Rule S reuses GENERIC_SOURCE_URL and adds no reason; the only length change since A5 is the S2-M1 addition');
     var genericCount = provider.SKIP_REASONS.filter(function (r) { return r === 'GENERIC_SOURCE_URL'; }).length;
     assert.strictEqual(genericCount, 1, 'exactly one GENERIC_SOURCE_URL entry — not duplicated, not renamed');
 
-    // Codex review (S2 A5): NP56/NP57 alone proved only that 'news-details'
-    // wasn't added and that SKIP_REASONS is still 12 — neither pinned the
+    // Codex review (S2 A5, when SKIP_REASONS.length was 12, pre-S2-M1): NP56/NP57
+    // alone proved only that 'news-details' wasn't added and that Rule S added no
+    // reason — neither pinned the
     // GENERIC_SOURCE_PATH_RE segment list itself, so a future widening of
     // that regex (e.g. adding 'events') would pass every existing test here
     // while silently rejecting legitimate article paths under the new
@@ -1771,6 +1788,19 @@ async function runTests() {
     assert.ok(baselineMatch, 'GENERIC_SOURCE_PATH_RE declaration not found in the 52c322b baseline provider source (comment-stripped)');
 
     assert.strictEqual(currentMatch[1], baselineMatch[1], 'GENERIC_SOURCE_PATH_RE source has changed since the approved A5 baseline (52c322b) — the generic-segment list must not be widened or altered by this task');
+  });
+
+  // ── NP58: S2-M1 — Site A and Site B emit distinct reasons ──────────────────
+  await test('NP58 Site A (malformed/unusable sourceUrl) emits INVALID_SOURCE_URL and Site B (well-formed sourceUrl absent from grounding) emits UNRETRIEVED_SOURCE_URL — the two failures are now distinguishable', function () {
+    var groundedUrl = 'https://ir.jfrog.com/news/a';
+    var siteA = norm([rawItem('2026-07-18', 'earnings_event', 'positive', 'http://ir.jfrog.com/news/a')], [groundedUrl], undefined);
+    assert.deepStrictEqual(siteA.skippedItems, [{ reason: 'INVALID_SOURCE_URL' }], 'Site A: malformed/unusable URL syntax');
+
+    var unretrievedUrl = 'https://ir.jfrog.com/news/never-retrieved';
+    var siteB = norm([rawItem('2026-07-18', 'earnings_event', 'positive', unretrievedUrl)], [groundedUrl], undefined);
+    assert.deepStrictEqual(siteB.skippedItems, [{ reason: 'UNRETRIEVED_SOURCE_URL' }], 'Site B: well-formed URL absent from the grounded evidence set');
+
+    assert.notStrictEqual(siteA.skippedItems[0].reason, siteB.skippedItems[0].reason, 'Sites A and B are distinguishable in production telemetry');
   });
 
   global.fetch = _origFetch;

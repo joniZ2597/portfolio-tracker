@@ -11,7 +11,7 @@
       "runId": "20260921T2045Z",
       "ticker": "NVDA",
       "captureSha256": "3ef102912caf0ae4ba1a50d74776940c0513a3d341516a29d1f2c77a7353b5e5",
-      "fixtureSha256": "070723345ceb2cf697137099d9ddb2afe9af8597e7f24687736fbb56e5898f74"
+      "fixtureSha256": "f8dbdc45af5a3749ffc8fc3e2f23a3ae3d0f10594cc7be561072c79d6f5488ce"
     },
     {
       "caseId": "p3-20260921T2045Z-FROG",
@@ -65,7 +65,7 @@
       "runId": "p4-20260921T2312Z",
       "ticker": "NVDA",
       "captureSha256": "acaf4c3f08980f68012ea94f898b734e65a26947f74879fcdb324cf0f7088b2c",
-      "fixtureSha256": "94c8c15041379c315e3317f3a905c6a360d9ea2e897171ef720ec9d01ccac3fb"
+      "fixtureSha256": "1f4a5a7a8f4cd31d3e730c87e520367c681d3e725ffff30a3ac0632b81d16a9b"
     },
     {
       "caseId": "p4-20260921T2312Z-FROG",

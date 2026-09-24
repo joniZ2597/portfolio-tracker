@@ -129,7 +129,8 @@ var SKIP_REASONS = deepFreeze([
   'INVALID_RELEVANCE_SCOPE',
   'INVALID_SUB_TYPE',
   'GENERIC_SOURCE_URL',
-  'FUTURE_DATED_CATALYST'
+  'FUTURE_DATED_CATALYST',
+  'UNRETRIEVED_SOURCE_URL'
 ]);
 
 // Exact spec §7 JSON Schema literal. Sent to Sonar as a GENERATION CONSTRAINT
@@ -652,7 +653,7 @@ function normalizeNewsResponse(parsedResponse, context) {
     }
     var groundedIndex = resolveGrounded(candidate, grounding);
     if (groundedIndex === -1) {
-      skippedItems.push({ reason: 'INVALID_SOURCE_URL' });
+      skippedItems.push({ reason: 'UNRETRIEVED_SOURCE_URL' });
       continue;
     }
     var grounded = grounding[groundedIndex];
