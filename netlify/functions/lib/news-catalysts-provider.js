@@ -763,12 +763,38 @@ function normalizeNewsResponse(parsedResponse, context) {
     // beside items — never onto it — so position alone already pairs
     // evidenceBindings[k] with items[k]; itemIndex is carried explicitly and
     // redundantly (§C.8) rather than relied on implicitly.
-    evidenceBindings.push({
+    //
+    // S2-M2 (A3a, O-4/O-5): dateProvenance is observation only, never
+    // enforcement — no rejection, filter or survivor change reads it. It
+    // classifies how a surviving CATALYST's eventDate relates to the date on
+    // the evidence entry it bound to (grounded.date, the entry's own date —
+    // never lastUpdated, which is not a publication date). upcoming_event is
+    // excluded by construction (O-5): the field is omitted entirely for it,
+    // never set to a placeholder, because a future event's source
+    // legitimately predates the event and including it would manufacture
+    // "violations". This sidecar field is never read by any decision path,
+    // never stringified into a persisted record (core builds records solely
+    // from the 17 ITEM_FIELDS + sourceTier + contractVersion), so it cannot
+    // reach persistence — the same proven-safe seam A2's evidenceBindings
+    // used.
+    var evidenceBinding = {
       itemIndex: items.length,
       evidenceIndex: groundedIndex,
       evidenceKind: grounded.evidenceKind,
       normalizedSourceUrl: grounded.normalized
-    });
+    };
+    if (raw.eventType !== 'upcoming_event') {
+      if (grounded.date === undefined || grounded.date === null) {
+        evidenceBinding.dateProvenance = 'no-evidence-date';
+      } else if (grounded.date === eventDate) {
+        evidenceBinding.dateProvenance = 'equal';
+      } else if (grounded.date > eventDate) {
+        evidenceBinding.dateProvenance = 'evidence-later';
+      } else {
+        evidenceBinding.dateProvenance = 'evidence-earlier';
+      }
+    }
+    evidenceBindings.push(evidenceBinding);
     items.push({
       ticker: ticker,
       eventDate: eventDate,

@@ -272,10 +272,12 @@ async function runTests() {
         // S2-A2 (§C.8): sidecar binding — traversal order is [search_result,
         // url_citation] (D-M2: search_results before url_citation), so url2
         // (the search_results entry) is evidenceIndex 0 and url1 (the
-        // url_citation entry) is evidenceIndex 1.
+        // url_citation entry) is evidenceIndex 1. S2-M2: neither grounding
+        // entry here carries a `date` field, so both catalysts classify
+        // no-evidence-date.
         evidenceBindings: [
-          { itemIndex: 0, evidenceIndex: 1, evidenceKind: 'url_citation', normalizedSourceUrl: url1 },
-          { itemIndex: 1, evidenceIndex: 0, evidenceKind: 'search_result', normalizedSourceUrl: url2 }
+          { itemIndex: 0, evidenceIndex: 1, evidenceKind: 'url_citation', normalizedSourceUrl: url1, dateProvenance: 'no-evidence-date' },
+          { itemIndex: 1, evidenceIndex: 0, evidenceKind: 'search_result', normalizedSourceUrl: url2, dateProvenance: 'no-evidence-date' }
         ],
         evidenceSetSize: 2,
         writtenKeys: []
@@ -1801,6 +1803,53 @@ async function runTests() {
     assert.deepStrictEqual(siteB.skippedItems, [{ reason: 'UNRETRIEVED_SOURCE_URL' }], 'Site B: well-formed URL absent from the grounded evidence set');
 
     assert.notStrictEqual(siteA.skippedItems[0].reason, siteB.skippedItems[0].reason, 'Sites A and B are distinguishable in production telemetry');
+  });
+
+  // ── NP59: S2-M2 (A3a, DP-2) — synthetic classification matrix ──────────────
+  await test('NP59 dateProvenance classifies equal / evidence-later / evidence-earlier / no-evidence-date on synthetic catalysts, each independently', function () {
+    var equalUrl = 'https://ir.jfrog.com/news/dp-equal';
+    var laterUrl = 'https://ir.jfrog.com/news/dp-later';
+    var earlierUrl = 'https://ir.jfrog.com/news/dp-earlier';
+    var noDateUrl = 'https://ir.jfrog.com/news/dp-nodate';
+
+    var rEqual = norm([rawItem('2026-07-18', 'earnings_event', 'positive', equalUrl)], undefined, [{ url: equalUrl, date: '2026-07-18' }]);
+    assert.strictEqual(rEqual.items.length, 1);
+    assert.strictEqual(rEqual.evidenceBindings[0].dateProvenance, 'equal', 'entry date === eventDate must classify equal');
+
+    var rLater = norm([rawItem('2026-07-18', 'earnings_event', 'positive', laterUrl)], undefined, [{ url: laterUrl, date: '2026-07-20' }]);
+    assert.strictEqual(rLater.evidenceBindings[0].dateProvenance, 'evidence-later', 'entry date after eventDate must classify evidence-later');
+
+    var rEarlier = norm([rawItem('2026-07-18', 'earnings_event', 'positive', earlierUrl)], undefined, [{ url: earlierUrl, date: '2026-07-15' }]);
+    assert.strictEqual(rEarlier.evidenceBindings[0].dateProvenance, 'evidence-earlier', 'entry date before eventDate must classify evidence-earlier');
+
+    var rNoDate = norm([rawItem('2026-07-18', 'earnings_event', 'positive', noDateUrl)], undefined, [{ url: noDateUrl }]);
+    assert.strictEqual(rNoDate.evidenceBindings[0].dateProvenance, 'no-evidence-date', 'an entry with no date field must classify no-evidence-date');
+  });
+
+  // ── NP60: S2-M2 (O-5, DP-1) — upcoming_event carries no dateProvenance ─────
+  await test('NP60 an upcoming_event binding carries no dateProvenance at all, even when its bound entry has a date earlier than eventDate (O-5: the comparison is structurally excluded, not merely skipped for this case)', function () {
+    var url = 'https://ir.jfrog.com/news/dp-upcoming';
+    var upcoming = rawItem('2026-09-01', 'earnings_event', null, url, { eventType: 'upcoming_event' });
+    var r = norm([upcoming], undefined, [{ url: url, date: '2026-07-01' }]);
+    assert.strictEqual(r.items.length, 1, 'the upcoming_event survives');
+    assert.strictEqual(r.items[0].eventType, 'upcoming_event');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(r.evidenceBindings[0], 'dateProvenance'), false, 'an upcoming_event binding must not carry a dateProvenance key at all (O-5), regardless of what the bound entry\'s date would otherwise classify as');
+  });
+
+  // ── NP61: S2-M2 (DP-7) — lastUpdated is never substituted as a date ────────
+  await test('NP61 an entry carrying lastUpdated but no date classifies no-evidence-date — lastUpdated is never substituted (P-5 sourcing validator rule carried into A3a)', function () {
+    var url = 'https://ir.jfrog.com/news/dp-lastupdated-only';
+    var r = norm([rawItem('2026-07-18', 'earnings_event', 'positive', url)], undefined, [{ url: url, last_updated: '2026-07-18' }]);
+    assert.strictEqual(r.evidenceBindings[0].dateProvenance, 'no-evidence-date', 'lastUpdated must never be read as a date, even when it exactly equals eventDate');
+  });
+
+  // ── NP62: S2-M2 (§4 out-of-scope) — dateProvenance never leaks onto the persisted item or affects survival ──
+  await test('NP62 dateProvenance never appears on the persisted item, and an evidence-earlier or no-evidence-date classification never rejects, filters or otherwise changes the item — observation only (O-4)', function () {
+    var earlierUrl = 'https://ir.jfrog.com/news/dp-np62-earlier';
+    var r = norm([rawItem('2026-07-18', 'earnings_event', 'positive', earlierUrl)], undefined, [{ url: earlierUrl, date: '2026-01-01' }]);
+    assert.strictEqual(r.items.length, 1, 'an evidence-earlier classification does not reject the item');
+    assert.deepStrictEqual(Object.keys(r.items[0]), ITEM_FIELD_ORDER, 'the persisted item carries exactly the 17-field contract — dateProvenance never leaks onto it');
+    assert.strictEqual(r.evidenceBindings[0].dateProvenance, 'evidence-earlier');
   });
 
   global.fetch = _origFetch;

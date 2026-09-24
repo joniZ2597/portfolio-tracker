@@ -91,7 +91,14 @@ function appendEvidenceEntry(entries, raw, evidenceKind) {
   // B-2's raw-URL invariant only; no traversal, dedup, normalization,
   // acceptance, or survival-rule change, and still exactly one
   // reconstruction (STOP 7b unchanged).
-  entries.push({ raw: rawUrl, normalized: norm.normalized, domain: norm.domain, evidenceKind: evidenceKind });
+  // S2-M2 (narrow extension of the existing STOP-7a-style exception): `date`
+  // is carried through unchanged, exactly as production's own
+  // appendEvidenceEntry (provider.js) retains raw.date, so DP-2 can
+  // independently re-derive dateProvenance from this reconstruction rather
+  // than trusting the provider's own classification. No traversal, dedup,
+  // normalization, acceptance, or survival-rule change; still one
+  // reconstruction.
+  entries.push({ raw: rawUrl, normalized: norm.normalized, domain: norm.domain, evidenceKind: evidenceKind, date: raw.date });
 }
 // D-M2 order: search_results.results[] (array order), then
 // fetch_url_results.contents[] (array order), then url_citation annotations
@@ -552,6 +559,11 @@ async function runTests() {
   // full entry-by-entry equivalence of the entire Evidence Set.
   var APPROVED_EVIDENCE_KINDS = ['search_result', 'fetch_url_result', 'url_citation'];
   var BINDING_FIELD_ORDER = ['itemIndex', 'evidenceIndex', 'evidenceKind', 'normalizedSourceUrl'];
+  // S2-M2 (A3a, O-5): dateProvenance is appended last, and only for a
+  // surviving CATALYST binding — never for upcoming_event, which carries
+  // none by construction.
+  var BINDING_FIELD_ORDER_WITH_DATE_PROVENANCE = BINDING_FIELD_ORDER.concat(['dateProvenance']);
+  var DATE_PROVENANCE_VALUES = ['equal', 'evidence-later', 'evidence-earlier', 'no-evidence-date'];
 
   // Full (unmapped) provider envelope — used only where a test needs the
   // provider's OWN skippedItems shape (B-6) rather than the suite's
@@ -591,7 +603,8 @@ async function runTests() {
       var replayed = await replay(fixture);
       for (var j = 0; j < replayed.items.length; j++) {
         var binding = replayed.evidenceBindings[j];
-        assert.deepStrictEqual(Object.keys(binding), BINDING_FIELD_ORDER, fixture.caseId + ' item ' + j + ': binding must carry exactly the §C.8 sidecar shape');
+        var expectedBindingKeys = replayed.items[j].eventType === 'upcoming_event' ? BINDING_FIELD_ORDER : BINDING_FIELD_ORDER_WITH_DATE_PROVENANCE;
+        assert.deepStrictEqual(Object.keys(binding), expectedBindingKeys, fixture.caseId + ' item ' + j + ': binding must carry exactly the §C.8 sidecar shape (plus dateProvenance for a catalyst, S2-M2)');
         var entry = evidenceSet.entries[binding.evidenceIndex];
         assert.ok(entry, fixture.caseId + ' item ' + j + ': evidenceIndex ' + binding.evidenceIndex + ' out of range of the reconstruction');
         assert.strictEqual(binding.normalizedSourceUrl, replayed.items[j].normalizedSourceUrl, fixture.caseId + ' item ' + j + ': binding.normalizedSourceUrl must equal the item\'s normalizedSourceUrl');
@@ -763,6 +776,155 @@ async function runTests() {
       var replayed = await replay(fixture);
       assert.strictEqual(replayed.evidenceSetSize, evidenceSet.total, fixture.caseId + ': evidenceSetSize does not equal the reconstruction\'s entry count');
     }
+  });
+
+  // S2-M2 (A3a, work/s2-date-provenance-observability/brief.md) — DP-1..DP-8.
+  // Observation only: dateProvenance is a sidecar field on evidenceBindings,
+  // never read by any decision path. O-4/O-5: upcoming_event is excluded by
+  // construction, never enforcement, and A3b (any rule) is out of scope here.
+  // DATE_PROVENANCE_VALUES is declared once, above, alongside BINDING_FIELD_ORDER.
+
+  // ── DP-1: every surviving catalyst carries exactly one classification; every upcoming_event carries none ──
+  await test('DP-1 every surviving catalyst binding carries exactly one dateProvenance classification; every upcoming_event binding carries none (O-5)', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var replayed = await replay(fixture);
+      for (var j = 0; j < replayed.items.length; j++) {
+        var item = replayed.items[j];
+        var binding = replayed.evidenceBindings[j];
+        if (item.eventType === 'upcoming_event') {
+          assert.strictEqual(binding.dateProvenance, undefined, fixture.caseId + ' item ' + j + ': upcoming_event binding must carry no dateProvenance (O-5)');
+        } else {
+          assert.ok(Object.prototype.hasOwnProperty.call(binding, 'dateProvenance'), fixture.caseId + ' item ' + j + ': surviving catalyst binding must carry exactly one dateProvenance classification');
+        }
+      }
+    }
+  });
+
+  // ── DP-2: classification is one of the four defined values; derivable from the bound entry alone ──
+  await test('DP-2 dateProvenance is always one of the four defined values, and is independently re-derivable from the reconstruction entry at evidenceIndex alone (never a re-implementation of production, just a comparison against it)', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var envelope = JSON.parse(fixture.input.rawResponseBody);
+      var evidenceSet = reconstructEvidenceSet(envelope);
+      var replayed = await replay(fixture);
+      for (var j = 0; j < replayed.items.length; j++) {
+        var item = replayed.items[j];
+        var binding = replayed.evidenceBindings[j];
+        if (item.eventType === 'upcoming_event') { continue; }
+        assert.ok(DATE_PROVENANCE_VALUES.indexOf(binding.dateProvenance) !== -1, fixture.caseId + ' item ' + j + ': dateProvenance outside the defined vocabulary');
+        var entry = evidenceSet.entries[binding.evidenceIndex];
+        var expected;
+        if (entry.date === undefined || entry.date === null) {
+          expected = 'no-evidence-date';
+        } else if (entry.date === item.eventDate) {
+          expected = 'equal';
+        } else if (entry.date > item.eventDate) {
+          expected = 'evidence-later';
+        } else {
+          expected = 'evidence-earlier';
+        }
+        assert.strictEqual(binding.dateProvenance, expected, fixture.caseId + ' item ' + j + ': dateProvenance does not match what the bound entry\'s own date independently derives');
+      }
+    }
+  });
+
+  // ── DP-3: items[] and skippedItems[] byte-identical to the tracked baseline in all 9 cases — zero survival change ──
+  await test('DP-3 items[] and skippedItems[] are byte-identical to each fixture\'s tracked expected values, every case — S2-M2 observes without changing a single survivor', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var replayed = await replay(fixture);
+      assert.deepStrictEqual(replayed.items, fixture.expected.items, fixture.caseId + ': items[] diverged from the tracked baseline — S2-M2 must be observation-only');
+      assert.deepStrictEqual(replayed.skippedItems, fixture.expected.skippedItems, fixture.caseId + ': skippedItems[] diverged from the tracked baseline — S2-M2 must be observation-only');
+    }
+  });
+
+  // ── DP-4: all 9 fixtureSha256 values unchanged ──────────────────────────
+  await test('DP-4 all 9 fixtureSha256 values in index.json are unchanged — S2-M2 touches no fixture file', function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var caseId = index.cases[i].caseId;
+      var raw = loadCaseRaw(caseId);
+      assert.strictEqual(sha256Hex(raw), index.cases[i].fixtureSha256, caseId + ': fixtureSha256 moved — S2-M2 must not touch any fixture file (§7.3 STOP)');
+    }
+  });
+
+  // ── DP-5: determinism — replaying a case twice yields identical classifications ──
+  await test('DP-5 replaying a case twice yields identical dateProvenance classifications, every case', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var r1 = await replay(fixture);
+      var r2 = await replay(fixture);
+      var dp1 = r1.evidenceBindings.map(function (b) { return b.dateProvenance; });
+      var dp2 = r2.evidenceBindings.map(function (b) { return b.dateProvenance; });
+      assert.deepStrictEqual(dp1, dp2, fixture.caseId + ': dateProvenance not deterministic across replays');
+    }
+  });
+
+  // ── DP-6: SNAPSHOT — corpus totals, never presented as a rule ───────────
+  // S2-M2 revalidation (brief §10): the brief's §2 "26 equal · 3 differ ·
+  // 2 no-evidence-date over 31 catalysts" baseline was measured against a
+  // stale survivor count. Independently re-measured against the current,
+  // tracked corpus (same 9 fixtures, unchanged — DP-4) both at the brief's
+  // stated preparation commit (aa62aea) and at the current HEAD: 29
+  // catalysts survive (not 31), because 2 fewer items are present than the
+  // brief assumed — not a regression, a correction of the brief's own
+  // original count. This test pins the CORRECTED measured distribution as a
+  // SNAPSHOT (a drift detector, never a rule): a future change to this
+  // corpus or to the classification logic that moves these numbers is
+  // expected to retrigger this test and prompt re-measurement, exactly as
+  // the brief's own "any drift... updates §2" clause anticipates.
+  await test('DP-6 SNAPSHOT: the corpus totals over 29 non-upcoming (catalyst) survivors are reported — 25 equal / 1 evidence-later / 1 evidence-earlier / 2 no-evidence-date (corrected from the brief\'s stale 26/3/2-over-31 baseline; see review.md)', async function () {
+    var counts = { equal: 0, 'evidence-later': 0, 'evidence-earlier': 0, 'no-evidence-date': 0 };
+    var catalysts = 0, upcoming = 0;
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var replayed = await replay(fixture);
+      for (var j = 0; j < replayed.items.length; j++) {
+        var item = replayed.items[j];
+        var binding = replayed.evidenceBindings[j];
+        if (item.eventType === 'upcoming_event') { upcoming++; continue; }
+        catalysts++;
+        counts[binding.dateProvenance]++;
+      }
+    }
+    var sum = counts.equal + counts['evidence-later'] + counts['evidence-earlier'] + counts['no-evidence-date'];
+    assert.strictEqual(sum, catalysts, 'the four buckets must sum to the total catalyst count — internal consistency, independent of the exact SNAPSHOT numbers');
+    process.stdout.write('    (DP-6 SNAPSHOT: ' + catalysts + ' catalysts, ' + upcoming + ' upcoming_event excluded (O-5); ' + JSON.stringify(counts) + ')\n');
+    assert.deepStrictEqual(counts, { equal: 25, 'evidence-later': 1, 'evidence-earlier': 1, 'no-evidence-date': 2 }, 'SNAPSHOT drifted from the corrected measured baseline — re-measure and update review.md/brief §2 before treating this as a failure, per the brief\'s own revalidation clause');
+    assert.strictEqual(catalysts, 29, 'SNAPSHOT catalyst-count drifted from the corrected measured baseline (29, not the brief\'s stale 31)');
+    assert.strictEqual(upcoming, 6, 'upcoming_event count unchanged from the brief\'s §2 baseline');
+  });
+
+  // ── DP-7: SYNTHETIC — lastUpdated present, date absent ⇒ no-evidence-date, never substituted ──
+  await test('DP-7 SYNTHETIC: an evidence entry carrying lastUpdated but no date classifies no-evidence-date — lastUpdated is never substituted as a publication date', async function () {
+    var NOW_ISO = '2026-09-24T12:00:00.000Z';
+    var candidateUrl = 'https://example-news.test/dp7-no-date';
+    var candidate = { eventDate: '2026-09-01', category: 'corporate_action', direction: 'positive', eventType: 'catalyst', relevanceScope: 'company', subType: null, sourceUrl: candidateUrl };
+    var envelope = {
+      status: 'completed', error: null,
+      output: [
+        { type: 'search_results', results: [{ url: candidateUrl, last_updated: '2026-09-20' }], queries: [] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ items: [candidate] }), annotations: [] }] }
+      ]
+    };
+    var result = await provider.getNewsCatalysts({ ticker: 'ZZZZ' }, { fetchImpl: makeFetchStub(JSON.stringify(envelope)), apiKey: 'x', nowIso: NOW_ISO });
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.envelope.items.length, 1, 'the candidate survives (lastUpdated does not affect grounding)');
+    assert.strictEqual(result.envelope.evidenceBindings[0].dateProvenance, 'no-evidence-date', 'lastUpdated-only entry must classify no-evidence-date, never be substituted as a date');
+  });
+
+  // ── DP-8: NEGATIVE — no persistence, no store write, no pt_* reference ──
+  await test('DP-8 NEGATIVE: dateProvenance never reaches a persisted field — items[] carries exactly the 17 ITEM_FIELDS, no pt_* reference or store write appears anywhere in the provider source', async function () {
+    for (var i = 0; i < index.cases.length; i++) {
+      var fixture = loadCase(index.cases[i].caseId);
+      var replayed = await replay(fixture);
+      for (var j = 0; j < replayed.items.length; j++) {
+        assert.ok(!Object.prototype.hasOwnProperty.call(replayed.items[j], 'dateProvenance'), fixture.caseId + ' item ' + j + ': dateProvenance must never appear on a persisted item');
+      }
+    }
+    var providerSource = fs.readFileSync(PROVIDER_PATH, 'utf8');
+    assert.strictEqual(/pt_[A-Za-z0-9_]*/.test(providerSource), false, 'no pt_* localStorage-style reference in the provider source');
+    assert.strictEqual(/\bfetch\s*\(\s*['"]https:\/\/[^'"]*blob/i.test(providerSource), false, 'no Blob/store write call introduced');
   });
 
   // S2 A5 (Rule S) — R-12..R-15 verify the measured, single-case survivor
