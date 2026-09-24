@@ -10,7 +10,7 @@ brief-only commit records them unchanged.
 | Last validated | `16543cd`, 2026-09-24 |
 | Branch / worktree | new `task/s3-catalyst-evidence-client`, separate worktree |
 | `qa:offline` | **+1 suite** from the post-S3-M1 baseline |
-| Status | **CODE-READY** — §9 revalidation performed |
+| Status | **DONE / LANDED** — brief `f536cad` (reconciled `9cc815c`) · implementation **`0c99e13`** on `branch-dev`, pushed |
 
 **Objective.** A client adapter that calls `news-catalysts-read` and returns validated catalyst
 records to the UI. **Validation only — it re-derives nothing.**

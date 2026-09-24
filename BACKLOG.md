@@ -13,10 +13,11 @@ file is stale.
 
 | | |
 |---|---|
-| Normalized | 2026-09-23 |
-| `branch-dev` | `52c322b` — in sync with `origin/branch-dev`, clean tree |
-| `origin/main` | `fbec2c1` — `branch-dev` is **62 commits ahead of production** |
-| Active entries | 17 (5 closed this pass: 1, 2, 3, 5, 8a · 1 added: 22) |
+| Normalized | 2026-09-24 |
+| `branch-dev` | `0c99e13` — in sync with `origin/branch-dev`, clean tree |
+| `origin/main` | `fbec2c1` — `branch-dev` is **80 commits ahead of production** |
+| Active entries | 16 (1 closed this pass: 6) |
+| `qa:offline` | **46** effective suites (auto-discovered, minus the 11-entry denylist) |
 
 **Active ARC:** S2 — the news-catalyst evidence pipeline (entry 4). The 23 legacy ARC
 directories under `.ai-reports/arcs/` remain **FROZEN / SUPERSEDED** as a class
@@ -46,14 +47,20 @@ collided with the S2 slice names A1–A7 on the same subject matter.
 `fundstore:v1:news-index:<TICKER>:<YYYY-MM-DD>`. Hardened through S1.5 / S1.5.1 / S1.5.2;
 observability slices A1 (`6e242fb`, `9327e47`) and A2 (`52c322b`) landed.
 
-*4b — read route `news-catalysts-read`: **HOLD**, ARC-coupled.* Absent from the repo. Reads the
-persisted record shape that S2-A3 / A5 may still change.
+*4b — read route `news-catalysts-read`: **DONE** (`16543cd`, S3-M1).* Gated route
+`netlify/functions/news-catalysts-read.mjs` + `news-catalysts-read-core.js`, bound to the frozen
+D-S3-1 reader contract (`work/s3-catalyst-evidence-surface/D-S3-1-reader-contract.md`) over a fixed
+31-partition UTC window. Missing days are non-fatal.
 
-*4c — Ticker Detail card + `services/news-catalysts-client.js`: **HOLD**, ARC-coupled.* Absent.
-Only non-empty after a live seeding canary.
+*4c — `services/news-catalysts-client.js`: **DONE** (`0c99e13`, S3-M2).* Validating client adapter
+over the S3-M1 envelope; re-derives nothing. **The Ticker Detail card itself remains HOLD** — no UI
+surface has been built, and the card is only non-empty after a live seeding canary.
 
-*Remaining ARC sequence:* `A5 → D-A2-2 → A3a → A3b* → A7a → A4*/A7b*`. **A6 HOLD** — reopens
-only on a measured true duplicate within one run.
+*Remaining ARC sequence:* `A3b* → A7a → A4*/A7b*`. **DONE:** A5 (`810586d`) · D-A2-2 (`0526458`,
+S2-M1) · A3a (`28c2543`, S2-M2). **A3b is BLOCKED** — enforcement requires its own Owner-approved
+rule / date-truth manifest (O-4); the A3a evidence it would be ruled from now exists and measures
+**25 equal · 2 differ · 2 no-evidence-date over 29 catalysts**. **A6 HOLD** — reopens only on a
+measured true duplicate within one run.
 *Legacy refs:* `WP-P7 A1/A2/A3/Slice B`, `C3-S1…S5`, `EG-25C-3`, `J3`.
 
 ---
@@ -63,16 +70,16 @@ only on a measured true duplicate within one run.
 **Previous standing rule retired.** It sequenced entries 2 and 3 behind the TradingView pilot;
 the pilot landed (entry 1, DONE), so the condition no longer exists.
 
-### 6 · Technical Score v1 surfacing
+### 6 · Technical Score v1 surfacing — **DONE** (`aa62aea`)
 **Scores / Signals**
 
 Engine landed and dark with full offline coverage; display only, no ranking or persistence
 influence.
 
-*What remains:* one gated invocation site, the display row on `#ts-card` (`index.html:7816`),
-a per-symbol session memo, and replacing the structural pin `qa/run-offline.js:3523`
-(`callCount === 2` → `3`).
-*Deps:* **none — entry 5 landed at `9cade5b`.** READY.
+*Landed at `aa62aea`:* the gated invocation site, the display row on `#ts-card`, the per-symbol
+session memo, and the structural pin in `qa/run-offline.js` — subsequently re-pinned by 8a
+(`9f8171d`), so the historical `:3523` / `callCount === 2` anchor no longer applies.
+*Deps:* none — entry 5 landed at `9cade5b`.
 *UI ruled 2026-09-23:* exactly one `Tech Score v1` row showing **`result.score`** and
 **`result.coveragePct`**. No state colour. No four-component breakdown. No second generic
 `Score` row.
@@ -217,13 +224,25 @@ chart/embed · `EG-10A` and `EG-15` design briefs · the ARC governance chain
 (`qa/run-offline.js:227-238`) ·
 **3** Remove `services/history.js` — file deleted ·
 **5** Benchmark self-comparison guard — `9cade5b` ·
+**6** Technical Score v1 surfacing — `aa62aea` ·
 **8a** `Rating:` regex de-duplication — `9f8171d` ·
 **S2 slices** S1.5 · S1.5.1 (H-A/H-B/H-C, `1eda72c`) · S1.5.2 (`d9395ea`) · A1 (`6e242fb`,
-`9327e47`) · A2 (`52c322b`) ·
+`9327e47`) · A2 (`52c322b`) · A5 (`810586d`) · D-A2-2 / S2-M1 (`0526458`) ·
+A3a / S2-M2 (`28c2543`) ·
+**S3 slices** M1 read route (`16543cd`) · M2 client adapter (`0c99e13`) ·
 **the completed EG-series items identified in the legacy normalization review** ·
 fund-facts `C1-S1…S6` · `C3-S1` provider · `T1-C1` · closed arcs `WU-P7A1`,
 `WU-EOD-V0`, `WU-DDV0`, `WU-VSCR`, `WU-SARL`, `WU-LABE` and the rest · the `work/`
 task-folder convention.
 
 *Historical totals are approximate (~40 merged refs, ~50 retired, ~64 done) and deliberately
-not enumerated line-by-line. The 17 active entries above are exact.*
+not enumerated line-by-line. The 16 active entries above are exact.*
+
+**KNOWN HISTORICAL EXCEPTIONS** (recorded, not remediated — do not back-fill):
+
+- **S2-A2 has no `work/s2-evidence-index-binding/review.md`.** The implementation commit
+  `52c322b` carries three files and no task review artifact; the file has never existed on any
+  ref. Every other S2 and S3 implementation commit carries its `review.md`. Owner-ruled
+  2026-09-24: **record as a known historical exception, do not reconstruct retrospectively** — a
+  review written after the fact would assert verification that never took place. The convention
+  itself is unchanged and remains binding for all subsequent slices.

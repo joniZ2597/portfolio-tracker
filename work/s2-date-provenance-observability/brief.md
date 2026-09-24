@@ -10,7 +10,7 @@ brief-only commit records them unchanged.
 | Last validated | `aa62aea`, 2026-09-24 |
 | Branch / worktree | new `task/s2-date-provenance-observability`, separate worktree |
 | `qa:offline` | **no change** — no suite added |
-| Status | **PREPARED — READY FOR BRIEF COMMIT** → CODE-READY after the brief-only commit + §10 revalidation |
+| Status | **DONE / LANDED** — brief `fdc3e69` (baseline corrected `122e5bb`) · implementation **`28c2543`** on `branch-dev`, pushed |
 
 **Objective.** Measure and classify, for every surviving catalyst, how its `eventDate` relates to the
 date on the evidence entry it bound to. **Observation only. Nothing is rejected.**

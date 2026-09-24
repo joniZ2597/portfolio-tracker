@@ -6,11 +6,11 @@ brief-only commit records them unchanged.
 | | |
 |---|---|
 | ARC / Slice | **DH** (BLOCKED at M0b) · **M0a** Vocabulary census |
-| Preparation baseline | **`aa62aea`** = `branch-dev` |
-| Last validated | `aa62aea`, 2026-09-24 |
+| Preparation baseline | **`0c99e13`** = `branch-dev` (originally `aa62aea`; §2 amended 2026-09-24) |
+| Last validated | `0c99e13`, 2026-09-24 |
 | Branch / worktree | new `task/dh-vocabulary-census`, separate worktree |
-| `qa:offline` | **no change** — no suite added, no assertion changed |
-| Status | **PREPARED — READY FOR BRIEF COMMIT** → CODE-READY after the brief-only commit + §9 revalidation |
+| `qa:offline` | **no change** — no suite added, no assertion changed (effective count **46**) |
+| Status | **CODE-READY** — brief committed `8965a42`; §2 amendment Owner-re-approved 2026-09-24 (the sole remaining blocker) |
 
 **Objective.** Produce the measured inventory that DH-M0b's ruling will be taken *from*.
 **Census only. Read-only. It decides nothing.**
@@ -45,6 +45,37 @@ Occurrences in `index.html`:
 - **J7** — `netlify/functions/lib/evidence-freshness.js`, incl. `DEGRADED_NOTES` (`:105`)
 - **`PF_*` family** — `PF_ATTENTION_STALE_MAX_DAYS`, `PF_CLOUD_STALE_MS`, `PF_FX_FRESH_MAX_AGE_DAYS`,
   `PF_FX_VALID_MAX_AGE_DAYS`, `PF_EOD_*_COOLDOWN_MS`
+
+**Amendment 2026-09-24 — a fifth vocabulary landed after this baseline.** S3-M1 (`16543cd`) and
+S3-M2 (`0c99e13`) introduced two files that did not exist at `aa62aea` and that carry
+census-relevant state terms:
+
+```
+netlify/functions/lib/news-catalysts-read-core.js   545 L   NEW at 16543cd
+netlify/functions/news-catalysts-read.mjs            11 L   NEW at 16543cd
+services/news-catalysts-client.js                   482 L   NEW at 0c99e13
+```
+
+Combined term occurrences across those three files — **a screening count only, not the census**:
+
+| Term | `DEGRADED` / `degraded` | `UNAVAILABLE` | `MISSING` / `missing` | `FAILED` / `failed` | `stale` |
+|---|---|---|---|---|---|
+| Count | 9 / 8 | 7 | 5 / 2 | 4 / 2 | 1 |
+
+**These are aggregate substring counts, not attributed occurrences.** They establish that the
+surface exists and is non-trivial; the census must still resolve each one to a file, line, data
+family and authority under §3, exactly as for `index.html`.
+
+This is the **read-envelope status family** — the D-S3-1 reader contract's 13 status values across
+16 combinations, including `NOT_AVAILABLE` and `DEGRADED` as *envelope statuses with a separate
+`reason`* — plus the client adapter's 3-kind result vocabulary. **It is a machine-facing contract,
+not a display vocabulary**, and no renderer consumes it yet; that distinction is itself a census
+finding and must be recorded, not resolved.
+
+**Census scope is therefore five vocabularies, not four.** The `index.html` counts above are
+unaffected — `index.html` is byte-identical between `aa62aea` and `0c99e13` — so §2's original
+measurement stands. Only the file surface grew. **Reading the S3 files is mandatory; changing them
+is a STOP**, exactly as for every other file in the census.
 
 **A third vocabulary already exists inside the EOD packet** — `_eodReconciliationLimitationText`
 emits *"stale — N day(s)"*, *"unavailable — Portfolio Total is incomplete"*, *"not recorded"*; and

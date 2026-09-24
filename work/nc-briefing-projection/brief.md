@@ -6,11 +6,11 @@ brief-only commit records them unchanged.
 | | |
 |---|---|
 | ARC / Slice | **NC** (PLAN-READY) · **M1** Briefing projection · **Phase 1** |
-| Preparation baseline | **`aa62aea`** = `branch-dev` |
-| Last validated | `aa62aea`, 2026-09-24 |
+| Preparation baseline | **`0c99e13`** = `branch-dev` (revalidated from `aa62aea`, 2026-09-24) |
+| Last validated | `0c99e13`, 2026-09-24 — `index.html`, `qa/run-offline.js`, `qa/vis_score_caliper_offline.js` and `qa/eod_packet_v0_offline.js` are **byte-identical** across `aa62aea..0c99e13`; §5 scope, the caliper note and Lane-B serialization are unaffected |
 | Branch / worktree | new `task/nc-briefing-projection`, separate worktree |
-| `qa:offline` | **no change** — no suite added; assertions go into the existing EOD suite |
-| Status | **PREPARED — READY FOR BRIEF COMMIT** → CODE-READY after the brief-only commit + §10 revalidation |
+| `qa:offline` | **no change** — no suite added; assertions go into the existing EOD suite (effective count **46**) |
+| Status | **CODE-READY** — brief committed `f2c94d0`; §10 revalidation performed against `0c99e13` |
 
 **Objective.** A pure projector that turns the existing EOD packet into the daily briefing source
 document, plus a frozen versioned prompt constant. **Deterministic, offline, no network.**
