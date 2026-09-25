@@ -38,14 +38,14 @@ below.
 
 **Before writing any implementation code:**
 
-0. **Worktree bootstrap — automatic, pre-authorized.** Confirm the session's cwd is the task
-   worktree on the task branch. If `node_modules/` is missing or older than
-   `package-lock.json`, run `npm ci` (it touches only the gitignored `node_modules/`). Then run
-   `npm run qa:offline` once, before any edit, and record the result and suite count on the
-   first line of `work/<id>/qa.log` as the pre-edit baseline every Definition of Done is
-   measured against. A red pre-edit baseline is an **M4** transition (diagnose first), not a
-   STOP. A harness permission prompt for any of these steps is answered under this
-   authorization; it is not an Owner decision.
+0. **Worktree bootstrap — automatic, pre-authorized.** Confirm the session's cwd is the assigned
+   Worker slot (see "Worker slot model") with the task branch checked out. If `node_modules/`
+   is missing or older than `package-lock.json`, run `npm ci` (it touches only the gitignored
+   `node_modules/`). Then run `npm run qa:offline` once, before any edit, and record the result
+   and suite count on the first line of `work/<id>/qa.log` as the pre-edit baseline every
+   Definition of Done is measured against. A red pre-edit baseline is an **M4** transition
+   (diagnose first), not a STOP. A harness permission prompt for any of these steps is answered
+   under this authorization; it is not an Owner decision.
 1. **Requirement → test map.** Every requirement in the brief maps to at least one named
    assertion, and every assertion maps back to a requirement. Write it to `work/<id>/plan.md`.
    An orphan test is drift; an unmapped requirement is an untested requirement.
@@ -370,7 +370,7 @@ COWORK is never an execution relay.
 ## Task folder convention
 
 Each implementation task uses `work/<id>/`, where `<id>` is a stable slug derived from the task's
-branch/worktree name (e.g. `work/p7-a2-news-catalysts/`, `work/tradingview-alerts/`). No
+branch name `task/<id>` (e.g. `work/p7-a2-news-catalysts/`, `work/tradingview-alerts/`). No
 centrally allocated id, no lookup table, no registry.
 
 - `brief.md` (tracked) — the Owner-approved task scope: what file(s) will change, the
@@ -481,13 +481,19 @@ above.
 - Live external API canaries (SEC, Perplexity, or similar).
 - Committing — Claude Code prepares and requests, the Owner approves the exact scope.
 
-## Simplified worktree model
+## Worker slot model
 
-- Use plain `git worktree add <path> <branch>` for parallel tasks — no registry, claim file,
-  or mutex. A worktree is just an isolated checkout; delete it (`git worktree remove`) when the
-  task lands or is abandoned.
-- A new worktree has no `node_modules/`; step 0 of the Worker execution contract handles it.
-- Existing worktrees at the time of this writing (`pt-wt-panel`, `pt-wt-wft`, plus older
-  `-lab-*` experiment worktrees) may continue to be used or cleaned up as their own tasks
-  dictate — this convention doesn't retroactively require changing them.
-- Each worktree stays scoped to one task; do not stack unrelated work in the same worktree.
+- Parallel work uses two **permanent** worktree paths — Worker slots — beside the main checkout:
+  `pt-wt-worker-a` and `pt-wt-worker-b`. No registry, claim file, or mutex; a slot is just an
+  isolated checkout.
+- Slot paths are **reused between Slices**. Do **not** create a new filesystem worktree path per
+  Slice (no per-task `git worktree add`), and do not remove a slot when its Slice lands.
+- Task branches remain **per Slice** (`task/<id>`): created from the current `branch-dev` and
+  switched to inside the assigned slot (`git -C <slot> switch -c task/<id> <base>`). A slot is
+  switched only when its working tree is clean.
+- One Slice per slot at a time; do not stack unrelated work on a slot's task branch. Between
+  Slices a slot sits detached and clean at `branch-dev`.
+- A slot keeps its `node_modules/`; step 0 of the Worker execution contract refreshes it when it
+  is missing or older than `package-lock.json`.
+- LAND, push, and every other protected action are unchanged (see "Owner LAND / SHIP boundaries"
+  and "Protected actions").
