@@ -506,8 +506,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .sb-wl-tab{font-family:var(--mono);font-size:9px;font-weight:600;color:var(--text3);background:none;border:none;cursor:pointer;padding:3px 8px 3px 0;text-transform:uppercase;letter-spacing:.8px}
 .sb-wl-tab.active{color:var(--text)}
 .sb-wl-tab-count{font-size:8px;opacity:.7;margin-left:3px}
-.sb-wl-filter{background:none;border:none;color:var(--text3);cursor:pointer;font-size:11px;padding:2px 4px}
-.sb-wl-filter:hover{color:var(--text2)}
 
 /* Column header */
 .sb-col-header{display:flex;align-items:center;padding:4px 12px 3px;flex-shrink:0}
@@ -878,7 +876,8 @@ select.edit-inp{appearance:none;cursor:pointer}
       <div class="sb-search-wrap">
         <span class="sb-search-icon">⌕</span>
         <input class="sb-search-inp" type="text" id="tickerInput"
-          placeholder="Search ticker or company…"
+          placeholder="Search watchlist…"
+          title="Matches ticker, company, exchange, sector and benchmark ETF"
           maxlength="10"
           onkeydown="if(event.key==='Enter') addTicker()"
           oninput="filterWatchlistRows(this.value)"/>
@@ -914,7 +913,6 @@ select.edit-inp{appearance:none;cursor:pointer}
           All <span class="sb-wl-tab-count" id="countAll">0</span>
         </button>
       </div>
-      <button class="sb-wl-filter" title="Filter">⇅</button>
     </div>
 
     <!-- Column header -->
@@ -7506,8 +7504,6 @@ function renderMainPanel(item) {
   const _scoreSt  = _ptScoreStates(score); // missing -> explicit '—' states, never MODERATE / IN LINE
   const riskState = _scoreSt.riskState;
   const riskCls   = _scoreSt.riskCls;
-  const rs        = _scoreSt.rs;
-  const rsCls     = _scoreSt.rsCls;
   const cat       = (sl.includes('earnings beat')||sl.includes('upgrade')||sl.includes('hbm')||sl.includes('ai demand'))?'CATALYST PRESENT':
                     (sl.includes('downgrade')||sl.includes('earnings miss'))?'NEGATIVE EVENT':
                     (sl.includes('no verified')||sl.includes('limited catalyst'))?'NO CATALYST':'MONITORING';
@@ -14971,7 +14967,6 @@ async function runAnalysis() {
   window._pplxDebug = {};
   if (window._fetchTimestamps) Object.keys(window._fetchTimestamps).forEach(k => delete window._fetchTimestamps[k]);
   document.querySelectorAll('[class*="deepdive-result"]').forEach(el => { el.style.display = 'none'; const txt = el.querySelector('[id^="dd-text-"]'); if (txt) txt.textContent = ''; });
-  document.querySelectorAll('[id^="dd-btn-"]').forEach(btn => { btn.textContent = 'Deep Dive — ניתוח מוסדי מעמיק'; btn.disabled = false; });
   const resultsGrid = document.getElementById('cardsGrid');
   if (resultsGrid) resultsGrid.innerHTML = '';
   console.log('[PT] Scan start — preserving ' + previousResults.length + ' previous results');
@@ -14991,7 +14986,7 @@ async function runAnalysis() {
   const _scanStartedAt = Date.now(); // 7B-4b: scan-level telemetry timing baseline (memory-only)
 
   try {
-    setProgress(5, 'מאתחל...');
+    setProgress(5, 'Initializing...');
     for (let i = 0; i < scanSymbols.length; i += BATCH_SIZE) {
       if (_cancelRequested) {
         console.log('[PT] Scan loop stopped — cancellation confirmed.');
@@ -15000,7 +14995,7 @@ async function runAnalysis() {
       const batch = scanSymbols.slice(i, i + BATCH_SIZE);
       _currentScanTicker = batch[0]; // track first ticker of current batch
       const pct = Math.round(10 + (i / scanSymbols.length) * 80);
-      setProgress(pct, `מנתח ${batch.join(', ')}...`);
+      setProgress(pct, `Analyzing ${batch.join(', ')}...`);
       const batchResults = await analyzeChunk(batch, today);
       _currentScanTicker = null;
       // Terminal-chain integrity: validate this batch's current-scan results
@@ -15048,7 +15043,7 @@ async function runAnalysis() {
       console.warn('[PT] Telemetry rollup failed (non-fatal):', _telErr.message);
     }
 
-    setProgress(100, 'הניתוח הושלם!');
+    setProgress(100, 'Analysis complete!');
     const dateStr = new Date().toLocaleString('he-IL');
 
     // Validate only the newly scanned results — same validator the mid-scan
@@ -15077,12 +15072,12 @@ async function runAnalysis() {
       renderResults(finalResults, dateStr);
     } catch(renderErr) {
       console.error('[PT] renderResults failed:', renderErr.message);
-      showError('שגיאה בהצגת התוצאות: ' + renderErr.message);
+      showError('Error displaying results: ' + renderErr.message);
     }
 
   } catch (err) {
     hideProgress();
-    showError(err.message || 'שגיאה לא ידועה');
+    showError(err.message || 'Unknown error');
     // On error: restore previous results so the user does not lose saved data
     if (previousResults.length && !results.length) {
       results = previousResults;
