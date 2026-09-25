@@ -6,11 +6,11 @@ brief-only commit records them unchanged.
 | | |
 |---|---|
 | ARC / Slice | **DH** (BLOCKED at M0b) · **M0a** Vocabulary census |
-| Preparation baseline | **`0c99e13`** = `branch-dev` (originally `aa62aea`; §2 amended 2026-09-24) |
-| Last validated | `0c99e13`, 2026-09-24 |
+| Preparation baseline | **`e2bdfd2`** = `branch-dev` = `origin/branch-dev` (originally `aa62aea`; §2 amended 2026-09-24 and 2026-09-25) |
+| Last validated | `e2bdfd2`, 2026-09-25 |
 | Branch / worktree | new `task/dh-vocabulary-census`, separate worktree |
 | `qa:offline` | **no change** — no suite added, no assertion changed (effective count **46**) |
-| Status | **CODE-READY** — brief committed `8965a42`; §2 amendment Owner-re-approved 2026-09-24 (the sole remaining blocker) |
+| Status | **CODE-READY on Owner approval of these exact contents** — brief first committed `8965a42`; Amendment 1 re-approved 2026-09-24; Amendment 2 (2026-09-25) takes effect only through its own brief-only commit |
 
 **Objective.** Produce the measured inventory that DH-M0b's ruling will be taken *from*.
 **Census only. Read-only. It decides nothing.**
@@ -86,6 +86,60 @@ emits *"stale — N day(s)"*, *"unavailable — Portfolio Total is incomplete"*,
 occurrence to a call site and a data family — a raw count cannot distinguish a machine state from a
 user-facing label.
 
+### Amendment 2 — 2026-09-25 · revalidation at `e2bdfd2` + NC briefing vocabulary
+
+**(a) Counting unit — correction, not a change of scope.** The §2 table above is headed
+"Occurrences" but its numbers are **matching-line counts** (case-sensitive substring, `grep -c`).
+They reproduce exactly on `aa62aea` (byte-identical to `0c99e13` for `index.html`). Per-occurrence
+counts (`grep -o … | wc -l`) on that same file differ: `unavailable` 90 · `Unavailable` 24 ·
+`STALE` 28 · `Stale` 37 · `MISSING` 11 · `Missing` 46 (the rest equal). The Amendment 1 screening
+table for the S3 files is also a line count (`MISSING` 5 lines / 6 occurrences). **The census
+attributes occurrences (§3) and reports both totals per term (§6 C-1).**
+
+**(b) Recount at `e2bdfd2`, `index.html`, both units.** The only `index.html` change in
+`0c99e13..e2bdfd2` is NC-M1 (`a65a5e1`).
+
+| Term | Lines @`0c99e13` | Lines @`e2bdfd2` | Occurrences @`e2bdfd2` |
+|---|---|---|---|
+| `unavailable` | 84 | **87** | 93 |
+| `Unavailable` | 23 | **27** | 28 |
+| `STALE` | 27 | 27 | 28 |
+| `Stale` | 34 | **37** | 40 |
+| `MISSING` | 10 | 10 | 11 |
+| `Missing` | 36 | 36 | 46 |
+| `FAILED` · `Failed` | 8 · 16 | 8 · 16 | 8 · 16 |
+| `DEGRADED` | 16 | 16 | 16 |
+| `insufficient` · `not covered` | 7 · 1 | 7 · 1 | 7 · 1 |
+
+The whole delta (+3 · +4 · +3 lines) comes from NC-M1's added lines. The three S3 files are
+unchanged since `0c99e13`, so the Amendment 1 screening counts still stand.
+
+**(c) Sixth vocabulary — NC briefing wording.** NC-M1 added a display-facing (spoken) wording
+table and its consumer to `index.html`:
+
+```
+index.html:2923-2931   NC_BRIEFING_VOCAB          weightUnavailable{3 reasons} · marketStale · marketUnavailable
+index.html:2937        NOTEBOOK_BRIEFING_PROMPT   frozen prompt prose (contains "unavailable")
+index.html:2951        _eodPacketToBriefing       the table's only consumer
+```
+
+It was authored under NC-M1's single-mapping-table rule so that adopting DH-M0b later is a table
+edit. **Census scope is therefore six vocabularies.** Its occurrences are already inside the
+`index.html` totals in (b): the census attributes them to this family and **must not count them
+twice**. Recording the table is required; judging its wording is a STOP (§7 item 7).
+
+**(d) `PF_*` anchor corrections.** `PF_CLOUD_STALE_MS` is actually **`_PF_CLOUD_STALE_MS`**
+(`:14217`). **`PF_RECON_STALE_MAX_DAYS`** (`:8677`) exists and was not listed. Current anchors are
+`PF_RECON_STALE_MAX_DAYS :8677` · `PF_ATTENTION_STALE_MAX_DAYS :9030` ·
+`PF_EOD_AUTO_COOLDOWN_MS` / `PF_EOD_FAIL_COOLDOWN_MS :10279-10280` · `PF_FX_AUTO_COOLDOWN_MS` /
+`PF_FX_FAIL_COOLDOWN_MS :10434-10435` · `PF_FX_FRESH_MAX_AGE_DAYS` / `PF_FX_VALID_MAX_AGE_DAYS
+:10444-10445` · `_PF_CLOUD_STALE_MS :14217`. **This list is a floor, not the scope.** C-2 still
+requires every freshness/staleness constant.
+
+**(e) Unchanged anchors.** J7 `DEGRADED_NOTES` is still at `evidence-freshness.js:105` (425 L). The
+EOD-packet-local sources `_p5BuildLocalContext :2410`, `_eodReconciliationLimitationText :2654`,
+`_eodBuildPacket :2671` and `_eodPacketToMarkdown :2867` all still exist.
+
 ## 3 · Scope
 
 The census must inventory, per occurrence:
@@ -94,7 +148,8 @@ The census must inventory, per occurrence:
 2. **the call site** — file and line;
 3. **the data family** it describes (evidence · market/EOD · FX · portfolio/reporting · research
    coverage · reconciliation · sync);
-4. **which authority owns that family today** — J7, `PF_*`, EOD-packet-local, or none;
+4. **which authority owns that family today** — J7, `PF_*`, EOD-packet-local, the S3 read
+   envelope, the NC briefing table (Amendment 2 (c)), or none;
 5. **whether the term is user-visible, machine-internal, or both.**
 
 **Deliverable: one tracked census artifact** (§5). Not code.
@@ -120,6 +175,9 @@ work/dh-vocabulary-census/review.md      NEW  tracked task artifact
 
 **No product file. No QA file. Suite count unchanged.**
 
+**QA suites that read in-scope files as text:** none. No `qa/*.js` reads `work/dh-vocabulary-census/`;
+the only `work/` mentions in `qa/` are comments naming other tasks' briefs (checked at `e2bdfd2`).
+
 The census is **tracked**, not an `.ai-reports/` local artifact, because **DH-M0b's ruling and every
 later consumer bind to it** — the same reasoning that made D-S3-1 tracked.
 
@@ -133,10 +191,10 @@ re-running the measurement:
 
 | ID | Check |
 |---|---|
-| **C-1** | every occurrence of each term in `index.html` is accounted for — recount matches the census total exactly |
-| **C-2** | every `PF_*` freshness/staleness constant is listed with its unit |
+| **C-1** | every occurrence of each term in `index.html` is accounted for. For each term the census states **both** the per-occurrence total and the matching-line total (Amendment 2 (a)), and both match a case-sensitive re-run on the task base exactly (Amendment 2 (b) is the expected value) |
+| **C-2** | every `PF_*` / `_PF_*` freshness, staleness or cooldown constant is listed with its unit — at least the nine in Amendment 2 (d) |
 | **C-3** | every J7 state token is listed |
-| **C-4** | the EOD-packet-local terms are listed |
+| **C-4** | the EOD-packet-local terms are listed; **the NC briefing table (`NC_BRIEFING_VOCAB`, and the `NOTEBOOK_BRIEFING_PROMPT` occurrence) is listed as its own vocabulary and is not counted twice** |
 | **C-5** | **no file outside `work/dh-vocabulary-census/` differs** — `git diff` over the rest of the tree is empty |
 
 **C-5 is the load-bearing one:** it is the mechanical proof the census stayed read-only.
@@ -173,6 +231,16 @@ activation, NC-M6, CH, DR) depend on M0b, not on M0a directly.
 
 **Revalidation trigger.** Re-run the §2 counts before execution; **any drift means the census scope
 grew and the brief's §2 baseline must be updated**. Re-run whenever `branch-dev` moves.
+
+**Task base and parallel execution (Amendment 2).** The census measures the task worktree's tree.
+Before measuring, the Worker confirms that the measured files are byte-identical to `e2bdfd2`:
+`index.html`, `netlify/functions/lib/evidence-freshness.js` and the three S3 files. A brief-only
+commit elsewhere does not break that identity. This census may run in parallel with the entry 9
+UI-hygiene task, whose brief forbids it from introducing any §2 term. **If `branch-dev` moves before
+LAND**, the census stays bound to its base. At LAND-request time the Worker re-runs the §2 recount
+(both units) on the then-current `branch-dev` and records the result in `review.md`. **Any change in
+a census-term count means the census no longer describes `branch-dev`**: that is STOP-2, and it is
+cleared by a re-based amendment, not absorbed.
 
 ## 10 · Definition of done
 
