@@ -16,7 +16,7 @@ file is stale.
 | Normalized | 2026-09-24 |
 | `branch-dev` | `0c99e13` — in sync with `origin/branch-dev`, clean tree |
 | `origin/main` | `fbec2c1` — `branch-dev` is **80 commits ahead of production** |
-| Active entries | 16 (1 closed this pass: 6) |
+| Active entries | 17 (16 at the 2026-09-24 normalization; +1 on 2026-09-25: 24) |
 | `qa:offline` | **46** effective suites (auto-discovered, minus the 11-entry denylist) |
 
 **Active ARC:** S2 — the news-catalyst evidence pipeline (entry 4). The 23 legacy ARC
@@ -61,6 +61,15 @@ S2-M1) · A3a (`28c2543`, S2-M2). **A3b is BLOCKED** — enforcement requires it
 rule / date-truth manifest (O-4); the A3a evidence it would be ruled from now exists and measures
 **25 equal · 2 differ · 2 no-evidence-date over 29 catalysts**. **A6 HOLD** — reopens only on a
 measured true duplicate within one run.
+*Slice candidate — `/news/latest`-class hub source pages (added 2026-09-25, non-blocking).*
+`GENERIC_SOURCE_PATH_RE` (`news-catalysts-provider.js:87`) rejects a generic leaf segment only
+when nothing follows it, and A5's `INDEX_DOC_LEAF_RE` (`:93`) strips only `index`/`default`
+document leaves, so a listing/hub path such as `/news/latest` is not rejected as a generic
+source. A real instance exists in the pinned replay corpus (NVDA fixtures `p3`/`p4`:
+`nvidianews.nvidia.com/news/latest`). **First step is measurement only:** how many corpus
+survivors carry a hub-class `sourceUrl`, and whether a candidate rule would change any survivor
+or `fixtureSha256`. **No filtering-rule change before that measurement**; any rule then needs its
+own Owner approval. Not scheduled; does not block the sequence above or reopen Worker 2.
 *Legacy refs:* `WP-P7 A1/A2/A3/Slice B`, `C3-S1…S5`, `EG-25C-3`, `J3`.
 
 ---
@@ -172,6 +181,7 @@ per dark surface would be inventory, not a plan.
 | 13 | Deep Dive v1 | Research / Analysis | v0 landed `529c721`. **No v1 scope defined** — this is a placeholder, not a ready task | `WP-P8`, Step 6 |
 | 14 | AI narrative validation | Research / Analysis | **Do not start before entry 8b's parser-contract question is settled** — both concern narrative/parser trust. See also the P-5 call-2 activation row in HOLD / EXTERNAL | `WP-P1 Slice B` |
 | 15 | Visual Control Center / live dashboard | Workflow / Dev Infra | The surviving visual-work item. Deferred until the workflow is proven in the pilot | — |
+| 24 | Sidecar harness post-summary / exit-code noise | Workflow / Dev Infra | **Tooling task, not product; added 2026-09-25, non-blocking.** Post-summary output and exit-code noise reported at Worker 2 closure. The harness is Worker-local — not in this repository — so the first step is to locate it. Fix pattern already proven in the MCP harness: derive PASS/FAIL/SKIP from individual result rows, never from the first summary-like line, and count each failure exactly once. Does not reopen the closed Worker 2 task | Worker 2 closure follow-up |
 
 ---
 
@@ -236,7 +246,7 @@ fund-facts `C1-S1…S6` · `C3-S1` provider · `T1-C1` · closed arcs `WU-P7A1`,
 task-folder convention.
 
 *Historical totals are approximate (~40 merged refs, ~50 retired, ~64 done) and deliberately
-not enumerated line-by-line. The 16 active entries above are exact.*
+not enumerated line-by-line. The 17 active entries above are exact.*
 
 **KNOWN HISTORICAL EXCEPTIONS** (recorded, not remediated — do not back-fill):
 
