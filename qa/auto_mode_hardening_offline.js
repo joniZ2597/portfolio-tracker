@@ -609,7 +609,7 @@ function payload(command, cwd, tool) {
 // ── planted negatives: mutate the PRODUCTION source, the suite must notice ───────────────
 function mutantCatches(label, find, replace, probe) {
   let src;
-  try { src = fs.readFileSync(HOOK_PATH, 'utf8'); } catch (e) { check('MUT ' + label + ': hook source readable', false); return; }
+  try { src = fs.readFileSync(HOOK_PATH, 'utf8').replace(/\r\n/g, '\n'); } catch (e) { check('MUT ' + label + ': hook source readable', false); return; }
   const idx = src.indexOf(find);
   check('MUT ' + label + ': anchor present in production source', idx !== -1);
   if (idx === -1) return;
