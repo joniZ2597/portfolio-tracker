@@ -487,6 +487,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 /* VSC-END */
 .sr-rating.pos{color:var(--green2)}.sr-rating.neg{color:var(--red2)}.sr-rating.neutral-v{color:var(--text3)}
 .sr-setup{font-size:9px;letter-spacing:.4px}
+.sr-held{margin-left:6px;font-size:9px;font-weight:600;letter-spacing:.4px;color:var(--blue2)}
 .sr-setup.pos{color:var(--green2)}.sr-setup.warn{color:var(--yellow2)}.sr-setup.neg{color:var(--red2)}.sr-setup.neutral-v{color:var(--text3)}
 .sr-chg.pos{color:var(--green2)}.sr-chg.neg{color:var(--red2)}.sr-chg.neu{color:var(--text3)}
 .sr-empty{padding:32px;text-align:center;font-size:12px;color:var(--text3)}
@@ -6523,6 +6524,16 @@ function _srGroupResults(source) {
   return groups;
 }
 
+// Entry 10: HELD marker — presentation only. Membership in loadHoldings() at render time (not sticky
+// position.hasPosition); read once per render by the caller. Unreadable holdings => no markers.
+function _srHeldMap() {
+  try { return loadHoldings() || {}; } catch (_) { return {}; }
+}
+function _srHeldHtml(held, ticker) {
+  const k = String(ticker || '').trim().toUpperCase();
+  return k && Object.prototype.hasOwnProperty.call(held, k) ? '<span class="sr-held">HELD</span>' : '';
+}
+
 function _srRenderGrouped(source, tbody) {
   if (!source.length) {
     tbody.innerHTML = '<tr><td colspan="6" class="sr-empty">No scan results yet. Run a scan to see ranked results.</td></tr>';
@@ -6538,6 +6549,7 @@ function _srRenderGrouped(source, tbody) {
     below_key_mas:            ['BEARISH',  'neg'],
   };
   const groups = _srGroupResults(source);
+  const held = _srHeldMap();
   const rows = [];
   groups.forEach(g => {
     if (!g.items.length) return;
@@ -6554,7 +6566,7 @@ function _srRenderGrouped(source, tbody) {
       const sym  = _crEsc(r.ticker || '');
       const name = _crEsc((r.company_name || '').slice(0, 30));
       rows.push(`<tr data-ticker="${sym}">
-        <td class="sr-sym">${sym}</td>
+        <td class="sr-sym">${sym}${_srHeldHtml(held, r.ticker)}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
         <td class="r sr-score"><span>${_ptScoreText(score)}</span><div class="sr-score-track">${_ptScoreFillHtml(score)}</div></td>
         <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>
@@ -6739,6 +6751,7 @@ function openScanResultsOverlay() {
   if (!sorted.length) {
     tbody.innerHTML = '<tr><td colspan="7" class="sr-empty">No scan results yet. Run a scan to see ranked results.</td></tr>';
   } else {
+    const held = _srHeldMap();
     tbody.innerHTML = sorted.map((r, i) => {
       const score  = _ptScoreNorm(r.sentiment_score);
       const chg    = typeof r._verifiedChangePct === 'number' ? r._verifiedChangePct : null;
@@ -6753,7 +6766,7 @@ function openScanResultsOverlay() {
       const name = _crEsc((r.company_name || '').slice(0, 30));
       return `<tr data-ticker="${sym}">
         <td class="r sr-rank">${i + 1}</td>
-        <td class="sr-sym">${sym}</td>
+        <td class="sr-sym">${sym}${_srHeldHtml(held, r.ticker)}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
         <td class="r sr-score">${_vscCellHtml(score)}</td>
         <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>

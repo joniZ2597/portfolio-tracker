@@ -13,6 +13,16 @@ brief-only commit records them unchanged.
 | Lane | **B** (`index.html`) — one `index.html` task at a time. **Entry 9 dependency satisfied** (`bf936de`, landed) |
 | Status | **CODE-READY on Owner approval of these exact contents** |
 
+## Owner ruling 2026-09-26 — Entry 10 narrowed (supersedes the Risk / Reward parts below)
+
+Recorded after this brief was first committed. **This ruling wins over every Risk / Reward reference in the sections that follow.**
+
+- **Risk / Reward enrichment is removed from this Slice.** Risk Level and Reward Potential are derived from the existing Score, so they read as independent analytical outputs when they are not.
+- **No Risk / Reward column, chips or labels are to be added** to Scan Results. §3 items 1-3 (header, ranked cell, review cell, colspan changes), §1 chip/column rulings, and SE-1, SE-2 and SE-7 are void; SE-3/4/5/6/8/9/10 apply to the HELD marker only, and the delivered suite additionally asserts Scan Results does not present Risk / Reward.
+- **No Score or Score-weight changes** are part of Entry 10. Existing Risk / Reward fields elsewhere (e.g. the Deep Dive card) are not refactored.
+- **The remaining product change is the HELD marker in the ticker cell** (§3 item 4, plus its CSS and the `_srRenderGrouped` caliper re-pin), in both renderers.
+- **Risk / Reward will be handled separately** under the future Entry / Position Planner work.
+
 **Objective.** Show each scan-result row's Risk and Reward state and whether the ticker is currently
 held, in **both** result renderers — presentation only, from values that already exist.
 
