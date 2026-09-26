@@ -518,9 +518,24 @@ function mkMountRegistered(db, sym) {
     // Catches any non-vocabulary logic drift the literal-set checks above
     // would miss.
     function eolNorm(s) { return s.replace(/\r\n/g, '\n'); }
+    // DH-M1 (DH-M0b D3) NARROW RE-PIN: the approved fetch-failure relabel changes
+    // exactly one literal inside _p5RenderPacket (' (stale)' -> ' (refresh failed)').
+    // Only that literal is normalized in the PINNED source before comparison —
+    // exactly one occurrence, only for _p5RenderPacket; every other byte of every
+    // pinned function must still match 36bf497.
+    const D3_OLD = "(m.eodStale ? ' (stale)' : '')";
+    const D3_NEW = "(m.eodStale ? ' (refresh failed)' : '')";
     for (const n of VOCAB_PINNED_FNS) {
+      let pinnedSrc = eolNorm(pinnedVocab.fnSrc[n]);
+      if (n === '_p5RenderPacket') {
+        check('DH-M1 D3: the pinned engine source carries the old literal exactly once (normalization is one-for-one)',
+          pinnedSrc.split(D3_OLD).length === 2);
+        pinnedSrc = pinnedSrc.replace(D3_OLD, D3_NEW);
+        check('DH-M1 D3: working-tree _p5RenderPacket carries the new literal and no longer the old one',
+          wtVocab.fnSrc[n].indexOf(D3_NEW) !== -1 && wtVocab.fnSrc[n].indexOf(D3_OLD) === -1);
+      }
       check(n + ' source identical to the engine at ' + ENGINE_PIN_REF + ' modulo checkout EOL (not byte-identical)',
-        eolNorm(wtVocab.fnSrc[n]) === eolNorm(pinnedVocab.fnSrc[n]));
+        eolNorm(wtVocab.fnSrc[n]) === pinnedSrc);
     }
   })();
 

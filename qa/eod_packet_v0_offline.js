@@ -81,7 +81,13 @@ const FNS = ['_pfIsFiniteNum', '_pfFxRateValid', '_pfFxState', '_pfNormalizeHold
   '_p5IndexSearchResults', '_p5ValidateItems', '_p5SynthesisPayload',
   '_p5PreloadContext', '_p5BuildLocalContext', '_p5CollectLocalContext', '_p5PacketStatus', '_p5BuildPacket',
   '_eodSnapshotPackets', '_eodReconciliationLimitationText', '_eodBuildPacket', '_eodPacketToMarkdown',
-  '_eodPacketToBriefing'];
+  '_eodPacketToBriefing',
+  // DH-M1: readiness computation, shared display mapping, TS1 calendar authority
+  // (reused, never re-implemented) and the fetch-boundary functions.
+  '_dhLabel', '_eodComputeReadiness', '_eodReadinessLines',
+  '_ts1ExchangeLocalParts', '_ts1RuleFor', '_ts1IsTradingSession', '_ts1SessionCloseMinutes',
+  '_ts1SessionCompleted', '_ts1AgeSessions', '_ts1ResolveMarket',
+  '_pfSessionDateFor', '_pfLiveNormalize', '_pfEodCacheSet', '_pfEodSaveCache'];
 const src = {};
 let missingExtract = [];
 for (const n of FNS) { src[n] = extractFunctionSource(content, n); if (!src[n]) missingExtract.push(n); }
@@ -104,6 +110,13 @@ if (!src.NC_BRIEFING_VOCAB) missingExtract.push('NC_BRIEFING_VOCAB');
 src.NOTEBOOK_BRIEFING_PROMPT = extractVarSource(content, 'NOTEBOOK_BRIEFING_PROMPT');
 if (!src.NOTEBOOK_BRIEFING_PROMPT) missingExtract.push('NOTEBOOK_BRIEFING_PROMPT');
 VARS.push('NC_BRIEFING_VOCAB', 'NOTEBOOK_BRIEFING_PROMPT');
+// DH-M1: the shared display table and the TS1 calendar policy (single authority).
+src.DH_DISPLAY = extractVarSource(content, 'DH_DISPLAY');
+if (!src.DH_DISPLAY) missingExtract.push('DH_DISPLAY');
+src.TS1_POLICY_V1 = extractVarSource(content, 'TS1_POLICY_V1');
+if (!src.TS1_POLICY_V1) missingExtract.push('TS1_POLICY_V1');
+src._PF_LIVE_PROVIDERS = "var _PF_LIVE_PROVIDERS = ['yahoo', 'polygon'];";
+VARS.push('DH_DISPLAY', 'TS1_POLICY_V1', '_PF_LIVE_PROVIDERS');
 if (missingExtract.length > 0) {
   console.log('  FAIL  could not extract: ' + missingExtract.join(', '));
   process.exit(1);
@@ -673,10 +686,19 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
   // Normalized to \n before hashing — index.html is CRLF-terminated on this
   // checkout, but a checkout with core.autocrlf=false (e.g. Linux CI) would
   // otherwise hash the byte-identical LF blob to a different digest.
+  // DH-M1 DELIBERATE RE-PIN: DH-M1 adds the `## Readiness` section to
+  // _eodPacketToMarkdown on purpose (the only change: one heading, one
+  // _eodReadinessLines call, one blank line, ahead of `## Limitations`; see
+  // work/dh-readiness-block/review.md for the extracted-source diff). The
+  // NC-M1 pre-task hash is kept as the documented base, and the pin is now the
+  // post-DH-M1 form — still a real drift pin, not a same-call tautology.
   const EOD_PACKET_TO_MARKDOWN_PRETASK_SHA256 = 'b7ea051d1b5c4d682424b5fdde6904cb012bf6577c48e9561b7a457682fc9c03';
+  const EOD_PACKET_TO_MARKDOWN_DH_M1_SHA256 = '366f51e36c1fb5c174187ccfd76534e1e7ef4a370a0d92f71c4e16813ccd108b';
   const mdSrcHash = crypto.createHash('sha256').update(src._eodPacketToMarkdown.replace(/\r\n/g, '\n'), 'utf8').digest('hex');
-  check('NB-4: _eodPacketToMarkdown extracted source hash matches its pinned pre-task baseline (byte-unchanged)',
-    mdSrcHash === EOD_PACKET_TO_MARKDOWN_PRETASK_SHA256);
+  check('NB-4: _eodPacketToMarkdown extracted source hash matches its pinned DH-M1 baseline (deliberately re-pinned)',
+    mdSrcHash === EOD_PACKET_TO_MARKDOWN_DH_M1_SHA256);
+  check('NB-4: the DH-M1 pin is genuinely a re-pin — it differs from the NC-M1 pre-task hash',
+    EOD_PACKET_TO_MARKDOWN_DH_M1_SHA256 !== EOD_PACKET_TO_MARKDOWN_PRETASK_SHA256);
   check('NB-4: _eodPacketToMarkdown extracted source carries no reference to the briefing projector',
     stripped('_eodPacketToMarkdown').indexOf('_eodPacketToBriefing') === -1 &&
     stripped('_eodPacketToMarkdown').indexOf('NC_BRIEFING_VOCAB') === -1);
@@ -747,7 +769,8 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
     check('NB-7: total-incomplete reconciliation state renders (via the transported limitation)',
       out.indexOf('Portfolio Total is incomplete') !== -1);
     check('NB-7: the stale EOD entry renders explicitly for the affected holding',
-      out.indexOf('market data for this holding is stale') !== -1 && out.indexOf('for AAA.') !== -1);
+      out.indexOf('the last refresh of market data failed') !== -1 && out.indexOf('for AAA.') !== -1 &&
+      out.indexOf('market data for this holding is stale') === -1);
   })();
 
   // ── STOP-8 (needsAttention): portfolio.needsAttention entries are an
@@ -844,6 +867,427 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
   const cccSection = holdingSection(briefing1, 'CCC');
   check('STOP-8: the market-unavailable state for CCC renders explicitly, never silently dropped',
     !!cccSection && cccSection.indexOf('market data was not retrieved for this holding for CCC.') !== -1);
+})();
+
+
+// ═══ DH-M1: EOD readiness block + shared display wording ═════════════════
+// Amendment 2 AC1-AC15 (numbered RD-ACn here — the EOD-v0 AC1-AC17 above are a
+// different namespace), planted negatives N1-N5 (EODFRESH plan §4), R-J7,
+// R-U1, R-D3, fetch-boundary and projection checks. AC16/AC17 are browser QA
+// (DH-M3 / EODFRESH-2) and are NOT asserted here.
+(function EOD_READINESS_DH_M1() {
+  function stripped(name) { return src[name].replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, ''); }
+  const VERDICTS = ['current', 'degraded', 'not-representative'];
+  const FORBIDDEN_ACTION = ['advice', 'shouldRefresh', 'doNotTrade', 'safe', 'unsafe'];
+
+  // ── Control fixture: every holding researched through the real P5 chain, US
+  // cache entries on the last completed NY session, fresh FX, cash set after
+  // the oldest baseline, all baselines under the existing advisory window.
+  // NOW_MS = 2026-09-16T12:00Z = 08:00 ET Wed: 09-16 is not complete, 09-15 is
+  // the last completed session (ageSessions 0); 09-14 → 1; 09-11 → 2. ─────────
+  const CTL_HOLD = {
+    AAA: Object.assign({}, HOLDINGS_SEED_OBJ.AAA, { baselineAt: iso(NOW_MS - 3 * DAY), updatedAt: iso(NOW_MS - 3 * DAY) }),
+    BBB: Object.assign({}, HOLDINGS_SEED_OBJ.BBB, { baselineAt: iso(NOW_MS - 2 * DAY) }),
+    CCC: Object.assign({}, HOLDINGS_SEED_OBJ.CCC, { baselineAt: iso(NOW_MS - 1 * DAY) })
+  };
+  function usEntry(sessionDate) {
+    return { price: 10, changePercent: 1, currency: 'USD', sessionEpoch: 1789000000, fetchedAt: iso(NOW_MS),
+      market: 'US', marketBasis: 'provider-meta', sessionDate: sessionDate };
+  }
+  const CTL_EOD = { AAA: usEntry('2026-09-15'), BBB: usEntry('2026-09-14'), CCC: usEntry('2026-09-15') };
+  function ctlSeed(over) {
+    return Object.assign({
+      pt_holdings: JSON.stringify(CTL_HOLD), pt_fx: fxSeed(1 * DAY),
+      pt_cash: JSON.stringify({ amountILS: 500, asOf: '2026-09-15' }), pt_eod_cache: JSON.stringify(CTL_EOD)
+    }, over || {});
+  }
+  const seedApi = buildApi(FULL_SEED).api;
+  const CTL_PACKETS = {};
+  ['AAA', 'BBB', 'CCC'].forEach(function (s) {
+    CTL_PACKETS[s] = buildRealPacket(seedApi, s, NOW_MS, [{ sourceUrl: 'https://ex.com/' + s.toLowerCase(), summary: 'S.' }]);
+  });
+  const ALL_PACKETS = [];
+  function build(seed, opts) {
+    opts = opts || {};
+    const b = buildApi(seed, { displayed: opts.displayed === undefined ? CTL_PACKETS : opts.displayed, patchSrc: opts.patchSrc });
+    const preload = b.api._p5PreloadContext(NOW_MS);
+    const packet = b.api._eodBuildPacket({ asOf: iso(NOW_MS), nowMs: NOW_MS,
+      packetsBySymbol: b.api._eodSnapshotPackets(['AAA', 'BBB', 'CCC']), preload: preload, reconState: b.api._pfReconLoad() });
+    // Source-mutated builds are planted negatives, not production fixtures.
+    if (!opts.patchSrc) ALL_PACKETS.push(packet);
+    return { packet: packet, api: b.api, ls: b.ls };
+  }
+  function classes(p) { return p.readiness.reasons.map(function (r) { return r.class; }); }
+  function reasonFor(p, cls) { return p.readiness.reasons.find(function (r) { return r.class === cls; }); }
+
+  const CTL = build(ctlSeed());
+  ALL_PACKETS.push(MAIN_PACKET);
+  check('control: the fixture is genuinely current (a valid base for every planted negative)',
+    CTL.packet.readiness.verdict === 'current' &&
+    JSON.stringify(classes(CTL.packet)) === JSON.stringify(['all-dimensions-within-band']));
+  check('control: market dimension reads current for all three holdings with recorded basis',
+    CTL.packet.readiness.dimensions.market.symbols.length === 3 &&
+    CTL.packet.readiness.dimensions.market.symbols.every(function (r) { return r.state === 'current' && r.marketBasis === 'provider-meta'; }));
+  check('control: ageSessions 0 (09-15) and 1 (09-14) are both current — the ruled band',
+    CTL.packet.readiness.dimensions.market.symbols[0].ageSessions === 0 && CTL.packet.readiness.dimensions.market.symbols[1].ageSessions === 1);
+
+  // ── N1: age a cached sessionDate by two completed sessions ─────────────────
+  const n1 = build(ctlSeed({ pt_eod_cache: JSON.stringify(Object.assign({}, CTL_EOD, { AAA: usEntry('2026-09-11') })) }));
+  check('N1 (RD-AC15/AC4): two completed sessions of lag → market aged, verdict lowers, symbol named',
+    n1.packet.readiness.verdict === 'degraded' && reasonFor(n1.packet, 'market-aged') &&
+    JSON.stringify(reasonFor(n1.packet, 'market-aged').symbols) === JSON.stringify(['AAA']) &&
+    n1.packet.readiness.dimensions.market.symbols[0].ageSessions === 2);
+  // ── N2: strip market/marketBasis → unknown, fails closed ────────────────────
+  const n2Entry = usEntry('2026-09-15'); delete n2Entry.market; delete n2Entry.marketBasis;
+  const n2 = build(ctlSeed({ pt_eod_cache: JSON.stringify(Object.assign({}, CTL_EOD, { AAA: n2Entry })) }));
+  check('N2 (RD-AC6/AC15): market stripped → unknown, verdict lowers, symbol named',
+    n2.packet.readiness.verdict === 'degraded' && reasonFor(n2.packet, 'market-unknown') &&
+    JSON.stringify(reasonFor(n2.packet, 'market-unknown').symbols) === JSON.stringify(['AAA']));
+  // ── N3: FX past valid window with USD holdings ─────────────────────────────
+  const n3 = build(ctlSeed({ pt_fx: fxSeed(7 * DAY) }));
+  check('N3 (RD-AC15): FX stale-invalid with USD holdings → not-representative',
+    n3.packet.readiness.verdict === 'not-representative' && !!reasonFor(n3.packet, 'fx-stale-invalid') &&
+    n3.packet.readiness.dimensions.fx.state === 'stale-invalid');
+  // ── N4: a baselineAt past 7 d → needs-confirmation ONLY (the discriminating case) ──
+  const n4Hold = JSON.stringify(Object.assign({}, CTL_HOLD, { BBB: Object.assign({}, CTL_HOLD.BBB, { baselineAt: iso(NOW_MS - 40 * DAY) }) }));
+  const n4 = build(ctlSeed({ pt_holdings: n4Hold }));
+  check('N4 (RD-AC10/AC15): position 40 d old → verdict exactly degraded, on needs-confirmation alone',
+    n4.packet.readiness.verdict === 'degraded' && JSON.stringify(classes(n4.packet)) === JSON.stringify(['positions-needs-confirmation']) &&
+    JSON.stringify(reasonFor(n4.packet, 'positions-needs-confirmation').symbols) === JSON.stringify(['BBB']) &&
+    JSON.stringify(n4.packet.readiness.dimensions.positions.needsConfirmation) === JSON.stringify(['BBB']));
+  check('RD-AC10: position age never excludes a holding from any total (portfolio total identical to control)',
+    n4.packet.portfolio.total === CTL.packet.portfolio.total && n4.packet.holdings.length === 3);
+  // ── N5: cash not recorded → missing/invalid, distinct from any staleness class ──
+  const n5Seed = ctlSeed(); delete n5Seed.pt_cash;
+  const n5 = build(n5Seed);
+  check('N5 (RD-AC15/AC3): cash not recorded → missing/invalid, named separately from any staleness class',
+    n5.packet.readiness.dimensions.cash.condition === 'missing/invalid' && !!reasonFor(n5.packet, 'cash-missing-or-invalid') &&
+    n5.packet.readiness.verdict === 'not-representative' && classes(n5.packet).every(function (c) { return c.indexOf('aged') === -1; }));
+  // coverage flips the verdict too (AC15's fifth dimension)
+  const covCase = build(ctlSeed(), { displayed: { AAA: CTL_PACKETS.AAA, BBB: CTL_PACKETS.BBB } });
+  check('RD-AC15: research coverage gap (CCC not researched) → degraded, symbol named, status stays research-coverage',
+    covCase.packet.readiness.verdict === 'degraded' && !!reasonFor(covCase.packet, 'research-coverage') &&
+    JSON.stringify(reasonFor(covCase.packet, 'research-coverage').symbols) === JSON.stringify(['CCC']) &&
+    covCase.packet.status === 'partial');
+
+  // ── RD-AC1 / RD-AC2 / RD-AC13 across every packet built by this suite ─────────
+  check('RD-AC1: readiness.verdict is in the closed three-value set on every fixture (a fourth value fails)',
+    ALL_PACKETS.length >= 8 && ALL_PACKETS.every(function (p) { return VERDICTS.indexOf(p.readiness.verdict) !== -1; }));
+  check('RD-AC2: no verdict without at least one named reason, on every fixture',
+    ALL_PACKETS.every(function (p) { return p.readiness.reasons.length >= 1 && p.readiness.reasons.every(function (r) { return typeof r.class === 'string' && r.class.length > 0; }); }));
+  check('RD-AC13: status is still research coverage ({partial, complete}) on every fixture; no readiness value in it',
+    ALL_PACKETS.every(function (p) { return p.status === 'partial' || p.status === 'complete'; }) &&
+    CTL.packet.status === 'complete' && MAIN_PACKET.status === 'partial');
+  check('RD-AC1/AC12 (no action vocabulary): no forbidden key and no action vocabulary key anywhere in readiness',
+    ALL_PACKETS.every(function (p) { return forbiddenKeyScan(p.readiness).length === 0; }) &&
+    (function () {
+      const hits = [];
+      (function walk(o) { if (o && typeof o === 'object') Object.keys(o).forEach(function (k) { if (FORBIDDEN_ACTION.indexOf(k) !== -1) hits.push(k); walk(o[k]); }); })(CTL.packet.readiness);
+      return hits.length === 0;
+    })());
+  check('RD-AC1 (every reason class has a display label — no unmapped class can render as a raw code)',
+    ALL_PACKETS.every(function (p) { return p.readiness.reasons.every(function (r) { return typeof CTL.api._dhLabel('reason', r.class) === 'string' && CTL.api._dhLabel('reason', r.class) !== r.class; }); }));
+
+  // ── RD-AC3: absent market + aged FX both appear, separately named; missing is never a verdict ──
+  const ac3Eod = JSON.parse(JSON.stringify(CTL_EOD)); delete ac3Eod.AAA;
+  const ac3 = build(ctlSeed({ pt_eod_cache: JSON.stringify(ac3Eod), pt_fx: fxSeed(4 * DAY) }));
+  check('RD-AC3: market-missing and fx-aged are both present as separate reason classes; "missing" is never the verdict',
+    !!reasonFor(ac3.packet, 'market-missing') && !!reasonFor(ac3.packet, 'fx-aged') && ac3.packet.readiness.verdict !== 'missing' &&
+    VERDICTS.indexOf(ac3.packet.readiness.verdict) !== -1 && ac3.packet.readiness.dimensions.fx.state === 'aged-but-valid');
+
+  // ── RD-AC5: marketBasis value set; a third token is not accepted ─────────────
+  const ac5Eod = JSON.parse(JSON.stringify(CTL_EOD));
+  ac5Eod.AAA = Object.assign(usEntry('2026-09-15'), { market: 'TASE', marketBasis: 'symbol-suffix-fallback' });
+  ac5Eod.BBB = Object.assign(usEntry('2026-09-15'), { marketBasis: 'guess' });
+  const ac5 = build(ctlSeed({ pt_eod_cache: JSON.stringify(ac5Eod) }));
+  const ac5Rows = ac5.packet.readiness.dimensions.market.symbols;
+  check('RD-AC5: every recorded marketBasis ∈ {provider-meta, symbol-suffix-fallback}; TASE fallback row accepted',
+    ac5Rows.every(function (r) { return r.marketBasis === null || r.marketBasis === 'provider-meta' || r.marketBasis === 'symbol-suffix-fallback'; }) &&
+    ac5Rows[0].state === 'current' && ac5Rows[0].market === 'TASE' && ac5Rows[0].marketBasis === 'symbol-suffix-fallback');
+  check('RD-AC5: a third basis token ("guess") is rejected → unknown, never accepted',
+    ac5Rows[1].state === 'unknown' && ac5Rows[1].marketBasis === null);
+
+  // ── RD-AC7: session date is NEVER inferred from sessionEpoch / fetchedAt ─────
+  const ac7Eod = JSON.parse(JSON.stringify(CTL_EOD));
+  ac7Eod.AAA = { price: 10, changePercent: 1, currency: 'USD', sessionEpoch: Date.parse('2026-09-15T20:00:00Z') / 1000,
+    fetchedAt: iso(NOW_MS), market: 'US', marketBasis: 'provider-meta' };
+  const ac7 = build(ctlSeed({ pt_eod_cache: JSON.stringify(ac7Eod) }));
+  check('RD-AC7 (planted negative): sessionEpoch + fetchedAt but NO sessionDate → unknown, sessionDate null — not a derived date',
+    ac7.packet.readiness.dimensions.market.symbols[0].state === 'unknown' && ac7.packet.readiness.dimensions.market.symbols[0].sessionDate === null &&
+    !!reasonFor(ac7.packet, 'market-unknown'));
+  // ── RD-AC8: legacy pre-change entry shape reads unknown (not missing); all-legacy lowers ──
+  const legacy = { price: 10, changePercent: 1, currency: 'USD', sessionEpoch: 1789000000, fetchedAt: iso(NOW_MS) };
+  const ac8 = build(ctlSeed({ pt_eod_cache: JSON.stringify({ AAA: legacy, BBB: legacy, CCC: legacy }) }));
+  check('RD-AC8: legacy-shape entries read unknown (not missing) — the expected first post-landing export',
+    ac8.packet.readiness.dimensions.market.symbols.every(function (r) { return r.state === 'unknown'; }) &&
+    !reasonFor(ac8.packet, 'market-missing'));
+  check('RD-AC8: every holding unknown → verdict lowered to not-representative (§12.8 "across the holdings")',
+    ac8.packet.readiness.verdict === 'not-representative' && JSON.stringify(reasonFor(ac8.packet, 'market-unknown').symbols) === JSON.stringify(['AAA', 'BBB', 'CCC']));
+  check('RD-AC8: MAIN_PACKET (entries without the three fields) reads unknown/missing and is not current',
+    MAIN_PACKET.readiness.verdict !== 'current' && MAIN_PACKET.readiness.dimensions.market.symbols.every(function (r) { return r.state === 'unknown' || r.state === 'missing'; }));
+
+  // ── RD-AC4 / AC11 / AC-U3: no threshold, no day math, no J7 literal in the readiness path ──
+  const authored = ['_eodComputeReadiness', '_eodReadinessLines', '_dhLabel', '_pfSessionDateFor', '_ts1ResolveMarket'];
+  const authoredSrc = authored.map(stripped).join('\n');
+  check('RD-AC4: no *_DAYS / *_MAX_* constant, no day-in-ms literal, no arithmetic on fetchedAt in the readiness path',
+    !/_DAYS\b|_MAX_|86400000|24\s*\*\s*60\s*\*\s*60\s*\*\s*1000|fetchedAt|effectiveAt/.test(authoredSrc));
+  check('RD-AC4 (control): the same scan does fire on the reused TS1 date-step helper (proves the scan can fail)',
+    /86400000/.test(stripped('_ts1AgeSessions')));
+  check('RD-AC-U3: no 7 / 30 / agingAfterDays / staleAfterDays literal in the readiness path; none anywhere in index.html',
+    !/\b7\b|\b30\b|agingAfterDays|staleAfterDays/.test(authoredSrc) && !/agingAfterDays|staleAfterDays/.test(content));
+  const PF_DECLARED_BASE = ['PF_ATTENTION_STALE_MAX_DAYS', 'PF_CASH_KEY', 'PF_CURRENCY_CODES', 'PF_CURRENCY_SYMBOLS',
+    'PF_EOD_AUTO_COOLDOWN_MS', 'PF_EOD_CACHE_KEY', 'PF_EOD_FAIL_COOLDOWN_MS', 'PF_EOD_LAST_FETCH_KEY', 'PF_FX_AUTO_COOLDOWN_MS',
+    'PF_FX_CACHE_KEY', 'PF_FX_FAIL_COOLDOWN_MS', 'PF_FX_FRESH_MAX_AGE_DAYS', 'PF_FX_VALID_MAX_AGE_DAYS', 'PF_HOLDING_WRAPPER_MARKER',
+    'PF_KNOWN_HOLDING_FIELDS', 'PF_RECON_KEY', 'PF_RECON_STALE_MAX_DAYS', 'PF_RESERVED_MARKER_KEYS'];
+  const PF_DECLARED_NOW = (content.match(/^(?:var|const) PF_[A-Z0-9_]+/gm) || []).map(function (s) { return s.replace(/^(?:var|const) /, ''); }).sort();
+  check('RD-AC11: the declared PF_* constant set is exactly the pinned base set — no new threshold beside the existing ones',
+    JSON.stringify(PF_DECLARED_NOW) === JSON.stringify(PF_DECLARED_BASE.slice().sort()));
+  check('RD-AC8 (structural): no Date.now()/new Date() in the readiness functions or projection helpers',
+    !/Date\.now|new Date\s*\(/.test(stripped('_eodComputeReadiness') + stripped('_eodReadinessLines') + stripped('_dhLabel')));
+
+  // ── RD-AC9 / R-D3: _pfEodIsStale byte-unchanged; relabel only ───────────────
+  const IS_STALE_BASE_SHA256 = '251a554adacbe3049eda5e2ef0d5bf3003f9b13684bd95b46cc4f35a70f1d941';
+  check('RD-AC9/R-D3: _pfEodIsStale extracted source is byte-identical to its pinned base',
+    crypto.createHash('sha256').update(src._pfEodIsStale.replace(/\r\n/g, '\n'), 'utf8').digest('hex') === IS_STALE_BASE_SHA256);
+  check('RD-AC9: _pfEodIsStale call sites unchanged (4 occurrences of the call/definition text, as at base)',
+    (content.match(/_pfEodIsStale\(/g) || []).length === 4);
+  const dhTable = new Function(src.DH_DISPLAY + '\nreturn DH_DISPLAY;')();
+  check('R-D3: no " (stale)" / "Stale" text remains on a fetch-failure display; both now read the table\'s refresh-failed wording',
+    content.indexOf("' (stale)'") === -1 && content.indexOf("staleTag.textContent = 'Stale'") === -1 &&
+    content.indexOf("(m.eodStale ? ' (refresh failed)' : '')") !== -1 &&
+    content.indexOf("staleTag.textContent = '" + dhTable.refreshFailed + "'") !== -1 &&
+    dhTable.refreshFailed === 'Refresh failed');
+  check('R-D3 (control): the pre-change literals would be caught by the same scan (proves it can fail)',
+    (function () { const mutated = content.replace("(m.eodStale ? ' (refresh failed)' : '')", "(m.eodStale ? ' (stale)' : '')"); return mutated.indexOf("' (stale)'") !== -1; })());
+
+  // ── R-J7: research recency is not-evaluated and NEVER lowers the verdict ─────
+  check('R-J7: control packet carries research.recency "not-evaluated" and is still current',
+    CTL.packet.readiness.dimensions.research.recency === 'not-evaluated' && CTL.packet.readiness.verdict === 'current');
+  const rj7Removed = build(ctlSeed(), { patchSrc: { _eodComputeReadiness: function (s) {
+    const m = s.replace(", recency: 'not-evaluated'", '');
+    if (m === s) throw new Error('R-J7 mutation anchor missing');
+    return m;
+  } } });
+  check('R-J7 (planted negative): removing the recency field leaves the verdict unchanged — recency is excluded from the rollup',
+    rj7Removed.packet.readiness.verdict === CTL.packet.readiness.verdict && rj7Removed.packet.readiness.dimensions.research.recency === undefined);
+  const rj7Lowering = build(ctlSeed(), { patchSrc: { _eodComputeReadiness: function (s) {
+    const m = s.replace("  var verdict = 'current';", "  lower('degraded', 'research-recency');\n  var verdict = 'current';");
+    if (m === s) throw new Error('R-J7 lowering mutation anchor missing');
+    return m;
+  } } });
+  check('R-J7 (planted negative): a mutation that lets recency lower the verdict is caught by the control assertion',
+    rj7Lowering.packet.readiness.verdict !== 'current');
+  check('R-J7: no J7 band literal or J7 reference in the readiness path',
+    !/evidence-freshness|J7|agingAfter|staleAfter/.test(authoredSrc));
+
+  // ── R-U1: the three cash conditions from the ratified predicate ─────────────
+  const u1Present = build(ctlSeed());
+  const u1Old = build(ctlSeed({ pt_cash: JSON.stringify({ amountILS: 500, asOf: '2026-09-01' }) }));
+  check('R-U1: cash.asOf AFTER oldestBaselineAt → present',
+    u1Present.packet.readiness.dimensions.cash.condition === 'present' && u1Present.packet.readiness.dimensions.cash.asOf === '2026-09-15');
+  check('R-U1: cash.asOf BEFORE oldestBaselineAt → old-user-maintained-state (named, degraded, not a forced not-representative)',
+    u1Old.packet.readiness.dimensions.cash.condition === 'old-user-maintained-state' && u1Old.packet.readiness.verdict === 'degraded' &&
+    !!reasonFor(u1Old.packet, 'cash-old-user-maintained-state'));
+  const u1Direct = CTL.api._eodComputeReadiness({ asOf: iso(NOW_MS), symbols: [], holdings: {}, eodCache: {}, fxState: 'fresh',
+    needsAttention: [], cashState: { state: 'recorded', amountILS: 1, asOf: '2020-01-01' }, oldestBaselineAt: null,
+    recon: { status: 'unset' }, coverage: { researched: [], notResearched: [], failed: [], zeroAccepted: [] } });
+  check('R-U1: oldestBaselineAt === null → present, however old cash.asOf is',
+    u1Direct.dimensions.cash.condition === 'present' && u1Direct.verdict === 'current');
+  check('R-U1: cash state !== recorded (unset / invalid) → missing/invalid',
+    ['unset', 'invalid'].every(function (st) {
+      return CTL.api._eodComputeReadiness({ asOf: iso(NOW_MS), symbols: [], holdings: {}, eodCache: {}, fxState: 'fresh',
+        needsAttention: [], cashState: { state: st }, oldestBaselineAt: null, recon: { status: 'unset' },
+        coverage: { researched: [], notResearched: [], failed: [], zeroAccepted: [] } }).dimensions.cash.condition === 'missing/invalid';
+    }));
+
+  // ── Source-mutation controls: each ruled boundary can actually fail ─────────
+  const bandMut = build(ctlSeed({ pt_eod_cache: JSON.stringify(Object.assign({}, CTL_EOD, { AAA: usEntry('2026-09-11') })) }),
+    { patchSrc: { _eodComputeReadiness: function (s) { const m = s.replace('age <= 1', 'age <= 99'); if (m === s) throw new Error('band anchor'); return m; } } });
+  check('planted negative (N1): widening the session band makes the two-session-lag fixture read current — N1 can fail',
+    bandMut.packet.readiness.dimensions.market.symbols[0].state === 'current');
+  const promoteMut = build(ctlSeed({ pt_holdings: n4Hold }),
+    { patchSrc: { _eodComputeReadiness: function (s) { const m = s.replace("lower('degraded', 'positions-needs-confirmation'", "lower('not-representative', 'positions-needs-confirmation'"); if (m === s) throw new Error('promote anchor'); return m; } } });
+  check('planted negative (N4): promoting position age to an expiry-grade effect is caught (verdict no longer "degraded")',
+    promoteMut.packet.readiness.verdict === 'not-representative');
+
+  // ── RD-AC12: Markdown is a deterministic projection of the JSON, before Limitations ──
+  const mdCtl1 = CTL.api._eodPacketToMarkdown(CTL.packet);
+  const mdCtl2 = CTL.api._eodPacketToMarkdown(JSON.parse(JSON.stringify(CTL.packet)));
+  check('RD-AC12: same JSON in → byte-identical Markdown out', mdCtl1 === mdCtl2);
+  check('RD-AC12: "## Readiness" renders before "## Limitations"',
+    mdCtl1.indexOf('## Readiness') !== -1 && mdCtl1.indexOf('## Readiness') < mdCtl1.indexOf('## Limitations') &&
+    mdCtl1.indexOf('## Readiness') > mdCtl1.indexOf('Status: '));
+  const readinessBlock = mdCtl1.slice(mdCtl1.indexOf('## Readiness') + '## Readiness'.length, mdCtl1.indexOf('## Limitations'));
+  check('RD-AC12: the Readiness block equals the deterministic projection of packet.readiness (nothing the JSON lacks)',
+    readinessBlock.trim() === CTL.api._eodReadinessLines(CTL.packet.readiness).join('\n'));
+  check('RD-AC12 (control): a Markdown whose Readiness block is dropped no longer matches the projection',
+    mdCtl1.replace(readinessBlock, '\n').indexOf('- Verdict:') === -1);
+  const mdAll = ALL_PACKETS.map(function (p) { return CTL.api._eodPacketToMarkdown(p); });
+  check('RD-AC12: every fixture renders its verdict label and every reason in the Markdown',
+    ALL_PACKETS.every(function (p, i) {
+      return mdAll[i].indexOf('- Verdict: ' + dhTable.verdict[p.readiness.verdict]) !== -1 &&
+        p.readiness.reasons.every(function (r) { return mdAll[i].indexOf(dhTable.reason[r.class]) !== -1; });
+    }));
+
+  // ── RD-AC14: readiness is additive — the pinned-base limitation set is a subset ──
+  const BASE_LIMITATIONS = [
+    {
+      "code": "coverage",
+      "text": "Researched 2 of 3 holdings. Not researched: CCC."
+    },
+    {
+      "code": "date-semantics",
+      "text": "The \"date\" shown for each source is publication metadata from the search provider. It is not an event date and must not be read as when something happened."
+    },
+    {
+      "code": "provider-coverage",
+      "text": "Evidence comes from a single provider request per holding. Coverage is non-exhaustive — absence of a source does not mean absence of news."
+    },
+    {
+      "code": "market-state",
+      "text": "Market and session data is partial. Figures reflect only the market state currently available."
+    },
+    {
+      "code": "reconciliation",
+      "text": "Reconciliation: not recorded."
+    },
+    {
+      "code": "fx",
+      "text": "FX: rate 3, USD/ILS, as of 2026-09-15T12:00:00.000Z, fresh."
+    },
+    {
+      "code": "staleness:AAA",
+      "text": "AAA: position values were last updated 2026-09-13T12:00:00.000Z; figures derived from them are as of that date, not today."
+    },
+    {
+      "code": "staleness:BBB",
+      "text": "BBB: position values were last updated 2026-09-06T12:00:00.000Z; figures derived from them are as of that date, not today."
+    },
+    {
+      "code": "staleness:CCC",
+      "text": "CCC: position values were last updated 2026-09-15T12:00:00.000Z; figures derived from them are as of that date, not today."
+    },
+    {
+      "code": "source-conflict:https://ex.com/shared",
+      "text": "Conflicting metadata for https://ex.com/shared: title. The first-encountered values were used."
+    },
+    {
+      "code": "synthesis:AAA",
+      "text": "AAA — Synthesis: done."
+    },
+    {
+      "code": "synthesis:BBB",
+      "text": "BBB — Synthesis: pending."
+    }
+  ];
+  check('RD-AC14: every pinned pre-DH-M1 limitation (code + text) is still present, unchanged, for the identical input',
+    BASE_LIMITATIONS.length === 12 && BASE_LIMITATIONS.every(function (b) {
+      return MAIN_PACKET.limitations.some(function (l) { return l.code === b.code && l.text === b.text; });
+    }));
+  check('RD-AC14 (control): the subset check fails if one pinned limitation is reworded',
+    !BASE_LIMITATIONS.map(function (b, i) { return i === 0 ? { code: b.code, text: b.text + ' (reworded)' } : b; }).every(function (b) {
+      return MAIN_PACKET.limitations.some(function (l) { return l.code === b.code && l.text === b.text; });
+    }));
+  check('RD-AC14: the market-state limitation still renders as prose (readiness routes nothing around it)',
+    CTL.api._eodPacketToMarkdown(MAIN_PACKET).indexOf(BASE_LIMITATIONS.find(function (b) { return b.code === 'market-state'; }).text) !== -1);
+
+  // ── RD-D2: the shared display table — exact words, single location ──────────
+  check('RD-D2: verdict labels are exactly Current / Partly out of date / Not representative',
+    JSON.stringify(dhTable.verdict) === JSON.stringify({ current: 'Current', degraded: 'Partly out of date', 'not-representative': 'Not representative' }));
+  check('RD-D2: the ruled state words Current / Stale / Not recorded / Unavailable (reason) are all in the state table',
+    dhTable.state.current === 'Current' && dhTable.state.aged === 'Stale' && dhTable.state.missing === 'Not recorded' &&
+    /^Unavailable \(.+\)$/.test(dhTable.state.unknown) && dhTable.researchRecency === 'Research recency: not evaluated' &&
+    dhTable.refreshFailed === 'Refresh failed');
+  check('RD-D2: each ruled display phrase is defined in exactly one place in index.html',
+    ['Partly out of date', 'Research recency: not evaluated'].every(function (ph) { return content.split("'" + ph + "'").length - 1 === 1; }));
+  check('RD-D2: Markdown and briefing render the ruled research-recency line for the not-evaluated dimension',
+    mdCtl1.indexOf('Research recency: not evaluated') !== -1 && CTL.api._eodPacketToBriefing(CTL.packet).indexOf('Research recency: not evaluated') !== -1);
+  check('RD-D2: readiness projection functions never hardcode a display phrase (only reference DH_DISPLAY via _dhLabel)',
+    ['Partly out of date', 'Not representative', 'Not recorded', 'Stale'].every(function (ph) { return stripped('_eodReadinessLines').indexOf("'" + ph) === -1; }));
+
+  // ── RD-B1: briefing speaks the verdict and its reasons, transported not recomputed ──
+  const brCtl = CTL.api._eodPacketToBriefing(CTL.packet);
+  const brN1 = CTL.api._eodPacketToBriefing(n1.packet);
+  check('RD-B1: briefing carries a Readiness section before Limitations with the verdict and each reason',
+    brN1.indexOf('## Readiness') !== -1 && brN1.indexOf('## Readiness') < brN1.indexOf('## Limitations') &&
+    brN1.indexOf('- Verdict: Partly out of date') !== -1 && brN1.indexOf(dhTable.reason['market-aged'] + ' — AAA') !== -1);
+  check('RD-B1: briefing readiness lines are exactly the shared projection of packet.readiness',
+    brN1.indexOf(CTL.api._eodReadinessLines(n1.packet.readiness).join('\n')) !== -1 && brCtl.indexOf('- Verdict: Current') !== -1);
+  check('RD-B1: briefing marketStale wording is the D3 meaning; key names unchanged',
+    new Function(src.NC_BRIEFING_VOCAB + '\nreturn NC_BRIEFING_VOCAB;')().marketStale === 'the last refresh of market data failed' &&
+    JSON.stringify(Object.keys(new Function(src.NC_BRIEFING_VOCAB + '\nreturn NC_BRIEFING_VOCAB;')())) === JSON.stringify(['weightUnavailable', 'marketStale', 'marketUnavailable']));
+
+  // ── No pt_* write during packet build with readiness ────────────────────────
+  check('no storage write: zero localStorage writes while building + projecting a readiness packet',
+    CTL.ls._writes.length === 0);
+  (function () {
+    const before = CTL.ls._dump();
+    CTL.api._eodPacketToMarkdown(CTL.packet); CTL.api._eodPacketToBriefing(CTL.packet);
+    check('no storage write: pt_* bytes byte-identical across both projections', CTL.ls._dump() === before && CTL.ls._writes.length === 0);
+  })();
+
+  // ── RD-F1: market identity + session date at the fetch boundary ─────────────
+  function norm(meta, sym, providerOverride) {
+    const b = buildApi({});
+    return b.api._pfLiveNormalize({ chart: { result: [{ meta: Object.assign({ _provider: 'yahoo', regularMarketPrice: 100, chartPreviousClose: 99,
+      currency: 'USD' }, meta), indicators: { quote: [{ close: [] }] } }] } }, sym);
+  }
+  const epoch = function (isoStr) { return Date.parse(isoStr) / 1000; };
+  const fNy = norm({ exchangeTimezoneName: 'America/New_York', regularMarketTime: epoch('2026-09-16T02:00:00Z') }, 'AAPL');
+  check('RD-F1: US via provider-meta; sessionDate is EXCHANGE-LOCAL (22:00 ET on 09-15, not the UTC date 09-16)',
+    fNy.market === 'US' && fNy.marketBasis === 'provider-meta' && fNy.sessionDate === '2026-09-15');
+  const fTase = norm({ exchangeTimezoneName: 'Asia/Jerusalem', currency: 'ILA', regularMarketTime: epoch('2026-09-14T22:30:00Z') }, 'NXSN.TA');
+  check('RD-F1: TASE via provider-meta; sessionDate uses the TASE calendar timeZone (01:30 IDT on 09-15)',
+    fTase.market === 'TASE' && fTase.marketBasis === 'provider-meta' && fTase.sessionDate === '2026-09-15');
+  const fSuffix = norm({ regularMarketTime: epoch('2026-09-15T12:00:00Z') }, 'NXSN.TA');
+  check('RD-F1: .TA suffix falls back to TASE ONLY when provider timezone is absent, basis symbol-suffix-fallback',
+    fSuffix.market === 'TASE' && fSuffix.marketBasis === 'symbol-suffix-fallback' && fSuffix.sessionDate === '2026-09-15');
+  const fNone = norm({ regularMarketTime: epoch('2026-09-15T12:00:00Z') }, 'AAPL');
+  check('RD-F1: no timezone and no .TA → market null, marketBasis null, sessionDate null (fails closed)',
+    fNone.market === null && fNone.marketBasis === null && fNone.sessionDate === null);
+  const fNoTime = norm({ exchangeTimezoneName: 'America/New_York' }, 'AAPL');
+  check('RD-F1: market resolved but no provider session time → sessionDate null (never guessed)',
+    fNoTime.market === 'US' && fNoTime.sessionDate === null && fNoTime.sessionEpoch === null);
+  const fOther = norm({ exchangeTimezoneName: 'Europe/London', regularMarketTime: epoch('2026-09-15T12:00:00Z') }, 'X.TA');
+  check('RD-F1: an unrelated provider timezone is NOT overridden by the .TA suffix → null / null / null',
+    fOther.market === null && fOther.marketBasis === null && fOther.sessionDate === null);
+  check('RD-F1: existing normalized fields are unchanged (price, change_percent, source, currency, sessionEpoch)',
+    fNy.price === 100 && fNy.change_percent === parseFloat(((100 - 99) / 99 * 100).toFixed(2)) && fNy.source === 'yahoo' &&
+    fNy.currency === 'USD' && fNy.sessionEpoch === epoch('2026-09-16T02:00:00Z'));
+
+  // ── RD-C1: _pfEodCacheSet writes the three fields; whole-entry replace ──────
+  (function () {
+    const cs = buildApi({ pt_eod_cache: JSON.stringify({ AAA: { price: 1, changePercent: 1, lastFailAt: iso(NOW_MS), fetchedAt: 'x' } }) });
+    cs.api._pfEodCacheSet('AAA', fNy);
+    const stored = JSON.parse(cs.ls.getItem('pt_eod_cache')).AAA;
+    check('RD-C1: _pfEodCacheSet writes market / marketBasis / sessionDate and replaces the whole entry (lastFailAt dropped)',
+      stored.market === 'US' && stored.marketBasis === 'provider-meta' && stored.sessionDate === '2026-09-15' &&
+      stored.lastFailAt === undefined && stored.price === 100);
+    const only = cs.ls._writes.filter(function (w) { return w[0] === 'set'; });
+    check('RD-C1: the cache write touches only pt_eod_cache', only.length === 1 && only[0][1] === 'pt_eod_cache');
+    cs.api._pfEodCacheSet('BBB', { price: 5, change_percent: 0, currency: 'USD', sessionEpoch: null });
+    const legacyNorm = JSON.parse(cs.ls.getItem('pt_eod_cache')).BBB;
+    check('RD-C1: a normalized quote without market identity stores null / null / null (never inferred)',
+      legacyNorm.market === null && legacyNorm.marketBasis === null && legacyNorm.sessionDate === null);
+  })();
+
+  // ── RD-F2: the ONE market rule — TS1 behaviour byte-equivalent ──────────────
+  const rm = CTL.api._ts1ResolveMarket;
+  const BASE_RULE = [
+    ['America/New_York', 'AAPL', 'US', 'provider-meta'], ['America/New_York', 'X.TA', 'US', 'provider-meta'],
+    ['Asia/Jerusalem', 'NXSN.TA', 'TASE', 'provider-meta'], ['Asia/Jerusalem', 'AAPL', 'TASE', 'provider-meta'],
+    [undefined, 'NXSN.TA', 'TASE', 'symbol-suffix-fallback'], [null, 'NXSN.TA', 'TASE', 'symbol-suffix-fallback'],
+    ['', 'NXSN.TA', 'TASE', 'symbol-suffix-fallback'], [undefined, 'AAPL', null, null], ['', 'AAPL', null, null],
+    ['Europe/London', 'X.TA', null, null], ['Europe/London', 'AAPL', null, null]
+  ];
+  check('RD-F2: the shared rule reproduces the pre-change _ts1FetchRawSeries market/basis table exactly (11 cases)',
+    BASE_RULE.every(function (c) { const r = rm(c[0], c[1]); return r.market === c[2] && r.marketBasis === c[3]; }));
+  const fetchRawSrc = extractFunctionSource(content, '_ts1FetchRawSeries');
+  check('RD-F2: _ts1FetchRawSeries and _pfLiveNormalize both call the ONE shared rule; the timezone literal is defined once',
+    /_ts1ResolveMarket\(/.test(fetchRawSrc) && /_ts1ResolveMarket\(/.test(src._pfLiveNormalize) &&
+    (content.match(/tz === 'America\/New_York'/g) || []).length === 1 && fetchRawSrc.indexOf('America/New_York') === -1);
+  check('RD-F2: the pre-change TS1 return shape is preserved (market / marketBasis still destructured into the returned series)',
+    /market:\s*market/.test(fetchRawSrc) || /market,/.test(fetchRawSrc) || fetchRawSrc.indexOf('marketBasis') !== -1);
 })();
 
 console.log(failures === 0

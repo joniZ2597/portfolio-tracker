@@ -2086,6 +2086,21 @@ function scoreTickerTech(snap, candles, computedAt, policy) {
 // repo-verifiable basis). Yahoo split-adjustment is NOT verifiably established
 // by a recorded provenance artifact in this slice ⇒ 'unknown' ⇒ the builder
 // fails closed (ratified rev-2 consequence; do not assume).
+// ONE market-identity rule, shared by the TS1 fetch boundary and the EOD
+// price-cache fetch boundary (_pfLiveNormalize). Provider timezone name is the
+// authority; the .TA suffix is a fallback ONLY when provider metadata is
+// absent (rev-2); anything else stays unestablished (null) and fails closed
+// at every caller.
+function _ts1ResolveMarket(tz, sym) {
+  var market = null, marketBasis = null;
+  if (tz === 'America/New_York') { market = 'US'; marketBasis = 'provider-meta'; }
+  else if (tz === 'Asia/Jerusalem') { market = 'TASE'; marketBasis = 'provider-meta'; }
+  else if (tz === undefined || tz === null || tz === '') {
+    if (/\.TA$/.test(sym)) { market = 'TASE'; marketBasis = 'symbol-suffix-fallback'; }
+  }
+  return { market: market, marketBasis: marketBasis };
+}
+
 async function _ts1FetchRawSeries(symbol) {
   var sym = String(symbol || '').trim().toUpperCase();
   if (!sym) return { error: 'BAD_SYMBOL' };
@@ -2104,15 +2119,8 @@ async function _ts1FetchRawSeries(symbol) {
   var meta = result.meta || {};
   var provider = meta._provider === 'polygon' ? 'polygon' : 'yahoo';
   var adjustedBasis = provider === 'polygon' ? 'explicit' : 'unknown';
-  var market = null, marketBasis = null;
-  var tz = meta.exchangeTimezoneName;
-  if (tz === 'America/New_York') { market = 'US'; marketBasis = 'provider-meta'; }
-  else if (tz === 'Asia/Jerusalem') { market = 'TASE'; marketBasis = 'provider-meta'; }
-  else if (tz === undefined || tz === null || tz === '') {
-    // .TA fallback ONLY when provider metadata is absent (rev-2); anything
-    // else stays unestablished and fails closed at the caller below.
-    if (/\.TA$/.test(sym)) { market = 'TASE'; marketBasis = 'symbol-suffix-fallback'; }
-  }
+  var mk = _ts1ResolveMarket(meta.exchangeTimezoneName, sym);
+  var market = mk.market, marketBasis = mk.marketBasis;
   var ts = result.timestamp || [];
   var q = (result.indicators && result.indicators.quote && result.indicators.quote[0]) || {};
   var bars = [];
@@ -2558,7 +2566,7 @@ function _p5RenderPacket(packet, mountEl) {
   var mBox = el('div', 'p5-section-market');
   mBox.appendChild(el('div', 'pf-summary-lbl', 'Market snapshot'));
   stat(mBox, 'Daily move', (m && m.present && m.changePercent !== null)
-    ? (m.changePercent.toFixed(2) + '%' + (m.eodStale ? ' (stale)' : '')) : 'unavailable');
+    ? (m.changePercent.toFixed(2) + '%' + (m.eodStale ? ' (refresh failed)' : '')) : 'unavailable');
   stat(mBox, 'Close', 'not available locally');
   stat(mBox, 'Session date', 'not available locally');
   root.appendChild(mBox);
@@ -2662,6 +2670,170 @@ function _eodReconciliationLimitationText(recon) {
     recon.exclusions.toFixed(2) + '.';
   if (recon.status === 'fully-reconciled') return 'Reconciliation: fully reconciled with the broker total.';
   return 'Reconciliation: not recorded.';
+}
+
+// DH-M1: the ONE shared display mapping (DH-M0b D2/D3) — internal codes map to
+// the ruled display words here and nowhere else. Internal codes are unchanged.
+// (The two fetch-failure UI sites carry the refreshFailed literal directly: each
+// is extracted alone by other QA suites; qa/eod_packet_v0_offline.js R-D3 pins
+// them to this table.)
+var DH_DISPLAY = {
+  verdict: { 'current': 'Current', 'degraded': 'Partly out of date', 'not-representative': 'Not representative' },
+  state: {
+    'current': 'Current', 'fresh': 'Current', 'present': 'Current',
+    'aged': 'Stale', 'aged-but-valid': 'Stale', 'stale-invalid': 'Stale', 'stale': 'Stale',
+    'old-user-maintained-state': 'Stale',
+    'missing': 'Not recorded', 'unset': 'Not recorded', 'missing/invalid': 'Not recorded',
+    'unknown': 'Unavailable (market not established)',
+    'invalid': 'Unavailable (invalid record)',
+    'total-incomplete': 'Unavailable (totals incomplete)',
+    'needs-confirmation': 'Needs confirmation'
+  },
+  reason: {
+    'market-aged': 'Market data: Stale',
+    'market-unknown': 'Market data: Unavailable (market not established)',
+    'market-missing': 'Market data: Not recorded',
+    'fx-aged': 'FX rate: Stale',
+    'fx-stale-invalid': 'FX rate: Stale',
+    'fx-missing': 'FX rate: Not recorded',
+    'positions-needs-confirmation': 'Positions: Needs confirmation',
+    'cash-missing-or-invalid': 'Cash: Not recorded',
+    'cash-old-user-maintained-state': 'Cash: Stale (owner-maintained, set before the oldest position baseline)',
+    'research-coverage': 'Research coverage: incomplete',
+    'all-dimensions-within-band': 'All dimensions within their own band'
+  },
+  refreshFailed: 'Refresh failed',
+  researchRecency: 'Research recency: not evaluated'
+};
+
+// Unmapped codes render as themselves — deterministic, never blank.
+function _dhLabel(group, code) {
+  var g = DH_DISPLAY[group];
+  if (g && Object.prototype.hasOwnProperty.call(g, code)) return g[code];
+  return String(code);
+}
+
+// Pure. Reads only its argument. Every dimension reuses an existing freshness
+// owner (DH-M0b D1): market → completed-session age via _ts1AgeSessions on
+// TS1_POLICY_V1.calendar; fx → _pfFxState; positions → the existing
+// needsAttention 'staleness' advisory; cash → the ratified U1 predicate;
+// reconciliation → recon.status; research → coverage only. No new threshold.
+// Market age uses the packet's asOf (the injected instant as ISO). The ruled
+// EOD band is ageSessions <= 1 (Q-EF1a-iv: deliberately NOT TS1's tolerance).
+function _eodComputeReadiness(a) {
+  var reasons = [];
+  var effects = [];
+  function lower(effect, cls, symbols) {
+    var r = { class: cls, effect: effect };
+    if (symbols) r.symbols = symbols;
+    reasons.push(r);
+    effects.push(effect);
+  }
+
+  // market — per symbol, from the cached fetch-boundary fields only
+  var marketRows = [];
+  a.symbols.forEach(function(sym) {
+    var h = a.holdings[sym];
+    if (h._corrupt === true) return;
+    var entry = a.eodCache[sym];
+    var row = { symbol: sym, state: 'missing', ageSessions: null, market: null, marketBasis: null, sessionDate: null };
+    if (entry && typeof entry === 'object') {
+      var cal = (entry.market === 'US' || entry.market === 'TASE') ? TS1_POLICY_V1.calendar[entry.market] : null;
+      var basisOk = entry.marketBasis === 'provider-meta' || entry.marketBasis === 'symbol-suffix-fallback';
+      row.state = 'unknown';
+      if (cal && basisOk && typeof entry.sessionDate === 'string') {
+        row.market = entry.market; row.marketBasis = entry.marketBasis; row.sessionDate = entry.sessionDate;
+        var age = _ts1AgeSessions(entry.sessionDate, cal, a.asOf);
+        if (age !== null) {
+          row.ageSessions = age;
+          row.state = age <= 1 ? 'current' : 'aged';
+        }
+      }
+    }
+    marketRows.push(row);
+  });
+  var marketCurrent = marketRows.filter(function(r) { return r.state === 'current'; }).length;
+  var marketEffect = (marketRows.length > 0 && marketCurrent === 0) ? 'not-representative' : 'degraded';
+  ['aged', 'unknown', 'missing'].forEach(function(st) {
+    var syms = marketRows.filter(function(r) { return r.state === st; }).map(function(r) { return r.symbol; });
+    if (syms.length > 0) lower(marketEffect, 'market-' + st, syms);
+  });
+
+  // fx — _pfFxState verbatim
+  var fxState = a.fxState;
+  var usdCount = 0;
+  a.symbols.forEach(function(sym) {
+    var h = a.holdings[sym];
+    if (h._corrupt !== true && h.currency === 'USD') usdCount += 1;
+  });
+  if (fxState === 'aged-but-valid') lower('degraded', 'fx-aged');
+  else if (fxState === 'stale-invalid') lower(usdCount > 0 ? 'not-representative' : 'degraded', 'fx-stale-invalid');
+  else if (fxState === 'missing') lower(usdCount > 0 ? 'not-representative' : 'degraded', 'fx-missing');
+
+  // positions — needs-confirmation only, never expiry, never below degraded
+  var confirmSyms = [];
+  a.needsAttention.forEach(function(item) {
+    if (item.category === 'staleness' && typeof item.symbol === 'string') confirmSyms.push(item.symbol);
+  });
+  confirmSyms.sort();
+  if (confirmSyms.length > 0) lower('degraded', 'positions-needs-confirmation', confirmSyms);
+
+  // cash — ratified U1 predicate (no expiry threshold)
+  var cash = a.cashState;
+  var cashCondition = 'present';
+  if (cash.state !== 'recorded') cashCondition = 'missing/invalid';
+  else if (a.oldestBaselineAt !== null && Date.parse(cash.asOf) < Date.parse(a.oldestBaselineAt)) cashCondition = 'old-user-maintained-state';
+  if (cashCondition === 'missing/invalid') lower('not-representative', 'cash-missing-or-invalid');
+  else if (cashCondition === 'old-user-maintained-state') lower('degraded', 'cash-old-user-maintained-state');
+
+  // research — coverage contributes as today; recency is NOT evaluated (D4c)
+  var cov = a.coverage;
+  var covSyms = cov.notResearched.concat(cov.failed, cov.zeroAccepted).sort();
+  if (covSyms.length > 0) lower('degraded', 'research-coverage', covSyms);
+
+  var verdict = 'current';
+  if (effects.indexOf('not-representative') !== -1) verdict = 'not-representative';
+  else if (effects.indexOf('degraded') !== -1) verdict = 'degraded';
+  if (reasons.length === 0) reasons.push({ class: 'all-dimensions-within-band', effect: 'current' });
+
+  return {
+    verdict: verdict,
+    reasons: reasons,
+    dimensions: {
+      market: { symbols: marketRows },
+      fx: { state: fxState },
+      positions: { needsConfirmation: confirmSyms },
+      cash: { condition: cashCondition, asOf: cash.state === 'recorded' ? cash.asOf : null },
+      reconciliation: { status: a.recon.status },
+      research: { coverage: { researched: cov.researched.length, notResearched: cov.notResearched.length,
+        failed: cov.failed.length, zeroAccepted: cov.zeroAccepted.length }, recency: 'not-evaluated' }
+    }
+  };
+}
+
+// Pure. The single projection of packet.readiness into display lines, shared by
+// the Markdown and briefing projectors — every word comes from DH_DISPLAY, no
+// fact the JSON lacks.
+function _eodReadinessLines(r) {
+  var lines = [];
+  lines.push('- Verdict: ' + _dhLabel('verdict', r.verdict));
+  r.reasons.forEach(function(x) {
+    lines.push('- Reason: ' + _dhLabel('reason', x.class) + (x.symbols ? ' — ' + x.symbols.join(', ') : ''));
+  });
+  var d = r.dimensions;
+  lines.push('- Market: ' + (d.market.symbols.length === 0 ? 'no holdings' : d.market.symbols.map(function(m) {
+    return m.symbol + ' ' + _dhLabel('state', m.state) +
+      (m.ageSessions !== null ? ' (' + m.ageSessions + ' completed session(s) behind, basis ' + m.marketBasis + ')' : '');
+  }).join('; ')));
+  lines.push('- FX: ' + _dhLabel('state', d.fx.state) + (d.fx.state === 'aged-but-valid' || d.fx.state === 'stale-invalid' ? ' [' + d.fx.state + ']' : ''));
+  lines.push('- Positions: ' + (d.positions.needsConfirmation.length === 0 ? 'none flagged' :
+    _dhLabel('state', 'needs-confirmation') + ' — ' + d.positions.needsConfirmation.join(', ')));
+  lines.push('- Cash: ' + _dhLabel('state', d.cash.condition) + (d.cash.asOf !== null ? ' (as of ' + d.cash.asOf + ')' : ''));
+  lines.push('- Reconciliation: ' + _dhLabel('state', d.reconciliation.status));
+  var c = d.research.coverage;
+  lines.push('- Research: ' + c.researched + ' researched, ' + c.notResearched + ' not researched, ' + c.failed + ' failed, ' +
+    c.zeroAccepted + ' zero accepted. ' + DH_DISPLAY.researchRecency + '.');
+  return lines;
 }
 
 // Pure aggregator. Every input is explicit — no storage, no globals, no DOM.
@@ -2846,10 +3018,19 @@ function _eodBuildPacket(args) {
 
   var status = (notResearchedSymbols.length > 0 || failedSymbols.length > 0 || zeroAcceptedSymbols.length > 0) ? 'partial' : 'complete';
 
+  var readiness = _eodComputeReadiness({
+    asOf: asOf, symbols: symbols, holdings: holdings, eodCache: preload.eodCache,
+    fxState: reporting.fxState, needsAttention: needsAttention, cashState: preload.cashState,
+    oldestBaselineAt: oldestBaselineAt, recon: recon,
+    coverage: { researched: researchedSymbols, notResearched: notResearchedSymbols,
+      failed: failedSymbols, zeroAccepted: zeroAcceptedSymbols }
+  });
+
   return {
     schemaVersion: 1,
     asOf: asOf,
     status: status,
+    readiness: readiness,
     portfolio: portfolio,
     holdings: holdingsOut,
     sources: sources,
@@ -2869,6 +3050,9 @@ function _eodPacketToMarkdown(packet) {
   lines.push('');
   lines.push('As of: ' + packet.asOf);
   lines.push('Status: ' + packet.status);
+  lines.push('');
+  lines.push('## Readiness');
+  _eodReadinessLines(packet.readiness).forEach(function(l) { lines.push(l); });
   lines.push('');
   lines.push('## Limitations');
   packet.limitations.forEach(function(l) { lines.push('- ' + l.text); });
@@ -2925,7 +3109,7 @@ var NC_BRIEFING_VOCAB = {
     'denominator-zero': 'weight cannot be computed because the portfolio has no valid allocation base',
     'holding-ils-value-unavailable': "weight cannot be computed because this holding's value could not be converted"
   },
-  marketStale: 'market data for this holding is stale',
+  marketStale: 'the last refresh of market data failed',
   marketUnavailable: 'market data was not retrieved for this holding'
 };
 
@@ -2953,6 +3137,9 @@ function _eodPacketToBriefing(packet) {
   lines.push('');
   lines.push('As of: ' + packet.asOf);
   lines.push('Status: ' + packet.status);
+  lines.push('');
+  lines.push('## Readiness');
+  _eodReadinessLines(packet.readiness).forEach(function(l) { lines.push(l); });
   lines.push('');
   lines.push('## Limitations');
   packet.limitations.forEach(function(l) { lines.push('- ' + l.text); });
@@ -10318,6 +10505,9 @@ function _pfEodCacheSet(sym, norm) {
     changePercent:  norm.change_percent,
     currency:       norm.currency || null,
     sessionEpoch:   norm.sessionEpoch || null,
+    market:         norm.market || null,
+    marketBasis:    norm.marketBasis || null,
+    sessionDate:    norm.sessionDate || null,
     fetchedAt:      new Date().toISOString()
   };
   _pfEodSaveCache(cache);
@@ -10643,6 +10833,20 @@ function _pfLiveClearAllVisibleLiveCells(syms) {
   for (var i = 0; i < syms.length; i++) _pfLiveClearCardLiveCell(syms[i]);
 }
 
+// Exchange-local YYYY-MM-DD of a provider session timestamp, derived ONCE at
+// the fetch boundary from the timestamp AND the resolved market's calendar
+// timeZone. null when either is absent — never guessed, never derived later
+// from sessionEpoch/fetchedAt at read time (Q-EF1a-iii).
+function _pfSessionDateFor(sessionEpoch, market) {
+  if (typeof sessionEpoch !== 'number' || !isFinite(sessionEpoch)) return null;
+  var cal = (market === 'US' || market === 'TASE') ? TS1_POLICY_V1.calendar[market] : null;
+  if (!cal) return null;
+  var d = new Date(sessionEpoch * 1000);
+  if (isNaN(d.getTime())) return null;
+  var loc = _ts1ExchangeLocalParts(d.toISOString(), cal.timeZone);
+  return loc ? loc.dateStr : null;
+}
+
 function _pfLiveNormalize(body, sym) {
   if (!body || !body.chart || !body.chart.result || !body.chart.result[0]) return null;
   var result = body.chart.result[0];
@@ -10689,8 +10893,11 @@ function _pfLiveNormalize(body, sym) {
   var sessionEpoch  = (typeof meta.regularMarketTime === 'number' && isFinite(meta.regularMarketTime))
     ? meta.regularMarketTime : null;
 
+  var mkt = _ts1ResolveMarket(meta.exchangeTimezoneName, sym);
   return { symbol: sym, price: price, change_percent: change_percent, source: source,
-           currency: currency, sessionEpoch: sessionEpoch };
+           currency: currency, sessionEpoch: sessionEpoch,
+           market: mkt.market, marketBasis: mkt.marketBasis,
+           sessionDate: _pfSessionDateFor(sessionEpoch, mkt.market) };
 }
 
 // ─── Portfolio / Holdings — Slice 1C-1A: Runtime Price Bridge ─────────────────
@@ -10914,7 +11121,7 @@ function _updatePortfolioCard(sym, mkt) {
     if (mkt.stale) {
       var staleTag = document.createElement('span');
       staleTag.className   = 'pf-res-state stale';
-      staleTag.textContent = 'Stale';
+      staleTag.textContent = 'Refresh failed';
       el.appendChild(staleTag);
     }
     return;
