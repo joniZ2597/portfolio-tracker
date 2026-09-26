@@ -2703,7 +2703,8 @@ var DH_DISPLAY = {
     'all-dimensions-within-band': 'All dimensions within their own band'
   },
   refreshFailed: 'Refresh failed',
-  researchRecency: 'Research recency: not evaluated'
+  researchRecency: 'Research recency: not evaluated',
+  surface: { 'pl-fx-not-usable': 'Unavailable (FX rate not usable)', 'ai-unavailable': 'Unavailable (AI analysis)' }
 };
 
 // Unmapped codes render as themselves — deterministic, never blank.
@@ -9749,7 +9750,7 @@ function _renderPortfolioPanel() {
         fxChipVal.textContent = 'FX ' + fxLabel + ' (aged)';
         fxChipVal.style.color = 'var(--yellow2)';
       } else {
-        fxChipVal.textContent = 'FX ' + fxLabel + ' — stale, not used in totals';
+        fxChipVal.textContent = 'FX ' + fxLabel + ' — ' + _dhLabel('state', 'stale-invalid') + ', not used in totals';
         fxChipVal.style.color = 'var(--yellow2)';
       }
       fxChipVal.title = 'Exact rate used in calculations: ' + fxCache.rate;
@@ -9807,15 +9808,15 @@ function _renderPortfolioPanel() {
     reconVal.className = 'pf-summary-val';
 
     if (recon.status === 'unset') {
-      reconVal.textContent = 'Broker total — (not recorded)';
+      reconVal.textContent = 'Broker total — ' + _dhLabel('state', 'unset');
     } else if (recon.status === 'invalid') {
-      reconVal.textContent = 'Broker total — (data invalid)';
+      reconVal.textContent = 'Broker total — ' + _dhLabel('state', 'invalid');
       reconVal.style.color = 'var(--red2)';
     } else if (recon.status === 'stale') {
-      reconVal.textContent = 'Comparison may be stale';
+      reconVal.textContent = 'Broker total — ' + _dhLabel('state', 'stale');
       reconVal.style.color = 'var(--yellow2)';
     } else if (recon.status === 'total-incomplete') {
-      reconVal.textContent = 'Reconciliation unavailable';
+      reconVal.textContent = 'Reconciliation — ' + _dhLabel('state', 'total-incomplete');
       reconVal.style.color = 'var(--text3)';
     } else if (recon.status === 'fully-reconciled') {
       reconVal.textContent = 'Reconciled · as of ' + new Date(reconState.asOf).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -10215,7 +10216,7 @@ function _renderPortfolioPanel() {
           } else if (!pl3.fxUsable) {
             var pl3FxEl = document.createElement('div');
             pl3FxEl.className   = 'pf-pos-pl pf-pos-pl--muted';
-            pl3FxEl.textContent = 'Unrealized P/L (ILS) — FX unavailable';
+            pl3FxEl.textContent = 'Unrealized P/L (ILS) — ' + DH_DISPLAY.surface['pl-fx-not-usable'];
             card.appendChild(pl3FxEl);
           }
         }
@@ -10280,7 +10281,7 @@ function _renderPortfolioPanel() {
         } else if (res._aiUnavailable === true) {
           var resStEl = document.createElement('span');
           resStEl.className = 'pf-res-state unavail';
-          resStEl.textContent = 'AI unavailable';
+          resStEl.textContent = DH_DISPLAY.surface['ai-unavailable'];
           resRow.appendChild(resStEl);
         } else {
           var isStale = _view.stale;
@@ -15371,7 +15372,7 @@ function checkAndShowStaleBanner() {
     const d = new Date(mostRecent);
     const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
       + ' · ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    _showStaleBanner('Results from ' + label + ' — re-run scan for latest data');
+    _showStaleBanner(_dhLabel('state', 'stale') + ' — results from ' + label + ' · re-run scan for latest data');
   }
 }
 
