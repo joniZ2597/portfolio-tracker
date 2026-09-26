@@ -17,7 +17,9 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const HOOK_PATH = path.join(ROOT, '.claude', 'hooks', 'pretooluse-guard.js');
+const HOOK_PATH = process.env.AH_HOOK_PATH
+  ? path.resolve(process.env.AH_HOOK_PATH)
+  : path.join(ROOT, '.claude', 'hooks', 'pretooluse-guard.js');
 const SETTINGS_PATH = process.env.AH_SETTINGS_PATH
   ? path.resolve(process.env.AH_SETTINGS_PATH)
   : path.join(ROOT, '.claude', 'settings.json');
@@ -156,12 +158,12 @@ const DESTRUCTIVE = [
 expectAll('AH-2', DESTRUCTIVE, SLOT_A, 'deny');
 expectAll('AH-2', DESTRUCTIVE, MAIN, 'deny');
 
-// AH-2b integration: slot deny / main ask (R1) — see also AH-7. Push is NOT in this table: git push is denied in every session (AH-11).
+// AH-2b integration: merge / rebase are denied in every session (R3m, see AH-15) — see also AH-7. Push is NOT in this table: git push is denied in every session (AH-11).
 const PUSHES = ['git push', 'git push origin task/x', 'git push --dry-run'];
 const MERGE_REBASE = ['git merge x', 'git -C x merge y', 'git rebase branch-dev', 'git -C x rebase y'];
 const INTEGRATION = PUSHES.concat(MERGE_REBASE); // AH-6 PowerShell rows: every git row is denied there
 expectAll('AH-2b', MERGE_REBASE, SLOT_A, 'deny');
-expectAll('AH-2b', MERGE_REBASE, MAIN, 'ask');
+expectAll('AH-2b', MERGE_REBASE, MAIN, 'deny');
 expectAll('AH-2b', PUSHES, SLOT_A, 'deny');
 expectAll('AH-2b', PUSHES, MAIN, 'deny');
 
@@ -206,12 +208,12 @@ const WRAP_INTEGRATION = [
   'git push\ngit status'
 ];
 expectAll('AH-3', WRAP_INTEGRATION, SLOT_A, 'deny');
-// Push wrappers are denied in the main checkout too (AH-11); the one merge wrapper keeps the R1 main-checkout ask.
+// Push wrappers are denied in the main checkout too (AH-11); so is the one merge wrapper (R3m, AH-15).
 const WRAP_MERGE = WRAP_INTEGRATION.filter((c) => /merge/.test(c));
 const WRAP_PUSH = WRAP_INTEGRATION.filter((c) => !/merge/.test(c)); // every other row wraps a push (incl. the base64 -EncodedCommand row)
 check('AH-3 wrapper tables partition WRAP_INTEGRATION (a merge wrapper and push wrappers both present)',
   WRAP_MERGE.length >= 1 && WRAP_PUSH.length >= 1 && WRAP_MERGE.length + WRAP_PUSH.length === WRAP_INTEGRATION.length);
-expectAll('AH-3', WRAP_MERGE, MAIN, 'ask');
+expectAll('AH-3', WRAP_MERGE, MAIN, 'deny');
 expectAll('AH-3', WRAP_PUSH, MAIN, 'deny');
 const WRAP_DESTRUCTIVE = ['cmd.exe /c "git reset --hard"', 'bash -c "git push -f"', 'pwsh -EncodedCommand ' + b64('git clean -fd'), 'eval "git branch -D x"'];
 expectAll('AH-3', WRAP_DESTRUCTIVE, SLOT_A, 'deny');
@@ -384,9 +386,9 @@ for (const slot of [SLOT_A, SLOT_B_SUB, SLOT_A_POSIX, SLOT_A_UPPER]) {
     d('git rebase x', slot).decision === 'deny' && d('echo x > package.json', slot).decision === 'deny');
 }
 for (const notSlot of [MAIN, DECOY_OLD, DECOY_C, 'C:\\somewhere\\else']) {
-  check('AH-7 non-slot cwd ' + notSlot + ': push deny (every session), merge ask, rebase ask, protected write ask',
-    d('git push', notSlot).decision === 'deny' && d('git merge x', notSlot).decision === 'ask' &&
-    d('git rebase x', notSlot).decision === 'ask' && d('echo x > package.json', notSlot).decision === 'ask');
+  check('AH-7 non-slot cwd ' + notSlot + ': push deny (every session), merge deny, rebase deny (R3m), protected write ask',
+    d('git push', notSlot).decision === 'deny' && d('git merge x', notSlot).decision === 'deny' &&
+    d('git rebase x', notSlot).decision === 'deny' && d('echo x > package.json', notSlot).decision === 'ask');
   check('AH-7 non-slot cwd ' + notSlot + ': destructive still deny',
     d('git push -f', notSlot).decision === 'deny' && d('git reset --hard', notSlot).decision === 'deny');
 }
@@ -409,7 +411,7 @@ check('AH-11 non-slot reason says to push manually outside Claude Code', /push m
 for (const cmd of ['git push', 'git push --dry-run', "& 'C:/Program Files/Git/cmd/git.exe' push", 'powershell -Command "git push"']) {
   check('AH-11 [PowerShell main] ' + cmd + ' -> deny', d(cmd, MAIN, 'PowerShell').decision === 'deny');
 }
-// Controls: only push moved. Commit stays ASK, merge/rebase keep their R1 governance, read-only git stays allow.
+// Controls: only push moved here. Commit stays ASK, merge/rebase are denied everywhere (R3m, AH-15), read-only git stays allow.
 for (const cwd of [SLOT_A, MAIN]) {
   check('AH-11 control [' + (cwd === MAIN ? 'main' : 'slot') + ']: git commit stays ask (incl. a message that mentions git push)',
     d('git commit -m x', cwd).decision === 'ask' && d('git commit -m "doc: explain git push"', cwd).decision === 'ask' && d('git -C x commit -m y', cwd).decision === 'ask');
@@ -419,9 +421,9 @@ for (const cwd of [SLOT_A, MAIN]) {
   check('AH-11 control [' + (cwd === MAIN ? 'main' : 'slot') + ']: echoing "git push" is not a push',
     d('echo "git push"', cwd).decision === 'allow');
 }
-check('AH-11 control: merge/rebase keep slot deny / main ask',
+check('AH-11 control: merge/rebase are deny in slot and main (R3m)',
   d('git merge x', SLOT_A).decision === 'deny' && d('git rebase y', SLOT_A).decision === 'deny' &&
-  d('git merge x', MAIN).decision === 'ask' && d('git rebase y', MAIN).decision === 'ask');
+  d('git merge x', MAIN).decision === 'deny' && d('git rebase y', MAIN).decision === 'deny');
 {
   const pushCli = spawnCli(payload('git push --dry-run', MAIN));
   check('AH-11 CLI: canonical git push --dry-run -> exit 2, reason on stderr, empty stdout',
@@ -564,6 +566,104 @@ check('AH-14 unbalanced case still fails closed', d('case x in x) git push;; "es
   check('AH-14 CLI: benign case -> exit 0, no output', benignCaseCli.status === 0 && benignCaseCli.stdout === '' && benignCaseCli.stderr === '');
 }
 
+// ── AH-15 merge / rebase / pull are denied in EVERY Claude Code session (R3m; RM1 / RM2, hook r8) ──
+// permissions.ask and a hook "ask" were observed not to prompt, so integration is a deterministic exit-2 deny in the slot AND the
+// main checkout; the Owner runs LAND merges / rebases / pulls from a normal terminal (same path as push, AH-11).
+const NO_CWD = { missing: true }; // sentinel: the hook input carries no cwd key at all
+const cwdLabel = (c) => (c === NO_CWD ? 'missing' : c === '' ? 'empty' : c === MAIN ? 'main' : c);
+function dAt(command, cwd, tool) {
+  if (!guard) return { decision: 'NOMODULE', reason: '' };
+  const input = { tool_name: tool || 'Bash', tool_input: { command } };
+  if (cwd !== NO_CWD) input.cwd = cwd;
+  try {
+    return guard.decide(input);
+  } catch (e) {
+    return { decision: 'THROW', reason: String(e && e.message) };
+  }
+}
+const INTEG_CWDS = [SLOT_A, SLOT_B_SUB, SLOT_A_POSIX, SLOT_A_UPPER, MAIN, DECOY_OLD, DECOY_C, 'C:\\somewhere\\else', '', NO_CWD];
+const INTEG_OPS = ['merge x', 'merge --no-ff x', 'merge --ff-only branch-dev', 'merge --abort', 'rebase branch-dev', 'rebase -i HEAD~3', 'rebase --continue',
+  'rebase --abort', 'pull', 'pull --rebase', 'pull -r', 'pull --ff-only origin branch-dev', 'pull origin main'];
+const GIT_PREFIXES = ['git ', 'git -C x ', 'git -c k=v ', 'git --no-pager ', 'git --git-dir=y -C x ', '/usr/bin/git ', 'git.exe ',
+  '"C:\\Program Files\\Git\\bin\\git.exe" ', "'C:/Program Files/Git/cmd/git.exe' "];
+for (const cwd of INTEG_CWDS) {
+  for (const op of INTEG_OPS) {
+    check('AH-15 [Bash ' + cwdLabel(cwd) + '] git ' + op + ' -> deny', dAt('git ' + op, cwd).decision === 'deny');
+  }
+}
+for (const cwd of [SLOT_A, MAIN, NO_CWD]) {
+  for (const prefix of GIT_PREFIXES) {
+    for (const op of INTEG_OPS) {
+      check('AH-15 [Bash ' + cwdLabel(cwd) + '] ' + prefix + op + ' -> deny', dAt(prefix + op, cwd).decision === 'deny');
+    }
+  }
+}
+const INTEG_WRAPPERS = ['CMD', 'bash -c "CMD"', "sh -c 'CMD'", 'cmd /c CMD', 'cmd.exe /c "CMD"', 'powershell -Command "CMD"', 'eval "CMD"', 'env A=1 CMD', 'a && CMD',
+  'a; CMD', 'a | CMD', 'a || CMD', 'echo $(CMD)', 'echo `CMD`', 'echo "$(CMD)"', '(CMD)', '{ CMD; }', 'xargs CMD', 'echo x | xargs -n 1 CMD', 'nohup CMD', 'time CMD',
+  'if true; then CMD; fi', 'for x in a; do CMD; done', 'iex "CMD"', 'Invoke-Expression "CMD"', '& CMD', 'CMD\ngit status', 'case x in x) CMD;; esac',
+  'bash -c "bash -c \\"CMD\\""', 'git commit -m x && CMD', 'git commit -m x; CMD'];
+for (const cmd of ['git merge x', 'git rebase y', 'git pull']) {
+  const rows = INTEG_WRAPPERS.map((form) => form.replace(/CMD/g, cmd)).concat(['pwsh -NoProfile -EncodedCommand ' + b64(cmd)]);
+  for (const cwd of [SLOT_A, MAIN, NO_CWD]) {
+    for (const row of rows) check('AH-15 wrapper [Bash ' + cwdLabel(cwd) + '] ' + JSON.stringify(row) + ' -> deny', dAt(row, cwd).decision === 'deny');
+  }
+}
+for (const cwd of [SLOT_A, MAIN]) {
+  for (const op of INTEG_OPS) {
+    check('AH-15 [PowerShell ' + cwdLabel(cwd) + '] git ' + op + ' -> deny', dAt('git ' + op, cwd, 'PowerShell').decision === 'deny');
+  }
+}
+// Reason text: names R3m and the manual path; a Worker-slot session additionally carries the existing R1 suffix (as push does).
+for (const cmd of ['git merge x', 'git rebase y', 'git pull', 'git -C x pull --rebase']) {
+  const m = dAt(cmd, MAIN);
+  check('AH-15 reason [main] ' + cmd + ': R3m + manual path, no R1 suffix', /R3m/.test(m.reason) && /manually/.test(m.reason) && !/R1/.test(m.reason));
+  const s = dAt(cmd, SLOT_A);
+  check('AH-15 reason [slot] ' + cmd + ': R3m + manual path + R1 suffix', /R3m/.test(s.reason) && /manually/.test(s.reason) && /R1/.test(s.reason));
+}
+// Controls: read-only git stays allow, commit / push / checkout behaviour is unchanged, text that merely mentions the words is not integration.
+const READONLY_GIT = ['git status --short --branch', 'git log --oneline -3', 'git diff --stat', 'git diff --cached --stat', 'git merge-base a b', 'git merge-base --is-ancestor a b',
+  'git merge-tree a b c', 'git config pull.rebase true', 'git worktree list', 'git rev-parse HEAD', 'git show HEAD', 'git branch --show-current', 'git -C x status --short',
+  'echo "git pull"', 'echo git merge x', 'echo "git rebase main"', 'git log --grep="git pull" --oneline -3'];
+for (const cwd of [SLOT_A, MAIN, NO_CWD]) {
+  for (const cmd of READONLY_GIT) check('AH-15 control [Bash ' + cwdLabel(cwd) + '] ' + cmd + ' -> allow', dAt(cmd, cwd).decision === 'allow');
+}
+for (const cwd of [SLOT_A, MAIN]) {
+  check('AH-15 control [' + cwdLabel(cwd) + ']: commit stays ask (incl. messages that mention merge / rebase / pull)',
+    ['git commit -m x', 'git -C x commit -m y', 'git commit -m "docs: git merge, git rebase and git pull are denied"',
+      'git commit -m "$(cat <<\'EOF\'\nfix: git pull --rebase notes\nEOF\n)"'].every((c) => dAt(c, cwd).decision === 'ask'));
+  check('AH-15 control [' + cwdLabel(cwd) + ']: push deny, checkout/switch main deny, switch -c / checkout -b allow',
+    dAt('git push', cwd).decision === 'deny' && dAt('git checkout main', cwd).decision === 'deny' && dAt('git switch main', cwd).decision === 'deny' &&
+    dAt('git switch -c task/x 91e5c03', cwd).decision === 'allow' && dAt('git checkout -b task/x main', cwd).decision === 'allow');
+}
+// CLI (real spawn): exit 2, empty stdout, R3m on stderr — slot, main, empty cwd and a missing cwd key (runCli falls back to CLAUDE_PROJECT_DIR, so
+// a missing cwd is spawned with the variable unset, set to the main checkout and set to a slot: every combination denies).
+function spawnCliEnv(stdin, projectDir) {
+  const env = Object.assign({}, process.env);
+  delete env.CLAUDE_PROJECT_DIR;
+  if (projectDir !== undefined) env.CLAUDE_PROJECT_DIR = projectDir;
+  return spawnSync(process.execPath, [HOOK_PATH], { input: stdin, encoding: 'utf8', timeout: 15000, env });
+}
+for (const cmd of ['git merge x', 'git rebase y', 'git pull', 'git -C x pull --rebase']) {
+  const cases = [['slot', payload(cmd, SLOT_A), undefined], ['main', payload(cmd, MAIN), undefined], ['empty cwd, no project dir', payload(cmd, ''), undefined],
+    ['missing cwd, no project dir', payload(cmd), undefined], ['missing cwd, project dir = main', payload(cmd), MAIN], ['missing cwd, project dir = slot', payload(cmd), SLOT_A]];
+  for (const c of cases) {
+    const r = spawnCliEnv(c[1], c[2]);
+    check('AH-15 CLI [' + c[0] + '] ' + cmd + ' -> exit 2, empty stdout, R3m + manual path on stderr',
+      r.status === 2 && r.stdout === '' && /R3m/.test(r.stderr) && /manually/.test(r.stderr));
+  }
+}
+{
+  const roMain = spawnCliEnv(payload('git status --short --branch', MAIN));
+  check('AH-15 CLI control: read-only git -> exit 0, no output', roMain.status === 0 && roMain.stdout === '' && roMain.stderr === '');
+  const commitMain = spawnCliEnv(payload('git commit -m x', MAIN));
+  let commitJson = null;
+  try { commitJson = JSON.parse(commitMain.stdout); } catch (e) { commitJson = null; }
+  check('AH-15 CLI control: git commit (main) -> exit 0 + permissionDecision "ask"',
+    commitMain.status === 0 && commitJson && commitJson.hookSpecificOutput && commitJson.hookSpecificOutput.permissionDecision === 'ask');
+  const pushMain = spawnCliEnv(payload('git push', MAIN));
+  check('AH-15 CLI control: git push -> exit 2 with the push reason (R3g wording unchanged)', pushMain.status === 2 && /push manually/.test(pushMain.stderr) && !/R3m/.test(pushMain.stderr));
+}
+
 // ── AH-9 CLI (real spawn) ───────────────────────────────────────────────────────────────
 function spawnCli(stdin, hookPath) {
   return spawnSync(process.execPath, [hookPath || HOOK_PATH], { input: stdin, encoding: 'utf8', timeout: 15000 });
@@ -629,14 +729,14 @@ function mutantCatches(label, find, replace, probe) {
 }
 mutantCatches('push not denied (downgraded to commit/ask)', "cls: 'push', reason", "cls: 'commit', reason",
   (m) => dec(m, 'git push', SLOT_A).decision === 'deny' && dec(m, 'git push --dry-run', MAIN).decision === 'deny');
-mutantCatches('push downgraded to integration (main ask again)', "cls: 'push', reason", "cls: 'integration', reason",
+mutantCatches('push downgraded to a main-ask class (main ask again)', "cls: 'push', reason", "cls: 'netlify', reason", // integration is deny-everywhere under r8, so netlify stands in for the slot-deny / main-ask column
   (m) => dec(m, 'git push --dry-run', MAIN).decision === 'deny');
 mutantCatches('merge not integration', "'push', 'merge', 'rebase'", "'push', 'rebase'",
   (m) => dec(m, 'git merge x', SLOT_A).decision === 'deny');
 mutantCatches('reset --hard not destructive', "'--hard'", "'--hard-x'",
   (m) => dec(m, 'git reset --hard', MAIN).decision === 'deny');
 mutantCatches('slot detection broken', '[ab]', '[x]',
-  (m) => dec(m, 'git merge x', SLOT_A).decision === 'deny'); // merge, not push: push is deny in every cwd now, so it no longer tells slot from main
+  (m) => dec(m, 'netlify deploy', SLOT_A).decision === 'deny'); // netlify, not push/merge: those are deny in every cwd now (AH-11, AH-15), so they no longer tell slot from main
 mutantCatches('deny exit code drifts', 'FAIL_CLOSED_EXIT = 2', 'FAIL_CLOSED_EXIT = 1',
   (m) => m.runCli(payload('git push -f', SLOT_A)).code === 2);
 mutantCatches('protected tail dropped (package.json)', 'package\\\\.json', 'package_x\\\\.json',
@@ -711,6 +811,19 @@ mutantCatches('nested case headers not followed', 'guard < 8 &&', 'guard < 1 &&'
   (m) => dec(m, 'case x in a) case y in b) git push;; esac;; esac', MAIN).decision === 'deny');
 mutantCatches('inline-code exemption removed (benign python -c over-blocked)', 'return args.some((a) => /^-[a-zA-Z]*[cm][a-zA-Z]*$/.test(a));', 'return false;',
   (m) => dec(m, 'python3 -c "print(1)" < data.json', MAIN).decision === 'allow');
+// AH-15 mutants (r8): a subcommand dropped, the decision made slot-conditional again, the R3m reason reverted, and a prefix match over-blocking lookalikes.
+for (const sub of ['merge', 'rebase', 'pull']) {
+  mutantCatches('integration subcommand dropped (' + sub + ')', "['push', 'merge', 'rebase', 'pull']",
+    '[' + ['push', 'merge', 'rebase', 'pull'].filter((s) => s !== sub).map((s) => "'" + s + "'").join(', ') + ']',
+    (m) => ['git ' + sub + ' x'].every((c) => dec(m, c, MAIN).decision === 'deny' && dec(m, c, SLOT_A).decision === 'deny' && dec(m, c, '').decision === 'deny'));
+}
+mutantCatches('integration decision slot-conditional again (main ask)', "    case 'push':\n    case 'integration':\n      return 'deny';\n    case 'netlify':",
+  "    case 'push':\n      return 'deny';\n    case 'integration':\n    case 'netlify':",
+  (m) => ['git merge x', 'git rebase y', 'git pull'].every((c) => dec(m, c, MAIN).decision === 'deny'));
+mutantCatches('R3m reason text reverted', "' - denied in every Claude Code session (R3m); run merge, rebase and pull manually from a normal terminal'", "''",
+  (m) => { const r = dec(m, 'git merge x', MAIN).reason; return /R3m/.test(r) && /manually/.test(r); });
+mutantCatches('integration match widened to a prefix (lookalikes over-blocked)', 'INTEGRATION_SUBCOMMANDS.indexOf(sub) !== -1', 'INTEGRATION_SUBCOMMANDS.some((s) => sub.indexOf(s) === 0)',
+  (m) => dec(m, 'git merge x', MAIN).decision === 'deny' && dec(m, 'git merge-base a b', MAIN).decision === 'allow' && dec(m, 'git merge-tree a b c', SLOT_A).decision === 'allow');
 
 // ── AH-8 settings static + AH-10 no regression ──────────────────────────────────────────
 // Baseline settings.json at the brief's landing (pre-§5), kept as literals so the "exactly the §5

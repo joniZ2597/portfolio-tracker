@@ -24,7 +24,7 @@ const MAX_GROUP_LEVEL = 8;
 // R1: a session whose cwd is (or is under) a Worker slot gets the strict column.
 const SLOT_DIR_RE = /(^|\/)pt-wt-worker-[ab](\/|$)/;
 
-const INTEGRATION_SUBCOMMANDS = ['push', 'merge', 'rebase'];
+const INTEGRATION_SUBCOMMANDS = ['push', 'merge', 'rebase', 'pull'];
 const HARD_RESET_FLAG = '--hard';
 const MAIN_TARGETS = ['main', 'origin/main'];
 const NETLIFY_WRITE = ['deploy', 'env:set', 'env:unset', 'env:clone', 'env:import', 'sites:create', 'sites:delete', 'api', 'link', 'unlink'];
@@ -606,7 +606,7 @@ function classifyGit(args, out) {
     return;
   }
   if (INTEGRATION_SUBCOMMANDS.indexOf(sub) !== -1) {
-    out.push({ cls: 'integration', reason: 'git ' + sub });
+    out.push({ cls: 'integration', reason: 'git ' + sub + ' - denied in every Claude Code session (R3m); run merge, rebase and pull manually from a normal terminal' });
     return;
   }
   if (sub === 'commit') {
@@ -731,8 +731,8 @@ function decisionFor(cls, slot) {
     case 'unresolvable':
     case 'git-program':
     case 'push':
-      return 'deny';
     case 'integration':
+      return 'deny';
     case 'netlify':
     case 'protected':
       return slot ? 'deny' : 'ask';
