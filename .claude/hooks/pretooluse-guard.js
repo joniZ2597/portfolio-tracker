@@ -58,6 +58,55 @@ const CODE_WRITE_RE = /writeFile|appendFile|createWriteStream|\brename|copyFile|
 
 class Unresolvable extends Error {}
 
+// Code-from-stdin guard: a shell / interpreter fed by a heredoc, here-string, `<` redirect, `<(...)` or a pipe
+// executes text the scanner treats as data, so it is denied unless the code is given inline (or stdin is /dev/null).
+const PIPE_MARK = '\u0001';
+const STDIN_INTERPRETER_RE = /^(?:bash|sh|zsh|dash|ash|ksh|csh|tcsh|fish|busybox|pwsh|powershell|cmd|python[\d.]*|pythonw|py|node|nodejs|deno|bun|perl|ruby|php|lua|source|\.)$/;
+let segStdinFed = false; // set per segment by analyze(); read by classifyWords() at every wrapper level
+// Wrappers that pass stdin through to the program they run (sudo -u x bash <<EOF, setsid bash < f, timeout 5 bash ...).
+const STDIN_PASSTHROUGH_RE = /^(?:exec|command|builtin|sudo|doas|setsid|nice|ionice|stdbuf|unbuffer|timeout|chroot|script)$/;
+const COMPOUND_OPEN_RE = /^(if|while|until|for|select|case)\b/;
+const COMPOUND_CLOSE_RE = /^(?:fi|done|esac)\b/;
+const STDIN_REDIRECT_RE = /<(?![ \t]*\/dev\/null(?![\w./-]))/; // any `<` / `<<` / `<<<` / `<(` except `< /dev/null`
+// `case WORD in PATTERN) command;;` puts the command in the same raw segment as the case header / arm pattern, so the
+// segment's first word is `case` or `PATTERN)`. Strip those prefixes so the command is classified like any other.
+const CASE_HEADER_RE = /^\s*case\s+[\s\S]*?\s+in(?=\s|$)\s*/;
+const CASE_ARM_RE = /^\s*(?:__SUB__|(?:"[^"]*"|'[^']*'|[^\s()"'])*\))\s*/;
+const CASE_ARM_TAIL_RE = /^\s*(?:"[^"]*"|'[^']*'|[^\s()"'])*\s*$/; // nothing but one (possibly partial) pattern word
+const CASE_HEAD_TAIL_RE = /^\s*case\s+[\s\S]*?\s+in\s+(?:"[^"]*"|'[^']*'|[^\s()"'])*\s*$/; // `case x in PAT` and no command yet
+function stripCaseArm(text) {
+  const m = CASE_ARM_RE.exec(text);
+  return m ? text.slice(m[0].length) : text;
+}
+function stripCaseHeaders(text) {
+  let t = text;
+  for (let guard = 0; guard < 8 && /^\s*case\s/.test(t); guard += 1) {
+    const h = CASE_HEADER_RE.exec(t);
+    if (!h) return t;
+    const rest = t.slice(h[0].length);
+    const a = CASE_ARM_RE.exec(rest);
+    t = a ? rest.slice(a[0].length) : ''; // no `)` yet: a pattern fragment (`a | b)` is split at `|`) or a bare header
+  }
+  return t;
+}
+function markFed(out, from, to) {
+  for (let k = from; k < to; k += 1) if (out[k].charAt(0) !== PIPE_MARK) out[k] = PIPE_MARK + out[k];
+}
+// a `( ... )` / `{ ... }` group at src[i..] followed by a stdin redirect: (bash) < f, { bash; } <<EOF
+function groupRedirected(src, i) {
+  return /^[ \t]*\d*<(?![ \t]*\/dev\/null(?![\w./-]))/.test(src.slice(i, i + 80));
+}
+function hasInlineCode(prog, args) {
+  if (/^(?:bash|sh|zsh|dash|ash|ksh|csh|tcsh|fish|busybox)$/.test(prog)) return args.some((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a));
+  if (/^(?:python[\d.]*|pythonw|py)$/.test(prog)) return args.some((a) => /^-[a-zA-Z]*[cm][a-zA-Z]*$/.test(a));
+  if (/^(?:node|nodejs|deno|bun)$/.test(prog)) return args.some((a) => /^(?:-[a-zA-Z]*[ep][a-zA-Z]*|--eval|--print)$/.test(a));
+  if (/^(?:perl|ruby)$/.test(prog)) return args.some((a) => /^-[a-zA-Z]*[eE][a-zA-Z]*$/.test(a));
+  if (prog === 'php') return args.some((a) => /^-[a-zA-Z]*r[a-zA-Z]*$/.test(a));
+  if (prog === 'pwsh' || prog === 'powershell') return args.some((a) => /^-(?:c|command|e|ec|encodedcommand)$/i.test(a));
+  if (prog === 'cmd') return args.some((a) => /^\/[ck]$/i.test(a));
+  return false; // source / . : never inline
+}
+
 // ── path helpers ────────────────────────────────────────────────────────────────────────
 function normalizePath(p) {
   return String(p).replace(/\\/g, '/').replace(/\/+/g, '/').toLowerCase();
@@ -82,22 +131,43 @@ function isWorkerSlot(cwd) {
 // Splits on && || ; | & newline, quote-aware. Substitutions ($(..), `..`, unquoted (..) and
 // {..} groups) are scanned recursively and their segments are added to the same flat list; the
 // enclosing segment gets a placeholder. Heredoc bodies and PowerShell here-strings are skipped.
-function scanCode(src, start, closer, out, level) {
+function scanCode(src, start, closer, out, level, inherit) {
   if (level > MAX_GROUP_LEVEL) throw new Unresolvable('nesting too deep');
   const n = src.length;
   let i = start;
   let cur = '';
   let pending = [];
+  let piped = false; // the segment being built is the right-hand side of a `|` pipe
+  const compounds = []; // open if/while/for/case ... : { fed } (segments inside a fed compound are fed)
+  const fedNow = () => piped || inherit === true || compounds.some((e) => e.fed);
   const flush = () => {
-    if (cur.trim()) out.push(cur);
+    const text = cur;
     cur = '';
+    if (text.trim()) {
+      const head = text.trim().replace(/^(?:then|do|else|elif)\s+/, '');
+      const fed = fedNow();
+      if (COMPOUND_CLOSE_RE.test(head)) {
+        const e = compounds.pop();
+        if (e && STDIN_REDIRECT_RE.test(head)) markFed(out, e.start, out.length); // `done < f`: the whole compound reads it
+      }
+      const top = compounds.length ? compounds[compounds.length - 1] : null;
+      let body = text;
+      if (/^case\s/.test(head)) body = stripCaseHeaders(head);
+      else if (top && top.kind === 'case' && !COMPOUND_CLOSE_RE.test(head)) body = stripCaseArm(text);
+      const idx = out.length;
+      if (body.trim()) out.push(fed ? PIPE_MARK + body : body);
+      const opened = COMPOUND_OPEN_RE.exec(head);
+      if (opened) compounds.push({ fed, start: idx, kind: opened[1] });
+    }
+    piped = false;
   };
 
   while (i < n) {
     const c = src[i];
     const next = src[i + 1];
 
-    if (closer && c === closer) {
+    if (closer && c === closer && !(closer === ')' && !/^\s*esac\s*$/.test(cur) &&
+        (CASE_HEAD_TAIL_RE.test(cur) || (compounds.some((e) => e.kind === 'case') && CASE_ARM_TAIL_RE.test(cur))))) {
       flush();
       return i + 1;
     }
@@ -129,12 +199,12 @@ function scanCode(src, start, closer, out, level) {
           continue;
         }
         if (ch === '$' && nx === '(') {
-          i = scanCode(src, i + 2, ')', out, level + 1);
+          i = scanCode(src, i + 2, ')', out, level + 1, fedNow());
           cur += '__SUB__';
           continue;
         }
         if (ch === '`' && src.indexOf('`', i + 1) !== -1) {
-          i = scanCode(src, i + 1, '`', out, level + 1);
+          i = scanCode(src, i + 1, '`', out, level + 1, fedNow());
           cur += '__SUB__';
           continue;
         }
@@ -164,7 +234,7 @@ function scanCode(src, start, closer, out, level) {
 
     if (c === '`') {
       if (src.indexOf('`', i + 1) !== -1) {
-        i = scanCode(src, i + 1, '`', out, level + 1);
+        i = scanCode(src, i + 1, '`', out, level + 1, fedNow());
         cur += '__SUB__';
       } else {
         cur += c;
@@ -174,17 +244,21 @@ function scanCode(src, start, closer, out, level) {
     }
 
     if (c === '$' && next === '(') {
-      i = scanCode(src, i + 2, ')', out, level + 1);
+      i = scanCode(src, i + 2, ')', out, level + 1, fedNow());
       cur += '__SUB__';
       continue;
     }
     if (c === '(') {
-      i = scanCode(src, i + 1, ')', out, level + 1);
+      const s0 = out.length;
+      i = scanCode(src, i + 1, ')', out, level + 1, fedNow());
+      if (groupRedirected(src, i)) markFed(out, s0, out.length);
       cur += '__SUB__';
       continue;
     }
     if (c === '{') {
-      i = scanCode(src, i + 1, '}', out, level + 1);
+      const s0 = out.length;
+      i = scanCode(src, i + 1, '}', out, level + 1, fedNow());
+      if (groupRedirected(src, i)) markFed(out, s0, out.length);
       cur += '__SUB__';
       continue;
     }
@@ -230,7 +304,8 @@ function scanCode(src, start, closer, out, level) {
     }
 
     if (c === ';') { flush(); i += 1; continue; }
-    if (c === '|' && src[i - 1] !== '>') { flush(); i += 1; continue; }
+    if (c === '|' && src[i - 1] !== '>') { flush(); piped = next !== '|' && src[i - 1] !== '|'; i += 1; continue; }
+    if (c === '&' && src[i - 1] === '|') { i += 1; continue; } // `|&` is one pipe operator
     if (c === '&' && src[i - 1] !== '>' && src[i - 1] !== '<' && next !== '>') { flush(); i += 1; continue; }
 
     cur += c;
@@ -246,6 +321,7 @@ function scanCode(src, start, closer, out, level) {
 function tokenize(raw) {
   const words = [];
   const redirects = [];
+  let stdinFed = false; // `<`, `<<`, `<<<` or `<(...)` (placeholder) other than `< /dev/null`
   const n = raw.length;
   let lastEnd = -1;
 
@@ -316,7 +392,7 @@ function tokenize(raw) {
       const w = readWord(skipWs(j));
       i = w.end;
       if (c === '>' && target && w.text) redirects.push(w.text);
-      void op;
+      if (c === '<' && !(op === '<' && w.text === '/dev/null')) stdinFed = true;
       continue;
     }
     const w = readWord(i);
@@ -325,20 +401,28 @@ function tokenize(raw) {
     lastEnd = w.end;
     i = w.end;
   }
-  return { words, redirects };
+  return { words, redirects, stdinFed };
 }
 
 // ── classification ──────────────────────────────────────────────────────────────────────
 function analyze(code, depth, out) {
   if (depth > MAX_WRAPPER_DEPTH) throw new Unresolvable('wrapper nesting too deep');
   const segments = [];
-  scanCode(code, 0, null, segments, 0);
-  for (const raw of segments) {
-    const { words, redirects } = tokenize(raw);
-    for (const t of redirects) {
-      if (isProtectedText(t)) out.push({ cls: 'protected', reason: 'redirect into protected file ' + t });
+  scanCode(code, 0, null, segments, 0, false);
+  const savedStdinFed = segStdinFed;
+  try {
+    for (const rawSeg of segments) {
+      const piped = rawSeg.charAt(0) === PIPE_MARK;
+      const raw = piped ? rawSeg.slice(1) : rawSeg;
+      const { words, redirects, stdinFed } = tokenize(raw);
+      for (const t of redirects) {
+        if (isProtectedText(t)) out.push({ cls: 'protected', reason: 'redirect into protected file ' + t });
+      }
+      segStdinFed = piped || stdinFed;
+      classifyWords(words, depth, out);
     }
-    classifyWords(words, depth, out);
+  } finally {
+    segStdinFed = savedStdinFed;
   }
 }
 
@@ -354,6 +438,15 @@ function classifyWords(words, depth, out) {
   }
   const prog = progName(w[0]);
   const args = w.slice(1);
+
+  if (segStdinFed && STDIN_INTERPRETER_RE.test(prog) && !hasInlineCode(prog, args)) {
+    out.push({ cls: 'interpreter', reason: 'shell/interpreter reading code from a heredoc, stdin redirect, process substitution or pipe' });
+  } else if (segStdinFed && STDIN_PASSTHROUGH_RE.test(prog)) {
+    const k = args.findIndex((a) => STDIN_INTERPRETER_RE.test(progName(a)));
+    if (k !== -1 && !hasInlineCode(progName(args[k]), args.slice(k + 1))) {
+      out.push({ cls: 'interpreter', reason: 'shell/interpreter reading code from a heredoc, stdin redirect, process substitution or pipe' });
+    }
+  }
 
   if (prog === 'git') { out.push({ cls: 'git-program', reason: 'git via the PowerShell tool - denied (R2)' }); classifyGit(args, out); return; }
   if (prog === 'netlify' || prog === 'ntl') { classifyNetlify(args, out); return; }
@@ -509,7 +602,7 @@ function classifyGit(args, out) {
       a === '--prune' || cluster(a, 'fd') || a.startsWith('+') || a.startsWith(':'));
     out.push(destructive
       ? { cls: 'destructive', reason: 'destructive git push (force / delete / mirror / +refspec / :ref)' }
-      : { cls: 'integration', reason: 'git push' });
+      : { cls: 'push', reason: 'git push - denied in every Claude Code session; push manually from a normal terminal' });
     return;
   }
   if (INTEGRATION_SUBCOMMANDS.indexOf(sub) !== -1) {
@@ -637,6 +730,7 @@ function decisionFor(cls, slot) {
     case 'interpreter':
     case 'unresolvable':
     case 'git-program':
+    case 'push':
       return 'deny';
     case 'integration':
     case 'netlify':

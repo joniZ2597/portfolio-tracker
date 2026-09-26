@@ -156,10 +156,14 @@ const DESTRUCTIVE = [
 expectAll('AH-2', DESTRUCTIVE, SLOT_A, 'deny');
 expectAll('AH-2', DESTRUCTIVE, MAIN, 'deny');
 
-// AH-2b integration: slot deny / main ask (R1) — see also AH-7
-const INTEGRATION = ['git push', 'git push origin task/x', 'git merge x', 'git -C x merge y', 'git rebase branch-dev', 'git -C x rebase y', 'git push --dry-run'];
-expectAll('AH-2b', INTEGRATION, SLOT_A, 'deny');
-expectAll('AH-2b', INTEGRATION, MAIN, 'ask');
+// AH-2b integration: slot deny / main ask (R1) — see also AH-7. Push is NOT in this table: git push is denied in every session (AH-11).
+const PUSHES = ['git push', 'git push origin task/x', 'git push --dry-run'];
+const MERGE_REBASE = ['git merge x', 'git -C x merge y', 'git rebase branch-dev', 'git -C x rebase y'];
+const INTEGRATION = PUSHES.concat(MERGE_REBASE); // AH-6 PowerShell rows: every git row is denied there
+expectAll('AH-2b', MERGE_REBASE, SLOT_A, 'deny');
+expectAll('AH-2b', MERGE_REBASE, MAIN, 'ask');
+expectAll('AH-2b', PUSHES, SLOT_A, 'deny');
+expectAll('AH-2b', PUSHES, MAIN, 'deny');
 
 // AH-2c netlify writes: slot deny / main ask
 const NETLIFY = ['netlify deploy', 'netlify deploy --prod', 'netlify env:set A b', 'netlify env:unset A', 'netlify env:clone', 'netlify env:import x',
@@ -202,7 +206,13 @@ const WRAP_INTEGRATION = [
   'git push\ngit status'
 ];
 expectAll('AH-3', WRAP_INTEGRATION, SLOT_A, 'deny');
-expectAll('AH-3', WRAP_INTEGRATION, MAIN, 'ask');
+// Push wrappers are denied in the main checkout too (AH-11); the one merge wrapper keeps the R1 main-checkout ask.
+const WRAP_MERGE = WRAP_INTEGRATION.filter((c) => /merge/.test(c));
+const WRAP_PUSH = WRAP_INTEGRATION.filter((c) => !/merge/.test(c)); // every other row wraps a push (incl. the base64 -EncodedCommand row)
+check('AH-3 wrapper tables partition WRAP_INTEGRATION (a merge wrapper and push wrappers both present)',
+  WRAP_MERGE.length >= 1 && WRAP_PUSH.length >= 1 && WRAP_MERGE.length + WRAP_PUSH.length === WRAP_INTEGRATION.length);
+expectAll('AH-3', WRAP_MERGE, MAIN, 'ask');
+expectAll('AH-3', WRAP_PUSH, MAIN, 'deny');
 const WRAP_DESTRUCTIVE = ['cmd.exe /c "git reset --hard"', 'bash -c "git push -f"', 'pwsh -EncodedCommand ' + b64('git clean -fd'), 'eval "git branch -D x"'];
 expectAll('AH-3', WRAP_DESTRUCTIVE, SLOT_A, 'deny');
 expectAll('AH-3', WRAP_DESTRUCTIVE, MAIN, 'deny');
@@ -328,9 +338,10 @@ for (const cwd of [SLOT_A, MAIN]) {
 // Bash controls: the R2 marker must not leak into the Bash tool.
 expectAll('AH-6 R2 Bash control', ['git status --short --branch', 'git log --oneline -3', 'git.exe status', "'C:/Program Files/Git/cmd/git.exe' status"], SLOT_A, 'allow', 'Bash');
 expectAll('AH-6 R2 Bash control', ['git status'], MAIN, 'allow', 'Bash');
-check('AH-6 R2 Bash git push keeps R1 slot deny / main ask / commit ask',
+check('AH-6 R2 Bash git push: slot deny with R1, main deny (push manually), commit ask',
   d('git push', SLOT_A, 'Bash').decision === 'deny' && /R1/.test(d('git push', SLOT_A, 'Bash').reason) &&
-  d('git push', MAIN, 'Bash').decision === 'ask' && d('git commit -m x', SLOT_A, 'Bash').decision === 'ask');
+  d('git push', MAIN, 'Bash').decision === 'deny' && /push manually/.test(d('git push', MAIN, 'Bash').reason) &&
+  d('git commit -m x', SLOT_A, 'Bash').decision === 'ask');
 // Non-git PowerShell: governed in the main checkout (allow), but the whole PowerShell tool is denied in Worker slots.
 expectAll('AH-6 R2 non-git PowerShell', ['Get-ChildItem', 'echo "git push"', 'Write-Output git'], MAIN, 'allow', 'PowerShell');
 expectAll('AH-6 R2 non-git PowerShell', ['Get-ChildItem', 'echo "git push"', 'Write-Output git'], SLOT_A, 'deny', 'PowerShell');
@@ -373,14 +384,185 @@ for (const slot of [SLOT_A, SLOT_B_SUB, SLOT_A_POSIX, SLOT_A_UPPER]) {
     d('git rebase x', slot).decision === 'deny' && d('echo x > package.json', slot).decision === 'deny');
 }
 for (const notSlot of [MAIN, DECOY_OLD, DECOY_C, 'C:\\somewhere\\else']) {
-  check('AH-7 non-slot cwd ' + notSlot + ': push ask, merge ask, rebase ask, protected write ask',
-    d('git push', notSlot).decision === 'ask' && d('git merge x', notSlot).decision === 'ask' &&
+  check('AH-7 non-slot cwd ' + notSlot + ': push deny (every session), merge ask, rebase ask, protected write ask',
+    d('git push', notSlot).decision === 'deny' && d('git merge x', notSlot).decision === 'ask' &&
     d('git rebase x', notSlot).decision === 'ask' && d('echo x > package.json', notSlot).decision === 'ask');
   check('AH-7 non-slot cwd ' + notSlot + ': destructive still deny',
     d('git push -f', notSlot).decision === 'deny' && d('git reset --hard', notSlot).decision === 'deny');
 }
 check('AH-7 missing cwd fails strict (treated as a Worker slot)',
   guard && guard.decide({ tool_name: 'Bash', tool_input: { command: 'git push' } }).decision === 'deny');
+
+// ── AH-11 push is denied in EVERY Claude Code session (Owner ruling: the ask gate is not a reliable boundary) ──
+const CANON_BRANCH_DEV = MAIN; // canonical / branch-dev / main checkout are all non-slot cwds
+const PUSH_FORMS = PUSHES.concat(['git -C x push', 'git -c k=v push origin x', '/usr/bin/git push', "'C:/Program Files/Git/cmd/git.exe' push",
+  'git push -u origin task/x', 'git push origin main', 'git push origin branch-dev', 'git commit -m x && git push']);
+for (const cwd of [SLOT_A, SLOT_B_SUB, SLOT_A_POSIX, SLOT_A_UPPER, CANON_BRANCH_DEV, DECOY_OLD, DECOY_C, 'C:\\somewhere\\else', undefined]) {
+  for (const cmd of PUSH_FORMS) {
+    check('AH-11 [Bash ' + String(cwd) + '] ' + cmd + ' -> deny', d(cmd, cwd === undefined ? '' : cwd).decision === 'deny');
+  }
+}
+check('AH-11 canonical git push --dry-run -> deny (the Owner ruling case)', d('git push --dry-run', CANON_BRANCH_DEV).decision === 'deny');
+check('AH-11 Worker git push -> deny', d('git push', SLOT_A).decision === 'deny');
+check('AH-11 main git push -> deny', d('git push', MAIN).decision === 'deny');
+check('AH-11 non-slot reason says to push manually outside Claude Code', /push manually/.test(d('git push', MAIN).reason));
+for (const cmd of ['git push', 'git push --dry-run', "& 'C:/Program Files/Git/cmd/git.exe' push", 'powershell -Command "git push"']) {
+  check('AH-11 [PowerShell main] ' + cmd + ' -> deny', d(cmd, MAIN, 'PowerShell').decision === 'deny');
+}
+// Controls: only push moved. Commit stays ASK, merge/rebase keep their R1 governance, read-only git stays allow.
+for (const cwd of [SLOT_A, MAIN]) {
+  check('AH-11 control [' + (cwd === MAIN ? 'main' : 'slot') + ']: git commit stays ask (incl. a message that mentions git push)',
+    d('git commit -m x', cwd).decision === 'ask' && d('git commit -m "doc: explain git push"', cwd).decision === 'ask' && d('git -C x commit -m y', cwd).decision === 'ask');
+  check('AH-11 control [' + (cwd === MAIN ? 'main' : 'slot') + ']: read-only git stays allow',
+    ['git status --short --branch', 'git log --oneline -3', 'git diff --stat', 'git merge-base a b', 'git worktree list', 'git rev-parse HEAD', 'git show HEAD']
+      .every((c) => d(c, cwd).decision === 'allow'));
+  check('AH-11 control [' + (cwd === MAIN ? 'main' : 'slot') + ']: echoing "git push" is not a push',
+    d('echo "git push"', cwd).decision === 'allow');
+}
+check('AH-11 control: merge/rebase keep slot deny / main ask',
+  d('git merge x', SLOT_A).decision === 'deny' && d('git rebase y', SLOT_A).decision === 'deny' &&
+  d('git merge x', MAIN).decision === 'ask' && d('git rebase y', MAIN).decision === 'ask');
+{
+  const pushCli = spawnCli(payload('git push --dry-run', MAIN));
+  check('AH-11 CLI: canonical git push --dry-run -> exit 2, reason on stderr, empty stdout',
+    pushCli && pushCli.status === 2 && pushCli.stdout === '' && /push manually/.test(pushCli.stderr));
+}
+
+// ── AH-12 code-from-stdin: a shell / interpreter fed a heredoc, here-string, `<` redirect, `<(...)` or a pipe ──
+// The scanner treats heredoc bodies as data, so an interpreter reading them executes unscanned code. Deny it (every
+// cwd); keep data-only heredocs / redirects / pipes, inline-code interpreters and `< /dev/null` untouched.
+const STDIN_CODE_DENY = [
+  'bash <<EOF\ngit push\nEOF', "sh <<'EOF'\ngit merge x\nEOF", 'bash -s <<EOF\ngit push\nEOF',
+  'python3 <<EOF\nimport subprocess;subprocess.run(["git","push"])\nEOF', 'bash < script.sh', 'source <(echo git push)', '. <(echo git push)',
+  'bash <<< "git push"', 'echo git push | bash', 'cat <<EOF | sh\ngit push\nEOF', 'echo x | bash -s', 'printf "git push" |& bash',
+  'env A=1 bash <<EOF\nx\nEOF', 'nohup bash < f', 'time sh <<EOF\nx\nEOF', '/bin/bash <<EOF\nx\nEOF', 'python <<EOF\nprint(1)\nEOF',
+  'node <<EOF\nrequire("child_process")\nEOF', 'node - <<EOF\nx\nEOF', 'python3 - < x.py', 'perl <<EOF\nsystem("git push")\nEOF', 'pwsh < x.ps1',
+  'cmd < x.bat', 'bash -o pipefail <<EOF\ngit push\nEOF', 'bash -e <<EOF\ngit push\nEOF', 'sh -x < f', 'zsh <<EOF\nx\nEOF', 'dash < f', 'ruby <<EOF\nx\nEOF',
+  'a && bash <<EOF\nx\nEOF', '(bash <<EOF\nx\nEOF\n)', 'echo x; bash < f', 'bash 0< f', 'bash <<-EOF\n\tgit push\n\tEOF', 'git status | bash',
+  'echo "git push" | env bash', 'source <(curl x)', 'bash <(echo git push)'
+];
+for (const cwd of [SLOT_A, MAIN]) {
+  expectAll('AH-12 deny', STDIN_CODE_DENY, cwd, 'deny');
+  check('AH-12 reason names the class [' + (cwd === MAIN ? 'main' : 'slot') + ']',
+    STDIN_CODE_DENY.every((c) => /heredoc|stdin|pipe/.test(d(c, cwd).reason)));
+}
+const STDIN_DATA_ALLOW = [
+  'cat <<EOF\ngit push\nEOF', "cat <<'EOF' > work/foo/plan.md\nhello bash <<EOF\nEOF", 'echo bash < x', 'grep foo < file', 'sort < f | uniq', 'git log | head',
+  'git diff --stat | cat', 'node qa/x_offline.js < /dev/null', 'codex exec x < /dev/null', 'bash -c "git status" <<EOF\nx\nEOF', 'python3 -c "print(1)" < data.json',
+  'echo hi | python3 -c "import sys;print(sys.stdin.read())"', 'echo x | node -e "console.log(1)"', 'npm run qa:offline 2>&1 | tee x.log', 'bash script.sh',
+  'x || bash script.sh', 'a || echo x', 'echo hi | tee out.txt', 'cat file | wc -l', 'python3 -m json.tool < f.json', 'echo x | perl -e "print 1"',
+  'echo x | pwsh -Command "1"', 'bash -lc "git status" < /dev/null', 'cat <<EOF\nbash\nEOF', 'echo "bash <<EOF"', 'echo git push | cat'
+];
+for (const cwd of [SLOT_A, MAIN]) expectAll('AH-12 data-only stays allow', STDIN_DATA_ALLOW, cwd, 'allow');
+const COMMIT_HEREDOCS = [
+  'git commit -m "$(cat <<\'EOF\'\nfix: git push notes\nEOF\n)"',
+  'git commit -m "$(cat <<\'EOF\'\nfeat: bash <<EOF handling\n\nsource <(x) and echo git push | bash are denied\nEOF\n)"',
+  'git commit -m "docs: bash <<EOF and python3 < x"', "git commit -F - <<'EOF'\nmsg\nEOF"
+];
+for (const cwd of [SLOT_A, MAIN]) expectAll('AH-12 commit-message heredoc text stays ask', COMMIT_HEREDOCS, cwd, 'ask');
+check('AH-12 PowerShell main: interpreter fed by redirect denied, plain pipeline allowed',
+  d('powershell < x.ps1', MAIN, 'PowerShell').decision === 'deny' && d('Get-ChildItem | Sort-Object', MAIN, 'PowerShell').decision === 'allow');
+check('AH-12 unbalanced heredoc delimiter into bash still fails closed', d('bash <<"EOF\nx', MAIN).decision === 'deny');
+check('AH-12 R1 / R3g preserved: canonical push deny, slot push R1 suffix, slot PowerShell blanket deny, commit ask',
+  d('git push --dry-run', MAIN).decision === 'deny' && /R1/.test(d('git push', SLOT_A).reason) &&
+  d('Get-ChildItem', SLOT_A, 'PowerShell').decision === 'deny' && d('git commit -m x', MAIN).decision === 'ask');
+{
+  const heredocCli = spawnCli(payload('bash <<EOF\ngit push\nEOF', MAIN));
+  check('AH-12 CLI: heredoc into bash -> exit 2, reason on stderr, empty stdout',
+    heredocCli.status === 2 && heredocCli.stdout === '' && /heredoc/.test(heredocCli.stderr));
+  const benignCli = spawnCli(payload('cat <<EOF\nx\nEOF', MAIN));
+  check('AH-12 CLI: benign cat heredoc -> exit 0, no output', benignCli.status === 0 && benignCli.stdout === '' && benignCli.stderr === '');
+}
+
+// ── AH-13 stdin-fed state through groups / subshells / substitutions / compound commands / wrappers ──
+// A pipe or a stdin redirect feeds the WHOLE group or compound; a shell / interpreter inside it reads that text.
+const GROUP_STDIN_DENY = [
+  "printf 'git push\\n' | (bash)", "printf 'git push\\n' | { bash; }", 'echo x | ( bash )', 'echo x | (cd /tmp; bash)', 'echo x | { cd /tmp; bash; }', 'echo x | (bash) 2>&1',
+  'echo x | echo $(bash)', 'echo x | echo `bash`', 'echo x | (echo a; (bash))', 'echo x | ( { bash; } )', 'echo x | (python3)', 'echo x | { node; }', 'echo x | (sh -x)',
+  '(bash) < script.sh', '{ bash; } < script.sh', '(bash) <<EOF\ngit push\nEOF', '{ bash; } <<< "git push"', '{ bash; } < <(echo git push)', '(python3) < x.py',
+  'echo x | while read l; do bash; done', 'echo x | if true; then bash; fi', 'echo x | for a in 1; do bash; done', 'while read l; do bash; done < f',
+  'for a in 1; do sh; done <<EOF\nx\nEOF', 'if true; then bash; fi < f', 'echo x | while true; do while true; do bash; done; done', 'echo x | while read l\ndo\n  bash\ndone',
+  'echo x | until false; do bash; break; done', 'echo x | (env A=1 bash)', 'echo x | { nohup bash; }', 'echo x | (exec bash)', 'echo x | (sudo bash)',
+  'echo x | sudo -u root bash', 'setsid bash < f', 'echo x | sudo -E -u root bash -s', 'stdbuf -o0 bash <<EOF\nx\nEOF'
+];
+const GROUP_STDIN_ALLOW = [
+  'echo x | (cat)', 'echo x | { cat; }', 'echo x | (cd /tmp; ls)', 'git log | (head -1)', 'printf x | { read a; echo $a; }', '(cd x; git status)', '{ git status; }',
+  'echo x | ( bash -c "echo hi" )', 'echo x | { node -e "console.log(1)"; }', '(bash script.sh)', '{ bash script.sh; }', '(bash) < /dev/null', '{ bash; } < /dev/null',
+  'for a in 1 2; do bash script.sh; done', 'while true; do bash script.sh; done < /dev/null', 'for f in a b; do echo $f; done', 'echo x | while read l; do echo $l; done',
+  'git log | while read l; do git show $l; done', 'cat f | while read l; do grep $l g; done', 'if true; then bash script.sh; fi', 'x || (bash script.sh)', 'a || { bash script.sh; }',
+  // the fed state must not leak past the group / pipeline that owns it
+  'echo x; (bash script.sh)', 'echo x | (cat); bash script.sh', 'echo x | cat; (bash script.sh)', 'echo x | { cat; }; bash script.sh', 'echo x | while read l; do echo $l; done; bash script.sh',
+  'sudo ls', 'exec ls', 'timeout 5 ls', 'command -v bash', 'echo x | timeout 5 cat', 'echo x | sudo tee out.txt', 'echo x | xargs echo', 'if true; then echo a; fi | cat',
+  // realistic Worker commands
+  'git stash list | head', 'grep -r x . | sort | uniq -c | sort -rn | head', 'node -e "console.log(1)" | sort', 'find . -name x | xargs grep y', 'echo $(git rev-parse HEAD)',
+  'ls | (head -3)', '{ echo a; echo b; } > work/foo/plan.md', 'cat > work/foo/plan.md <<EOF\nhello\nEOF', '(cd x && npm ci)', 'for f in qa/a_offline.js qa/b_offline.js; do node $f; done',
+  'while read l; do echo $l; done < list.txt', 'npm run qa:offline 2>&1 | tee work/foo/qa.log', 'git log --oneline -3 | head -1', 'git status --short --branch | grep task',
+  'echo x | (grep y)', 'echo x | { grep y; }', 'if [ -f x ]; then echo y; fi'
+];
+for (const cwd of [SLOT_A, MAIN]) {
+  expectAll('AH-13 group/compound stdin deny', GROUP_STDIN_DENY, cwd, 'deny');
+  expectAll('AH-13 group/compound benign stays allow', GROUP_STDIN_ALLOW, cwd, 'allow');
+}
+check('AH-13 tables are non-trivial and disjoint',
+  GROUP_STDIN_DENY.length > 0 && GROUP_STDIN_ALLOW.length > 0 && GROUP_STDIN_DENY.every((c) => GROUP_STDIN_ALLOW.indexOf(c) === -1));
+expectAll('AH-13 commit text mentioning the forms stays ask',
+  ['git commit -m "$(printf x | (cat))"', 'git commit -m "docs: printf x | (bash) is denied"', 'git commit -m "$(cat <<\'EOF\'\nfeat: { bash; } < f and echo x | (bash)\nEOF\n)"'], MAIN, 'ask');
+check('AH-13 PowerShell main: group into powershell denied, plain pipeline allowed',
+  d('echo x | (powershell)', MAIN, 'PowerShell').decision === 'deny' && d('Get-ChildItem | Sort-Object', MAIN, 'PowerShell').decision === 'allow');
+check('AH-13 unbalanced group into bash still fails closed', d('echo x | (bash', MAIN).decision === 'deny' && d('echo x | { bash', MAIN).decision === 'deny');
+{
+  const groupCli = spawnCli(payload("printf 'git push\\n' | (bash)", MAIN));
+  check('AH-13 CLI: printf | (bash) -> exit 2, reason on stderr, empty stdout',
+    groupCli.status === 2 && groupCli.stdout === '' && /heredoc|stdin|pipe/.test(groupCli.stderr));
+  const benignGroupCli = spawnCli(payload('echo x | (cat)', MAIN));
+  check('AH-13 CLI: benign group pipeline -> exit 0, no output', benignGroupCli.status === 0 && benignGroupCli.stdout === '' && benignGroupCli.stderr === '');
+}
+
+// ── AH-14 `case ... in PATTERN) command;; esac`: the command shares a raw segment with the header / arm pattern ──
+// Each row was classified as `case` / `PATTERN)` (so allowed) before the prefix stripping; the wrapped command must now
+// get exactly the decision the plain command gets.
+const CASE_PUSH_DENY = [
+  'case x in x) git push;; esac', 'case x in a|b) git push;; esac', 'case x in a | b) git push;; esac', 'case x in a|b|c) git push;; esac', 'case x in (a) git push;; esac',
+  'case x in "a b") git push;; esac', "case x in 'a b') git push;; esac", 'case x in *) git push;; esac', 'case "$1" in push) git push;; esac',
+  'case x in a) echo hi;; b) git push;; esac', 'case x in a) echo hi;;\nb) git push;;\nesac', 'case x in\n a) git push;;\nesac', 'case x in\n a|b)\n  git push\n  ;;\nesac',
+  '(case x in x) git push;; esac)', '$(case x in x) git push;; esac)', 'echo "$(case x in x) git push;; esac)"', 'if true; then case x in x) git push;; esac; fi',
+  'for a in 1; do case $a in 1) git push;; esac; done', 'case x in a) case y in b) git push;; esac;; esac', 'case x in x) git push --dry-run;; esac',
+  'case x in x) git -C y push;; esac', 'case x in x) /usr/bin/git push;; esac', 'case x in x) bash -c "git push";; esac', 'case x in x) env A=1 git push;; esac',
+  'case x in x) git push ;; esac', 'case x in x) git push;esac', 'case x in x) git push\nesac', 'case x in x) git push;;\n*) echo;;\nesac'
+];
+for (const cwd of [SLOT_A, MAIN]) expectAll('AH-14 case-prefixed git push deny', CASE_PUSH_DENY, cwd, 'deny');
+const CASE_CMD_PAIRS = ['git commit -m y', 'git merge y', 'git rebase y', 'git reset --hard', 'git checkout main', 'netlify deploy', 'echo x > package.json', 'bash < f',
+  'git status', 'git log --oneline -3', 'echo hi', 'npm run qa:offline'];
+const CASE_FORMS = ['case x in x) CMD;; esac', 'case x in a|b) CMD;; esac', 'case x in a) echo;; b) CMD;; esac', 'case x in\n a) CMD;;\nesac', '(case x in x) CMD;; esac)'];
+for (const cwd of [SLOT_A, MAIN]) for (const cmd of CASE_CMD_PAIRS) {
+  const plain = d(cmd, cwd).decision;
+  check('AH-14 case-wrapped == plain [' + (cwd === MAIN ? 'main' : 'slot') + '] ' + cmd + ' (plain ' + plain + ')',
+    CASE_FORMS.every((form) => d(form.replace('CMD', cmd), cwd).decision === plain));
+}
+const CASE_ALLOW = [
+  'case x in x) echo hi;; esac', 'case x in x) git status;; esac', 'case "$1" in a|b) ls;; *) echo none;; esac', 'case x in a) echo "a) b";; esac', 'case $(uname) in Linux) echo l;; esac',
+  'case x in\n a) echo a;;\n *) echo b;;\nesac', 'for f in a; do case $f in a) echo a;; esac; done', 'echo "case x in x) git push;; esac"', "echo 'case x in a|b) git push;; esac'",
+  'case x in x) npm run qa:offline;; esac', 'case x in x) git log --oneline -3;; esac', 'case x in x) ;; esac', 'case x in a) (cd /tmp; ls);; esac', 'case x in a) { echo a; };; esac',
+  'case x in a) echo $(git rev-parse HEAD);; esac', 'echo x | case x in x) cat;; esac', 'case x in *.js) echo js;; *.ts) echo ts;; esac', 'case x in [a-z]*) echo l;; esac',
+  '(case x in x) echo hi;; esac)', '$(case $(uname) in Linux) echo l;; esac)', 'echo $(case x in a|b) echo y;; esac)'
+];
+for (const cwd of [SLOT_A, MAIN]) expectAll('AH-14 benign case bodies stay allow', CASE_ALLOW, cwd, 'allow');
+for (const cwd of [SLOT_A, MAIN]) expectAll('AH-14 multiline case: command on its own line unchanged',
+  ['case x in x)\n git status\n;;\nesac'], cwd, 'allow');
+check('AH-14 multiline case: command on its own line still classified (push deny, commit ask)',
+  d('case x in x)\n git push\n;;\nesac', MAIN).decision === 'deny' && d('case x in x)\n git commit -m y\n;;\nesac', MAIN).decision === 'ask');
+expectAll('AH-14 commit text containing case syntax stays ask',
+  ['git commit -m "case x in x) git push;; esac"', "git commit -m 'fix: case x in a|b) git push;; esac'", 'git commit -m "$(cat <<\'EOF\'\nfix: case x in a|b) git push;; esac\nEOF\n)"',
+    'git commit -m "docs: (case x in x) git push;; esac)"', "git commit -F - <<'EOF'\ncase x in x) git push;; esac\nEOF"], MAIN, 'ask');
+check('AH-14 fed state reaches a case body (pipe into a group holding a case)',
+  d('echo x | case x in x) bash;; esac', MAIN).decision === 'deny' && d('echo x | (case x in x) bash;; esac)', MAIN).decision === 'deny');
+check('AH-14 unbalanced case still fails closed', d('case x in x) git push;; "esac', MAIN).decision === 'deny' && d('(case x in x) git push', MAIN).decision === 'deny');
+{
+  const caseCli = spawnCli(payload('case x in a|b) git push;; esac', MAIN));
+  check('AH-14 CLI: single-line case push -> exit 2, reason on stderr, empty stdout', caseCli.status === 2 && caseCli.stdout === '' && /push manually/.test(caseCli.stderr));
+  const benignCaseCli = spawnCli(payload('case x in x) echo hi;; esac', MAIN));
+  check('AH-14 CLI: benign case -> exit 0, no output', benignCaseCli.status === 0 && benignCaseCli.stdout === '' && benignCaseCli.stderr === '');
+}
 
 // ── AH-9 CLI (real spawn) ───────────────────────────────────────────────────────────────
 function spawnCli(stdin, hookPath) {
@@ -445,14 +627,16 @@ function mutantCatches(label, find, replace, probe) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
-mutantCatches('push not integration', "cls: 'integration', reason: 'git push'", "cls: 'commit', reason: 'git push'",
-  (m) => dec(m, 'git push', SLOT_A).decision === 'deny');
+mutantCatches('push not denied (downgraded to commit/ask)', "cls: 'push', reason", "cls: 'commit', reason",
+  (m) => dec(m, 'git push', SLOT_A).decision === 'deny' && dec(m, 'git push --dry-run', MAIN).decision === 'deny');
+mutantCatches('push downgraded to integration (main ask again)', "cls: 'push', reason", "cls: 'integration', reason",
+  (m) => dec(m, 'git push --dry-run', MAIN).decision === 'deny');
 mutantCatches('merge not integration', "'push', 'merge', 'rebase'", "'push', 'rebase'",
   (m) => dec(m, 'git merge x', SLOT_A).decision === 'deny');
 mutantCatches('reset --hard not destructive', "'--hard'", "'--hard-x'",
   (m) => dec(m, 'git reset --hard', MAIN).decision === 'deny');
 mutantCatches('slot detection broken', '[ab]', '[x]',
-  (m) => dec(m, 'git push', SLOT_A).decision === 'deny');
+  (m) => dec(m, 'git merge x', SLOT_A).decision === 'deny'); // merge, not push: push is deny in every cwd now, so it no longer tells slot from main
 mutantCatches('deny exit code drifts', 'FAIL_CLOSED_EXIT = 2', 'FAIL_CLOSED_EXIT = 1',
   (m) => m.runCli(payload('git push -f', SLOT_A)).code === 2);
 mutantCatches('protected tail dropped (package.json)', 'package\\\\.json', 'package_x\\\\.json',
@@ -475,6 +659,58 @@ mutantCatches('slot PowerShell blanket deny leaks into Bash / non-slot', "tool =
 mutantCatches('slot PowerShell blanket deny widened to every cwd', "tool === 'PowerShell' && isWorkerSlot(input.cwd)", "tool === 'PowerShell'",
   (m) => dec(m, 'Get-ChildItem', MAIN, 'PowerShell').decision === 'allow');
 // (The former 'reason falls back to R1' mutant is dropped: with the blanket deny, the slot+git-program reason branch is unreachable.)
+// AH-12 code-from-stdin mutants. Each probe holds the property on production and fails on the mutant.
+const HEREDOC_BASH = 'bash <<EOF\ngit push\nEOF';
+mutantCatches('stdin-fed interpreter check disabled', 'if (segStdinFed && STDIN_INTERPRETER_RE', 'if (false && STDIN_INTERPRETER_RE',
+  (m) => dec(m, HEREDOC_BASH, MAIN).decision === 'deny' && dec(m, 'bash < script.sh', MAIN).decision === 'deny');
+mutantCatches('pipe marker dropped (echo x | bash escapes)', 'out.push(fed ? PIPE_MARK + body : body)', 'out.push(body)',
+  (m) => dec(m, 'echo git push | bash', MAIN).decision === 'deny');
+mutantCatches('errexit -e counted as inline code (bash -e <<EOF escapes)', 'return args.some((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a));',
+  'return args.some((a) => /^-[a-zA-Z]*[ce][a-zA-Z]*$/.test(a));',
+  (m) => dec(m, 'bash -e <<EOF\ngit push\nEOF', MAIN).decision === 'deny');
+mutantCatches('/dev/null exemption removed (benign stdin over-blocked)', "!(op === '<' && w.text === '/dev/null')", 'true',
+  (m) => dec(m, 'node qa/x_offline.js < /dev/null', MAIN).decision === 'allow');
+mutantCatches('stdin redirect not counted', "if (c === '<' && !(op", "if (false && !(op",
+  (m) => dec(m, 'bash < script.sh', MAIN).decision === 'deny' && dec(m, 'source <(echo git push)', MAIN).decision === 'deny');
+mutantCatches('sh dropped from the interpreter list', '/^(?:bash|sh|zsh|dash|ash|ksh|csh|tcsh|fish|busybox|pwsh|', '/^(?:bash|zsh|dash|ash|ksh|csh|tcsh|fish|busybox|pwsh|',
+  (m) => dec(m, "sh <<'EOF'\ngit merge x\nEOF", MAIN).decision === 'deny');
+// AH-13 group / compound propagation mutants
+mutantCatches('fed state not inherited by ( ) subshell groups', "i = scanCode(src, i + 1, ')', out, level + 1, fedNow());", "i = scanCode(src, i + 1, ')', out, level + 1, false);",
+  (m) => dec(m, "printf 'git push\\n' | (bash)", MAIN).decision === 'deny');
+mutantCatches('fed state not inherited by { } groups', "i = scanCode(src, i + 1, '}', out, level + 1, fedNow());", "i = scanCode(src, i + 1, '}', out, level + 1, false);",
+  (m) => dec(m, "printf 'git push\\n' | { bash; }", MAIN).decision === 'deny');
+mutantCatches('fed state not inherited by $( ) substitutions', "i = scanCode(src, i + 2, ')', out, level + 1, fedNow());\n      cur += '__SUB__';\n      continue;\n    }\n    if (c === '(')",
+  "i = scanCode(src, i + 2, ')', out, level + 1, false);\n      cur += '__SUB__';\n      continue;\n    }\n    if (c === '(')",
+  (m) => dec(m, 'echo x | echo $(bash)', MAIN).decision === 'deny');
+mutantCatches('redirect on a ( ) / { } group ignored', 'function groupRedirected(src, i) {', 'function groupRedirected(src, i) {\n  return false;',
+  (m) => dec(m, '(bash) < script.sh', MAIN).decision === 'deny' && dec(m, '{ bash; } <<< "git push"', MAIN).decision === 'deny');
+mutantCatches('compound commands not tracked (pipe into while/if/for escapes)', 'if (opened) compounds.push', 'if (false) compounds.push',
+  (m) => dec(m, 'echo x | while read l; do bash; done', MAIN).decision === 'deny');
+mutantCatches('redirect on a compound (done < f) ignored', 'if (e && STDIN_REDIRECT_RE.test(head)) markFed', 'if (false && STDIN_REDIRECT_RE.test(head)) markFed',
+  (m) => dec(m, 'while read l; do bash; done < f', MAIN).decision === 'deny');
+mutantCatches('pass-through wrappers (sudo -u x / setsid) not followed', '} else if (segStdinFed && STDIN_PASSTHROUGH_RE', '} else if (false && STDIN_PASSTHROUGH_RE',
+  (m) => dec(m, 'echo x | sudo -u root bash', MAIN).decision === 'deny' && dec(m, 'setsid bash < f', MAIN).decision === 'deny');
+mutantCatches('every segment treated as fed (benign scripts over-blocked)', 'const fed = fedNow();', 'const fed = true;',
+  (m) => dec(m, '(bash script.sh)', MAIN).decision === 'allow' && dec(m, 'echo x | (cat); bash script.sh', MAIN).decision === 'allow');
+// AH-14 case-prefix mutants
+mutantCatches('case header prefix not stripped', 'body = stripCaseHeaders(head);', 'body = text;',
+  (m) => dec(m, 'case x in x) git push;; esac', MAIN).decision === 'deny');
+mutantCatches('case arm prefix not stripped (later arms / a|b) escape)', 'body = stripCaseArm(text);', 'body = text;',
+  (m) => dec(m, 'case x in a|b) git push;; esac', MAIN).decision === 'deny' && dec(m, 'case x in a) echo hi;; b) git push;; esac', MAIN).decision === 'deny');
+mutantCatches('case scope not tracked (compound kind lost)', "top.kind === 'case'", "top.kind === 'caseX'",
+  (m) => dec(m, 'case x in a) echo hi;; b) git push;; esac', MAIN).decision === 'deny');
+mutantCatches('( ) group closes at a case-arm paren (fed state lost)', "!(closer === ')' &&", '!(false &&',
+  (m) => dec(m, 'echo x | (case x in x) bash;; esac)', MAIN).decision === 'deny');
+mutantCatches('esac exemption dropped (benign (case ...) over-blocked)', '!/^\\s*esac\\s*$/.test(cur) &&', 'true &&',
+  (m) => dec(m, '(case x in x) echo hi;; esac)', MAIN).decision === 'allow');
+mutantCatches('(pattern) arm form not stripped', 'const CASE_ARM_RE = /^\\s*(?:__SUB__|', 'const CASE_ARM_RE = /^\\s*(?:__NEVER__|',
+  (m) => dec(m, 'case x in (a) git push;; esac', MAIN).decision === 'deny');
+mutantCatches('quoted case patterns not handled', '/^\\s*(?:__SUB__|(?:"[^"]*"|\'[^\']*\'|[^\\s()"\'])*\\))\\s*/', '/^\\s*(?:__SUB__|(?:[^\\s()"\'])*\\))\\s*/',
+  (m) => dec(m, 'case x in "a b") git push;; esac', MAIN).decision === 'deny');
+mutantCatches('nested case headers not followed', 'guard < 8 &&', 'guard < 1 &&',
+  (m) => dec(m, 'case x in a) case y in b) git push;; esac;; esac', MAIN).decision === 'deny');
+mutantCatches('inline-code exemption removed (benign python -c over-blocked)', 'return args.some((a) => /^-[a-zA-Z]*[cm][a-zA-Z]*$/.test(a));', 'return false;',
+  (m) => dec(m, 'python3 -c "print(1)" < data.json', MAIN).decision === 'allow');
 
 // ── AH-8 settings static + AH-10 no regression ──────────────────────────────────────────
 // Baseline settings.json at the brief's landing (pre-§5), kept as literals so the "exactly the §5
