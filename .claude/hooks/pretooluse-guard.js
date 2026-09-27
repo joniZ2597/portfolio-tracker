@@ -17,6 +17,10 @@
  * merely contains the words "git push" is not a git push.
  */
 
+const fs = require('fs');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
 const FAIL_CLOSED_EXIT = 2;
 const MAX_WRAPPER_DEPTH = 6;
 const MAX_GROUP_LEVEL = 8;
@@ -25,6 +29,21 @@ const MAX_GROUP_LEVEL = 8;
 const SLOT_DIR_RE = /(^|\/)pt-wt-worker-[ab](\/|$)/;
 
 const INTEGRATION_SUBCOMMANDS = ['push', 'merge', 'rebase', 'pull'];
+
+// r9 commit gate (RC1-RC3): a Worker may commit only on its OWN task/* branch, in its OWN slot, in plain form, with a clean staged set.
+const TASK_BRANCH_RE = /^ref: refs\/heads\/task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+const COMMIT_FLAGS_PLAIN = ['-s', '-q', '-v', '--no-edit', '--allow-empty', '--dry-run'];
+const COMMIT_CLUSTER_OK = 'sqv';
+const STAGED_DENY_SOURCES = [
+  '^\\.claude/settings[\\w.-]*\\.json$',
+  '^\\.claude/hooks/',
+  '^checkpoint\\.md$',
+  '^\\.env[\\w.-]*$',
+  '^work/[^/]+/brief\\.md$'
+];
+const STAGED_DENY_RES = STAGED_DENY_SOURCES.map((s) => new RegExp(s));
+// r9 RC4: ref moves of these branches are denied in every session.
+const REF_MOVE_TARGETS = ['main', 'branch-dev'];
 const HARD_RESET_FLAG = '--hard';
 const MAIN_TARGETS = ['main', 'origin/main'];
 const NETLIFY_WRITE = ['deploy', 'env:set', 'env:unset', 'env:clone', 'env:import', 'sites:create', 'sites:delete', 'api', 'link', 'unlink'];
@@ -155,7 +174,10 @@ function scanCode(src, start, closer, out, level, inherit) {
       if (/^case\s/.test(head)) body = stripCaseHeaders(head);
       else if (top && top.kind === 'case' && !COMPOUND_CLOSE_RE.test(head)) body = stripCaseArm(text);
       const idx = out.length;
-      if (body.trim()) out.push(fed ? PIPE_MARK + body : body);
+      if (body.trim()) {
+        out.push(fed ? PIPE_MARK + body : body);
+        if (level === 0) (out.top || (out.top = [])).push(idx);
+      }
       const opened = COMPOUND_OPEN_RE.exec(head);
       if (opened) compounds.push({ fed, start: idx, kind: opened[1] });
     }
@@ -411,7 +433,10 @@ function analyze(code, depth, out) {
   scanCode(code, 0, null, segments, 0, false);
   const savedStdinFed = segStdinFed;
   try {
+    const top = segments.top || [];
+    let segNo = -1;
     for (const rawSeg of segments) {
+      segNo += 1;
       const piped = rawSeg.charAt(0) === PIPE_MARK;
       const raw = piped ? rawSeg.slice(1) : rawSeg;
       const { words, redirects, stdinFed } = tokenize(raw);
@@ -419,19 +444,25 @@ function analyze(code, depth, out) {
         if (isProtectedText(t)) out.push({ cls: 'protected', reason: 'redirect into protected file ' + t });
       }
       segStdinFed = piped || stdinFed;
+      const before = out.length;
       classifyWords(words, depth, out);
+      for (let k = before; k < out.length; k += 1) {
+        if (out[k].cls === 'commit' && out[k].plainCtx === undefined) out[k].plainCtx = depth === 0 && top.length === 1 && top[0] === segNo;
+      }
     }
   } finally {
     segStdinFed = savedStdinFed;
   }
 }
 
-function classifyWords(words, depth, out) {
+function classifyWords(words, depth, out, wrapped) {
+  let via = wrapped === true; // reached through a wrapper, env prefix or shell keyword: not a plain top-level program
   const w = words.slice();
   for (;;) {
     if (!w.length) return;
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w[0]) || SHELL_KEYWORDS.indexOf(w[0].toLowerCase()) !== -1) {
       w.shift();
+      via = true;
       continue;
     }
     break;
@@ -448,17 +479,17 @@ function classifyWords(words, depth, out) {
     }
   }
 
-  if (prog === 'git') { out.push({ cls: 'git-program', reason: 'git via the PowerShell tool - denied (R2)' }); classifyGit(args, out); return; }
+  if (prog === 'git') { out.push({ cls: 'git-program', reason: 'git via the PowerShell tool - denied (R2)' }); classifyGit(args, out, via || w[0] !== 'git'); return; }
   if (prog === 'netlify' || prog === 'ntl') { classifyNetlify(args, out); return; }
 
   if (prog === 'env') { unwrapEnv(args, depth, out); return; }
-  if (prog === 'xargs') { classifyWords(skipXargs(args), depth, out); return; }
-  if (PACKAGE_RUNNERS.indexOf(prog) !== -1) { classifyWords(skipRunnerArgs(args), depth, out); return; }
+  if (prog === 'xargs') { classifyWords(skipXargs(args), depth, out, true); return; }
+  if (PACKAGE_RUNNERS.indexOf(prog) !== -1) { classifyWords(skipRunnerArgs(args), depth, out, true); return; }
   if ((prog === 'npm' || prog === 'pnpm' || prog === 'yarn') && (args[0] === 'exec' || args[0] === 'dlx')) {
-    classifyWords(skipRunnerArgs(args.slice(1)), depth, out);
+    classifyWords(skipRunnerArgs(args.slice(1)), depth, out, true);
     return;
   }
-  if (GENERIC_WRAPPERS.indexOf(prog) !== -1) { classifyWords(skipGenericWrapper(prog, args), depth, out); return; }
+  if (GENERIC_WRAPPERS.indexOf(prog) !== -1) { classifyWords(skipGenericWrapper(prog, args), depth, out, true); return; }
 
   if (POSIX_SHELLS.indexOf(prog) !== -1) {
     const k = args.findIndex((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a));
@@ -503,7 +534,7 @@ function unwrapEnv(args, depth, out) {
     } else if (a.startsWith('-')) i += 1;
     else break;
   }
-  classifyWords(args.slice(i), depth, out);
+  classifyWords(args.slice(i), depth, out, true);
 }
 function skipXargs(args) {
   const valued = ['-I', '-n', '-P', '-d', '-E', '-L', '-l', '-s', '-a', '-J'];
@@ -578,7 +609,7 @@ function startProcessCommand(args) {
 }
 
 // ── git ─────────────────────────────────────────────────────────────────────────────────
-function classifyGit(args, out) {
+function classifyGit(args, out, wrapped) {
   const valued = ['--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env', '--attr-source'];
   let i = 0;
   while (i < args.length) {
@@ -610,7 +641,12 @@ function classifyGit(args, out) {
     return;
   }
   if (sub === 'commit') {
-    out.push({ cls: 'commit', reason: 'git commit needs Owner approval' });
+    out.push({
+      cls: 'commit',
+      reason: 'git commit',
+      formIssue: i !== 0 ? 'git global options (-C / -c / --git-dir / --work-tree / --no-pager ...) are not allowed before commit'
+        : wrapped ? 'wrapped, env-prefixed or non-plain git invocation' : commitFormIssue(rest)
+    });
     return;
   }
   if (sub === 'reset' && rest.some((a) => a === HARD_RESET_FLAG)) {
@@ -628,6 +664,13 @@ function classifyGit(args, out) {
   if (sub === 'update-ref' && rest.some((a) => a === '-d' || a === '--delete')) {
     out.push({ cls: 'destructive', reason: 'git update-ref -d' });
     return;
+  }
+  if (sub === 'update-ref' || sub === 'symbolic-ref' || sub === 'branch') {
+    const moved = refMoveIssue(sub, rest);
+    if (moved !== null) {
+      out.push({ cls: 'destructive', reason: moved });
+      return;
+    }
   }
   if (sub === 'worktree' && rest[0] === 'remove' && rest.some((a) => a === '--force' || cluster(a, 'f'))) {
     out.push({ cls: 'destructive', reason: 'git worktree remove --force' });
@@ -724,6 +767,159 @@ function classifyFileWrite(prog, args, out) {
 // ── decide + CLI ────────────────────────────────────────────────────────────────────────
 const SEVERITY = { allow: 1, ask: 2, deny: 3 };
 
+// ── commit gate + RC4 (r9) ──────────────────────────────────────────────────────────────
+// The gate is deny-only: 'allow' means "no opinion" and the settings allow rule (RC5) does the rest. Every failure to prove a condition denies.
+function commitFormIssue(rest) {
+  for (let k = 0; k < rest.length; k += 1) {
+    const a = rest[k];
+    if (a === '--amend') return 'amend is not allowed (RC3) - add a new commit instead';
+    if (COMMIT_FLAGS_PLAIN.indexOf(a) !== -1) continue;
+    if (a === '--message' || a === '--file') {
+      if (k + 1 >= rest.length) return 'flag ' + a + ' has no value';
+      k += 1;
+      continue;
+    }
+    if (/^--(?:message|file)=/.test(a)) continue;
+    if (/^-[a-zA-Z]+$/.test(a)) {
+      for (let j = 1; j < a.length; j += 1) {
+        const ch = a.charAt(j);
+        if (COMMIT_CLUSTER_OK.indexOf(ch) !== -1) continue;
+        if (ch === 'm' || ch === 'F') {
+          if (j + 1 < a.length) break;
+          if (k + 1 >= rest.length) return 'flag -' + ch + ' has no value';
+          k += 1;
+          break;
+        }
+        return 'flag -' + ch + ' is not in the commit allowlist';
+      }
+      continue;
+    }
+    if (a.startsWith('-')) return 'flag ' + a + ' is not in the commit allowlist';
+    return 'argument ' + a + ' is not allowed (pathspecs bypass the staged-set check)';
+  }
+  return null;
+}
+
+function isRefMoveTarget(name) {
+  return REF_MOVE_TARGETS.indexOf(String(name).toLowerCase().replace(/^refs\/heads\//, '')) !== -1;
+}
+function refMoveIssue(sub, rest) {
+  const pos = [];
+  const flags = [];
+  for (let k = 0; k < rest.length; k += 1) {
+    const a = rest[k];
+    if (a === '-m' && (sub === 'update-ref' || sub === 'symbolic-ref')) { k += 1; continue; } // -m <reason>
+    if (a.startsWith('-')) flags.push(a);
+    else pos.push(a);
+  }
+  const why = 'git ' + sub + ' moves main/branch-dev - denied in every session (RC4)';
+  if (sub === 'update-ref') {
+    if (flags.indexOf('--stdin') !== -1) return 'git update-ref --stdin cannot be resolved - denied in every session (RC4)';
+    const target = pos[0];
+    return target !== undefined && isRefMoveTarget(target) ? why : null;
+  }
+  if (sub === 'symbolic-ref') {
+    return pos.length >= 2 && (isRefMoveTarget(pos[0]) || isRefMoveTarget(pos[1])) ? why : null;
+  }
+  const short = flags.filter((a) => /^-[a-zA-Z]+$/.test(a)).join('');
+  const move = flags.some((a) => a === '--move' || a === '--copy') || /[mMcC]/.test(short);
+  const force = flags.some((a) => a === '--force') || /f/.test(short);
+  if (move) return pos.some(isRefMoveTarget) ? why : null;
+  if (force) return pos.length > 0 && isRefMoveTarget(pos[0]) ? why : null;
+  return null;
+}
+
+function isStagedDenied(p) {
+  const n = normalizePath(p);
+  return STAGED_DENY_RES.some((re) => re.test(n));
+}
+function slotRootOf(cwd) {
+  const s = String(cwd).replace(/\\/g, '/').replace(/\/+/g, '/');
+  const m = /^(.*?\/pt-wt-worker-[ab])(?:\/|$)/i.exec(s);
+  return m ? m[1] : null;
+}
+// Real readers (injectable through decide(input, deps)). HEAD: <slot>/.git is a file (worktree: 'gitdir: <path>') or a directory; read <gitdir>/HEAD.
+function readHeadRefFs(root) {
+  const dotGit = root + '/.git';
+  const st = fs.statSync(dotGit);
+  let gitDir = dotGit;
+  if (st.isFile()) {
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(dotGit, 'utf8'));
+    if (!m) throw new Error('unrecognised .git file');
+    gitDir = path.isAbsolute(m[1]) ? m[1] : path.resolve(root, m[1]);
+  } else if (!st.isDirectory()) {
+    throw new Error('.git is neither a file nor a directory');
+  }
+  return fs.readFileSync(gitDir + '/HEAD', 'utf8').split(/\r?\n/)[0];
+}
+// Staged paths: --no-renames lists BOTH sides of a rename (renaming a protected file away must still show its old path); GIT_* is stripped
+// from the child env and locks are optional so the read never writes.
+function stagedPathsGit(root) {
+  const env = {};
+  for (const k of Object.keys(process.env)) if (!/^GIT_/i.test(k)) env[k] = process.env[k];
+  env.GIT_OPTIONAL_LOCKS = '0';
+  const r = spawnSync('git', ['diff', '--cached', '--name-only', '-z', '--no-renames'], {
+    cwd: root, env, encoding: 'utf8', timeout: 5000, windowsHide: true, maxBuffer: 16 * 1024 * 1024
+  });
+  if (r.error) throw r.error;
+  if (r.status !== 0) throw new Error('git diff exited ' + r.status);
+  if (typeof r.stdout !== 'string') throw new Error('git diff produced no output');
+  return r.stdout.split('\0').filter((p) => p.length > 0);
+}
+// The commit acts on the repository that CONTAINS the session cwd, which may be a nested repo or worktree inside the slot: find it the way git does.
+function findRepoRootFs(cwd) {
+  let dir = path.resolve(cwd);
+  for (;;) {
+    if (fs.existsSync(path.join(dir, '.git'))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) throw new Error('no .git above the session cwd');
+    dir = parent;
+  }
+}
+const DEFAULT_DEPS = { readHeadRef: readHeadRefFs, stagedPaths: stagedPathsGit, repoRoot: findRepoRootFs };
+
+function commitDeny(cause) {
+  return { decision: 'deny', reason: 'git commit - ' + cause + ' - commit from a normal terminal (R3c)' };
+}
+const GIT_ENV_OVERRIDE_RE = /^GIT_(?:DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)$/;
+function commitGate(f, cwd, slot, gitCount, deps) {
+  if (!slot) return commitDeny('denied outside a Worker slot');
+  if (typeof cwd !== 'string' || !cwd) return commitDeny('the session cwd is unknown, so the slot cannot be verified');
+  if (f.formIssue) return commitDeny(f.formIssue);
+  const envOverride = Object.keys(process.env).find((k) => GIT_ENV_OVERRIDE_RE.test(k));
+  if (envOverride !== undefined) return commitDeny('the session environment sets ' + envOverride + ', so the commit may not act on the repository/index the gate inspected');
+  if (f.plainCtx !== true) return commitDeny('not a single top-level git commit (compound, grouped, piped, wrapped or inside a compound command)');
+  if (gitCount > 1) return commitDeny('another git command appears in the same call (the staged set is read before the call runs)');
+  const root = slotRootOf(cwd);
+  if (root === null) return commitDeny('the Worker slot root could not be resolved');
+  let repo;
+  try {
+    repo = deps.repoRoot(cwd);
+  } catch (e) {
+    return commitDeny('the repository root could not be resolved (' + (e && e.message ? e.message : String(e)) + ')');
+  }
+  if (typeof repo !== 'string' || normalizePath(repo).replace(/\/+$/, '') !== normalizePath(root).replace(/\/+$/, '')) {
+    return commitDeny('the commit would run in a different repository than the Worker slot (nested repo or worktree)');
+  }
+  let head;
+  try {
+    head = deps.readHeadRef(root);
+  } catch (e) {
+    return commitDeny('HEAD could not be read (' + (e && e.message ? e.message : String(e)) + ')');
+  }
+  if (typeof head !== 'string' || !TASK_BRANCH_RE.test(head.trim())) return commitDeny('HEAD is not on a task/* branch');
+  let staged;
+  try {
+    staged = deps.stagedPaths(root);
+  } catch (e) {
+    return commitDeny('the staged set could not be read (' + (e && e.message ? e.message : String(e)) + ')');
+  }
+  if (!Array.isArray(staged) || staged.some((p) => typeof p !== 'string')) return commitDeny('the staged set is unreadable');
+  const bad = staged.find((p) => isStagedDenied(p));
+  if (bad !== undefined) return commitDeny('the staged set touches a protected path (' + bad + ')');
+  return { decision: 'allow', reason: 'commit gate passed (own task branch, plain form, clean staged set)' };
+}
+
 function decisionFor(cls, slot) {
   switch (cls) {
     case 'destructive':
@@ -737,13 +933,13 @@ function decisionFor(cls, slot) {
     case 'protected':
       return slot ? 'deny' : 'ask';
     case 'commit':
-      return 'ask';
+      return 'deny';
     default:
       return 'deny';
   }
 }
 
-function decide(input) {
+function decide(input, deps) {
   const tool = input && input.tool_name;
   if (tool !== 'Bash' && tool !== 'PowerShell') return { decision: 'allow', reason: 'no opinion on tool ' + String(tool) };
   // R2: the PowerShell tool is denied outright in Worker-slot sessions (closes the alias/variable/function indirection class).
@@ -759,10 +955,19 @@ function decide(input) {
     throw e;
   }
   const slot = isWorkerSlot(input.cwd);
+  const gitCount = findings.filter((f) => f.cls === 'git-program').length;
+  const gateDeps = Object.assign({}, DEFAULT_DEPS, deps);
   let best = { decision: 'allow', reason: 'no restricted operation detected' };
   // R2: any resolved git program is denied for the PowerShell tool only; the marker is ignored for Bash.
   const effective = tool === 'PowerShell' ? findings : findings.filter((f) => f.cls !== 'git-program');
   for (const f of effective) {
+    if (f.cls === 'commit') {
+      // the PowerShell tool is already denied for git (R2, git-program marker above), so the gate reads nothing for it
+      if (tool === 'PowerShell') continue;
+      const g = commitGate(f, input.cwd, slot, gitCount, gateDeps);
+      if (SEVERITY[g.decision] > SEVERITY[best.decision]) best = g;
+      continue;
+    }
     const decision = decisionFor(f.cls, slot);
     if (SEVERITY[decision] > SEVERITY[best.decision]) {
       best = { decision, reason: f.reason + (decision === 'deny' && slot && f.cls !== 'destructive' && f.cls !== 'git-program' ? ' - denied in Worker-slot sessions (R1)' : '') };
@@ -787,7 +992,7 @@ function runCli(stdinText, opts) {
     const toolInput = input.tool_input;
     if (!toolInput || typeof toolInput.command !== 'string') return block('missing or non-string command (fail closed)');
     const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : process.env.CLAUDE_PROJECT_DIR;
-    const r = decideFn({ tool_name: tool, tool_input: toolInput, cwd });
+    const r = decideFn({ tool_name: tool, tool_input: toolInput, cwd }, opts && opts.deps);
     if (!r || typeof r.reason !== 'string' || !Object.prototype.hasOwnProperty.call(SEVERITY, r.decision)) {
       return block('guard returned an invalid decision (fail closed)');
     }
