@@ -24,6 +24,194 @@ const { spawnSync } = require('child_process');
 const FAIL_CLOSED_EXIT = 2;
 const MAX_WRAPPER_DEPTH = 6;
 const MAX_GROUP_LEVEL = 8;
+const R10_BUDGET_MS = 8000;
+const R10_GIT_CHECK_CAP_MS = 4000;
+
+// r10 R10-2: fixed host Git 2.53.0.windows.2 main-command allowlist (178 commands).
+const KNOWN_GIT_SUBCOMMANDS = new Set(`add
+am
+annotate
+apply
+archive
+backfill
+bisect
+blame
+branch
+bugreport
+bundle
+cat-file
+check-attr
+check-ignore
+check-mailmap
+check-ref-format
+checkout
+checkout--worker
+checkout-index
+cherry
+cherry-pick
+citool
+clean
+clone
+column
+commit
+commit-graph
+commit-tree
+config
+count-objects
+credential
+credential-cache
+credential-cache--daemon
+credential-store
+credential-wincred
+daemon
+describe
+diagnose
+diff
+diff-files
+diff-index
+diff-pairs
+diff-tree
+difftool
+difftool--helper
+fast-export
+fast-import
+fetch
+fetch-pack
+filter-branch
+fmt-merge-msg
+for-each-ref
+for-each-repo
+format-patch
+fsck
+fsck-objects
+fsmonitor--daemon
+gc
+get-tar-commit-id
+grep
+gui
+gui--askpass
+gui--askyesno
+gui.tcl
+hash-object
+help
+hook
+http-backend
+http-fetch
+http-push
+imap-send
+index-pack
+init
+init-db
+instaweb
+interpret-trailers
+last-modified
+log
+ls-files
+ls-remote
+ls-tree
+mailinfo
+mailsplit
+maintenance
+merge
+merge-base
+merge-file
+merge-index
+merge-octopus
+merge-one-file
+merge-ours
+merge-recursive
+merge-recursive-ours
+merge-recursive-theirs
+merge-resolve
+merge-subtree
+merge-tree
+mergetool
+mktag
+mktree
+multi-pack-index
+mv
+name-rev
+notes
+pack-objects
+pack-redundant
+pack-refs
+patch-id
+pickaxe
+prune
+prune-packed
+pull
+push
+quiltimport
+range-diff
+read-tree
+rebase
+receive-pack
+reflog
+refs
+remote
+remote-ext
+remote-fd
+remote-ftp
+remote-ftps
+remote-http
+remote-https
+repack
+replace
+replay
+repo
+request-pull
+rerere
+reset
+restore
+rev-list
+rev-parse
+revert
+rm
+send-email
+send-pack
+sh-i18n--envsubst
+shortlog
+show
+show-branch
+show-index
+show-ref
+sparse-checkout
+stage
+stash
+status
+stripspace
+submodule
+submodule--helper
+subtree
+survey
+svn
+switch
+symbolic-ref
+tag
+unpack-file
+unpack-objects
+update
+update-index
+update-ref
+update-server-info
+upload-archive
+upload-archive--writer
+upload-pack
+var
+verify-commit
+verify-pack
+verify-tag
+version
+web--browse
+whatchanged
+worktree
+write-tree`.split('\n'));
+const R10_ALWAYS_DENY_GIT = new Set(['cherry-pick', 'revert', 'am', 'filter-branch']);
+const R10_PROTECTED_CONFIG_RE = /^(?:core\.hookspath|core\.fsmonitor|include\.path|includeif\..*\.path)$/i;
+const R10_REMOTE_CONFIG_RE = /^remote\.[^.]+\.(?:fetch|mirror)$/i;
+const R10_GIT_CONFIG_ENV_RE = /^GIT_CONFIG_/i;
+const R10_GIT_OVERRIDE_RE = /^GIT_(?:DIR|WORK_TREE)$/i;
+const R10_FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
 // R1: a session whose cwd is (or is under) a Worker slot gets the strict column.
 const SLOT_DIR_RE = /(^|\/)pt-wt-worker-[ab](\/|$)/;
@@ -129,6 +317,33 @@ function hasInlineCode(prog, args) {
 // ── path helpers ────────────────────────────────────────────────────────────────────────
 function normalizePath(p) {
   return String(p).replace(/\\/g, '/').replace(/\/+/g, '/').toLowerCase();
+}
+
+function isDotGitText(text) {
+  const n = normalizePath(text);
+  return /(?:^|\/)\.git(?:\/|$)/.test(n);
+}
+
+function spawnBudgetMs(deadline) {
+  const remaining = Number(deadline) - Date.now();
+  if (!Number.isFinite(remaining) || remaining <= 0) throw new Error('r10 time budget exhausted');
+  return Math.max(1, Math.min(R10_GIT_CHECK_CAP_MS, remaining));
+}
+
+function stripShellEscapes(command, tool) {
+  const src = String(command);
+  let out = '';
+  let single = false;
+  let double = false;
+  for (let i = 0; i < src.length; i += 1) {
+    const c = src[i];
+    if (c === "'" && !double) { single = !single; out += c; continue; }
+    if (c === '"' && !single) { double = !double; out += c; continue; }
+    if (!single && tool === 'PowerShell' && c === '`' && i + 1 < src.length) { out += src[++i]; continue; }
+    if (!single && tool === 'Bash' && c === '\\' && i + 1 < src.length) { out += src[++i]; continue; }
+    out += c;
+  }
+  return out;
 }
 function isProtectedText(text) {
   const n = normalizePath(text);
@@ -441,7 +656,8 @@ function analyze(code, depth, out) {
       const raw = piped ? rawSeg.slice(1) : rawSeg;
       const { words, redirects, stdinFed } = tokenize(raw);
       for (const t of redirects) {
-        if (isProtectedText(t)) out.push({ cls: 'protected', reason: 'redirect into protected file ' + t });
+        if (isDotGitText(t)) out.push({ cls: 'destructive', reason: 'redirect into .git path - denied in every session (R10-3)' });
+        else if (isProtectedText(t)) out.push({ cls: 'protected', reason: 'redirect into protected file ' + t });
       }
       segStdinFed = piped || stdinFed;
       const before = out.length;
@@ -458,9 +674,16 @@ function analyze(code, depth, out) {
 function classifyWords(words, depth, out, wrapped) {
   let via = wrapped === true; // reached through a wrapper, env prefix or shell keyword: not a plain top-level program
   const w = words.slice();
+  const envAssignments = [];
   for (;;) {
     if (!w.length) return;
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w[0]) || SHELL_KEYWORDS.indexOf(w[0].toLowerCase()) !== -1) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w[0])) {
+      envAssignments.push(w[0]);
+      w.shift();
+      via = true;
+      continue;
+    }
+    if (SHELL_KEYWORDS.indexOf(w[0].toLowerCase()) !== -1) {
       w.shift();
       via = true;
       continue;
@@ -479,7 +702,18 @@ function classifyWords(words, depth, out, wrapped) {
     }
   }
 
-  if (prog === 'git') { out.push({ cls: 'git-program', reason: 'git via the PowerShell tool - denied (R2)' }); classifyGit(args, out, via || w[0] !== 'git'); return; }
+  if (prog === 'git' || /^git-[a-z0-9][a-z0-9._-]*$/i.test(prog)) {
+    if (envAssignments.some((a) => R10_GIT_CONFIG_ENV_RE.test(a.split('=')[0]))) {
+      out.push({ cls: 'destructive', reason: 'GIT_CONFIG_* environment overrides for git are denied in every session (R10-3)' });
+    }
+    if (envAssignments.some((a) => R10_GIT_OVERRIDE_RE.test(a.split('=')[0]))) {
+      out.push({ cls: 'destructive', reason: 'GIT_DIR/GIT_WORK_TREE environment overrides are denied for protected git operations (R10-5)' });
+    }
+    out.push({ cls: 'git-program', reason: 'git via the PowerShell tool - denied (R2)' });
+    if (prog === 'git') classifyGit(args, out, via || w[0] !== 'git');
+    else classifyGit([prog.slice(4)].concat(args), out, true);
+    return;
+  }
   if (prog === 'netlify' || prog === 'ntl') { classifyNetlify(args, out); return; }
 
   if (prog === 'env') { unwrapEnv(args, depth, out); return; }
@@ -609,17 +843,49 @@ function startProcessCommand(args) {
 }
 
 // ── git ─────────────────────────────────────────────────────────────────────────────────
+function configKeyFromArg(kv) {
+  const eq = String(kv).indexOf('=');
+  return (eq === -1 ? String(kv) : String(kv).slice(0, eq)).trim();
+}
+function isProtectedConfigKey(k) { return R10_PROTECTED_CONFIG_RE.test(String(k)); }
+function isRemoteRiskConfigKey(k) { return R10_REMOTE_CONFIG_RE.test(String(k)); }
+function protectedRefName(v) {
+  const n = String(v || '').toLowerCase().replace(/^refs\/heads\//, '');
+  return REF_MOVE_TARGETS.indexOf(n) !== -1;
+}
+function refspecTargetsProtected(v) {
+  const x = String(v || '');
+  const colon = x.lastIndexOf(':');
+  if (colon === -1) return false;
+  return protectedRefName(x.slice(colon + 1).replace(/^\+/, ''));
+}
 function classifyGit(args, out, wrapped) {
   const valued = ['--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env', '--attr-source'];
   let i = 0;
+  let riskyGlobal = false;
   while (i < args.length) {
     const a = args[i];
-    if (a === '-C') i += 2;
+    if (a === '-C') { riskyGlobal = true; i += 2; }
     else if (a === '-c') {
       const kv = args[i + 1] || '';
+      const key = configKeyFromArg(kv);
       if (/^alias\./i.test(kv) && kv.indexOf('!') !== -1) out.push({ cls: 'destructive', reason: 'git alias with a shell escape (-c alias.*=!...)' });
+      if (isProtectedConfigKey(key)) out.push({ cls: 'destructive', reason: 'protected git config override ' + key + ' - denied in every session (R10-3)' });
+      if (isRemoteRiskConfigKey(key)) out.push({ cls: 'destructive', reason: 'remote fetch/mirror config override - denied in every session (R10-5)' });
+      riskyGlobal = true;
       i += 2;
-    } else if (valued.indexOf(a) !== -1) i += 2;
+    } else if (a === '--config-env') {
+      const spec = args[i + 1] || '';
+      const key = configKeyFromArg(spec);
+      if (isProtectedConfigKey(key) || isRemoteRiskConfigKey(key)) out.push({ cls: 'destructive', reason: 'protected git --config-env override - denied in every session (R10-3)' });
+      riskyGlobal = true;
+      i += 2;
+    } else if (a.startsWith('--config-env=')) {
+      const key = configKeyFromArg(a.slice('--config-env='.length));
+      if (isProtectedConfigKey(key) || isRemoteRiskConfigKey(key)) out.push({ cls: 'destructive', reason: 'protected git --config-env override - denied in every session (R10-3)' });
+      riskyGlobal = true;
+      i += 1;
+    } else if (valued.indexOf(a) !== -1) { riskyGlobal = true; i += 2; }
     else if (a.startsWith('-')) i += 1;
     else break;
   }
@@ -627,6 +893,28 @@ function classifyGit(args, out, wrapped) {
   const sub = args[i].toLowerCase();
   const rest = args.slice(i + 1);
   const cluster = (a, chars) => /^-[a-zA-Z]+$/.test(a) && chars.split('').some((ch) => a.indexOf(ch) !== -1);
+
+  if (!KNOWN_GIT_SUBCOMMANDS.has(sub)) {
+    out.push({ cls: 'destructive', reason: 'unknown/external git subcommand ' + sub + ' - denied in every session (R10-A)' });
+    return;
+  }
+  if (R10_ALWAYS_DENY_GIT.has(sub)) {
+    out.push({ cls: 'destructive', reason: 'git ' + sub + ' - denied in every session (R10-5)' });
+    return;
+  }
+  if (sub === 'config') {
+    const pos = rest.filter((a) => !a.startsWith('-'));
+    const key = pos[0] || '';
+    const writeish = pos.length >= 2 || rest.some((a) => /^(--add|--replace-all|--unset|--unset-all|--rename-section|--remove-section)$/i.test(a));
+    if (writeish && isProtectedConfigKey(key)) {
+      out.push({ cls: 'destructive', reason: 'git config write to protected execution key - denied in every session (R10-3)' });
+      return;
+    }
+    if (writeish && isRemoteRiskConfigKey(key)) {
+      out.push({ cls: 'destructive', reason: 'git config write to remote fetch/mirror key - denied in every session (R10-5)' });
+      return;
+    }
+  }
 
   if (sub === 'push') {
     const destructive = rest.some((a) => a === '--force' || a.startsWith('--force') || a === '--mirror' || a === '--delete' ||
@@ -636,10 +924,12 @@ function classifyGit(args, out, wrapped) {
       : { cls: 'push', reason: 'git push - denied in every Claude Code session; push manually from a normal terminal' });
     return;
   }
+
   if (INTEGRATION_SUBCOMMANDS.indexOf(sub) !== -1) {
     out.push({ cls: 'integration', reason: 'git ' + sub + ' - denied in every Claude Code session (R3m); run merge, rebase and pull manually from a normal terminal' });
     return;
   }
+
   if (sub === 'commit') {
     out.push({
       cls: 'commit',
@@ -649,22 +939,47 @@ function classifyGit(args, out, wrapped) {
     });
     return;
   }
-  if (sub === 'reset' && rest.some((a) => a === HARD_RESET_FLAG)) {
-    out.push({ cls: 'destructive', reason: 'git reset --hard' });
+
+  if (sub === 'remote' && rest[0] === 'add' &&
+      rest.slice(1).some((a) => a === '--mirror' || a.startsWith('--mirror='))) {
+    out.push({ cls: 'destructive', reason: 'git remote add --mirror* - denied in every session (R10-5)' });
     return;
   }
+
+  if (sub === 'fetch') {
+    const risky = rest.some((a) => refspecTargetsProtected(a) ||
+      /^--refmap=/.test(a) && refspecTargetsProtected(a.slice('--refmap='.length)) ||
+      a === '--mirror');
+    if (risky) {
+      out.push({ cls: 'destructive', reason: 'git fetch can move main/branch-dev - denied in every session (R10-5)' });
+      return;
+    }
+  }
+
+  if (sub === 'reset') {
+    if (rest.some((a) => a === HARD_RESET_FLAG)) {
+      out.push({ cls: 'destructive', reason: 'git reset --hard' });
+      return;
+    }
+    out.push({ cls: 'reset', reason: 'git reset', args: rest, formIssue: riskyGlobal || wrapped ? 'global/wrapped git reset form is not allowed' : null });
+    return;
+  }
+
   if (sub === 'clean' && rest.some((a) => a === '--force' || cluster(a, 'f'))) {
     out.push({ cls: 'destructive', reason: 'git clean with force' });
     return;
   }
+
   if (sub === 'branch' && rest.some((a) => a === '--delete' || cluster(a, 'dD'))) {
     out.push({ cls: 'destructive', reason: 'git branch delete' });
     return;
   }
+
   if (sub === 'update-ref' && rest.some((a) => a === '-d' || a === '--delete')) {
     out.push({ cls: 'destructive', reason: 'git update-ref -d' });
     return;
   }
+
   if (sub === 'update-ref' || sub === 'symbolic-ref' || sub === 'branch') {
     const moved = refMoveIssue(sub, rest);
     if (moved !== null) {
@@ -672,23 +987,84 @@ function classifyGit(args, out, wrapped) {
       return;
     }
   }
-  if (sub === 'worktree' && rest[0] === 'remove' && rest.some((a) => a === '--force' || cluster(a, 'f'))) {
-    out.push({ cls: 'destructive', reason: 'git worktree remove --force' });
-    return;
+
+  if (sub === 'worktree') {
+    if (rest[0] === 'remove' && rest.some((a) => a === '--force' || cluster(a, 'f'))) {
+      out.push({ cls: 'destructive', reason: 'git worktree remove --force' });
+      return;
+    }
+    if (rest[0] === 'add') {
+      if (rest.some((a) => a === '--ignore-other-worktrees')) {
+        out.push({ cls: 'destructive', reason: 'git worktree add --ignore-other-worktrees - denied in every session (R10-4)' });
+        return;
+      }
+      const addPositional = [];
+      for (let k = 1; k < rest.length; k += 1) {
+        const a = rest[k];
+        const attached = /^-[bB](.+)$/.exec(a);
+
+        if (a === '-b' || a === '-B') {
+          if (protectedRefName(rest[k + 1])) {
+            out.push({ cls: 'destructive', reason: 'git worktree add targeting main/branch-dev - denied in every session (R10-4)' });
+            return;
+          }
+          k += 1;
+          continue;
+        }
+
+        if (attached) {
+          if (protectedRefName(attached[1])) {
+            out.push({ cls: 'destructive', reason: 'git worktree add targeting main/branch-dev - denied in every session (R10-4)' });
+            return;
+          }
+          continue;
+        }
+
+        if (a === '--reason') {
+          k += 1;
+          continue;
+        }
+
+        if (a.startsWith('--reason=') || a.startsWith('-')) continue;
+
+        addPositional.push(a);
+      }
+
+      if (addPositional.length >= 2 && protectedRefName(addPositional[1])) {
+        out.push({ cls: 'destructive', reason: 'git worktree add checkout target main/branch-dev - denied in every session (R10-4)' });
+        return;
+      }
+    }
   }
+
   if (sub === 'checkout' || sub === 'switch') {
+    if (rest.some((a) => a === '--ignore-other-worktrees')) {
+      out.push({ cls: 'destructive', reason: 'git ' + sub + ' --ignore-other-worktrees - denied in every session (R10-4)' });
+      return;
+    }
     let flagTarget = null;
     let positional = null;
+    let forceCreate = false;
     for (let k = 0; k < rest.length; k += 1) {
       const a = rest[k];
       if (a === '--') break;
-      if (['-b', '-B', '-c', '-C', '--orphan'].indexOf(a) !== -1) { flagTarget = rest[k + 1] || null; k += 1; }
-      else if (a.startsWith('-')) continue;
-      else if (positional === null) positional = a;
+      if (['-b', '-B', '-c', '-C', '--orphan', '--force-create'].indexOf(a) !== -1) {
+        flagTarget = rest[k + 1] || null;
+        if (['-B', '-C', '--force-create'].indexOf(a) !== -1) forceCreate = true;
+        k += 1;
+      } else {
+        const attached = /^-([bBcC])(.+)$/.exec(a);
+        if (attached) {
+          flagTarget = attached[2];
+          if (attached[1] === 'B' || attached[1] === 'C') forceCreate = true;
+        } else if (a.startsWith('-')) continue;
+        else if (positional === null) positional = a;
+      }
     }
-    const target = (flagTarget !== null ? flagTarget : positional || '').toLowerCase().replace(/^refs\/(heads|remotes)\//, '');
-    if (MAIN_TARGETS.indexOf(target) !== -1) {
-      out.push({ cls: 'destructive', reason: 'git ' + sub + ' targeting main' });
+    const target = flagTarget !== null ? flagTarget : positional;
+    if (protectedRefName(target) || String(target || '').toLowerCase() === 'origin/main') {
+      out.push({ cls: 'destructive', reason: 'git ' + sub + ' targeting protected branch' + (forceCreate ? ' with force-create' : '') + ' - denied in every session (R10-4)' });
+      return;
     }
   }
 }
@@ -731,7 +1107,13 @@ function classifyInterpreterCode(code, out) {
   if (SPAWN_RE.test(code) && GIT_OR_NETLIFY_RE.test(code)) {
     out.push({ cls: 'interpreter', reason: 'interpreter code spawns a process referencing git/netlify' });
   }
-  if (CODE_WRITE_RE.test(code) && isProtectedText(code)) {
+
+  const codeText = normalizePath(code);
+  const dotGitInCode = /(?:^|[\/'"(\s])\.git(?:\/|['"),\s]|$)/.test(codeText);
+
+  if (CODE_WRITE_RE.test(code) && dotGitInCode) {
+    out.push({ cls: 'destructive', reason: 'interpreter code writes a .git path - denied in every session (R10-3)' });
+  } else if (CODE_WRITE_RE.test(code) && isProtectedText(code)) {
     out.push({ cls: 'protected', reason: 'interpreter code writes a protected file' });
   }
 }
@@ -740,6 +1122,8 @@ function classifyInterpreterCode(code, out) {
 function classifyFileWrite(prog, args, out) {
   const positional = args.filter((a) => !a.startsWith('-'));
   const hit = (list, what) => {
+    const dg = list.find((a) => isDotGitText(a));
+    if (dg !== undefined) { out.push({ cls: 'destructive', reason: what + ' .git path ' + dg + ' - denied in every session (R10-3)' }); return; }
     const t = list.find((a) => isProtectedText(a));
     if (t !== undefined) out.push({ cls: 'protected', reason: what + ' protected file ' + t });
   };
@@ -808,14 +1192,15 @@ function refMoveIssue(sub, rest) {
   const flags = [];
   for (let k = 0; k < rest.length; k += 1) {
     const a = rest[k];
-    if (a === '-m' && (sub === 'update-ref' || sub === 'symbolic-ref')) { k += 1; continue; } // -m <reason>
+    if (a === '-m' && (sub === 'update-ref' || sub === 'symbolic-ref')) { k += 1; continue; }
     if (a.startsWith('-')) flags.push(a);
     else pos.push(a);
   }
-  const why = 'git ' + sub + ' moves main/branch-dev - denied in every session (RC4)';
+  const why = 'git ' + sub + ' moves main/branch-dev - denied in every session (RC4/R10-4)';
   if (sub === 'update-ref') {
     if (flags.indexOf('--stdin') !== -1) return 'git update-ref --stdin cannot be resolved - denied in every session (RC4)';
     const target = pos[0];
+    if (String(target || '').toUpperCase() === 'HEAD') return 'git update-ref HEAD - denied in every session (R10-4)';
     return target !== undefined && isRefMoveTarget(target) ? why : null;
   }
   if (sub === 'symbolic-ref') {
@@ -824,6 +1209,7 @@ function refMoveIssue(sub, rest) {
   const short = flags.filter((a) => /^-[a-zA-Z]+$/.test(a)).join('');
   const move = flags.some((a) => a === '--move' || a === '--copy') || /[mMcC]/.test(short);
   const force = flags.some((a) => a === '--force') || /f/.test(short);
+  if (move && pos.length === 1) return 'git branch one-name move/copy - denied in every session (R10-4)';
   if (move) return pos.some(isRefMoveTarget) ? why : null;
   if (force) return pos.length > 0 && isRefMoveTarget(pos[0]) ? why : null;
   return null;
@@ -854,12 +1240,12 @@ function readHeadRefFs(root) {
 }
 // Staged paths: --no-renames lists BOTH sides of a rename (renaming a protected file away must still show its old path); GIT_* is stripped
 // from the child env and locks are optional so the read never writes.
-function stagedPathsGit(root) {
+function stagedPathsGit(root, deadline) {
   const env = {};
   for (const k of Object.keys(process.env)) if (!/^GIT_/i.test(k)) env[k] = process.env[k];
   env.GIT_OPTIONAL_LOCKS = '0';
   const r = spawnSync('git', ['diff', '--cached', '--name-only', '-z', '--no-renames'], {
-    cwd: root, env, encoding: 'utf8', timeout: 5000, windowsHide: true, maxBuffer: 16 * 1024 * 1024
+    cwd: root, env, encoding: 'utf8', timeout: spawnBudgetMs(deadline), windowsHide: true, maxBuffer: 16 * 1024 * 1024
   });
   if (r.error) throw r.error;
   if (r.status !== 0) throw new Error('git diff exited ' + r.status);
@@ -876,7 +1262,78 @@ function findRepoRootFs(cwd) {
     dir = parent;
   }
 }
-const DEFAULT_DEPS = { readHeadRef: readHeadRefFs, stagedPaths: stagedPathsGit, repoRoot: findRepoRootFs };
+function gitDirInfoFs(root) {
+  const dotGit = path.join(root, '.git');
+  const st = fs.statSync(dotGit);
+  if (st.isDirectory()) return { gitDir: dotGit, commonDir: dotGit };
+  if (!st.isFile()) throw new Error('.git is neither a file nor a directory');
+  const m = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(dotGit, 'utf8'));
+  if (!m) throw new Error('unrecognised .git file');
+  const gitDir = path.isAbsolute(m[1]) ? m[1] : path.resolve(root, m[1]);
+  const commonDir = /[\\/]worktrees[\\/][^\\/]+$/i.test(gitDir) ? path.dirname(path.dirname(gitDir)) : gitDir;
+  return { gitDir, commonDir };
+}
+function protectedConfigStateGit(root, deadline) {
+  const env = Object.assign({}, process.env, { GIT_OPTIONAL_LOCKS: '0' });
+  const r = spawnSync('git', ['config', '--null', '--list'], { cwd: root, env, encoding: 'utf8', timeout: spawnBudgetMs(deadline), windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+  if (r.error) throw r.error;
+  if (r.status !== 0) throw new Error('git config exited ' + r.status);
+  const bad = [];
+  for (const rec of String(r.stdout || '').split('\0')) {
+    if (!rec) continue;
+    const nl = rec.indexOf('\n');
+    const key = (nl === -1 ? rec : rec.slice(0, nl)).trim();
+    const value = nl === -1 ? '' : rec.slice(nl + 1).trim();
+    if (/^core\.fsmonitor$/i.test(key)) {
+      if (!/^(?:true|false|yes|no|on|off|0|1)$/i.test(value)) bad.push(key + '=' + value);
+    } else if (R10_PROTECTED_CONFIG_RE.test(key)) bad.push(key + '=' + value);
+  }
+  return { ok: bad.length === 0, bad };
+}
+function hooksStateFs(root) {
+  const info = gitDirInfoFs(root);
+  const dir = path.join(info.commonDir, 'hooks');
+  if (!fs.existsSync(dir)) return { ok: true, bad: [] };
+  const bad = fs.readdirSync(dir).filter((name) => !/\.sample$/i.test(name));
+  return { ok: bad.length === 0, bad };
+}
+function resolveFileToolTargetFs(cwd, raw) {
+  if (typeof cwd !== 'string' || !cwd || typeof raw !== 'string' || !raw) throw new Error('file path/cwd missing');
+
+  const realpath = (p) => fs.realpathSync.native ? fs.realpathSync.native(p) : fs.realpathSync(p);
+
+  const cwdStat = fs.statSync(cwd);
+  if (!cwdStat.isDirectory()) throw new Error('cwd is not a directory');
+
+  const abs = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(cwd, raw);
+
+  if (fs.existsSync(abs)) return realpath(abs);
+
+  let probe = abs;
+  const missing = [];
+
+  for (;;) {
+    if (fs.existsSync(probe)) break;
+
+    const parent = path.dirname(probe);
+    if (parent === probe) throw new Error('no existing ancestor');
+
+    missing.unshift(path.basename(probe));
+    probe = parent;
+  }
+
+  const ancestor = realpath(probe);
+  return path.join(ancestor, ...missing);
+}
+const DEFAULT_DEPS = {
+  readHeadRef: readHeadRefFs,
+  stagedPaths: stagedPathsGit,
+  repoRoot: findRepoRootFs,
+  protectedConfigState: protectedConfigStateGit,
+  hooksState: hooksStateFs,
+  pathExists: (p) => fs.existsSync(p),
+  resolveFileToolTarget: resolveFileToolTargetFs
+};
 
 function commitDeny(cause) {
   return { decision: 'deny', reason: 'git commit - ' + cause + ' - commit from a normal terminal (R3c)' };
@@ -908,9 +1365,17 @@ function commitGate(f, cwd, slot, gitCount, deps) {
     return commitDeny('HEAD could not be read (' + (e && e.message ? e.message : String(e)) + ')');
   }
   if (typeof head !== 'string' || !TASK_BRANCH_RE.test(head.trim())) return commitDeny('HEAD is not on a task/* branch');
+  let cfg;
+  try { cfg = deps.protectedConfigState(root, deps.deadline); }
+  catch (e) { return commitDeny('git config integrity could not be verified (' + (e && e.message ? e.message : String(e)) + ')'); }
+  if (!cfg || cfg.ok !== true) return commitDeny('protected git config is active (' + ((cfg && cfg.bad) || []).join(', ') + ')');
+  let hooks;
+  try { hooks = deps.hooksState(root); }
+  catch (e) { return commitDeny('git hooks integrity could not be verified (' + (e && e.message ? e.message : String(e)) + ')'); }
+  if (!hooks || hooks.ok !== true) return commitDeny('non-sample git hooks are installed (' + ((hooks && hooks.bad) || []).join(', ') + ')');
   let staged;
   try {
-    staged = deps.stagedPaths(root);
+    staged = deps.stagedPaths(root, deps.deadline);
   } catch (e) {
     return commitDeny('the staged set could not be read (' + (e && e.message ? e.message : String(e)) + ')');
   }
@@ -918,6 +1383,55 @@ function commitGate(f, cwd, slot, gitCount, deps) {
   const bad = staged.find((p) => isStagedDenied(p));
   if (bad !== undefined) return commitDeny('the staged set touches a protected path (' + bad + ')');
   return { decision: 'allow', reason: 'commit gate passed (own task branch, plain form, clean staged set)' };
+}
+
+function resetGate(f, cwd, slot, deps) {
+  if (slot) return { decision: 'allow', reason: 'task-slot reset behavior unchanged' };
+  if (f.formIssue) return { decision: 'deny', reason: 'git reset - ' + f.formIssue + ' (R10-5)' };
+  if (typeof cwd !== 'string' || !cwd) return { decision: 'deny', reason: 'git reset - cwd unknown (R10-5)' };
+  if (Object.keys(process.env).some((k) => R10_GIT_OVERRIDE_RE.test(k))) return { decision: 'deny', reason: 'git reset with GIT_DIR/GIT_WORK_TREE environment override - denied (R10-5)' };
+  let root;
+  let head;
+  try { root = deps.repoRoot(cwd); head = deps.readHeadRef(root); }
+  catch (e) { return { decision: 'deny', reason: 'git reset - protected HEAD could not be verified (R10-5)' }; }
+  const m = /^ref:\s+refs\/heads\/(.+)$/i.exec(String(head).trim());
+  if (!m || !protectedRefName(m[1])) return { decision: 'allow', reason: 'reset is not on main/branch-dev' };
+  const a = (f.args || []).filter((x) => x !== '-q' && x !== '--quiet');
+  if (a.length === 0) return { decision: 'allow', reason: 'harmless index reset on protected branch' };
+  if (a[0] === '--' && a.length > 1) return { decision: 'allow', reason: 'path-only unstaging on protected branch' };
+
+  if (/^HEAD$/i.test(a[0] || '')) {
+    if (a.length === 1) return { decision: 'allow', reason: 'harmless HEAD index reset on protected branch' };
+    if (a[1] === '--' && a.length > 2) return { decision: 'allow', reason: 'HEAD path-only unstaging on protected branch' };
+    if (a.length > 1 && !String(a[1]).startsWith('-')) return { decision: 'allow', reason: 'HEAD path-only unstaging on protected branch' };
+  }
+
+  if (/^refs\/heads\/(?:main|branch-dev)$/i.test(a[0] || '') &&
+      a.length > 1 &&
+      !String(a[1]).startsWith('-')) {
+    return { decision: 'allow', reason: 'protected-ref path-only unstaging on protected branch' };
+  }
+
+  if (a.length === 1 && !String(a[0]).startsWith('-')) {
+    const fp = path.resolve(root, a[0]);
+    if (deps.pathExists(fp)) return { decision: 'allow', reason: 'existing-file unstaging on protected branch' };
+  }
+  return { decision: 'deny', reason: 'git reset can move main/branch-dev - denied in every session (R10-5)' };
+}
+
+function fileToolDecision(input, deps) {
+  const tool = input && input.tool_name;
+  if (!R10_FILE_TOOLS.has(tool)) return { decision: 'allow', reason: 'no opinion on tool ' + String(tool) };
+  const ti = input.tool_input || {};
+  const raw = ti.file_path || ti.path || ti.notebook_path || ti.filePath || ti.notebookPath;
+  if (typeof raw !== 'string' || !raw) return { decision: 'deny', reason: tool + ' path missing/unresolvable - denied (R10-6)' };
+  try {
+    const resolved = deps.resolveFileToolTarget(input.cwd, raw);
+    if (isDotGitText(resolved) || isDotGitText(raw)) return { decision: 'deny', reason: tool + ' targeting .git - denied in every session (R10-6)' };
+    return { decision: 'allow', reason: 'no .git file-tool target detected' };
+  } catch (e) {
+    return { decision: 'deny', reason: tool + ' path could not be resolved - denied fail-closed (R10-6)' };
+  }
 }
 
 function decisionFor(cls, slot) {
@@ -941,30 +1455,48 @@ function decisionFor(cls, slot) {
 
 function decide(input, deps) {
   const tool = input && input.tool_name;
+  const deadline = Date.now() + R10_BUDGET_MS;
+  const gateDeps = Object.assign({}, DEFAULT_DEPS, deps, { deadline });
+  if (R10_FILE_TOOLS.has(tool)) return fileToolDecision(input, gateDeps);
   if (tool !== 'Bash' && tool !== 'PowerShell') return { decision: 'allow', reason: 'no opinion on tool ' + String(tool) };
-  // R2: the PowerShell tool is denied outright in Worker-slot sessions (closes the alias/variable/function indirection class).
   if (tool === 'PowerShell' && isWorkerSlot(input.cwd)) return { decision: 'deny', reason: 'PowerShell tool - denied in Worker-slot sessions (R2)' };
   const command = input.tool_input && input.tool_input.command;
   if (typeof command !== 'string') return { decision: 'deny', reason: 'missing or non-string command (fail closed)' };
 
   const findings = [];
-  try {
-    analyze(command, 0, findings);
-  } catch (e) {
+  try { analyze(command, 0, findings); }
+  catch (e) {
     if (e instanceof Unresolvable) return { decision: 'deny', reason: 'command could not be fully resolved (' + e.message + ') - fail closed' };
     throw e;
   }
+
+  // R10-1: run a second classifier pass after shell escape removal. It is deny-only and never invokes the commit gate.
+  const stripped = stripShellEscapes(command, tool);
+  if (stripped !== command) {
+    const alt = [];
+    try { analyze(stripped, 0, alt); }
+    catch (e) { return { decision: 'deny', reason: 'escape-normalized command could not be fully resolved - denied (R10-E)' }; }
+    const norm = (arr) => arr.filter((f) => !(tool === 'Bash' && f.cls === 'git-program')).map((f) => f.cls + '|' + String(f.reason || '')).sort();
+    const before = new Set(norm(findings));
+    const revealed = norm(alt).find((x) => !before.has(x));
+    if (revealed !== undefined) return { decision: 'deny', reason: 'shell escapes conceal a restricted operation - denied (R10-E)' };
+  }
+
+  if (Date.now() >= deadline) return { decision: 'deny', reason: 'r10 guard time budget exhausted - denied fail-closed (R10-7)' };
   const slot = isWorkerSlot(input.cwd);
   const gitCount = findings.filter((f) => f.cls === 'git-program').length;
-  const gateDeps = Object.assign({}, DEFAULT_DEPS, deps);
   let best = { decision: 'allow', reason: 'no restricted operation detected' };
-  // R2: any resolved git program is denied for the PowerShell tool only; the marker is ignored for Bash.
   const effective = tool === 'PowerShell' ? findings : findings.filter((f) => f.cls !== 'git-program');
   for (const f of effective) {
+    if (Date.now() >= deadline) return { decision: 'deny', reason: 'r10 guard time budget exhausted - denied fail-closed (R10-7)' };
     if (f.cls === 'commit') {
-      // the PowerShell tool is already denied for git (R2, git-program marker above), so the gate reads nothing for it
       if (tool === 'PowerShell') continue;
       const g = commitGate(f, input.cwd, slot, gitCount, gateDeps);
+      if (SEVERITY[g.decision] > SEVERITY[best.decision]) best = g;
+      continue;
+    }
+    if (f.cls === 'reset') {
+      const g = resetGate(f, input.cwd, slot, gateDeps);
       if (SEVERITY[g.decision] > SEVERITY[best.decision]) best = g;
       continue;
     }
@@ -988,9 +1520,9 @@ function runCli(stdinText, opts) {
     }
     if (!input || typeof input !== 'object' || Array.isArray(input)) return block('hook input is not a JSON object (fail closed)');
     const tool = input.tool_name;
-    if (tool !== 'Bash' && tool !== 'PowerShell') return { code: 0, stdout: '', stderr: '' };
-    const toolInput = input.tool_input;
-    if (!toolInput || typeof toolInput.command !== 'string') return block('missing or non-string command (fail closed)');
+    if (tool !== 'Bash' && tool !== 'PowerShell' && !R10_FILE_TOOLS.has(tool)) return { code: 0, stdout: '', stderr: '' };
+    const toolInput = input.tool_input || {};
+    if ((tool === 'Bash' || tool === 'PowerShell') && typeof toolInput.command !== 'string') return block('missing or non-string command (fail closed)');
     const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : process.env.CLAUDE_PROJECT_DIR;
     const r = decideFn({ tool_name: tool, tool_input: toolInput, cwd }, opts && opts.deps);
     if (!r || typeof r.reason !== 'string' || !Object.prototype.hasOwnProperty.call(SEVERITY, r.decision)) {
@@ -1010,7 +1542,7 @@ function runCli(stdinText, opts) {
   }
 }
 
-module.exports = { decide, runCli, isWorkerSlot, FAIL_CLOSED_EXIT };
+module.exports = { decide, runCli, isWorkerSlot, FAIL_CLOSED_EXIT, spawnBudgetMs, stripShellEscapes, KNOWN_GIT_SUBCOMMANDS };
 
 if (require.main === module) {
   process.on('uncaughtException', () => process.exit(FAIL_CLOSED_EXIT));

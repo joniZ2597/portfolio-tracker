@@ -56,7 +56,11 @@ if (loadError) console.log('  (load error: ' + loadError.message + ')');
 
 // r9 commit gate: table rows never touch the real fs / git, they read this fixed task branch and empty staged set (AH-16 covers the real readers)
 const slotRootFromCwd = (cwd) => { const m = /^(.*?\/pt-wt-worker-[ab])(?:\/|$)/i.exec(String(cwd).replace(/\\/g, '/').replace(/\/+/g, '/')); return m ? m[1] : undefined; };
-const TEST_DEPS = { readHeadRef: () => 'ref: refs/heads/task/x', stagedPaths: () => [], repoRoot: slotRootFromCwd };
+// r10: hermetic stubs for the new commit-gate / reset-gate / file-tool deps so table rows never touch real git/fs.
+const OK_CFG = () => ({ ok: true, bad: [] });
+const OK_HOOKS = () => ({ ok: true, bad: [] });
+const R10_STUBS = { protectedConfigState: OK_CFG, hooksState: OK_HOOKS, pathExists: () => false, resolveFileToolTarget: (cwd, raw) => String(raw) };
+const TEST_DEPS = Object.assign({ readHeadRef: () => 'ref: refs/heads/task/x', stagedPaths: () => [], repoRoot: slotRootFromCwd }, R10_STUBS);
 function dec(mod, command, cwd, tool) {
   try {
     return mod.decide({ tool_name: tool || 'Bash', tool_input: { command }, cwd: cwd === undefined ? SLOT_A : cwd }, TEST_DEPS);
@@ -680,20 +684,22 @@ for (const cmd of ['git merge x', 'git rebase y', 'git pull', 'git -C x pull --r
 // else is denied with R3c (commit from a normal terminal). Table rows inject the two readers, so they never touch the real fs / git;
 // the temp-repo block at the end of this section drives the REAL readers. Nothing here creates a commit in the repository under test.
 const HEAD_TASK = 'ref: refs/heads/task/x';
-function depsOf(head, staged, log, repo) {
-  return {
+function depsOf(head, staged, log, repo, cfg, hooks) {
+  return Object.assign({}, R10_STUBS, {
     readHeadRef: (root) => { if (log) log.push(['head', root]); return typeof head === 'function' ? head(root) : head; },
     stagedPaths: (root) => { if (log) log.push(['staged', root]); return typeof staged === 'function' ? staged(root) : staged; },
     // the repository that contains the session cwd: by default the slot itself (nested repos / worktrees are exercised through `repo`)
-    repoRoot: (cwd) => { if (log) log.push(['repo', cwd]); return typeof repo === 'function' ? repo(cwd) : repo !== undefined ? repo : slotRootFromCwd(cwd); }
-  };
+    repoRoot: (cwd) => { if (log) log.push(['repo', cwd]); return typeof repo === 'function' ? repo(cwd) : repo !== undefined ? repo : slotRootFromCwd(cwd); },
+    protectedConfigState: (root) => { if (log) log.push(['cfg', root]); return typeof cfg === 'function' ? cfg(root) : cfg !== undefined ? cfg : { ok: true, bad: [] }; },
+    hooksState: (root) => { if (log) log.push(['hooks', root]); return typeof hooks === 'function' ? hooks(root) : hooks !== undefined ? hooks : { ok: true, bad: [] }; }
+  });
 }
-function dc(command, cwd, head, staged, tool, log, repo) {
+function dc(command, cwd, head, staged, tool, log, repo, cfg, hooks) {
   if (!guard) return { decision: 'NOMODULE', reason: '' };
   const input = { tool_name: tool || 'Bash', tool_input: { command } };
   if (cwd !== NO_CWD) input.cwd = cwd;
   try {
-    return guard.decide(input, depsOf(head, staged, log, repo));
+    return guard.decide(input, depsOf(head, staged, log, repo, cfg, hooks));
   } catch (e) {
     return { decision: 'THROW', reason: String(e && e.message) };
   }
@@ -742,12 +748,19 @@ const COMMIT_FORM_DENY = [
   'git commit -m "$(git add -A; echo m)"', 'git commit -m "$(git log -1 --format=%s)"', 'iex "git commit -m x"', 'npx git commit -m x',
   'git commit --amend', 'git commit --amend -m x', 'git commit --amend --no-edit', 'git commit -m x --amend', 'git commit -a --amend'
 ];
+// r10: a GIT_DIR/GIT_WORK_TREE command prefix on git is denied earlier via R10-5 (destructive), not the R3c commit gate.
+const R10_ENV_PREFIX_COMMIT = /^GIT_(?:DIR|WORK_TREE)=/;
 for (const cwd of [SLOT_A, SLOT_B_SUB]) {
   for (const cmd of COMMIT_FORM_DENY) {
     const log = [];
     const r = dc(cmd, cwd, HEAD_TASK, [], 'Bash', log);
-    check('AH-16 form deny [slot ' + cwd + '] ' + JSON.stringify(cmd) + ' -> deny with R3c, no reads (got ' + r.decision + ', reads ' + log.length + ')',
-      r.decision === 'deny' && /R3c/.test(r.reason) && /normal terminal/.test(r.reason) && log.length === 0);
+    if (R10_ENV_PREFIX_COMMIT.test(cmd)) {
+      check('AH-16 form deny [slot ' + cwd + '] ' + JSON.stringify(cmd) + ' -> deny via R10-5, no reads (got ' + r.decision + ', reads ' + log.length + ')',
+        r.decision === 'deny' && /R10-5/.test(r.reason) && log.length === 0);
+    } else {
+      check('AH-16 form deny [slot ' + cwd + '] ' + JSON.stringify(cmd) + ' -> deny with R3c, no reads (got ' + r.decision + ', reads ' + log.length + ')',
+        r.decision === 'deny' && /R3c/.test(r.reason) && /normal terminal/.test(r.reason) && log.length === 0);
+    }
   }
 }
 // RC3: --amend is named in the reason
@@ -846,7 +859,7 @@ const RC4_ALLOW = ['git update-ref refs/heads/x abc', 'git update-ref refs/heads
 for (const cwd of [SLOT_A, MAIN, NO_CWD]) {
   for (const cmd of RC4_DENY) {
     const r = dc(cmd, cwd, HEAD_TASK, []);
-    check('AH-16 RC4 [Bash ' + cwdLabel(cwd) + '] ' + cmd + ' -> deny (got ' + r.decision + ')', r.decision === 'deny' && /RC4/.test(r.reason));
+    check('AH-16 RC4 [Bash ' + cwdLabel(cwd) + '] ' + cmd + ' -> deny (got ' + r.decision + ')', r.decision === 'deny' && /RC4|R10-4/.test(r.reason));
   }
   for (const cmd of RC4_ALLOW) check('AH-16 RC4 control [Bash ' + cwdLabel(cwd) + '] ' + cmd + ' -> allow', dc(cmd, cwd, HEAD_TASK, []).decision === 'allow');
 }
@@ -1092,7 +1105,7 @@ mutantCatches('wrapper unwrap dropped (bash -c)', "'bash', 'sh', 'zsh'", "'zsh'"
   (m) => dec(m, 'bash -c "git push"', SLOT_A).decision === 'deny');
 mutantCatches('netlify deploy not write', "'deploy'", "'deploy-x'",
   (m) => dec(m, 'netlify deploy', SLOT_A).decision === 'deny');
-mutantCatches('checkout main not destructive', "'origin/main'", "'origin/main-x'",
+mutantCatches('checkout main not destructive', "=== 'origin/main'", "=== 'origin/main-x'",
   (m) => dec(m, 'git checkout origin/main', MAIN).decision === 'deny');
 mutantCatches('R2 git-program marker dropped', "out.push({ cls: 'git-program'", "void ({ cls: 'git-program'",
   (m) => dec(m, "& 'C:/Program Files/Git/cmd/git.exe' status", MAIN, 'PowerShell').decision === 'deny'); // main cwd: the slot blanket deny would mask it
@@ -1290,7 +1303,7 @@ mutantCatches('RC4 symbolic-ref dropped', 'return pos.length >= 2 && (isRefMoveT
   (m) => cd(m, 'git symbolic-ref HEAD refs/heads/main', MAIN) === 'deny');
 mutantCatches('RC4 target list narrowed (branch-dev dropped)', "const REF_MOVE_TARGETS = ['main', 'branch-dev'];", "const REF_MOVE_TARGETS = ['main'];",
   (m) => cd(m, 'git update-ref refs/heads/branch-dev HEAD', MAIN) === 'deny');
-mutantCatches('RC4 refs/heads/ prefix not stripped', ".replace(/^refs\\/heads\\//, '')", '',
+mutantCatches('RC4 refs/heads/ prefix not stripped', "REF_MOVE_TARGETS.indexOf(String(name).toLowerCase().replace(/^refs\\/heads\\//, ''))", 'REF_MOVE_TARGETS.indexOf(String(name).toLowerCase())',
   (m) => cd(m, 'git update-ref refs/heads/main abc', MAIN) === 'deny');
 mutantCatches('RC4 block skipped (branch subcommand)', "if (sub === 'update-ref' || sub === 'symbolic-ref' || sub === 'branch') {", "if (false) {",
   (m) => cd(m, 'git branch -f main abc', MAIN) === 'deny');
@@ -1350,6 +1363,8 @@ const RC5_ALLOW_ADDED = ['Bash(git commit)', 'Bash(git commit *)'];
 const EXPECT_ASK = [...BASE_ASK.filter((x) => MOVED_TO_DENY.indexOf(x) === -1), ...ADD_ASK].filter((x) => RC5_ASK_REMOVED.indexOf(x) === -1);
 const EXPECT_ALLOW = [...BASE_ALLOW, ...RC5_ALLOW_ADDED];
 const HOOK_COMMAND = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/pretooluse-guard.js"';
+// r10 R10-6: the Owner-applied matcher extends coverage to the file tools.
+const R10_MATCHER = 'Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit';
 
 function sameSet(a, b) {
   const sa = new Set(a);
@@ -1370,14 +1385,14 @@ function settingsProblems(s) {
   if (perms.defaultMode !== 'acceptEdits') p.push('defaultMode is not acceptEdits');
   if (/bypassPermissions|"auto"/.test(JSON.stringify(s))) p.push('bypassPermissions/auto present');
   const pre = s && s.hooks && s.hooks.PreToolUse;
-  const wired = Array.isArray(pre) && pre.some((e) => e && e.matcher === 'Bash|PowerShell' && Array.isArray(e.hooks) &&
+  const wired = Array.isArray(pre) && pre.some((e) => e && e.matcher === R10_MATCHER && Array.isArray(e.hooks) &&
     e.hooks.some((h) => h && h.type === 'command' && h.command === HOOK_COMMAND && h.timeout === 10));
-  if (!wired) p.push('PreToolUse hook not wired with matcher Bash|PowerShell / exact command / timeout 10');
+  if (!wired) p.push('PreToolUse hook not wired with matcher ' + R10_MATCHER + ' / exact command / timeout 10');
   return p;
 }
 function appliedSettings() {
   return {
-    hooks: { PreToolUse: [{ matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: HOOK_COMMAND, timeout: 10 }] }] },
+    hooks: { PreToolUse: [{ matcher: R10_MATCHER, hooks: [{ type: 'command', command: HOOK_COMMAND, timeout: 10 }] }] },
     permissions: {
       deny: [...BASE_DENY, ...ADD_DENY],
       ask: EXPECT_ASK.slice(),
@@ -1438,6 +1453,357 @@ if (realSettings) {
 for (const rule of BASE_ALLOW.filter((r) => /^Bash\(/.test(r))) {
   const cmd = rule.slice(5, -1).replace(/\*/g, 'x');
   check('AH-10 (base) ' + rule + ' -> allow', d(cmd, SLOT_A).decision === 'allow' && d(cmd, MAIN).decision === 'allow');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// AH-17 — r10 bypass families (brief §1 T1–T5) -> deny in slot / main / missing-cwd (decide + CLI).
+// AH-18 — R10-8 integrity check. Plus R10-1..R10-8 production mutants.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+const integrity = require(path.join(ROOT, 'qa', 'guard_integrity_check.js'));
+const IDENTITY_FT = Object.assign({}, TEST_DEPS, { resolveFileToolTarget: (c, x) => String(x) });
+const AH17_CWDS = [SLOT_A, MAIN, NO_CWD];
+function dAtF(command, cwd) { // dAt but forces the identity file-resolver hermetic stub set
+  if (!guard) return { decision: 'NOMODULE', reason: '' };
+  const input = { tool_name: 'Bash', tool_input: { command } };
+  if (cwd !== NO_CWD) input.cwd = cwd;
+  try { return guard.decide(input, IDENTITY_FT); } catch (e) { return { decision: 'THROW', reason: String(e && e.message) }; }
+}
+function denyAll(label, rows, reasonRe) {
+  for (const cmd of rows) for (const cwd of AH17_CWDS) {
+    const r = dAtF(cmd, cwd);
+    check('AH-17 ' + label + ' [' + cwdLabel(cwd) + '] ' + JSON.stringify(cmd) + ' -> deny (got ' + r.decision + ')',
+      r.decision === 'deny' && (!reasonRe || reasonRe.test(r.reason)));
+  }
+}
+
+// ── AH-17a R10-1 escape differential ──
+const T1_ESCAPE_DENY = ['g\\it push', 'git pu\\sh', 'git me\\rge x', 'git re\\base x', 'git pu\\ll', 'git c\\ommit -am x',
+  'git reset --h\\ard', 'git checkout ma\\in', 'git update-ref refs/heads/branch-d\\ev X', 'n\\etlify deploy --prod'];
+denyAll('T1 escape-diff', T1_ESCAPE_DENY);
+check('AH-17 T1d PowerShell backtick escape at main -> deny', dAtF('g`it push', MAIN).decision === 'deny' || d('g`it push', MAIN, 'PowerShell').decision === 'deny');
+for (const c of ['echo a\\ b', 'echo hi', 'git status'])
+  check('AH-17 escape control (literal unchanged) allow ' + JSON.stringify(c), dAtF(c, SLOT_A).decision === 'allow');
+check('AH-17 stripShellEscapes Bash strips unquoted backslash', guard && guard.stripShellEscapes('g\\it push', 'Bash') === 'git push');
+check('AH-17 stripShellEscapes single-quote preserved', guard && guard.stripShellEscapes("echo 'a\\b'", 'Bash') === "echo 'a\\b'");
+check('AH-17 stripShellEscapes PowerShell backtick stripped', guard && guard.stripShellEscapes('g`it push', 'PowerShell') === 'git push');
+
+// ── AH-17b R10-2 subcommand allowlist + git-<sub> ──
+const T2_DENY = ['git p', 'git -c alias.p=push p', 'git -c alias.ci=commit ci -am x', 'git -c alias.m=merge m x',
+  'git --config-env=alias.p=V p', 'git zzz', 'git lfs push', 'git-push', 'git-lfs push',
+  '"C:/Program Files/Git/mingw64/libexec/git-core/git-push.exe" origin x'];
+denyAll('T2 unknown-sub', T2_DENY, /R10-A|push/);
+for (const c of ['git status', 'git log --oneline -3', 'git diff --stat', 'git show HEAD', 'git rev-parse HEAD', 'git worktree list'])
+  check('AH-17 T2 known-sub control allow ' + c, dAtF(c, SLOT_A).decision === 'allow');
+check('AH-17 R10-2 allowlist push/commit/reset present, zzz absent, size>150',
+  guard && guard.KNOWN_GIT_SUBCOMMANDS.has('push') && guard.KNOWN_GIT_SUBCOMMANDS.has('commit') && guard.KNOWN_GIT_SUBCOMMANDS.has('reset') &&
+  !guard.KNOWN_GIT_SUBCOMMANDS.has('zzz') && guard.KNOWN_GIT_SUBCOMMANDS.size > 150);
+
+// ── AH-17c R10-3 config execution paths ──
+const T3_CONFIG_DENY = ['git config core.hooksPath /tmp/h', 'git config include.path /tmp/f', 'git config --add includeIf.gitdir:x.path /tmp/f',
+  'git config core.fsmonitor /tmp/p', 'git -c core.fsmonitor=/tmp/p status', 'git -c core.hooksPath=/tmp/h status', 'git -c include.path=/tmp/f log',
+  'git --config-env=core.hooksPath=X status', 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/tmp/h git checkout x',
+  'GIT_CONFIG_GLOBAL=/tmp/g git status', 'GIT_CONFIG_SYSTEM=/tmp/s git status', 'GIT_CONFIG_PARAMETERS=x git status'];
+denyAll('T3 config-exec', T3_CONFIG_DENY, /R10-3/);
+for (const c of ['git config --get core.hooksPath', 'git config --get-regexp core', 'git config --list', 'git config pull.rebase true'])
+  check('AH-17 R10-3 read/benign control allow ' + c, dAtF(c, SLOT_A).decision === 'allow');
+
+// ── AH-17d R10-3c .git writers ──
+const T3_DOTGIT_DENY = ['echo x > .git/config', 'echo x >> .git/hooks/pre-commit', 'cp x ../portfolio-tracker/.git/hooks/pre-commit',
+  'cp x .git/config', 'mv x .git/hooks/pre-commit', 'tee .git/config', 'sed -i s/a/b/ .git/config', 'echo x > ./.git/config',
+  'echo x > sub/.git/hooks/h', 'cp x C:/repo/.GIT/hooks/h', 'Set-Content .git/config x',
+  'node -e "require(\'fs\').writeFileSync(\'.git/hooks/pre-commit\',\'x\')"'];
+denyAll('T3c dotgit-write', T3_DOTGIT_DENY);
+for (const c of ['echo x > .github/workflows/ci.yml', 'cp x .gitmodules', 'echo x > sub/notes.txt'])
+  check('AH-17 T3c non-.git control allow ' + c, dAtF(c, SLOT_A).decision === 'allow');
+
+// ── AH-17e R10-4 ref-moving ──
+const T4_DENY = ['git update-ref HEAD abc', 'git update-ref --no-deref HEAD abc', 'git branch -m newname', 'git branch -M single',
+  'git checkout -B branch-dev', 'git checkout -Bbranch-dev', 'git checkout -BBRANCH-DEV', 'git switch -C branch-dev', 'git switch -Cbranch-dev',
+  'git switch --force-create branch-dev', 'git checkout -B refs/heads/main', 'git checkout -B main', 'git switch -Cmain',
+  'git worktree add -B branch-dev ../w', 'git worktree add -Bmain ../w', 'git worktree add ../w branch-dev', 'git worktree add ../w main',
+  'git worktree add -f ../w branch-dev', 'git worktree add --detach ../w branch-dev', 'git worktree add --ignore-other-worktrees ../w abc',
+  'git checkout --ignore-other-worktrees x', 'git switch --ignore-other-worktrees branch-dev'];
+denyAll('T4 refmove', T4_DENY, /R10-4|RC4/);
+for (const c of ['git checkout -B task/x', 'git switch -c task/y', 'git checkout -B branch-dev-feature', 'git branch -m old new',
+  'git worktree add ../w task/z', 'git worktree add ../w', 'git worktree add -b task/w ../w', 'git worktree add ../w HEAD~1', 'git checkout -b feature main'])
+  check('AH-17 T4 control allow ' + c, dAtF(c, SLOT_A).decision === 'allow');
+
+// ── AH-17f R10-5 other ref-moving / commit-creating ──
+const T5_DENY = ['git cherry-pick abc', 'git revert HEAD', 'git am x.patch', 'git filter-branch --all',
+  'git fetch . task/x:branch-dev', 'git fetch origin +main:main', 'git fetch --refmap=+refs/heads/*:refs/heads/main origin',
+  'git fetch origin refs/heads/x:refs/heads/branch-dev', 'git fetch --mirror origin',
+  'git config remote.origin.fetch +refs/heads/*:refs/heads/*', 'git config remote.origin.mirror true', 'git config --add remote.o.fetch x',
+  'git remote add --mirror=fetch m .', 'git remote add --mirror=push m .', 'git remote add --mirror m .'];
+denyAll('T5 refmove-commit', T5_DENY, /R10-5/);
+for (const c of ['git fetch origin', 'git fetch origin refs/heads/x:refs/heads/feature', 'git config --get remote.origin.fetch', 'git remote add -m master m .', 'git remote -v'])
+  check('AH-17 T5 control allow ' + c, dAtF(c, SLOT_A).decision === 'allow');
+
+// ── AH-17f R10-5 canonical reset (HEAD=branch-dev/main; slot keeps old behavior) ──
+function decCanonReset(cmd) {
+  const deps = Object.assign({}, depsOf('ref: refs/heads/branch-dev', [], undefined, () => MAIN),
+    { pathExists: (p) => path.basename(String(p)) === 'keep.txt', resolveFileToolTarget: (c, r) => String(r) });
+  try { return guard.decide({ tool_name: 'Bash', tool_input: { command: cmd }, cwd: MAIN }, deps).decision; } catch (e) { return 'THROW'; }
+}
+for (const c of ['git reset --soft HEAD~1', 'git reset --mixed HEAD~1', 'git reset HEAD~1', 'git reset abc123', 'git reset --soft branch-dev', 'git reset nonexistent-file'])
+  check('AH-17 R10-5 canonical reset deny ' + c, decCanonReset(c) === 'deny');
+for (const c of ['git reset', 'git reset -q', 'git reset --quiet', 'git reset HEAD', 'git reset -q HEAD', 'git reset -- keep.txt', 'git reset -q -- keep.txt', 'git reset HEAD -- keep.txt', 'git reset HEAD keep.txt', 'git reset keep.txt'])
+  check('AH-17 R10-5 canonical harmless reset allow ' + c, decCanonReset(c) === 'allow');
+for (const c of ['git reset --soft HEAD~1', 'git reset HEAD~1'])
+  check('AH-17 R10-5 slot reset keeps old behavior (allow) ' + c, dAtF(c, SLOT_A).decision === 'allow');
+check('AH-17 R10-5 canonical reset with GIT_DIR override -> deny',
+  guard && guard.decide({ tool_name: 'Bash', tool_input: { command: 'GIT_DIR=x git reset --soft HEAD~1' }, cwd: MAIN }, depsOf('ref: refs/heads/branch-dev', [], undefined, () => MAIN)).decision === 'deny');
+
+// ── AH-17g R10-6 file-tool guard ──
+function df(tool, fp, cwd, deps) { try { return guard.decide({ tool_name: tool, tool_input: { file_path: fp }, cwd }, deps || IDENTITY_FT).decision; } catch (e) { return 'THROW'; } }
+const FILE_TOOLS = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'];
+const DOTGIT_PATHS = ['.git/config', './.git/hooks/pre-commit', '../portfolio-tracker/.git/hooks/x', 'sub/.git/x', 'C:/repo/.GIT/config', 'a/b/../.git/x'];
+for (const tool of FILE_TOOLS) for (const fp of DOTGIT_PATHS) for (const cwd of [SLOT_A, MAIN, NO_CWD])
+  check('AH-17 R10-6 ' + tool + ' [' + cwdLabel(cwd) + '] ' + fp + ' -> deny', df(tool, fp, cwd) === 'deny');
+check('AH-17 R10-6 NotebookEdit notebook_path .git -> deny',
+  guard && guard.decide({ tool_name: 'NotebookEdit', tool_input: { notebook_path: '.git/x.ipynb' }, cwd: SLOT_A }, IDENTITY_FT).decision === 'deny');
+check('AH-17 R10-6 missing path -> deny', guard && guard.decide({ tool_name: 'Write', tool_input: {}, cwd: SLOT_A }, IDENTITY_FT).decision === 'deny');
+for (const fp of ['index.html', 'work/x/review.md', '.github/workflows/ci.yml', '.gitignore', 'qa/x_offline.js', 'C:/repo/src/app.js'])
+  check('AH-17 R10-6 benign file-tool allow ' + fp, df('Write', fp, SLOT_A) === 'allow');
+check('AH-17 R10-6 Read tool -> allow (no opinion)', guard && guard.decide({ tool_name: 'Read', tool_input: { file_path: '.git/config' }, cwd: SLOT_A }, IDENTITY_FT).decision === 'allow');
+// real resolver: deepest existing ancestor, junction, fail-closed
+if (guard) {
+  const ftBase = fs.mkdtempSync(path.join(os.tmpdir(), 'ah17-ft-'));
+  try {
+    fs.mkdirSync(path.join(ftBase, '.git', 'hooks'), { recursive: true });
+    fs.mkdirSync(path.join(ftBase, 'work'), { recursive: true });
+    const realWrite = (fp) => guard.decide({ tool_name: 'Write', tool_input: { file_path: fp }, cwd: ftBase }).decision;
+    check('AH-17 R10-6 real: existing .git target -> deny', realWrite(path.join(ftBase, '.git', 'hooks', 'pre-commit')) === 'deny');
+    check('AH-17 R10-6 real: new file, existing parent -> allow', realWrite(path.join(ftBase, 'work', 'plan.md')) === 'allow');
+    check('AH-17 R10-6 real: new file in NEW subdir (deepest ancestor) -> allow', realWrite(path.join(ftBase, 'work', 'newid', 'brief.md')) === 'allow');
+    check('AH-17 R10-6 real: new file in NEW nested subdir -> allow', realWrite(path.join(ftBase, 'a', 'b', 'c', 'x.txt')) === 'allow');
+    check('AH-17 R10-6 real: relative new file in new subdir -> allow', guard.decide({ tool_name: 'Write', tool_input: { file_path: 'work/newid2/plan.md' }, cwd: ftBase }).decision === 'allow');
+    check('AH-17 R10-6 real: unresolvable cwd -> deny', guard.decide({ tool_name: 'Write', tool_input: { file_path: 'x.txt' }, cwd: path.join(ftBase, 'nope', 'deeper') }).decision === 'deny');
+    let junctionMade = false;
+    try { fs.symlinkSync(path.join(ftBase, '.git'), path.join(ftBase, 'link-to-git'), 'junction'); junctionMade = true; } catch (e) { junctionMade = false; }
+    check('AH-17 R10-6 real: junction into .git -> deny' + (junctionMade ? '' : ' (skipped, no privilege)'),
+      junctionMade ? realWrite(path.join(ftBase, 'link-to-git', 'config')) === 'deny' : true);
+  } finally { fs.rmSync(ftBase, { recursive: true, force: true }); }
+}
+
+// ── AH-17 R10-7 time budget ──
+check('AH-17 R10-7 spawnBudgetMs caps at 4000', guard && guard.spawnBudgetMs(Date.now() + 100000) === 4000);
+check('AH-17 R10-7 spawnBudgetMs shrinks near deadline', guard && (() => { const v = guard.spawnBudgetMs(Date.now() + 400); return v > 0 && v <= 400; })());
+check('AH-17 R10-7 spawnBudgetMs throws when exhausted', guard && (() => { try { guard.spawnBudgetMs(Date.now() - 1); return false; } catch (e) { return true; } })());
+
+// ── AH-17 CLI (real spawn) sample -> exit 2 ──
+for (const cmd of ['g\\it push', 'git p', 'git config core.hooksPath /tmp/h', 'git update-ref HEAD abc', 'git worktree add ../w branch-dev', 'git cherry-pick abc', 'git remote add --mirror m .', 'echo x > .git/config']) {
+  const r = spawnCli(payload(cmd, SLOT_A));
+  check('AH-17 CLI [slot] ' + JSON.stringify(cmd) + ' -> exit 2', r.status === 2 && r.stdout === '');
+}
+{
+  const denyFt = spawnCli(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: 'C:/x/.git/config' }, cwd: SLOT_A }));
+  check('AH-17 CLI Write .git target -> exit 2', denyFt.status === 2 && denyFt.stdout === '');
+  const okFt = spawnCli(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(SLOT_A, 'qa', 'ah17_probe.js') }, cwd: SLOT_A }));
+  check('AH-17 CLI Write ordinary (existing parent) -> exit 0', okFt.status === 0 && okFt.stdout === '');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// AH-18 — R10-8 integrity check: clean PASS, 7 induced FAILs, report-only, usage error (temp repo).
+// ══════════════════════════════════════════════════════════════════════════════════════════
+{
+  const gv = spawnSync('git', ['--version'], { encoding: 'utf8' });
+  check('AH-18 git available on PATH', gv.status === 0);
+  if (gv.status === 0) {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'ah18-'));
+    const canonical = path.join(base, 'portfolio-tracker');
+    const slotA = path.join(base, 'pt-wt-worker-a');
+    const slotB = path.join(base, 'pt-wt-worker-b');
+    const G = (cwd, ...args) => spawnSync('git', ['-c', 'user.name=ah', '-c', 'user.email=ah@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...args], { cwd, encoding: 'utf8' });
+    const put = (root, rel, text) => { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), text); };
+    const run = (opts) => integrity.runIntegrity(Object.assign({ root: canonical, gitExec: 'git' }, opts));
+    try {
+      fs.mkdirSync(canonical, { recursive: true });
+      G(canonical, 'init', '-q', '-b', 'main');
+      put(canonical, '.claude/settings.json', '{"a":1}\n');
+      put(canonical, 'keep.txt', 'k\n');
+      G(canonical, 'add', '-A');
+      G(canonical, 'commit', '-q', '-m', 'seed');
+      G(canonical, 'branch', 'branch-dev');
+      G(canonical, 'worktree', 'add', '-q', '-b', 'task/x', slotA, 'branch-dev');
+      G(canonical, 'worktree', 'add', '-q', '-b', 'task/y', slotB, 'branch-dev');
+      const baseMain = G(canonical, 'rev-parse', 'main').stdout.trim();
+      const baseDev = G(canonical, 'rev-parse', 'branch-dev').stdout.trim();
+      // clean PASS (no --since so C2 skipped)
+      const clean = run({ baseMain, baseDev, task: 'task/x' });
+      check('AH-18 clean fixture -> PASS (ok, no failures): ' + clean.failures.join('; '), clean.ok === true && clean.failures.length === 0);
+      // C1
+      const c1 = run({ baseMain: '0'.repeat(40), baseDev, task: 'task/x' });
+      check('AH-18 C1 wrong base-main -> FAIL', c1.ok === false && c1.failures.some((f) => /^C1/.test(f)));
+      // C2 (since epoch -> any reflog entry is newer)
+      const c2 = run({ baseMain, baseDev, task: 'task/x', since: '1970-01-01T00:00:00Z' });
+      check('AH-18 C2 reflog newer than --since -> FAIL', c2.ok === false && c2.failures.some((f) => /^C2/.test(f)));
+      // C2 (Codex FIX): a future --since with reflogs intact -> no C2; a deleted reflog on a protected ref -> C2 FAIL (fail-closed)
+      const future = new Date(Date.now() + 86400000).toISOString();
+      const c2quiet = run({ baseMain, baseDev, task: 'task/x', since: future });
+      check('AH-18 C2 future --since, reflogs intact -> no C2', !c2quiet.failures.some((f) => /^C2/.test(f)));
+      const devReflog = path.join(canonical, '.git', 'logs', 'refs', 'heads', 'branch-dev');
+      const savedReflog = fs.readFileSync(devReflog);
+      fs.rmSync(devReflog, { force: true });
+      const c2err = run({ baseMain, baseDev, task: 'task/x', since: future });
+      fs.mkdirSync(path.dirname(devReflog), { recursive: true }); fs.writeFileSync(devReflog, savedReflog);
+      check('AH-18 C2 deleted protected-ref reflog -> FAIL (fail-closed)', c2err.ok === false && c2err.failures.some((f) => /^C2/.test(f)));
+      // C3 alias / protected key
+      G(canonical, 'config', 'alias.foo', 'status');
+      const c3 = run({ baseMain, baseDev, task: 'task/x' });
+      G(canonical, 'config', '--unset', 'alias.foo');
+      check('AH-18 C3 alias present -> FAIL', c3.ok === false && c3.failures.some((f) => /^C3/.test(f)));
+      // C4 non-sample hook
+      put(canonical, '.git/hooks/pre-commit', '#!/bin/sh\n');
+      const c4 = run({ baseMain, baseDev, task: 'task/x' });
+      fs.rmSync(path.join(canonical, '.git', 'hooks', 'pre-commit'), { force: true });
+      check('AH-18 C4 non-sample hook -> FAIL', c4.ok === false && c4.failures.some((f) => /^C4/.test(f)));
+      // C5 governance file differs from HEAD in a worktree
+      put(slotA, '.claude/settings.json', '{"a":2}\n');
+      const c5 = run({ baseMain, baseDev, task: 'task/x' });
+      G(slotA, 'checkout', '--', '.claude/settings.json');
+      check('AH-18 C5 governance file differs from HEAD -> FAIL', c5.ok === false && c5.failures.some((f) => /^C5/.test(f)));
+      // C6 base-dev...task touches a protected path
+      put(slotA, '.claude/settings.json', '{"a":3}\n');
+      G(slotA, 'add', '.claude/settings.json');
+      G(slotA, 'commit', '-q', '-m', 'touch protected');
+      const c6 = run({ baseMain, baseDev, task: 'task/x' });
+      check('AH-18 C6 base-dev...task touches protected -> FAIL', c6.ok === false && c6.failures.some((f) => /^C6/.test(f)));
+      G(slotA, 'reset', '-q', '--hard', 'branch-dev');
+      // C7 extra worktree
+      const extra = path.join(base, 'pt-wt-worker-extra');
+      G(canonical, 'worktree', 'add', '-q', '-b', 'task/extra', extra, 'branch-dev');
+      const c7 = run({ baseMain, baseDev, task: 'task/x' });
+      check('AH-18 C7 unexpected worktree set -> FAIL', c7.ok === false && c7.failures.some((f) => /^C7/.test(f)));
+      G(canonical, 'worktree', 'remove', '--force', extra);
+      // C5 (Codex FIX): an UNTRACKED planted hook (the primary tamper vector, not gitignored) differs from HEAD -> FAIL.
+      // A gitignored .claude/settings.local.json is intentionally NOT flagged (legit DENY-tier local file); control below.
+      put(slotA, '.claude/hooks/evil.js', '//evil\n');
+      const c5u = run({ baseMain, baseDev, task: 'task/x' });
+      fs.rmSync(path.join(slotA, '.claude', 'hooks', 'evil.js'), { force: true });
+      check('AH-18 C5 untracked planted hook -> FAIL', c5u.ok === false && c5u.failures.some((f) => /^C5/.test(f)));
+      // control: a gitignored settings.local.json is NOT a false-positive (it is a legit local file, DENY-tier)
+      put(slotA, '.claude/settings.local.json', '{"u":1}\n');
+      const chkIgnored = spawnSync('git', ['check-ignore', '.claude/settings.local.json'], { cwd: slotA, encoding: 'utf8' });
+      const c5ig = run({ baseMain, baseDev, task: 'task/x' });
+      fs.rmSync(path.join(slotA, '.claude', 'settings.local.json'), { force: true });
+      // only assert the no-false-positive property when the host actually gitignores it (else it is a plain untracked file)
+      if (chkIgnored.status === 0) check('AH-18 C5 gitignored settings.local.json -> no false positive', !c5ig.failures.some((f) => /^C5/.test(f)));
+      // C3 (Codex FIX): per-remote default fetch is fine; a fetch into another namespace fails
+      G(canonical, 'remote', 'add', 'upstream', 'https://example.invalid/x.git');
+      const c3ok = run({ baseMain, baseDev, task: 'task/x' });
+      check('AH-18 C3 legit non-origin remote (own default fetch) -> no C3', c3ok.ok === true && !c3ok.failures.some((f) => /^C3/.test(f)));
+      G(canonical, 'config', 'remote.upstream.fetch', '+refs/heads/*:refs/remotes/origin/*');
+      const c3bad = run({ baseMain, baseDev, task: 'task/x' });
+      G(canonical, 'remote', 'remove', 'upstream');
+      check('AH-18 C3 remote fetch into another namespace -> FAIL', c3bad.ok === false && c3bad.failures.some((f) => /^C3/.test(f)));
+      // report-only key does not fail
+      G(canonical, 'config', 'core.pager', 'less');
+      const rep = run({ baseMain, baseDev, task: 'task/x' });
+      G(canonical, 'config', '--unset', 'core.pager');
+      check('AH-18 report-only core.pager -> PASS with a report line', rep.ok === true && rep.report.some((r) => /core\.pager/.test(r)));
+      // usage error (bad --since) and CLI usage error (no base args)
+      const badSince = run({ baseMain, baseDev, since: 'not-a-date' });
+      check('AH-18 unparseable --since -> usage error', badSince.ok === false && badSince.usage === true);
+      const cliUsage = spawnSync(process.execPath, [path.join(ROOT, 'qa', 'guard_integrity_check.js')], { encoding: 'utf8' });
+      check('AH-18 CLI no args -> exit 3 (usage)', cliUsage.status === 3);
+      // CLI PASS/FAIL exit codes against the fixture
+      const cliPass = spawnSync(process.execPath, [path.join(ROOT, 'qa', 'guard_integrity_check.js'), '--base-main', baseMain, '--base-dev', baseDev, '--task', 'task/x', '--root', canonical], { encoding: 'utf8' });
+      check('AH-18 CLI clean -> exit 0', cliPass.status === 0 && /PASS/.test(cliPass.stdout));
+      const cliFail = spawnSync(process.execPath, [path.join(ROOT, 'qa', 'guard_integrity_check.js'), '--base-main', '0'.repeat(40), '--base-dev', baseDev, '--task', 'task/x', '--root', canonical], { encoding: 'utf8' });
+      check('AH-18 CLI wrong base-main -> exit 1', cliFail.status === 1 && /FAIL/.test(cliFail.stdout));
+    } finally {
+      try { G(canonical, 'worktree', 'prune'); } catch (e) { /* ignore */ }
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  }
+}
+
+// ── R10 mutants: production-source mutation, ≥1 per R10-1..R10-8 ──
+mutantCatches('R10-1 escape differential disabled', 'const stripped = stripShellEscapes(command, tool);', 'const stripped = command;',
+  (m) => dec(m, 'g\\it push', SLOT_A).decision === 'deny');
+mutantCatches('R10-2 subcommand allowlist dropped', 'if (!KNOWN_GIT_SUBCOMMANDS.has(sub)) {', 'if (false) {',
+  (m) => dec(m, 'git p', SLOT_A).decision === 'deny' && dec(m, 'git zzz', MAIN).decision === 'deny');
+mutantCatches('R10-2 git-<sub> program classification dropped', "/^git-[a-z0-9][a-z0-9._-]*$/i.test(prog)", '/^__never__$/.test(prog)',
+  (m) => dec(m, 'git-push', SLOT_A).decision === 'deny');
+mutantCatches('R10-3 config-exec -c/config-write not denied', 'if (writeish && isProtectedConfigKey(key)) {', 'if (false) {',
+  (m) => dec(m, 'git config core.hooksPath /tmp/h', SLOT_A).decision === 'deny');
+mutantCatches('R10-3 GIT_CONFIG_* env prefix not denied', 'const R10_GIT_CONFIG_ENV_RE = /^GIT_CONFIG_/i;', 'const R10_GIT_CONFIG_ENV_RE = /^__never__$/i;',
+  (m) => dec(m, 'GIT_CONFIG_GLOBAL=/tmp/g git status', MAIN).decision === 'deny');
+mutantCatches('R10-3 .git writer not denied', "if (dg !== undefined) { out.push({ cls: 'destructive', reason: what + ' .git path '", "if (false) { out.push({ cls: 'destructive', reason: what + ' .git path '",
+  (m) => dec(m, 'cp x .git/config', SLOT_A).decision === 'deny');
+mutantCatches('R10-3 commit-gate config check dropped', "if (!cfg || cfg.ok !== true) return commitDeny(", 'if (false) return commitDeny(',
+  (m) => m.decide({ tool_name: 'Bash', tool_input: { command: 'git commit -m x' }, cwd: SLOT_A }, depsOf(HEAD_TASK, [], undefined, undefined, () => ({ ok: false, bad: ['core.hooksPath=x'] }))).decision === 'deny');
+mutantCatches('R10-3 commit-gate hooks check dropped', "if (!hooks || hooks.ok !== true) return commitDeny(", 'if (false) return commitDeny(',
+  (m) => m.decide({ tool_name: 'Bash', tool_input: { command: 'git commit -m x' }, cwd: SLOT_A }, depsOf(HEAD_TASK, [], undefined, undefined, undefined, () => ({ ok: false, bad: ['pre-commit'] }))).decision === 'deny');
+mutantCatches('R10-4 update-ref HEAD not denied', "if (String(target || '').toUpperCase() === 'HEAD') return 'git update-ref HEAD", "if (false) return 'git update-ref HEAD",
+  (m) => dec(m, 'git update-ref HEAD abc', MAIN).decision === 'deny');
+mutantCatches('R10-4 branch one-name move not denied', 'if (move && pos.length === 1) return', 'if (false) return',
+  (m) => dec(m, 'git branch -m newname', SLOT_A).decision === 'deny' && dec(m, 'git branch -M single', MAIN).decision === 'deny');
+mutantCatches('R10-4 worktree checkout-target not denied', "if (addPositional.length >= 2 && protectedRefName(addPositional[1])) {", 'if (false) {',
+  (m) => dec(m, 'git worktree add ../w branch-dev', SLOT_A).decision === 'deny');
+mutantCatches('R10-4 attached -B/-C not denied', "const attached = /^-([bBcC])(.+)$/.exec(a);", 'const attached = null;',
+  (m) => dec(m, 'git checkout -Bbranch-dev', SLOT_A).decision === 'deny' && dec(m, 'git switch -Cmain', MAIN).decision === 'deny');
+mutantCatches('R10-5 always-deny set dropped (cherry-pick)', 'if (R10_ALWAYS_DENY_GIT.has(sub)) {', 'if (false) {',
+  (m) => dec(m, 'git cherry-pick abc', SLOT_A).decision === 'deny' && dec(m, 'git revert HEAD', MAIN).decision === 'deny');
+mutantCatches('R10-5 remote add --mirror not denied', "rest.slice(1).some((a) => a === '--mirror' || a.startsWith('--mirror='))", 'false',
+  (m) => dec(m, 'git remote add --mirror m .', SLOT_A).decision === 'deny');
+mutantCatches('R10-5 fetch refspec-to-protected not denied', 'const risky = rest.some((a) => refspecTargetsProtected(a) ||', 'const risky = rest.some((a) => false && refspecTargetsProtected(a) ||',
+  (m) => dec(m, 'git fetch . task/x:branch-dev', MAIN).decision === 'deny');
+mutantCatches('R10-5 canonical reset ref-move not denied', "return { decision: 'deny', reason: 'git reset can move main/branch-dev - denied in every session (R10-5)' };", "return { decision: 'allow', reason: 'x' };",
+  (m) => decCanonResetMod(m, 'git reset --soft HEAD~1') === 'deny');
+mutantCatches('R10-6 file-tool .git target not denied', 'if (isDotGitText(resolved) || isDotGitText(raw)) return { decision: \'deny\', reason: tool +', 'if (false) return { decision: \'deny\', reason: tool +',
+  (m) => m.decide({ tool_name: 'Write', tool_input: { file_path: '.git/config' }, cwd: SLOT_A }, IDENTITY_FT).decision === 'deny');
+mutantCatches('R10-7 time budget exhausted not denied', 'const R10_BUDGET_MS = 8000;', 'const R10_BUDGET_MS = 0;',
+  (m) => dec(m, 'git status', SLOT_A).decision === 'allow');
+function decCanonResetMod(m, cmd) {
+  const deps = Object.assign({}, depsOf('ref: refs/heads/branch-dev', [], undefined, () => MAIN), { pathExists: () => false, resolveFileToolTarget: (c, r) => String(r) });
+  try { return m.decide({ tool_name: 'Bash', tool_input: { command: cmd }, cwd: MAIN }, deps).decision; } catch (e) { return 'THROW'; }
+}
+// R10-8 integrity-script mutants (mutate qa/guard_integrity_check.js)
+function integrityMutantCatches(label, find, replace, probe) {
+  const src0 = fs.readFileSync(path.join(ROOT, 'qa', 'guard_integrity_check.js'), 'utf8').replace(/\r\n/g, '\n');
+  const idx = src0.indexOf(find);
+  check('MUT ' + label + ': anchor present', idx !== -1);
+  if (idx === -1) return;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ah18-mut-'));
+  try {
+    const file = path.join(dir, 'guard_integrity_check.js');
+    fs.writeFileSync(file, src0.slice(0, idx) + replace + src0.slice(idx + find.length));
+    const mod = require(file);
+    check('MUT ' + label + ': caught by probe', probe(mod) === false);
+    check('MUT ' + label + ': production passes probe', probe(integrity) === true);
+  } catch (e) { check('MUT ' + label + ': mutant loads (' + e.message + ')', false); }
+  finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+if (guard && integrity && spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0) {
+  // shared fixture for integrity mutants
+  const mbase = fs.mkdtempSync(path.join(os.tmpdir(), 'ah18-mf-'));
+  const mcanon = path.join(mbase, 'portfolio-tracker');
+  const G = (cwd, ...a) => spawnSync('git', ['-c', 'user.name=ah', '-c', 'user.email=ah@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...a], { cwd, encoding: 'utf8' });
+  try {
+    fs.mkdirSync(mcanon, { recursive: true });
+    G(mcanon, 'init', '-q', '-b', 'main');
+    fs.mkdirSync(path.join(mcanon, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(mcanon, '.claude', 'settings.json'), '{"a":1}\n');
+    fs.writeFileSync(path.join(mcanon, 'keep.txt'), 'k\n');
+    G(mcanon, 'add', '-A'); G(mcanon, 'commit', '-q', '-m', 'seed'); G(mcanon, 'branch', 'branch-dev');
+    G(mcanon, 'worktree', 'add', '-q', '-b', 'task/x', path.join(mbase, 'pt-wt-worker-a'), 'branch-dev');
+    G(mcanon, 'worktree', 'add', '-q', '-b', 'task/y', path.join(mbase, 'pt-wt-worker-b'), 'branch-dev');
+    const bMain = G(mcanon, 'rev-parse', 'main').stdout.trim();
+    const bDev = G(mcanon, 'rev-parse', 'branch-dev').stdout.trim();
+    integrityMutantCatches('R10-8 C1 local-ref check dropped', 'if (mainOid !== opts.baseMain)', 'if (false)',
+      (mod) => mod.runIntegrity({ root: mcanon, gitExec: 'git', baseMain: '0'.repeat(40), baseDev: bDev, task: 'task/x' }).ok === false);
+    integrityMutantCatches('R10-8 C3 alias check dropped', "} else if (/^alias\\./i.test(key)) {", '} else if (false) {',
+      (mod) => { G(mcanon, 'config', 'alias.foo', 'status'); const r = mod.runIntegrity({ root: mcanon, gitExec: 'git', baseMain: bMain, baseDev: bDev, task: 'task/x' }).ok === false; G(mcanon, 'config', '--unset', 'alias.foo'); return r; });
+    integrityMutantCatches('R10-8 C6 protected-diff check dropped', '.filter((p) => STAGED_DENY_RES.some((re) => re.test(p.replace(/\\\\/g, \'/\'))))', '.filter(() => false)',
+      (mod) => { fs.writeFileSync(path.join(mbase, 'pt-wt-worker-a', '.claude', 'settings.json'), '{"a":9}\n'); const sa = path.join(mbase, 'pt-wt-worker-a'); G(sa, 'add', '.claude/settings.json'); G(sa, 'commit', '-q', '-m', 't'); const r = mod.runIntegrity({ root: mcanon, gitExec: 'git', baseMain: bMain, baseDev: bDev, task: 'task/x' }).ok === false; G(sa, 'reset', '-q', '--hard', 'branch-dev'); return r; });
+    integrityMutantCatches('R10-8 C5 misses untracked governance (Codex FIX)', "['status', '--porcelain', '--', '.claude']", "['diff', '--name-only', 'HEAD', '--', '.claude']",
+      (mod) => { const p = path.join(mbase, 'pt-wt-worker-a', '.claude', 'hooks'); fs.mkdirSync(p, { recursive: true }); fs.writeFileSync(path.join(p, 'evil.js'), '//\n'); const r = mod.runIntegrity({ root: mcanon, gitExec: 'git', baseMain: bMain, baseDev: bDev, task: 'task/x' }).failures.some((f) => /^C5/.test(f)); fs.rmSync(path.join(p, 'evil.js'), { force: true }); return r; });
+    integrityMutantCatches('R10-8 C3 remote-fetch hardcoded to origin (Codex FIX)', "'+refs/heads/*:refs/remotes/' + rname + '/*'", "'+refs/heads/*:refs/remotes/origin/*'",
+      (mod) => { G(mcanon, 'remote', 'add', 'upstream', 'https://example.invalid/x.git'); const r = mod.runIntegrity({ root: mcanon, gitExec: 'git', baseMain: bMain, baseDev: bDev, task: 'task/x' }); G(mcanon, 'remote', 'remove', 'upstream'); return r.ok === true && !r.failures.some((f) => /^C3/.test(f)); });
+    integrityMutantCatches('R10-8 C2 emptied/missing reflog fails open (Codex FIX)', "if (requireReflog && lines.length === 0) { failures.push('C2 protected ref '", "if (false) { failures.push('C2 protected ref '",
+      (mod) => { const future = new Date(Date.now() + 86400000).toISOString(); const rl = path.join(mcanon, '.git', 'logs', 'refs', 'heads', 'branch-dev'); const saved = fs.readFileSync(rl); fs.rmSync(rl, { force: true }); const r = mod.runIntegrity({ root: mcanon, gitExec: 'git', baseMain: bMain, baseDev: bDev, task: 'task/x', since: future }).failures.some((f) => /^C2/.test(f)); fs.mkdirSync(path.dirname(rl), { recursive: true }); fs.writeFileSync(rl, saved); return r; });
+  } finally { try { G(mcanon, 'worktree', 'prune'); } catch (e) { /* ignore */ } fs.rmSync(mbase, { recursive: true, force: true }); }
 }
 
 if (failures) {
