@@ -14,8 +14,8 @@ file is stale.
 | | |
 |---|---|
 | Normalized | 2026-09-29 |
-| `branch-dev` | `9901ee0` — brief-only commit for this reconciliation |
-| `origin/main` | `fbec2c1` — `branch-dev` is **111 commits ahead of production** |
+| `branch-dev` | `732f481` — second-LAND base for this reconciliation |
+| `origin/main` | `fbec2c1` — `branch-dev` is **112 commits ahead of production** |
 | Active entries | 21 |
 | `qa:offline` | **50** effective suites (auto-discovered, minus the denylist) |
 
