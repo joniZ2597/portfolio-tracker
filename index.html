@@ -2704,7 +2704,10 @@ var DH_DISPLAY = {
   },
   refreshFailed: 'Refresh failed',
   researchRecency: 'Research recency: not evaluated',
-  surface: { 'pl-fx-not-usable': 'Unavailable (FX rate not usable)', 'ai-unavailable': 'Unavailable (AI analysis)' }
+  surface: {
+    'pl-fx-not-usable': 'Unavailable (FX rate not usable)', 'ai-unavailable': 'Unavailable (AI analysis)',
+    'fx-not-fetched': 'Unavailable (no rate fetched)', 'scan-date-unknown': 'Unavailable (scan date unknown)'
+  }
 };
 
 // Unmapped codes render as themselves — deterministic, never blank.
@@ -9734,7 +9737,7 @@ function _renderPortfolioPanel() {
     var fxChipVal = document.createElement('div');
     fxChipVal.className = 'pf-summary-val';
     if (fxState === 'missing') {
-      fxChipVal.textContent = 'FX unavailable';
+      fxChipVal.textContent = DH_DISPLAY.surface['fx-not-fetched'];
     } else {
       var fxDateStr = new Date(fxCache.effectiveAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       // P-4A-1 FX-chip precision rider: the old 2dp display (3.01) rounded
@@ -10276,7 +10279,7 @@ function _renderPortfolioPanel() {
         } else if (!res) {
           var resStEl = document.createElement('span');
           resStEl.className = 'pf-res-state missing';
-          resStEl.textContent = 'No research';
+          resStEl.textContent = _dhLabel('state', 'missing');
           resRow.appendChild(resStEl);
         } else if (res._aiUnavailable === true) {
           var resStEl = document.createElement('span');
@@ -15364,7 +15367,7 @@ function checkAndShowStaleBanner() {
     .filter(function(t) { return t > 0; });
   if (timestamps.length === 0) {
     // Legacy results with no timestamp — pre-Improvement 2
-    _showStaleBanner('Scan results are from a previous session (date unknown) — re-run scan to get current data');
+    _showStaleBanner(DH_DISPLAY.surface['scan-date-unknown'] + ' — results from a previous session · re-run scan for latest data');
     return;
   }
   const mostRecent = Math.max.apply(null, timestamps);

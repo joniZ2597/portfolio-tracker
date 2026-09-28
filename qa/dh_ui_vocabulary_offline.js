@@ -83,7 +83,16 @@ const SITES = [
     expect: 'Unavailable (AI analysis)', refs: ["DH_DISPLAY.surface['ai-unavailable']"], before: "'AI unavailable'" },
   { id: 'U8', fn: BANNER, anchor: 'STALE_RESULT_THRESHOLD_MS', lhs: '_showStaleBanner(', scope: { label: 'Sep 1 · 09:00 AM' },
     expect: 'Stale — results from Sep 1 · 09:00 AM · re-run scan for latest data', refs: ["_dhLabel('state', 'stale')"],
-    before: "'Results from '" }
+    before: "'Results from '" },
+  // DH-M2b (work/dh-ruled-surfaces/brief.md §3) — three additional render-only sites.
+  { id: 'B1', fn: PANEL, anchor: "if (fxState === 'missing') {", lhs: 'fxChipVal.textContent', scope: {},
+    expect: 'Unavailable (no rate fetched)', refs: ["DH_DISPLAY.surface['fx-not-fetched']"], before: "'FX unavailable'" },
+  { id: 'B2', fn: PANEL, anchor: '} else if (!res) {', lhs: 'resStEl.textContent', scope: {},
+    expect: 'Not recorded', refs: ["_dhLabel('state', 'missing')"], before: "'No research'" },
+  { id: 'B3', fn: BANNER, anchor: 'timestamps.length === 0', lhs: '_showStaleBanner(', scope: {},
+    expect: 'Unavailable (scan date unknown) — results from a previous session · re-run scan for latest data',
+    refs: ["DH_DISPLAY.surface['scan-date-unknown']"],
+    before: 'Scan results are from a previous session (date unknown) — re-run scan to get current data' }
 ];
 
 // Returns the assignment RHS (or call argument for U8) of the site, or null.
@@ -147,7 +156,11 @@ const CONDS = [
   ['U5', PANEL, /\} else if \(recon\.status === 'total-incomplete'\) \{\s*reconVal\.textContent[^\n]*\n\s*reconVal\.style\.color = 'var\(--text3\)';/],
   ['U6', PANEL, /\} else if \(!pl3\.fxUsable\) \{\s*var pl3FxEl = document\.createElement\('div'\);\s*pl3FxEl\.className {3}= 'pf-pos-pl pf-pos-pl--muted';\s*pl3FxEl\.textContent/],
   ['U7', PANEL, /\} else if \(res\._aiUnavailable === true\) \{\s*var resStEl = document\.createElement\('span'\);\s*resStEl\.className = 'pf-res-state unavail';\s*resStEl\.textContent/],
-  ['U8', BANNER, /if \(\(Date\.now\(\) - mostRecent\) > STALE_RESULT_THRESHOLD_MS\) \{\s*const d = new Date\(mostRecent\);/]
+  ['U8', BANNER, /if \(\(Date\.now\(\) - mostRecent\) > STALE_RESULT_THRESHOLD_MS\) \{\s*const d = new Date\(mostRecent\);/],
+  // DH-M2b RB-3 — B1-B3 branch conditions byte-unchanged.
+  ['B1', PANEL, /if \(fxState === 'missing'\) \{\s*fxChipVal\.textContent/],
+  ['B2', PANEL, /\} else if \(!res\) \{\s*var resStEl = document\.createElement\('span'\);\s*resStEl\.className = 'pf-res-state missing';\s*resStEl\.textContent/],
+  ['B3', BANNER, /if \(timestamps\.length === 0\) \{\s*\/\/ Legacy results with no timestamp — pre-Improvement 2\s*_showStaleBanner\(/]
 ];
 function condFailures(content) {
   return CONDS.filter(([, fn, re]) => {
@@ -160,14 +173,16 @@ check('UV-3: U1-U8 branch conditions / styles present exactly as at baseline (' 
   const f = extractFunctionSource(SRC, PANEL);
   const mutated = swap(SRC, f, f.replace("recon.status === 'stale'", "recon.status === 'aged'"));
   check('UV-3 control: a changed condition is detected', condFailures(mutated).indexOf('U4') !== -1);
+  const mutatedB2 = swap(SRC, f, f.replace('} else if (!res) {', "} else if (!res && false) {"));
+  check('RB-3 control: a changed B2 condition is detected', condFailures(mutatedB2).indexOf('B2') !== -1);
 }
 
 // ---------------------------------------------------------------------- UV-4
 // [literal, owning function, count] — site-scoped: each literal must still sit inside
 // the function where it lived at baseline, exactly once, and exactly once file-wide.
 const OOS = [
-  ["'FX unavailable'", PANEL], ["fxLabel + ' (aged)'", PANEL], ["'No research'", PANEL],
-  ['Scan results are from a previous session (date unknown) — re-run scan to get current data', BANNER],
+  ["fxLabel + ' (aged)'", PANEL],
+  ["'FX as of '", PANEL],
   ["'FX rate unavailable'", '_pfComputeNeedsAttention'],
   ["'USD holdings excluded — FX unavailable'", '_pfComputePortfolioReporting']
 ];
@@ -176,12 +191,12 @@ function oosFailures(content) {
   return OOS.filter(([t, fn]) => count(content, t) !== 1 || count(extractFunctionSource(content, fn) || '', t) !== 1).map(([t]) => t);
 }
 check('UV-4: out-of-scope literals each still present exactly once, at their baseline function (' + oosFailures(SRC).join(' | ') + ')', oosFailures(SRC).length === 0);
-check('UV-4 control: a removed out-of-scope literal is detected', oosFailures(swap(SRC, "'No research'", "'Not recorded'")).length === 1);
+check('UV-4 control: a removed out-of-scope literal is detected', oosFailures(swap(SRC, "'FX rate unavailable'", "'FX rate absent'")).length === 1);
 {
   // A literal that moved out of its owning function (still once file-wide) must also fail.
   const f = extractFunctionSource(SRC, PANEL);
-  const moved = swap(SRC, f, f.replace("'No research'", "'x'"));
-  const movedFull = swap(moved, 'function _dhLabel(', "var _m = 'No research';\nfunction _dhLabel(");
+  const moved = swap(SRC, f, f.replace("'FX as of '", "'x'"));
+  const movedFull = swap(moved, 'function _dhLabel(', "var _m = 'FX as of ';\nfunction _dhLabel(");
   check('UV-4 control: a literal moved out of its site is detected', oosFailures(movedFull).length === 1);
 }
 
@@ -214,7 +229,10 @@ const BASE_DISPLAY = {
   refreshFailed: 'Refresh failed',
   researchRecency: 'Research recency: not evaluated'
 };
-const SURFACE = { 'pl-fx-not-usable': 'Unavailable (FX rate not usable)', 'ai-unavailable': 'Unavailable (AI analysis)' };
+const SURFACE = {
+  'pl-fx-not-usable': 'Unavailable (FX rate not usable)', 'ai-unavailable': 'Unavailable (AI analysis)',
+  'fx-not-fetched': 'Unavailable (no rate fetched)', 'scan-date-unknown': 'Unavailable (scan date unknown)'
+};
 function displayFailures(d) {
   const bad = [];
   if (!d) return ['not extractable'];
@@ -223,13 +241,13 @@ function displayFailures(d) {
   for (const g of Object.keys(BASE_DISPLAY)) {
     if (JSON.stringify(d[g]) !== JSON.stringify(BASE_DISPLAY[g])) bad.push('baseline group changed: ' + g);
   }
-  if (JSON.stringify(d.surface) !== JSON.stringify(SURFACE)) bad.push('surface group != the two §3 entries');
+  if (JSON.stringify(d.surface) !== JSON.stringify(SURFACE)) bad.push('surface group != the two DH-M2 entries plus the two DH-M2b §3 entries');
   return bad;
 }
 {
   const ctx = loadDisplay(SRC);
   const bad = displayFailures(ctx && JSON.parse(JSON.stringify(ctx.DH_DISPLAY)));
-  check('UV-5: DH_DISPLAY additive — baseline groups equal, only `surface` added with exactly two entries (' + bad.join('; ') + ')', bad.length === 0);
+  check('UV-5: DH_DISPLAY additive — baseline groups equal, `surface` has exactly four entries (' + bad.join('; ') + ')', bad.length === 0);
   const tampered = JSON.parse(JSON.stringify(ctx ? ctx.DH_DISPLAY : {}));
   if (tampered.state) tampered.state.missing = 'Unavailable (no rate fetched)';
   check('UV-5 control: a changed baseline value is detected', displayFailures(tampered).length > 0);
