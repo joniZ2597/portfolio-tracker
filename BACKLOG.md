@@ -13,11 +13,11 @@ file is stale.
 
 | | |
 |---|---|
-| Normalized | 2026-09-24 |
-| `branch-dev` | `0c99e13` — in sync with `origin/branch-dev`, clean tree |
-| `origin/main` | `fbec2c1` — `branch-dev` is **80 commits ahead of production** |
-| Active entries | 17 (16 at the 2026-09-24 normalization; +1 on 2026-09-25: 24) |
-| `qa:offline` | **46** effective suites (auto-discovered, minus the 11-entry denylist) |
+| Normalized | 2026-09-29 |
+| `branch-dev` | `9901ee0` — brief-only commit for this reconciliation |
+| `origin/main` | `fbec2c1` — `branch-dev` is **111 commits ahead of production** |
+| Active entries | 21 |
+| `qa:offline` | **50** effective suites (auto-discovered, minus the denylist) |
 
 **Active ARC:** S2 — the news-catalyst evidence pipeline (entry 4). The 23 legacy ARC
 directories under `.ai-reports/arcs/` remain **FROZEN / SUPERSEDED** as a class
@@ -61,15 +61,11 @@ S2-M1) · A3a (`28c2543`, S2-M2). **A3b is BLOCKED** — enforcement requires it
 rule / date-truth manifest (O-4); the A3a evidence it would be ruled from now exists and measures
 **25 equal · 2 differ · 2 no-evidence-date over 29 catalysts**. **A6 HOLD** — reopens only on a
 measured true duplicate within one run.
-*Slice candidate — `/news/latest`-class hub source pages (added 2026-09-25, non-blocking).*
-`GENERIC_SOURCE_PATH_RE` (`news-catalysts-provider.js:87`) rejects a generic leaf segment only
-when nothing follows it, and A5's `INDEX_DOC_LEAF_RE` (`:93`) strips only `index`/`default`
-document leaves, so a listing/hub path such as `/news/latest` is not rejected as a generic
-source. A real instance exists in the pinned replay corpus (NVDA fixtures `p3`/`p4`:
-`nvidianews.nvidia.com/news/latest`). **First step is measurement only:** how many corpus
-survivors carry a hub-class `sourceUrl`, and whether a candidate rule would change any survivor
-or `fixtureSha256`. **No filtering-rule change before that measurement**; any rule then needs its
-own Owner approval. Not scheduled; does not block the sequence above or reopen Worker 2.
+*Hub-page candidate — **MEASURED, closed; no rule change** (`3fc3e61`,
+`work/s2-hub-page-measurement/`).* 35 corpus survivors over 9 cases are all article-specific;
+the 7 hub-class `nvidianews.nvidia.com/news/latest` URLs are none a candidate, survivor or
+skip, and neither candidate predicate dropped a survivor or changed a `fixtureSha256`. Reopens
+only on a hub-class survivor in a new corpus.
 *Legacy refs:* `WP-P7 A1/A2/A3/Slice B`, `C3-S1…S5`, `EG-25C-3`, `J3`.
 
 ---
@@ -79,36 +75,27 @@ own Owner approval. Not scheduled; does not block the sequence above or reopen W
 **Previous standing rule retired.** It sequenced entries 2 and 3 behind the TradingView pilot;
 the pilot landed (entry 1, DONE), so the condition no longer exists.
 
-### 6 · Technical Score v1 surfacing — **DONE** (`aa62aea`)
-**Scores / Signals**
-
-Engine landed and dark with full offline coverage; display only, no ranking or persistence
-influence.
-
-*Landed at `aa62aea`:* the gated invocation site, the display row on `#ts-card`, the per-symbol
-session memo, and the structural pin in `qa/run-offline.js` — subsequently re-pinned by 8a
-(`9f8171d`), so the historical `:3523` / `callCount === 2` anchor no longer applies.
-*Deps:* none — entry 5 landed at `9cade5b`.
-*UI ruled 2026-09-23:* exactly one `Tech Score v1` row showing **`result.score`** and
-**`result.coveragePct`**. No state colour. No four-component breakdown. No second generic
-`Score` row.
-*Legacy refs:* `WP-P3`, `SCORE-V1-S1`, `D-R1`.
-
 ### 7 · EOD data-readiness + data-state presentation contract
 **Market Data / Pricing · Data honesty**
 
 Explicit readiness judgement so stale data never reads as current. Contract ratified
 (Amendment 2, `7510d546…`).
 
-*What remains:* readiness block in `_eodBuildPacket` + Markdown; optional pre-export UI
-warning.
+*Landed:* DH-M1 readiness block + shared display table (`98d3d68`); DH-M2 U1–U8 display
+vocabulary (`5ad0a5f`). *Briefed:* DH-M2b — ruled words R1/R3/R4 on three render-only sites
+(brief `9be7717`). *What remains:* (a) R2 — usable-but-aged FX → `Current · N d old` —
+together with DH-M1's export reasons `fx-missing` / `fx-aged`: **needs an Owner ruling** on
+the age basis and on how the readiness verdict treats aged-but-valid FX; (b) R1's
+export/prompt-fed sites (needs-attention title, completeness reason, EOD limitation) —
+Manual; (c) DH-M3 pre-export warning, which must also explain that the first export after
+DH-M1 reads `not-representative` until each holding is refreshed once.
 *Absorbed 2026-09-23 — the presentation half.* This entry now also owns the **global
 data-state presentation contract**: a single product-wide convention for **Degraded**,
 **Missing** and **Failed**, so the same state never renders three different ways. Carried from
 the deferred presentation half of `WU-PROV` and the display-only intent of `EG-25D`. The
 readiness judgement and its presentation are the same problem stated at two levels.
-*Deps:* **resolve first** — two competing freshness authorities for the same signals:
-`evidence-freshness.js` (J7) vs the `PF_*` portfolio family.
+*Deps:* the competing-freshness-authority question is **resolved** by DH-M0b ruling D1 (one
+freshness owner per domain; 2026-09-26).
 *Legacy refs:* `WU-EODFRESH`, EODFRESH-0/1/2, `WU-PROV` (presentation half), `EG-25D`.
 
 ### 8 · Parser / render integrity
@@ -127,23 +114,6 @@ on a failing summary string or a committed parser contract.
 evidence.
 *Deps:* none.
 *Legacy refs:* `WP-P1 Slice A`, `BC-3a`.
-
-### 9 · UI hygiene bundle
-**Visual / UX**
-
-*What remains:* dead `⇅` control (`index.html:917`, CSS `:509-510`) — **it has no `onclick` and
-no listener, yet carries `cursor:pointer` and a hover state: a clickable button that does
-nothing**; search placeholder vs the predicate triplicated at `:5984`/`:6762`/`:6788`; six
-Hebrew strings; dead `rs`/`rsCls` locals near `:7402`. No new behaviour.
-*Deps:* none. **Must land before entry 10.**
-*Legacy refs:* `WP-P5`, BC-4/BC-6/F9/QR-4.
-
-### 10 · Scan Results row enrichment
-**Daily Review**
-
-Risk/reward chips + held marker in both renderers; **first QA coverage** for these surfaces.
-*Deps:* **after entry 9** — must not consume the `rs`/`rsCls` locals entry 9 deletes.
-*Legacy refs:* `WP-P6`, RV-1…8.
 
 ### 11 · Selected-for-scan visibility
 **Search / Scan** · small.
@@ -197,6 +167,16 @@ per dark surface would be inventory, not a plan.
 Nothing technical stands in the way. Its stated gate — "after the TradingView pilot" — has been
 satisfied (entry 1, DONE). **Owner-only: not Worker execution.** Not scheduled into either lane.
 
+### 29 · Remote push prevention
+**Workflow / Dev Infra** · **new 2026-09-29** · **Owner-only**
+
+Prerequisite for **unattended Auto** and the **Cloud Night Shift** pilot: a Worker-written
+script can still invoke `git` with the machine's credentials (T6), which the command-text
+hook cannot prevent and the integrity check only detects. Either a GitHub ruleset blocking
+direct pushes to `main` (and, if chosen, `branch-dev`), or Worker sessions without
+push-capable credentials. Owner decision and external setting — not Worker execution.
+Attended Auto does not depend on it.
+
 ---
 
 ## HOLD / EXTERNAL — genuinely blocked, or activation-only
@@ -240,6 +220,9 @@ chart/embed · `EG-10A` and `EG-15` design briefs · the ARC governance chain
 **5** Benchmark self-comparison guard — `9cade5b` ·
 **6** Technical Score v1 surfacing — `aa62aea` ·
 **8a** `Rating:` regex de-duplication — `9f8171d` ·
+**9** UI hygiene bundle — `bf936de` ·
+**10** Scan Results HELD marker — `df5ad24` (narrowed by Owner ruling 2026-09-26: no
+Risk / Reward column or chips in Scan Results) ·
 **S2 slices** S1.5 · S1.5.1 (H-A/H-B/H-C, `1eda72c`) · S1.5.2 (`d9395ea`) · A1 (`6e242fb`,
 `9327e47`) · A2 (`52c322b`) · A5 (`810586d`) · D-A2-2 / S2-M1 (`0526458`) ·
 A3a / S2-M2 (`28c2543`) ·
@@ -250,7 +233,8 @@ fund-facts `C1-S1…S6` · `C3-S1` provider · `T1-C1` · closed arcs `WU-P7A1`,
 task-folder convention.
 
 *Historical totals are approximate (~40 merged refs, ~50 retired, ~64 done) and deliberately
-not enumerated line-by-line. The 17 active entries above are exact.*
+not enumerated line-by-line. The **21** active entries above are exact (numbered entries in
+NOW, NEXT, LATER, HOLD and HOLD / EXTERNAL; DONE-marked entries excluded).*
 
 **KNOWN HISTORICAL EXCEPTIONS** (recorded, not remediated — do not back-fill):
 
