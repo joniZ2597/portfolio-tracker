@@ -10,3 +10,10 @@ paths: "qa/**"
 - Offline means offline: no network, no live provider, no browser — fixtures only.
 - Assert against the real production module, not a re-implementation.
 - Prefer relative or derived counts over hardcoded expected-count literals.
+- A check whose assertion calls something with real side effects (spawns a process, reads live
+  git or filesystem state) computes the result ONCE, stores it, and asserts against the stored
+  value — never two live calls in one assertion path; timing can change the second result.
+- A repo-state / tamper check on governance files uses `git status --porcelain`: `git diff HEAD`
+  misses untracked planted files, and `--ignored` false-positives on a legitimate gitignored
+  `.claude/settings.local.json`. A gitignored malicious governance file is a DENY-tier / T6
+  residual concern, not a detection-check case.

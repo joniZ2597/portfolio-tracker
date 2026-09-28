@@ -33,8 +33,8 @@ read a file it never imports.)*
 ## Worker execution contract
 
 Once a tracked, Owner-approved `brief.md` exists, the Worker executes the whole task inside
-that scope and returns to the Owner only at commit approval, LAND, or on a STOP condition
-below.
+that scope and returns to the Owner only at the step-13 STOP (after its gated task-branch
+commit) or on a STOP condition below.
 
 **Before writing any implementation code:**
 
@@ -88,9 +88,9 @@ below.
       classified under the same FIX/DEFER/REJECT rule: DEFER and REJECT close normally. If the
       scoped re-pass finds a new Class I FIX requiring another implementation change, do not
       apply it and do not start a third Codex round. Record it in `review.md` as an unresolved
-      Class I finding and surface it at the existing commit-approval boundary (step 13) for
-      Owner ruling — this does not create a new return point; it is a STOP only if one of
-      STOP-1..5 independently applies. Record one line in `review.md` for a round with at least
+      Class I finding and surface it at the step-13 STOP for Owner ruling, **without
+      committing** — this does not create a new return point; it is a STOP only if one of
+      STOP-1..6 independently applies. Record one line in `review.md` for a round with at least
       one class-I finding and no class-II findings: `Final check: N rounds, M class-I findings —
       X FIX, Y DEFER, Z REJECT, U unresolved; QA/re-pass performed where required; no class-II
       findings.`
@@ -112,22 +112,28 @@ below.
     Class I bullet above)** — each used only for the round shape it names; the unmodified
     class-II line is used only for a round with zero class-I findings or reclassifications.
 
-12a. **STOP BEFORE COMMIT.** When the final Codex check returns **PASS**, report the final
-     implementation / QA / Codex state to the Owner and **halt**. This is a return point, not a
-     pause inside a continuous run: the Worker does not carry on into step 13 as one motion.
-     The commit gate itself is unchanged and lives in step 13 and "Protected actions" — **12a
-     adds the halt and the report; it does not restate the commit rule.**
+12a. **Final report.** When the final Codex check returns **PASS**, continue to step 13. The report is delivered at the step-13 STOP.
 
-**Then, at the commit boundary — never autonomous:**
+**Then, at the commit boundary — gated, never bypassed:**
 
-13. Prepare the task for its final commit (implementation + `review.md`), then request Owner
-    commit approval for the exact scope. `git commit` stays `ask`-tier — see "Protected
-    actions". Commit only after that approval, then request LAND.
+13. **Commit on the task branch, then STOP.**
+    - Commit only in the Worker's own slot, with HEAD on `task/<id>`, through the r9 commit gate
+      (HOOK-DENY).
+    - Stage explicit paths with `git add` in one call, then run a plain `git commit -m "…"` in a
+      separate call. Never amend; never stage a protected path.
+    - A final commit that must include a DENY-tier or protected path is made by the Owner in a
+      normal terminal.
+    - A gate denial is **STOP-6**.
+    - After the final commit, run
+      `node qa/guard_integrity_check.js --base-main <main oid> --base-dev <brief base> --task task/<id> --since <task-start ISO> --root <canonical checkout>`.
+      Any FAIL is **STOP-6**.
+    - Then **STOP**: report the implementation, QA, Codex and integrity results, and request LAND.
+    - The Worker never merges, rebases, pulls, pushes or lands.
 
 **The Owner does not approve individual file edits, inspect code previews, relay Codex
-findings, or decide ordinary in-scope implementation questions — commit approval and LAND
-approval remain the Owner's, as they already are under "Protected actions" and "Owner LAND /
-SHIP boundaries" below.**
+findings, or decide ordinary in-scope implementation questions — LAND approval remains the
+Owner's; task-branch commits follow the r9 gate (step 13), as they already are under "Protected
+actions" and "Owner LAND / SHIP boundaries" below.**
 
 **The Owner is never a relay for review context.** Diff, brief, QA evidence, `codex.md` and any
 other review material are provided by the Worker directly to the Codex review process. The Owner
@@ -135,33 +141,69 @@ is not asked to copy them into a separate conversation when the Worker can suppl
 
 ## Worker mode policy
 
-The Worker runs in one permission mode for the whole session — `acceptEdits`. PLAN and MANUAL
-are **postures the Worker adopts**, not modes it switches to; nothing stops a Worker that
-ignores them except review.
+Every brief sets `Mode: Manual` or `Mode: Auto`.
+
+- **Manual** — Claude Code `default` mode, every action approved — is the project default.
+- `Mode: Auto` *permits* the Owner to run the session in **attended Auto** or `acceptEdits`. It never
+  requires it.
+- **Attended** means the Owner is at the machine and responsive for the whole session.
+- **Unattended Auto is not permitted**: scheduled, background, cloud, overnight, or any session left
+  running without the Owner. It stays prohibited until remote-side prevention exists (for example a
+  GitHub ruleset blocking direct pushes to main, or Worker sessions without push-capable credentials).
+  The command-text hook cannot stop a Worker-written script from invoking git (T6), and the integrity
+  check is detection, not prevention.
+
+**`Mode: Auto` eligibility — all must hold:**
+- an approved, committed brief with explicit files and STOP conditions;
+- bounded product or QA work;
+- offline QA only;
+- no schema, persistence, architecture, contract, scoring or ranking change;
+- no ASK- or DENY-tier file in scope;
+- no environment, runtime, live-API, deploy, `main` or external mutation;
+- every Owner ruling already exists;
+- the session runs in its own slot under the current guard (see "Worker slot model").
+
+**Manual fallback triggers — any one → STOP-6, then Manual:**
+- an architecture, schema, persistence, contract or scoring surface (M5);
+- any ASK- or DENY-tier file;
+- an Owner-ruling conflict or a missing ruling;
+- committed evidence contradicting the plan (M6);
+- any hook denial, Auto-mode safety-classifier block, or integrity-check FAIL;
+- any environment, runtime, live-API, deploy or `main` need;
+- the current-guard check failing;
+- the Owner becoming unavailable (the session ends; it never continues unattended).
+
+PLAN, IMPLEMENT and MANUAL remain **postures** inside any mode.
 
 ### Protection tiers — the enforced layer
 
-| Tier | Rule | Files | Rationale |
-|---|---|---|---|
-| **DENY** — never modifiable by a task | `deny` | `.claude/settings.json` · `.claude/settings.local.json` | The privilege-escalation surface, and only that. A task that can edit its own permissions has no permissions |
-| **ASK** — sensitive, legitimately editable | `ask` | `CLAUDE.md` · `AGENTS.md` · `.gitignore` · `.claude/rules/**` · `qa/run-offline.js` · `netlify.toml` · `work/*/brief.md` (once approved/committed) | Real tasks edit these. `ask` prompts even under `acceptEdits` — one confirmation for a file that deserves one, no prompt for ordinary work |
-| **ACCEPT EDITS** — ordinary | *(mode default)* | everything else in the approved brief | Autonomous |
+| Tier | Enforced by | Covers |
+|---|---|---|
+| **HOOK-DENY** | PreToolUse hook, exit 2, every Claude Code session — the only deterministic boundary | push (R3g); merge/rebase/pull (R3m); destructive git; checkout/switch to main; ref moves of main/branch-dev (RC4, R10-4, R10-5); commits outside the r9 gate (R3c); unknown git subcommands (R10-2); escaped forms (R10-1); git config execution paths (R10-3); `.git` writes by any tool (R10-3c, R10-6); PowerShell rules (R2, R2b); wrappers and stdin-fed interpreters; Netlify writes and protected-file writes from Worker slots |
+| **DENY** | `deny` | `.claude/settings.json` · `.claude/settings.local.json` · `.claude/hooks/**` |
+| **ASK** | `ask` | `CLAUDE.md` · `AGENTS.md` · `.gitignore` · `.claude/rules/**` · `qa/run-offline.js` · `netlify.toml` · `package.json` · `package-lock.json` · `work/*/brief.md` (once approved/committed) |
+| **ORDINARY** | the approved brief | everything else in the approved brief |
+
+`ask` is a convenience, not a safety boundary: it has been observed not to prompt. A brief that lists
+any ASK- or DENY-tier file is `Mode: Manual`. DENY-tier files are changed only by the Owner, through
+the copy/hash workflow.
 
 **The brief-listing rule:** an ASK-tier file may be edited only if the approved `brief.md`
-lists it by path. Listed → the Worker adopts the MANUAL posture for that edit, answers the
-prompt, continues — no STOP unless one of the five real STOP conditions fires independently.
-Not listed → **STOP-1**, edit outside approved scope. The Worker does not amend its own scope.
+lists it by path. Listed → the brief is `Mode: Manual`; the Worker adopts the MANUAL posture for
+that edit and continues once the Owner approves the action — no STOP unless one of the six STOP
+conditions fires independently. Not listed → **STOP-1**, edit outside approved scope. The Worker
+does not amend its own scope.
 
 ### Working postures — the behavioural layer, not enforced
 
 | Posture | What the Worker does | Enforced by |
 |---|---|---|
 | **PLAN** | Reads, traces, builds the requirement→test map. Writes no code | nothing — discipline |
-| **ACCEPT EDITS** | Implements autonomously inside the approved file set | the mode + the approved brief |
-| **MANUAL** | Slows down: one edit at a time, re-reads the surrounding contract first | `ask` rules, for ASK-tier files. Discipline elsewhere |
+| **IMPLEMENT** | Implements autonomously inside the approved file set | the approved brief |
+| **MANUAL** | Slows down: one edit at a time, re-reads the surrounding contract first | Manual mode for ASK/DENY-tier files. Discipline elsewhere |
 
 **MANUAL is not STOP.** MANUAL means the Worker proceeding more carefully. STOP means
-returning to the Owner, and happens only on the five STOP conditions below. A Worker that hands
+returning to the Owner, and happens only on the six STOP conditions below. A Worker that hands
 back on every MANUAL transition rebuilds the courier problem.
 
 ### Transitions — six
@@ -169,10 +211,10 @@ back on every MANUAL transition rebuilds the courier problem.
 | # | Trigger | → Posture | What the Worker does |
 |---|---|---|---|
 | **M1** | Task start, approach not trivial — more than one file, a new module, or any requirement without one obvious assertion | **PLAN** | Build the requirement→test map and the conventions-followed/overridden list in `plan.md`. No code. *(Trivial tasks skip straight to implementation — the map is still written, it is just short.)* |
-| **M2** | `plan.md` complete: every requirement mapped, every override named | **ACCEPT EDITS** | Before the first implementation edit, confirm `work/<id>/brief.md` is tracked (`git ls-files work/<id>/brief.md` non-empty) and unmodified (`git status --short work/<id>/brief.md` empty). Then: failing tests first, then implement |
+| **M2** | `plan.md` complete: every requirement mapped, every override named | **IMPLEMENT** | Before the first implementation edit, confirm `work/<id>/brief.md` is tracked (`git ls-files work/<id>/brief.md` non-empty) and unmodified (`git status --short work/<id>/brief.md` empty). Then: failing tests first, then implement |
 | **M3** | Two consecutive fix attempts fail on the same assertion | **PLAN** | Stop editing. Re-derive the cause from source before touching anything else |
 | **M4** | An unexpected QA failure — a suite the task did not touch, or a failure class not seen before | **PLAN** | Diagnose first. Do not "fix" a suite you do not yet understand |
-| **M5** | Next edit touches an ASK-tier file, or an architecture / security / contract surface — auth or token path, gate predicate, persisted shape, public contract, scoring or persistence boundary | **MANUAL** | One edit at a time. ASK-tier files also produce a real prompt |
+| **M5** | Next edit touches an ASK-tier file, or an architecture / security / contract surface — auth or token path, gate predicate, persisted shape, public contract, scoring or persistence boundary | **MANUAL** | One edit at a time. In an Auto or `acceptEdits` session this is a Manual fallback trigger (STOP-6) |
 | **M6** | Repository evidence conflicts with the approved brief | **MANUAL**, then assess | Record the conflict. Brief merely more specific than precedent → the brief wins, continue. Brief cannot be satisfied as written → **STOP-2** |
 
 **Codex findings** are handled by the existing FIX / DEFER / REJECT rule, not by a transition:
@@ -189,12 +231,15 @@ The Worker stops and returns to the Owner **only** when one of these is true:
 1. A required edit falls **outside the approved scope or file set**.
 2. The **approved contract cannot be satisfied as written**. A brief whose *wording*
    mis-measures a condition the implementation plainly meets is not this condition. Record the
-   reading used and continue; the Owner sees it at commit approval. STOP-2 is reserved for a
+   reading used and continue; the Owner sees it at LAND review. STOP-2 is reserved for a
    brief whose **intent** cannot be met.
 3. A **security assumption in the brief conflicts with repository or vendor evidence**.
 4. A required test or action needs a **live, production, deployment, or other protected
    mutation**.
 5. **Two approved brief requirements contradict each other.**
+6. **A guard or fallback fires.** This means a hook denial, an Auto-mode safety-classifier block,
+   an integrity-check FAIL, or any Manual fallback trigger in an Auto or `acceptEdits` session.
+   Never retry, rephrase or reroute through another form, script or tool.
 
 Anything else is the Worker's to decide. A STOP names the condition, the evidence, and the
 smallest decision that would clear it.
@@ -377,9 +422,9 @@ centrally allocated id, no lookup table, no registry.
   smallest scoped diff, how it will be validated. It may be drafted directly at
   `work/<id>/brief.md` before approval — the required sequence is: draft `work/<id>/brief.md`
   → Owner reviews the exact current contents → Owner approves the exact brief-only commit →
-  commit it unchanged → implementation may begin. **An uncommitted or merely staged brief does
-  not authorize implementation** — only the tracked, committed brief whose exact contents were
-  Owner-approved does.
+  the Owner makes it in a normal terminal (RC2) → commit it unchanged → implementation may
+  begin. **An uncommitted or merely staged brief does not authorize implementation** — only the
+  tracked, committed brief whose exact contents were Owner-approved does.
 - `plan.md` (untracked, gitignored via `work/*/plan.md`) — the requirement→test map and the
   conventions-followed/overridden list. Written before implementation begins.
 - `codex.md` (untracked, gitignored via `work/*/codex.md`) — the raw Codex review output,
@@ -394,8 +439,8 @@ centrally allocated id, no lookup table, no registry.
   definition), so the complete final diff — including `review.md` itself — is reviewed before
   it is committed.
   `review.md` is committed in the same commit as any final implementation touch-ups — that
-  commit's Owner approval and the separate, later Owner LAND approval are two distinct events,
-  never conflated even when they happen close together. `review.md`'s "Files changed" section
+  commit (the Worker's gated step-13 commit) and the separate, later Owner LAND approval are two
+  distinct events, never conflated even when they happen close together. `review.md`'s "Files changed" section
   uses this fixed two-row shape:
 
   ```
@@ -409,8 +454,8 @@ no name variants (no `codex-final.md`, no `qa-post-edit.log`). None of them carr
 state, or lifecycle.**
 The only operational meaning of a tracked, committed `brief.md` is that implementation may
 begin within its exact approved scope. `review.md` is evidence only and authorizes nothing.
-Commit, LAND, and SHIP still require their explicit Owner decisions. No registry, claim, or
-mutex exists anywhere in this convention.
+LAND and SHIP require explicit Owner decisions; Worker task-branch commits follow step 13. No
+registry, claim, or mutex exists anywhere in this convention.
 
 ## Test commands
 
@@ -448,8 +493,8 @@ repository history: `git diff <base> -- work/<id>/brief.md work/<id>/review.md`;
 is still untracked at final-review time, its contents are included directly (this is how a
 still-untracked `review.md` reaches the final check); plus any permitted `BACKLOG.md` change.
 `plan.md`, `codex.md`, and `qa.log` stay untracked/gitignored task evidence — available as
-supporting evidence but not part of the task diff. The final Codex check (step 12), the commit
-request and the LAND request refer to the task diff; it is the sole, authoritative definition of
+supporting evidence but not part of the task diff. The final Codex check (step 12), the step-13
+commit and the LAND request refer to the task diff; it is the sole, authoritative definition of
 "the complete final diff" wherever that phrase is used — nothing else defines it separately.
 
 **Codex must receive every part of whichever diff applies** — the tracked diff and the
@@ -464,9 +509,19 @@ above.
 
 ## Owner LAND / SHIP boundaries
 
-- **LAND** (integrate the reviewed task into `branch-dev`): requires `npm run qa:offline`
-  passing, a clean `git status`, and a reviewed diff (Codex or Owner). Claude Code may prepare
-  and request LAND; it does not decide LAND is done — the Owner confirms.
+- **LAND** integrates the reviewed task into `branch-dev`: fast-forward only, one task at a time, run by the Owner in a normal terminal (merge/rebase/pull are HOOK-DENY, R3m).
+  - Before LAND:
+    - `npm run qa:offline` passes at the final commit;
+    - `git status` is clean;
+    - the task diff has been reviewed (Codex or Owner);
+    - `node qa/guard_integrity_check.js` passes (this covers an empty `core.hooksPath` and only
+      `.sample` git hooks).
+  - Claude Code may prepare and request LAND; the Owner confirms it.
+  - **Second LAND:** when another task landed first, the Owner rebases the task branch in a normal
+    terminal. The Worker then re-runs `npm run qa:offline` and the relevant targeted tests in its
+    slot and reports, before LAND.
+- **Push** is run by the Owner in a normal terminal only (R3g). One consolidated push after a batch
+  is preferred.
 - **SHIP** (`branch-dev` → `main`/production): always requires explicit, separate Owner
   approval, on top of a landed and QA'd `branch-dev` state. Never bundled with a LAND approval.
 
@@ -479,7 +534,9 @@ above.
   deploys/previews, environment-variable changes, and any other Netlify mutation. Read-only
   Netlify inspection does not require approval.
 - Live external API canaries (SEC, Perplexity, or similar).
-- Committing — Claude Code prepares and requests, the Owner approves the exact scope.
+- Commits outside the r9 gate — the main checkout, brief-only commits, any commit staging a DENY-tier or protected path, any denied form — are made by the Owner in a normal terminal (RC2).
+- `git merge`, `rebase`, `pull`, and any ref move of `main`/`branch-dev` — the Owner, in a normal terminal.
+- Environment/runtime mutations, and protected governance changes (the hook and settings, through the Owner copy/hash workflow).
 
 ## Worker slot model
 
@@ -497,3 +554,9 @@ above.
   is missing or older than `package-lock.json`.
 - LAND, push, and every other protected action are unchanged (see "Owner LAND / SHIP boundaries"
   and "Protected actions").
+- A Worker session runs only in its own slot (cwd) — never in the other slot or the main checkout.
+- **Current-guard check** before any non-Manual session: the slot's task branch descends from the
+  current `branch-dev`, and `git status --porcelain .claude` is empty.
+- The Git/bootstrap Worker performs approved, deterministic mechanical Git/worktree setup (slots,
+  task branches, refs, hashes, status) only where the hook permits. It is never a bypass; anything
+  the hook denies goes to the Owner's terminal.

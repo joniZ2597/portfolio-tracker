@@ -138,6 +138,6 @@
       "mcp__claude_ai_Netlify__netlify-user-services-reader",
       "mcp__claude_ai_Netlify__get-netlify-coding-context"
     ],
-    "defaultMode": "acceptEdits"
+    "defaultMode": "default"
   }
 }

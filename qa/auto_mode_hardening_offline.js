@@ -1382,7 +1382,7 @@ function settingsProblems(s) {
   if (!sameSet(ask, EXPECT_ASK)) p.push('ask set is not (base − moved) + §5 additions − RC5 commit entries');
   if (!sameSet(allow, EXPECT_ALLOW)) p.push('allow set is not base + RC5 (Bash(git commit) and Bash(git commit *))');
   if (allow.some((r) => /^Bash\(npm run \*\)$|node -e|python3? -c/.test(r))) p.push('broad allow (npm run * / node -e / python3 -c) present');
-  if (perms.defaultMode !== 'acceptEdits') p.push('defaultMode is not acceptEdits');
+  if (perms.defaultMode !== 'default') p.push('defaultMode is not default (Manual)');
   if (/bypassPermissions|"auto"/.test(JSON.stringify(s))) p.push('bypassPermissions/auto present');
   const pre = s && s.hooks && s.hooks.PreToolUse;
   const wired = Array.isArray(pre) && pre.some((e) => e && e.matcher === R10_MATCHER && Array.isArray(e.hooks) &&
@@ -1397,7 +1397,7 @@ function appliedSettings() {
       deny: [...BASE_DENY, ...ADD_DENY],
       ask: EXPECT_ASK.slice(),
       allow: EXPECT_ALLOW.slice(),
-      defaultMode: 'acceptEdits'
+      defaultMode: 'default'
     }
   };
 }
@@ -1419,8 +1419,9 @@ check('AH-8 control: §5-applied fixture has no problems', settingsProblems(appl
   const m11 = RC5_ASK_REMOVED.map((entry) => { const m = clone(appliedSettings()); m.permissions.ask.push(entry); return m; });
   const m12 = clone(appliedSettings()); m12.permissions.allow.push('Bash(git -C * commit*)');
   const m13 = clone(appliedSettings()); m13.permissions.allow.push('Bash(git commit:*)');
+  const m14 = clone(appliedSettings()); m14.permissions.defaultMode = 'acceptEdits';
   check('AH-8 planted negatives: each mutated settings fixture is rejected',
-    [m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m12, m13, ...m11].every((m) => settingsProblems(m).length > 0));
+    [m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m12, m13, m14, ...m11].every((m) => settingsProblems(m).length > 0));
   check('AH-8 planted negative (RC5): the pre-RC5 (r8) settings shape is rejected — commit ask entries present, commit allow entries absent',
     settingsProblems(Object.assign(clone(appliedSettings()), { permissions: Object.assign(clone(appliedSettings()).permissions, {
       ask: [...EXPECT_ASK, ...RC5_ASK_REMOVED], allow: BASE_ALLOW.slice() }) })).length > 0);
