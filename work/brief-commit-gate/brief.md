@@ -8,7 +8,7 @@ brief-only commit records them unchanged. Everything this brief relies on is wri
 | Baseline | the current `branch-dev` at the time of this brief's commit (it must contain r10 `dd03098` and the auto-policy `ea5a632`) |
 | Branch / slot | `task/brief-commit-gate`, created from this brief's commit in whichever Worker slot is free and current |
 | Mode | **Manual** (hook = DENY tier; AGENTS.md = ASK tier) |
-| qa:offline | 50 → 50 (the existing `qa/auto_mode_hardening_offline.js` is extended) |
+| qa:offline | 51 → 51 (the existing `qa/auto_mode_hardening_offline.js` is extended) |
 | Status | CODE-READY on Owner approval of this brief, incl. rulings GB-1…GB-3 |
 
 Objective. Let a Claude Code session in the canonical checkout (the Git/bootstrap Worker) create an
@@ -16,6 +16,81 @@ Objective. Let a Claude Code session in the canonical checkout (the Git/bootstra
 verify / add / diff / commit terminal steps. The Owner's approval act remains, as one terminal line
 that writes an approval record Claude cannot write (§2). Every r9 / r10 / R3g / R3m / RC2 protection is
 otherwise unchanged.
+
+## Amendment 1 (Owner-approved 2026-09-29) — remove inert `Write(...)` permission rules
+
+This amendment is inserted without deleting any text. **Where it conflicts with a later section, this
+amendment wins**, specifically:
+- §3 "Unchanged … `.claude/settings.json` … no settings change";
+- §5 "exactly 4";
+- §8's settings STOP line;
+- §10 "no settings, … change".
+
+**Why.** Every Claude Code session starts with the warning "`Write(...)` is not matched by file
+permission checks — only `Edit(path)` rules are". The twelve `Write(...)` rules in
+`.claude/settings.json` are therefore inert today. Each has an `Edit(...)` twin with the same intent
+(verified at `c35f76e`), and `Edit(path)` rules already govern every file-editing tool, Write included.
+Removing the `Write(...)` entries changes no enforcement. It only silences the warnings.
+
+| Path | Tier | Rule kept | Rule removed |
+|---|---|---|---|
+| `./.claude/settings.json` | deny | `Edit(./.claude/settings.json)` | `Write(./.claude/settings.json)` |
+| `./.claude/settings.local.json` | deny | `Edit(./.claude/settings.local.json)` | `Write(./.claude/settings.local.json)` |
+| `./.claude/hooks/**` | deny | `Edit(./.claude/hooks/**)` | `Write(./.claude/hooks/**)` |
+| `./CLAUDE.md` | ask | `Edit(./CLAUDE.md)` | `Write(./CLAUDE.md)` |
+| `./AGENTS.md` | ask | `Edit(./AGENTS.md)` | `Write(./AGENTS.md)` |
+| `./.gitignore` | ask | `Edit(./.gitignore)` | `Write(./.gitignore)` |
+| `./.claude/rules/**` | ask | `Edit(./.claude/rules/**)` | `Write(./.claude/rules/**)` |
+| `./qa/run-offline.js` | ask | `Edit(./qa/run-offline.js)` | `Write(./qa/run-offline.js)` |
+| `./work/*/brief.md` | ask | `Edit(./work/*/brief.md)` | `Write(./work/*/brief.md)` |
+| `./netlify.toml` | ask | `Edit(./netlify.toml)` | `Write(./netlify.toml)` |
+| `./package.json` | ask | `Edit(./package.json)` | `Write(./package.json)` |
+| `./package-lock.json` | ask | `Edit(./package-lock.json)` | `Write(./package-lock.json)` |
+
+**A1-1 — settings change (Owner-applied, copy/hash).**
+- `.claude/settings.json` loses exactly these twelve array elements: the lines holding
+  `"Write(./…)",` at `c35f76e` lines 19, 21, 30, 74, 76, 78, 80, 82, 84, 86, 107 and 109.
+- Nothing else changes: every `Edit(...)` rule, every Bash/PowerShell/MCP rule, `allow`, `defaultMode`,
+  the hook block and the matcher all stay identical.
+- The file's CRLF line endings are kept.
+- The Worker builds the candidate in its scratchpad and reports its sha256 and a diff that deletes
+  only those 12 lines. The Owner copies it into the slot after a hash check. The Worker never writes
+  `.claude/settings.json`.
+
+**A1-2 — AH-8 update (`qa/auto_mode_hardening_offline.js`).**
+- Add `const R11_WRITE_REMOVED = [ …the twelve Write(...) strings… ];`.
+- The expected deny set becomes `[...BASE_DENY, ...ADD_DENY]` minus `R11_WRITE_REMOVED`. `EXPECT_ASK`
+  additionally filters out `R11_WRITE_REMOVED`. `appliedSettings()` follows.
+- The historical `BASE_*` / `ADD_*` literals stay unchanged, as history.
+- New AH-8 rows, each with a planted negative:
+  - **AH-8-W1:** no rule in `deny`, `ask` or `allow` starts with `Write(`. *Negative:* re-adding any one
+    removed `Write(...)` entry is rejected, so the warnings cannot silently return.
+  - **AH-8-W2:** each of the 12 paths still has its `Edit(...)` rule in exactly the tier in the table
+    (3 deny, 9 ask). *Negatives:* dropping any one `Edit(...)` rule is rejected; moving a deny `Edit`
+    into `ask` is rejected; adding any of the 12 paths to `allow` is rejected.
+  - **AH-8-W3:** no `MultiEdit(`, `NotebookEdit(` or other file-tool rule is introduced; `Edit(...)` is
+    the only file-tool rule family.
+- The existing AH-8 checks (exact set equality, `defaultMode === 'default'`, R10 matcher, RC5) stay and
+  must pass against the Owner-applied file.
+
+**A1-3 — scope and STOP adjustments.**
+- §5's implementation file set becomes **exactly 5**: add `.claude/settings.json` (A1-1 only; Owner-applied).
+- §8's STOP line "any change to … `.claude/settings.json`" now reads "any settings change other than A1-1".
+- The final commit is still made by the Owner in a normal terminal, because it stages the hook and
+  settings (protected).
+
+**A1-4 — live checks (Owner, after applying the settings and hook, in a restarted session).**
+- **L-S1:** a new Claude Code session in a Worker slot shows **no** `Write(...) is not matched…`
+  startup warning.
+- **L-S2:** in that slot session, a Write tool call targeting `.claude/settings.json` is **denied**. This
+  proves the `Edit(...)` deny rule covers Write. It is harmless because it is denied.
+- **L-S3:** in a Manual session, a Write tool call targeting `AGENTS.md` shows the permission prompt.
+  Answer **No**. If it does not prompt, record it in `review.md` as the known pre-existing `ask`
+  unreliability; it is not a regression of this amendment.
+- **L-S4:** `qa:offline` PASS 51 in the canonical checkout after LAND.
+
+**Unchanged by this amendment:** R11 (§3), the AGENTS.md edits (§4), AH-19, CLAUDE.md and its
+fingerprint, and every hook rule.
 
 ## 1. Current behaviour (r10, `dd03098`)
 
@@ -171,7 +246,7 @@ Rows use injected deps unless marked "real git". Each rule gets a planted negati
 - **QA lesson:** every subprocess-backed check computes its result once and asserts on the stored
   value.
 - **Also run:**
-  - full `npm run qa:offline` PASS 50;
+  - full `npm run qa:offline` PASS 51;
   - `node qa/instruction_layer_offline.js` PASS (CLAUDE.md fingerprint unchanged);
   - G1–G3 on the copied hook: real hook-process spawns for one allow and three denies from AH-19.
 - **Owner live check after LAND:**
@@ -227,7 +302,7 @@ brief in the slot, and the Worker resumes for QA, differential, mutants, Codex a
 - R11 is implemented exactly per §3 in the Owner-applied hook, with a recorded sha256.
 - AGENTS.md carries exactly the §4 edits.
 - AH-19 rows and mutants PASS; the r10→r11 differential shows 0 changes; AH-16 is unchanged.
-- Full `qa:offline` PASS 50; `instruction_layer` PASS; G1–G3 PASS.
+- Full `qa:offline` PASS 51; `instruction_layer` PASS; G1–G3 PASS.
 - Codex: no unresolved Class I finding.
 - STOP before the Owner's final commit.
 
