@@ -2840,6 +2840,32 @@ function _eodReadinessLines(r) {
   return lines;
 }
 
+// DH-M3 (M3-1/M3-2): pre-export warning copy. Explanatory prose only — every
+// state/reason word still comes from DH_DISPLAY via _dhLabel.
+var EOD_PREEXPORT_COPY = {
+  heading: 'Export check — this EOD packet is ',
+  marketUnknownNote: 'Prices cached before the readiness check was added carry no market session yet; they count as Current after their next price refresh.',
+  footer: 'The export will include these limitations in its Readiness section.',
+  choice: 'OK = export anyway · Cancel = go back without exporting.'
+};
+
+// Pure. Reads only its argument. Returns null unless the verdict is
+// not-representative (M3-1); otherwise the confirm() text, listing only the
+// reasons whose effect is not-representative, in packet order.
+function _eodPreExportWarning(r) {
+  if (!r || r.verdict !== 'not-representative' || !Array.isArray(r.reasons)) return null;
+  var lines = [EOD_PREEXPORT_COPY.heading + _dhLabel('verdict', r.verdict) + '.', ''];
+  var hasUnknown = false;
+  r.reasons.forEach(function(x) {
+    if (!x || x.effect !== 'not-representative') return;
+    if (x.class === 'market-unknown') hasUnknown = true;
+    lines.push('- ' + _dhLabel('reason', x.class) + (x.symbols ? ' — ' + x.symbols.join(', ') : ''));
+  });
+  if (hasUnknown) lines.push('', EOD_PREEXPORT_COPY.marketUnknownNote);
+  lines.push('', EOD_PREEXPORT_COPY.footer, EOD_PREEXPORT_COPY.choice);
+  return lines.join('\n');
+}
+
 // Pure aggregator. Every input is explicit — no storage, no globals, no DOM.
 // Calls only _p5BuildLocalContext (never _p5CollectLocalContext, never
 // _p5RunResearch) so preload is read once and reused for every holding.
@@ -3189,6 +3215,8 @@ function _eodExportPacket() {
   var reconState = _pfReconLoad();
   var packet = _eodBuildPacket({ asOf: asOf, nowMs: nowMs, packetsBySymbol: packetsBySymbol,
     preload: preload, reconState: reconState });
+  var preExportWarning = _eodPreExportWarning(packet.readiness);
+  if (preExportWarning !== null && !window.confirm(preExportWarning)) return;
   var md = _eodPacketToMarkdown(packet);
   var briefing = _eodPacketToBriefing(packet);
   var ts = _ptTimestamp();
