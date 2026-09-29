@@ -127,6 +127,8 @@ commit) or on a STOP condition below.
     - After the final commit, run
       `node qa/guard_integrity_check.js --base-main <main oid> --base-dev <brief base> --task task/<id> --since <task-start ISO> --root <canonical checkout>`.
       Any FAIL is **STOP-6**.
+    - The integrity result is **LAND evidence**: report it only in the step-13 STOP report (the `CLAUDE.md` task-completion report). It is never written into `review.md` — no amend, and no second commit made only to record it — and `review.md` does not list it as pending.
+    - If a FAIL comes from a baseline or ruling issue that the Owner resolves, and a re-run PASSes without any implementation change, the task proceeds to LAND with the original task commit unchanged.
     - Then **STOP**: report the implementation, QA, Codex and integrity results, and request LAND.
     - The Worker never merges, rebases, pulls, pushes or lands.
 
@@ -433,7 +435,8 @@ centrally allocated id, no lookup table, no registry.
 - `qa.log` (untracked, gitignored via `work/*/qa.log`) — raw output from targeted/full QA runs
   for this task.
 - `review.md` (tracked) — final evidence: QA result, Codex outcome, and the FIX / DEFER /
-  REJECT ledger with a reason for every DEFER and REJECT. Populated after Codex reviews the
+  REJECT ledger with a reason for every DEFER and REJECT. It holds pre-commit evidence only; the
+  post-commit integrity check is LAND evidence (step 13). Populated after Codex reviews the
   implementation diff and any required fixes/QA re-runs are done; then one final lightweight
   Codex check runs against the task diff (see "Codex as diff reviewer" for its authoritative
   definition), so the complete final diff — including `review.md` itself — is reviewed before
@@ -515,11 +518,13 @@ above.
     - `git status` is clean;
     - the task diff has been reviewed (Codex or Owner);
     - `node qa/guard_integrity_check.js` passes (this covers an empty `core.hooksPath` and only
-      `.sample` git hooks).
+      `.sample` git hooks) — run after the task commit and reported in the Worker's step-13
+      report or by the Owner, never recorded in the committed `review.md`.
   - Claude Code may prepare and request LAND; the Owner confirms it.
   - **Second LAND:** when another task landed first, the Owner rebases the task branch in a normal
-    terminal. The Worker then re-runs `npm run qa:offline` and the relevant targeted tests in its
-    slot and reports, before LAND.
+    terminal. The Worker then re-runs `npm run qa:offline`, the relevant targeted tests and the
+    integrity check (against the rebased commit) in its slot and reports, before LAND — the
+    post-rebase integrity result is LAND evidence only, never recorded in `review.md`.
 - **Push** is run by the Owner in a normal terminal only (R3g). One consolidated push after a batch
   is preferred.
 - **SHIP** (`branch-dev` → `main`/production): always requires explicit, separate Owner

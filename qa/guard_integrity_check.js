@@ -3,7 +3,7 @@
 
 /*
  * r10 R10-8: read-only compensating control (detection only). Not part of qa:offline.
- * Run by the Worker at STOP (result -> review.md) and by the Owner before LAND.
+ * Run by the Worker after its step-13 commit (result -> the step-13 report / LAND evidence, never review.md) and by the Owner before LAND.
  *
  * Usage:
  *   node qa/guard_integrity_check.js --base-main <oid> --base-dev <oid> [--since <ISO>]
