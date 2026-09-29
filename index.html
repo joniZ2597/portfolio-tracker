@@ -2695,7 +2695,7 @@ var DH_DISPLAY = {
     'market-missing': 'Market data: Not recorded',
     'fx-aged': 'FX rate: Stale',
     'fx-stale-invalid': 'FX rate: Stale',
-    'fx-missing': 'FX rate: Not recorded',
+    'fx-missing': 'FX rate: Unavailable (no rate fetched)',
     'positions-needs-confirmation': 'Positions: Needs confirmation',
     'cash-missing-or-invalid': 'Cash: Not recorded',
     'cash-old-user-maintained-state': 'Cash: Stale (owner-maintained, set before the oldest position baseline)',
@@ -3017,8 +3017,10 @@ function _eodBuildPacket(args) {
   if (!reporting.completeness && reporting.completenessReasons.length > 0) {
     addLimitation('incomplete-totals', 'Portfolio totals exclude: ' + reporting.completenessReasons.join('; ') + '. These totals are incomplete.');
   }
-  if (reporting.fxState === 'missing' || reporting.fxState === 'stale-invalid') {
-    addLimitation('fx', 'FX unavailable — cross-currency totals are not reported.');
+  if (reporting.fxState === 'missing') {
+    addLimitation('fx', 'FX: Unavailable (no rate fetched) — cross-currency totals are not reported.');
+  } else if (reporting.fxState === 'stale-invalid') {
+    addLimitation('fx', 'FX: Stale — cross-currency totals are not reported.');
   } else if (preload.fxCache.rate) {
     addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' + reporting.fxState + '.');
   }
@@ -9057,8 +9059,8 @@ function _pfComputePortfolioReporting(usdSubtotal, ilsSubtotal, unknownCurrencyC
   if (cashState.state === 'invalid') completenessReasons.push('Cash data invalid');
   if (unknownCurrencyCount > 0)      completenessReasons.push(unknownCurrencyCount + (unknownCurrencyCount === 1 ? ' unknown-currency holding excluded' : ' unknown-currency holdings excluded'));
   if (hasCorrupt)                    completenessReasons.push(corruptCount + (corruptCount === 1 ? ' corrupt holding excluded' : ' corrupt holdings excluded'));
-  if (usdSubtotal > 0 && fxState === 'missing')       completenessReasons.push('USD holdings excluded — FX unavailable');
-  if (usdSubtotal > 0 && fxState === 'stale-invalid') completenessReasons.push('USD holdings excluded — FX stale');
+  if (usdSubtotal > 0 && fxState === 'missing')       completenessReasons.push('USD holdings excluded — FX: Unavailable (no rate fetched)');
+  if (usdSubtotal > 0 && fxState === 'stale-invalid') completenessReasons.push('USD holdings excluded — FX: Stale');
 
   var cashIlsForTotal = cashState.state === 'recorded' ? cashState.amountILS : 0;
 
@@ -9381,7 +9383,7 @@ function _pfComputeNeedsAttention(holdings, fxCache, recon, cashState, nowMs) {
   if (usdHoldingCount > 0 && (attnFxState === 'missing' || attnFxState === 'stale-invalid')) {
     items.push({
       id: 'fx:unavailable', severity: 'high', category: 'fx', symbol: null,
-      title: attnFxState === 'missing' ? 'FX rate unavailable' : 'FX rate is stale',
+      title: attnFxState === 'missing' ? 'FX rate: Unavailable (no rate fetched)' : 'FX rate: Stale',
       detail: usdHoldingCount + ' USD holding' + (usdHoldingCount === 1 ? '' : 's') +
         ' cannot compute ILS value or P/L — ' +
         (attnFxState === 'missing' ? 'no FX rate has been fetched yet.' : 'the stored FX rate is more than 6 days old.'),

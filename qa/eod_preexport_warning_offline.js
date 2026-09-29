@@ -111,14 +111,15 @@ if (missingExtract.length > 0) {
 // sha256s computed at authoring time from `git show 0522247:index.html`, CRLF-normalized (the
 // blob itself is LF-stored; the working tree is CRLF via core.autocrlf — the same normalization
 // this suite applies to `content` above), recorded in review.md.
+// DH-M4a re-pin: _eodBuildPacket (E4), DH_DISPLAY (E1)
 const BASELINE_SHA256 = {
   _eodComputeReadiness: '085de316864f9b16f620d7fc1eef6bac31b6aa9caa73d32f5457b08b7d47aa2c',
-  _eodBuildPacket: 'aa8a41a6149a228daa0d2a113f2b8f32964095e18eb7687d00770b51b5f35f73',
+  _eodBuildPacket: '38c399f34bdd2c98be59bef832be2b9d842705d8d09700bb908932ad4b424401',
   _eodReadinessLines: 'd1b7c64763db7a28f0719e0c0047e29f8d37e452675ac7dca0c85388204771e9',
   _eodPacketToMarkdown: 'bdaba2e2a460b07e6873a25ff64e3a8351dfbd1663be61047e268ad482879967',
   _eodPacketToBriefing: '120d02d68633dc9343555bcddb51cd8043b851e6affc307888c7531d80806869',
   _dhLabel: '1d95989fe9eea086a34a44bd9d2fe1fef3411b721d941e87236f1023c658ee41',
-  DH_DISPLAY: '764b9d30766d45ecc685fe94e328baf88cbf193b75e5eb634b03503fb3fa2938'
+  DH_DISPLAY: '95729ebb75cf1cb145824f95d7c0626e7f18f0e5456eb671052c29f5b7d881d5'
 };
 Object.keys(BASELINE_SHA256).forEach(function (n) {
   check('PX-9: ' + n + ' byte-equal (sha256) to baseline 0522247', sha(src[n]) === BASELINE_SHA256[n]);

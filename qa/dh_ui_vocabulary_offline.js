@@ -182,16 +182,14 @@ check('UV-3: U1-U8 branch conditions / styles present exactly as at baseline (' 
 // the function where it lived at baseline, exactly once, and exactly once file-wide.
 const OOS = [
   ["fxLabel + ' (aged)'", PANEL],
-  ["'FX as of '", PANEL],
-  ["'FX rate unavailable'", '_pfComputeNeedsAttention'],
-  ["'USD holdings excluded — FX unavailable'", '_pfComputePortfolioReporting']
+  ["'FX as of '", PANEL]
 ];
 const count = (s, t) => s.split(t).length - 1;
 function oosFailures(content) {
   return OOS.filter(([t, fn]) => count(content, t) !== 1 || count(extractFunctionSource(content, fn) || '', t) !== 1).map(([t]) => t);
 }
 check('UV-4: out-of-scope literals each still present exactly once, at their baseline function (' + oosFailures(SRC).join(' | ') + ')', oosFailures(SRC).length === 0);
-check('UV-4 control: a removed out-of-scope literal is detected', oosFailures(swap(SRC, "'FX rate unavailable'", "'FX rate absent'")).length === 1);
+check('UV-4 control: a removed out-of-scope literal is detected', oosFailures(swap(SRC, "'FX as of '", "'FX as-of '")).length === 1);
 {
   // A literal that moved out of its owning function (still once file-wide) must also fail.
   const f = extractFunctionSource(SRC, PANEL);
@@ -219,7 +217,7 @@ const BASE_DISPLAY = {
     'market-missing': 'Market data: Not recorded',
     'fx-aged': 'FX rate: Stale',
     'fx-stale-invalid': 'FX rate: Stale',
-    'fx-missing': 'FX rate: Not recorded',
+    'fx-missing': 'FX rate: Unavailable (no rate fetched)',
     'positions-needs-confirmation': 'Positions: Needs confirmation',
     'cash-missing-or-invalid': 'Cash: Not recorded',
     'cash-old-user-maintained-state': 'Cash: Stale (owner-maintained, set before the oldest position baseline)',
@@ -263,8 +261,8 @@ const FN_HASHES = {
   _pfEodIsStale: '251a554adacbe3049eda5e2ef0d5bf3003f9b13684bd95b46cc4f35a70f1d941',
   _pfFxState: 'e59989a2b68b42bbca26f52e282867edf808d973431368ebc5229feeedbfe0fc',
   _pfComputeReconciliation: '175a6ae8ddebc611a4c4cf93e5b08d912d09ebbfbbfcb89aacf770b616c8dbed',
-  _pfComputeNeedsAttention: '2c33d414b7f04beb46f38cc1ccf510a73ee623345b8c8e603504ad05a4bd0320',
-  _pfComputePortfolioReporting: '5005bc1c95b00412a285f411208aff485238f101d5a7ce412d698b76b4ea3afb'
+  _pfComputeNeedsAttention: 'f42b25e470602b4b3d0456e7b49ad0fb1d4f44c24a76931495e65319de274545',
+  _pfComputePortfolioReporting: '2b62766507c2d90455e484882ae6cef40da387b724e1ca42081f9590d60e041b'
 };
 const CONST_HASH = '8c802d21fa4e580a6d61623751b8f70e7abfd8f008efaece45e24d656e26561c';
 function constHash(content) {
@@ -308,6 +306,174 @@ for (const fn of [PANEL, BANNER]) {
   const shifted = swap(SRC, g, g.replace('// corrupted-but-possibly-non-empty pt_holdings must never present as', '// corrupted-but-possibly-non-empty holdings must never present as').replace('var pl3FxEl = document.createElement', "var _pl = localStorage.getItem('pt_x'); var pl3FxEl = document.createElement"));
   check('UV-7 control: a moved pt_* access (one removed, one added) is detected', forbiddenLineHash(shifted, PANEL) !== FORBIDDEN_LINE_HASH[PANEL]);
 }
+
+// ------------------------------------------------------------------- DH-M4a
+// work/dh-fx-export-wording/brief.md §3/§5 (FW-1..FW-7) — the ruled FX
+// missing/stale wording (R1, D2) applied to the two export-fed compute
+// functions and DH_DISPLAY.reason['fx-missing']. Wording only: the trigger
+// conditions, id, severity, category, detail sentences and sortKey are
+// unchanged (proven by FW-6); the aged/fresh branch stays byte-unchanged
+// (FW-4); neither function gains a DH_DISPLAY / _dhLabel reference (FW-6),
+// since qa/run-offline.js executes them standalone without DH_DISPLAY in
+// scope.
+
+// FW-1: reason['fx-missing'] composes from surface['fx-not-fetched']; every
+// other reason/state/verdict/surface value equals its baseline value.
+function fw1Failures(content) {
+  const ctx = loadDisplay(content);
+  const d = ctx && ctx.DH_DISPLAY;
+  if (!d) return ['DH_DISPLAY not extractable'];
+  const out = [];
+  if (d.reason['fx-missing'] !== 'FX rate: ' + d.surface['fx-not-fetched']) {
+    out.push("reason['fx-missing'] does not compose from surface['fx-not-fetched']");
+  }
+  if (d.reason['fx-missing'] !== 'FX rate: Unavailable (no rate fetched)') {
+    out.push("reason['fx-missing'] != ruled wording");
+  }
+  return out.concat(displayFailures(JSON.parse(JSON.stringify(d))));
+}
+check('FW-1: reason[fx-missing] composes from surface[fx-not-fetched]; every other group value equals baseline (' +
+  fw1Failures(SRC).join('; ') + ')', fw1Failures(SRC).length === 0);
+check('FW-1 control: reverting the fx-missing wording is detected',
+  fw1Failures(swap(SRC, "'fx-missing': 'FX rate: Unavailable (no rate fetched)',", "'fx-missing': 'FX rate: Not recorded',")).length > 0);
+
+// FW-2: _pfComputeNeedsAttention has the exact E2 after-line once; the E2
+// before-literals are absent.
+const FW2_AFTER = "title: attnFxState === 'missing' ? 'FX rate: Unavailable (no rate fetched)' : 'FX rate: Stale',";
+const FW2_BEFORE = ["'FX rate unavailable'", "'FX rate is stale'"];
+function fw2Failures(content) {
+  const f = extractFunctionSource(content, '_pfComputeNeedsAttention');
+  if (!f) return ['function not extractable'];
+  const out = [];
+  if (count(f, FW2_AFTER) !== 1) out.push('after-line not present exactly once');
+  for (const lit of FW2_BEFORE) if (count(f, lit) !== 0) out.push('before literal still present: ' + lit);
+  return out;
+}
+check('FW-2: _pfComputeNeedsAttention carries the exact E2 after-line once, before-literals absent (' +
+  fw2Failures(SRC).join('; ') + ')', fw2Failures(SRC).length === 0);
+{
+  const f = extractFunctionSource(SRC, '_pfComputeNeedsAttention');
+  const mutated = swap(SRC, f, f.replace(FW2_AFTER, "title: attnFxState === 'missing' ? 'FX rate unavailable' : 'FX rate is stale',"));
+  check('FW-2 control: restoring the old title text is detected', fw2Failures(mutated).length > 0);
+}
+
+// FW-3: _pfComputePortfolioReporting has both E3 after-literals once, each
+// with its original condition; both before-literals are absent.
+const FW3_MISSING_AFTER = "if (usdSubtotal > 0 && fxState === 'missing')       completenessReasons.push('USD holdings excluded — FX: Unavailable (no rate fetched)');";
+const FW3_STALE_AFTER = "if (usdSubtotal > 0 && fxState === 'stale-invalid') completenessReasons.push('USD holdings excluded — FX: Stale');";
+const FW3_BEFORE = ["'USD holdings excluded — FX unavailable'", "'USD holdings excluded — FX stale'"];
+function fw3Failures(content) {
+  const f = extractFunctionSource(content, '_pfComputePortfolioReporting');
+  if (!f) return ['function not extractable'];
+  const out = [];
+  if (count(f, FW3_MISSING_AFTER) !== 1) out.push('missing-branch after-line (with original condition) not present exactly once');
+  if (count(f, FW3_STALE_AFTER) !== 1) out.push('stale-branch after-line (with original condition) not present exactly once');
+  for (const lit of FW3_BEFORE) if (count(f, lit) !== 0) out.push('before literal still present: ' + lit);
+  return out;
+}
+check('FW-3: _pfComputePortfolioReporting carries both E3 after-literals once with their original conditions, before-literals absent (' +
+  fw3Failures(SRC).join('; ') + ')', fw3Failures(SRC).length === 0);
+{
+  const f = extractFunctionSource(SRC, '_pfComputePortfolioReporting');
+  const mutated = swap(SRC, f, f.replace(FW3_MISSING_AFTER,
+    "if (usdSubtotal > 0 && fxState === 'missing')       completenessReasons.push('USD holdings excluded — FX unavailable');"));
+  check('FW-3 control: restoring the old missing-branch text is detected', fw3Failures(mutated).length > 0);
+}
+
+// FW-4: _eodBuildPacket has the exact three-branch E4 block; the aged/fresh
+// 'FX: rate ' branch is byte-equal to baseline; the old merged-branch literal
+// is absent.
+const FW4_BLOCK = "if (reporting.fxState === 'missing') {\n" +
+  "    addLimitation('fx', 'FX: Unavailable (no rate fetched) — cross-currency totals are not reported.');\n" +
+  "  } else if (reporting.fxState === 'stale-invalid') {\n" +
+  "    addLimitation('fx', 'FX: Stale — cross-currency totals are not reported.');\n" +
+  "  } else if (preload.fxCache.rate) {";
+const FW4_AGED_FRESH_BRANCH = "addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' + reporting.fxState + '.');";
+function fw4Failures(content) {
+  const f = extractFunctionSource(content, '_eodBuildPacket');
+  if (!f) return ['function not extractable'];
+  const out = [];
+  if (count(f, FW4_BLOCK) !== 1) out.push('three-branch E4 block not present exactly once');
+  if (count(f, FW4_AGED_FRESH_BRANCH) !== 1) out.push('aged/fresh branch text not byte-equal to baseline');
+  if (count(f, "'FX unavailable — cross-currency") !== 0) out.push('old merged-branch literal still present');
+  return out;
+}
+check('FW-4: _eodBuildPacket carries the exact three-branch E4 block, aged/fresh branch unchanged, old literal absent (' +
+  fw4Failures(SRC).join('; ') + ')', fw4Failures(SRC).length === 0);
+{
+  const f = extractFunctionSource(SRC, '_eodBuildPacket');
+  const mutated = swap(SRC, f, f.replace(FW4_BLOCK,
+    "if (reporting.fxState === 'missing' || reporting.fxState === 'stale-invalid') {\n" +
+    "    addLimitation('fx', 'FX unavailable — cross-currency totals are not reported.');\n" +
+    "  } else if (preload.fxCache.rate) {"));
+  check('FW-4 control: restoring the old merged branch is detected', fw4Failures(mutated).length > 0);
+}
+
+// FW-5: consistency — each E2-E4 after-literal composes from the evaluated
+// DH_DISPLAY.
+function fw5Failures(content) {
+  const ctx = loadDisplay(content);
+  const d = ctx && ctx.DH_DISPLAY;
+  if (!d) return ['DH_DISPLAY not extractable'];
+  const out = [];
+  const notFetched = d.surface['fx-not-fetched'];
+  const stale = d.state['stale-invalid'];
+  if ('FX rate: ' + notFetched !== 'FX rate: Unavailable (no rate fetched)') out.push('E2 missing-title composition mismatch');
+  if ('FX rate: ' + stale !== 'FX rate: Stale') out.push('E2 stale-title composition mismatch');
+  if ('USD holdings excluded — FX: ' + notFetched !== 'USD holdings excluded — FX: Unavailable (no rate fetched)') out.push('E3 missing-reason composition mismatch');
+  if ('USD holdings excluded — FX: ' + stale !== 'USD holdings excluded — FX: Stale') out.push('E3 stale-reason composition mismatch');
+  if ('FX: ' + notFetched + ' — cross-currency totals are not reported.' !== 'FX: Unavailable (no rate fetched) — cross-currency totals are not reported.') out.push('E4 missing-limitation composition mismatch');
+  if ('FX: ' + stale + ' — cross-currency totals are not reported.' !== 'FX: Stale — cross-currency totals are not reported.') out.push('E4 stale-limitation composition mismatch');
+  return out;
+}
+check('FW-5: every E2-E4 after-literal composes from the evaluated DH_DISPLAY (' + fw5Failures(SRC).join('; ') + ')', fw5Failures(SRC).length === 0);
+check('FW-5 control: a composition mismatch is detected',
+  fw5Failures(swap(SRC, "'fx-not-fetched': 'Unavailable (no rate fetched)'", "'fx-not-fetched': 'Unavailable (rate not fetched)'")).length > 0);
+
+// FW-6: surrounding logic unchanged — id/severity/category/detail/trigger
+// condition byte-for-byte in _pfComputeNeedsAttention; E2/E3 carry no
+// DH_DISPLAY / _dhLabel reference (standalone-execution safety, per
+// qa/run-offline.js's direct calls).
+const FW6_UNCHANGED = [
+  "id: 'fx:unavailable', severity: 'high', category: 'fx', symbol: null,",
+  "if (usdHoldingCount > 0 && (attnFxState === 'missing' || attnFxState === 'stale-invalid')) {",
+  "(attnFxState === 'missing' ? 'no FX rate has been fetched yet.' : 'the stored FX rate is more than 6 days old.')"
+];
+function fw6Failures(content) {
+  const out = [];
+  const attn = extractFunctionSource(content, '_pfComputeNeedsAttention');
+  const rep = extractFunctionSource(content, '_pfComputePortfolioReporting');
+  if (!attn || !rep) return ['function not extractable'];
+  for (const lit of FW6_UNCHANGED) if (count(attn, lit) !== 1) out.push('unchanged text missing/duplicated: ' + lit);
+  if (/DH_DISPLAY|_dhLabel/.test(attn)) out.push('_pfComputeNeedsAttention references DH_DISPLAY/_dhLabel');
+  if (/DH_DISPLAY|_dhLabel/.test(rep)) out.push('_pfComputePortfolioReporting references DH_DISPLAY/_dhLabel');
+  return out;
+}
+check('FW-6: id/severity/category/detail/condition unchanged; no DH_DISPLAY/_dhLabel reference in either function (' +
+  fw6Failures(SRC).join('; ') + ')', fw6Failures(SRC).length === 0);
+{
+  const attn = extractFunctionSource(SRC, '_pfComputeNeedsAttention');
+  const mutatedId = swap(SRC, attn, attn.replace("id: 'fx:unavailable'", "id: 'fx:unavail'"));
+  check('FW-6 control: a changed id is detected', fw6Failures(mutatedId).length > 0);
+  const mutatedRef = swap(SRC, attn, attn.replace(FW2_AFTER, "title: DH_DISPLAY.reason['fx-missing'],"));
+  check('FW-6 control: an inserted DH_DISPLAY reference is detected', fw6Failures(mutatedRef).length > 0);
+}
+
+// FW-7: file-wide — each of the six before-literals is absent (0 times).
+const FW7_BEFORE = [
+  "'FX rate: Not recorded'",
+  "'FX rate unavailable'",
+  "'FX rate is stale'",
+  "'USD holdings excluded — FX unavailable'",
+  "'USD holdings excluded — FX stale'",
+  "'FX unavailable — cross-currency totals are not reported.'"
+];
+function fw7Failures(content) {
+  return FW7_BEFORE.filter((lit) => count(content, lit) !== 0);
+}
+check('FW-7: each of the six before-literals occurs 0 times file-wide (' + fw7Failures(SRC).join(' | ') + ')', fw7Failures(SRC).length === 0);
+check('FW-7 control: a reintroduced before-literal is detected',
+  fw7Failures(SRC + "\n// 'FX rate unavailable'").length === 1);
 
 // -------------------------------------------------------------------- result
 if (failures) {
