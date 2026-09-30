@@ -988,12 +988,41 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
   check('RD-AC1 (every reason class has a display label — no unmapped class can render as a raw code)',
     ALL_PACKETS.every(function (p) { return p.readiness.reasons.every(function (r) { return typeof CTL.api._dhLabel('reason', r.class) === 'string' && CTL.api._dhLabel('reason', r.class) !== r.class; }); }));
 
-  // ── RD-AC3: absent market + aged FX both appear, separately named; missing is never a verdict ──
+  // ── RD-AC3 (DH-M4b): absent market present; aged-but-valid FX no longer lowers
+  // readiness (no fx-aged reason, Owner D-2); missing is never a verdict ──
   const ac3Eod = JSON.parse(JSON.stringify(CTL_EOD)); delete ac3Eod.AAA;
   const ac3 = build(ctlSeed({ pt_eod_cache: JSON.stringify(ac3Eod), pt_fx: fxSeed(4 * DAY) }));
-  check('RD-AC3: market-missing and fx-aged are both present as separate reason classes; "missing" is never the verdict',
-    !!reasonFor(ac3.packet, 'market-missing') && !!reasonFor(ac3.packet, 'fx-aged') && ac3.packet.readiness.verdict !== 'missing' &&
+  check('RD-AC3: market-missing present; aged-but-valid FX carries no fx-aged reason (DH-M4b D-2); "missing" is never the verdict',
+    !!reasonFor(ac3.packet, 'market-missing') && !reasonFor(ac3.packet, 'fx-aged') && ac3.packet.readiness.verdict !== 'missing' &&
     VERDICTS.indexOf(ac3.packet.readiness.verdict) !== -1 && ac3.packet.readiness.dimensions.fx.state === 'aged-but-valid');
+
+  // ── RD-AG1 (DH-M4b, new): every dimension current except FX aged (4 d) →
+  // verdict current; reasons exactly [all-dimensions-within-band] ──────────
+  const ag1 = build(ctlSeed({ pt_fx: fxSeed(4 * DAY) }));
+  check('RD-AG1: FX aged (4 d), every other dimension current -> verdict current, reasons exactly [all-dimensions-within-band]',
+    ag1.packet.readiness.verdict === 'current' &&
+    JSON.stringify(classes(ag1.packet)) === JSON.stringify(['all-dimensions-within-band']) &&
+    ag1.packet.readiness.dimensions.fx.state === 'aged-but-valid');
+
+  // ── RD-AG2 (DH-M4b, new): the Markdown / briefing readiness block for RD-AG1
+  // contains "- FX: Current [aged-but-valid]" and no "FX rate: Stale" ───────
+  const ag1Md = ag1.api._eodPacketToMarkdown(ag1.packet);
+  const ag1Briefing = ag1.api._eodPacketToBriefing(ag1.packet);
+  check('RD-AG2: markdown readiness block shows "- FX: Current [aged-but-valid]", no "FX rate: Stale"',
+    ag1Md.indexOf('- FX: Current [aged-but-valid]') !== -1 && ag1Md.indexOf('FX rate: Stale') === -1);
+  check('RD-AG2: briefing readiness block shows "- FX: Current [aged-but-valid]", no "FX rate: Stale"',
+    ag1Briefing.indexOf('- FX: Current [aged-but-valid]') !== -1 && ag1Briefing.indexOf('FX rate: Stale') === -1);
+
+  // ── RD-AG1 planted negative: restoring the removed lower('degraded', 'fx-aged')
+  // line makes the aged-but-valid-only fixture degrade again ────────────────
+  const ag1Mutated = build(ctlSeed({ pt_fx: fxSeed(4 * DAY) }), { patchSrc: { _eodComputeReadiness: function (fnSrc) {
+    const marker = "if (fxState === 'stale-invalid') lower(usdCount > 0 ? 'not-representative' : 'degraded', 'fx-stale-invalid');";
+    const restored = "if (fxState === 'aged-but-valid') lower('degraded', 'fx-aged');\n  else if (fxState === 'stale-invalid') lower(usdCount > 0 ? 'not-representative' : 'degraded', 'fx-stale-invalid');";
+    if (fnSrc.indexOf(marker) === -1) throw new Error('RD-AG1 planted-negative anchor missing');
+    return fnSrc.replace(marker, restored);
+  } } });
+  check('RD-AG1 planted negative: restoring the removed lowering line makes the aged-only fixture degrade again',
+    ag1Mutated.packet.readiness.verdict === 'degraded' && !!reasonFor(ag1Mutated.packet, 'fx-aged'));
 
   // ── RD-AC5: marketBasis value set; a third token is not accepted ─────────────
   const ac5Eod = JSON.parse(JSON.stringify(CTL_EOD));

@@ -2681,7 +2681,7 @@ var DH_DISPLAY = {
   verdict: { 'current': 'Current', 'degraded': 'Partly out of date', 'not-representative': 'Not representative' },
   state: {
     'current': 'Current', 'fresh': 'Current', 'present': 'Current',
-    'aged': 'Stale', 'aged-but-valid': 'Stale', 'stale-invalid': 'Stale', 'stale': 'Stale',
+    'aged': 'Stale', 'aged-but-valid': 'Current', 'stale-invalid': 'Stale', 'stale': 'Stale',
     'old-user-maintained-state': 'Stale',
     'missing': 'Not recorded', 'unset': 'Not recorded', 'missing/invalid': 'Not recorded',
     'unknown': 'Unavailable (market not established)',
@@ -2715,6 +2715,11 @@ function _dhLabel(group, code) {
   var g = DH_DISPLAY[group];
   if (g && Object.prototype.hasOwnProperty.call(g, code)) return g[code];
   return String(code);
+}
+
+// DH-M4b (D-1): the aged-but-valid FX label — the state word from DH_DISPLAY plus whole days.
+function _dhFxAgedLabel(days) {
+  return _dhLabel('state', 'aged-but-valid') + ' · ' + days + ' d old';
 }
 
 // Pure. Reads only its argument. Every dimension reuses an existing freshness
@@ -2770,8 +2775,8 @@ function _eodComputeReadiness(a) {
     var h = a.holdings[sym];
     if (h._corrupt !== true && h.currency === 'USD') usdCount += 1;
   });
-  if (fxState === 'aged-but-valid') lower('degraded', 'fx-aged');
-  else if (fxState === 'stale-invalid') lower(usdCount > 0 ? 'not-representative' : 'degraded', 'fx-stale-invalid');
+  // aged-but-valid is Current for readiness (DH-M4b, Owner D-2) — no reason, no lowering.
+  if (fxState === 'stale-invalid') lower(usdCount > 0 ? 'not-representative' : 'degraded', 'fx-stale-invalid');
   else if (fxState === 'missing') lower(usdCount > 0 ? 'not-representative' : 'degraded', 'fx-missing');
 
   // positions — needs-confirmation only, never expiry, never below degraded
@@ -9780,7 +9785,7 @@ function _renderPortfolioPanel() {
       if (fxState === 'fresh') {
         fxChipVal.textContent = 'FX ' + fxLabel;
       } else if (fxState === 'aged-but-valid') {
-        fxChipVal.textContent = 'FX ' + fxLabel + ' (aged)';
+        fxChipVal.textContent = 'FX ' + fxLabel + ' — ' + _dhFxAgedLabel(_pfFxAgeWholeDays(fxCache));
         fxChipVal.style.color = 'var(--yellow2)';
       } else {
         fxChipVal.textContent = 'FX ' + fxLabel + ' — ' + _dhLabel('state', 'stale-invalid') + ', not used in totals';
@@ -9804,7 +9809,7 @@ function _renderPortfolioPanel() {
       if (fxState === 'aged-but-valid') {
         var totalQualifier = document.createElement('div');
         totalQualifier.style.cssText = 'font-size:10px;color:var(--yellow2);margin-top:2px';
-        totalQualifier.textContent = 'FX as of ' + new Date(fxCache.effectiveAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' (aged)';
+        totalQualifier.textContent = 'FX as of ' + new Date(fxCache.effectiveAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' — ' + _dhFxAgedLabel(_pfFxAgeWholeDays(fxCache));
         totalStat.appendChild(totalQualifier);
       }
       summary.appendChild(totalStat);
@@ -10736,6 +10741,14 @@ function _pfFxState(cache, nowMs) {
   if (ageDays <= PF_FX_FRESH_MAX_AGE_DAYS) return 'fresh';
   if (ageDays <= PF_FX_VALID_MAX_AGE_DAYS) return 'aged-but-valid';
   return 'stale-invalid';
+}
+
+// DH-M4b (D-1): whole days since the Bank of Israel effective date — the same age basis as
+// _pfFxState (effectiveAt, optional injected clock). null when the record is not usable.
+function _pfFxAgeWholeDays(cache, nowMs) {
+  if (!_pfFxRateValid(cache)) return null;
+  var fxNow = (typeof nowMs === 'number' && isFinite(nowMs)) ? nowMs : Date.now();
+  return Math.floor((fxNow - Date.parse(cache.effectiveAt)) / (24 * 60 * 60 * 1000));
 }
 
 // Strict validator for the COMPLETE backup-restorable pt_fx record — all six

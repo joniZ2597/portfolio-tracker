@@ -63,7 +63,7 @@ function loadDisplay(content) {
 const PANEL = '_renderPortfolioPanel';
 const BANNER = 'checkAndShowStaleBanner';
 const SITES = [
-  { id: 'U1', fn: PANEL, anchor: "fxChipVal.textContent = 'FX ' + fxLabel + ' (aged)';", lhs: 'fxChipVal.textContent',
+  { id: 'U1', fn: PANEL, anchor: "fxChipVal.textContent = 'FX ' + fxLabel + ' — ' + _dhFxAgedLabel(_pfFxAgeWholeDays(fxCache));", lhs: 'fxChipVal.textContent',
     cond: /\} else if \(fxState === 'aged-but-valid'\) \{[\s\S]*?\} else \{\s*fxChipVal\.textContent = 'FX '/,
     scope: { fxLabel: '1.2345 · Sep 1 · BOI' }, expect: 'FX 1.2345 · Sep 1 · BOI — Stale, not used in totals',
     refs: ["_dhLabel('state', 'stale-invalid')"], before: ' — stale, not used in totals' },
@@ -177,33 +177,17 @@ check('UV-3: U1-U8 branch conditions / styles present exactly as at baseline (' 
   check('RB-3 control: a changed B2 condition is detected', condFailures(mutatedB2).indexOf('B2') !== -1);
 }
 
-// ---------------------------------------------------------------------- UV-4
-// [literal, owning function, count] — site-scoped: each literal must still sit inside
-// the function where it lived at baseline, exactly once, and exactly once file-wide.
-const OOS = [
-  ["fxLabel + ' (aged)'", PANEL],
-  ["'FX as of '", PANEL]
-];
+// UV-4 retired (DH-M4b, work/dh-fx-aged-current/brief.md §6): both of its
+// out-of-scope literals (`fxLabel + ' (aged)'`, `'FX as of '`) are now in
+// scope — AG-5 below supersedes its coverage.
 const count = (s, t) => s.split(t).length - 1;
-function oosFailures(content) {
-  return OOS.filter(([t, fn]) => count(content, t) !== 1 || count(extractFunctionSource(content, fn) || '', t) !== 1).map(([t]) => t);
-}
-check('UV-4: out-of-scope literals each still present exactly once, at their baseline function (' + oosFailures(SRC).join(' | ') + ')', oosFailures(SRC).length === 0);
-check('UV-4 control: a removed out-of-scope literal is detected', oosFailures(swap(SRC, "'FX as of '", "'FX as-of '")).length === 1);
-{
-  // A literal that moved out of its owning function (still once file-wide) must also fail.
-  const f = extractFunctionSource(SRC, PANEL);
-  const moved = swap(SRC, f, f.replace("'FX as of '", "'x'"));
-  const movedFull = swap(moved, 'function _dhLabel(', "var _m = 'FX as of ';\nfunction _dhLabel(");
-  check('UV-4 control: a literal moved out of its site is detected', oosFailures(movedFull).length === 1);
-}
 
 // ---------------------------------------------------------------------- UV-5
 const BASE_DISPLAY = {
   verdict: { 'current': 'Current', 'degraded': 'Partly out of date', 'not-representative': 'Not representative' },
   state: {
     'current': 'Current', 'fresh': 'Current', 'present': 'Current',
-    'aged': 'Stale', 'aged-but-valid': 'Stale', 'stale-invalid': 'Stale', 'stale': 'Stale',
+    'aged': 'Stale', 'aged-but-valid': 'Current', 'stale-invalid': 'Stale', 'stale': 'Stale',
     'old-user-maintained-state': 'Stale',
     'missing': 'Not recorded', 'unset': 'Not recorded', 'missing/invalid': 'Not recorded',
     'unknown': 'Unavailable (market not established)',
@@ -474,6 +458,200 @@ function fw7Failures(content) {
 check('FW-7: each of the six before-literals occurs 0 times file-wide (' + fw7Failures(SRC).join(' | ') + ')', fw7Failures(SRC).length === 0);
 check('FW-7 control: a reintroduced before-literal is detected',
   fw7Failures(SRC + "\n// 'FX rate unavailable'").length === 1);
+
+// ------------------------------------------------------------------- DH-M4b
+// work/dh-fx-aged-current/brief.md §4/§6 (AG-1..AG-6) — aged-but-valid FX is
+// Current for display and readiness (R2, D-1, D-2). `_pfFxState`,
+// `_pfFxRateValid`, the fresh/stale-invalid/missing branches and
+// `reason['fx-aged']` are all unchanged (proven by AG-1/AG-6); the new pure
+// helpers `_dhFxAgedLabel`/`_pfFxAgeWholeDays` carry no storage/DOM/scoring
+// reference (AG-6).
+
+// Evaluates DH_DISPLAY, _dhLabel, _dhFxAgedLabel, _pfFxRateValid, _pfFxState
+// and _pfFxAgeWholeDays from the real source in one vm context.
+function loadFxAged(content) {
+  const dm = content.match(/var DH_DISPLAY = \{[\s\S]*?\n\};/);
+  const dhLabel = extractFunctionSource(content, '_dhLabel');
+  const fxAgedLabel = extractFunctionSource(content, '_dhFxAgedLabel');
+  const isFiniteNum = extractFunctionSource(content, '_pfIsFiniteNum');
+  const fxRateValid = extractFunctionSource(content, '_pfFxRateValid');
+  const fxAgeWholeDays = extractFunctionSource(content, '_pfFxAgeWholeDays');
+  const fxState = extractFunctionSource(content, '_pfFxState');
+  const freshConst = (content.match(/var PF_FX_FRESH_MAX_AGE_DAYS = \d+;/) || [])[0];
+  const validConst = (content.match(/var PF_FX_VALID_MAX_AGE_DAYS = \d+;/) || [])[0];
+  if (!dm || !dhLabel || !fxAgedLabel || !isFiniteNum || !fxRateValid || !fxAgeWholeDays || !fxState || !freshConst || !validConst) return null;
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext([
+    dm[0], dhLabel, fxAgedLabel, freshConst, validConst, isFiniteNum, fxRateValid, fxState, fxAgeWholeDays,
+    'this.DH_DISPLAY = DH_DISPLAY; this._dhLabel = _dhLabel; this._dhFxAgedLabel = _dhFxAgedLabel;' +
+    'this._pfFxRateValid = _pfFxRateValid; this._pfFxState = _pfFxState; this._pfFxAgeWholeDays = _pfFxAgeWholeDays;'
+  ].join('\n'), ctx);
+  return ctx;
+}
+
+// AG-1: state['aged-but-valid'] === 'Current'; reason['fx-aged'] kept as
+// 'FX rate: Stale'; every other reason/state/verdict/surface value equals
+// baseline (reused displayFailures, BASE_DISPLAY updated above).
+function ag1Failures(content) {
+  const ctx = loadFxAged(content);
+  const d = ctx && ctx.DH_DISPLAY;
+  if (!d) return ['DH_DISPLAY not extractable'];
+  const out = [];
+  if (d.state['aged-but-valid'] !== 'Current') out.push("state['aged-but-valid'] != 'Current'");
+  if (d.reason['fx-aged'] !== 'FX rate: Stale') out.push("reason['fx-aged'] changed (must stay 'FX rate: Stale')");
+  return out.concat(displayFailures(JSON.parse(JSON.stringify(d))));
+}
+check('AG-1: state[aged-but-valid] = Current, reason[fx-aged] kept, every other group value equals baseline (' +
+  ag1Failures(SRC).join('; ') + ')', ag1Failures(SRC).length === 0);
+check('AG-1 control: reverting aged-but-valid to Stale is detected',
+  ag1Failures(swap(SRC, "'aged-but-valid': 'Current'", "'aged-but-valid': 'Stale'")).length > 0);
+
+// AG-2: _dhFxAgedLabel(4) === 'Current · 4 d old', composed from
+// _dhLabel('state', 'aged-but-valid').
+function ag2Failures(content) {
+  const ctx = loadFxAged(content);
+  if (!ctx) return ['not extractable'];
+  const out = [];
+  if (ctx._dhFxAgedLabel(4) !== 'Current · 4 d old') out.push('label(4) != "Current · 4 d old"');
+  if (ctx._dhFxAgedLabel(4) !== ctx._dhLabel('state', 'aged-but-valid') + ' · 4 d old') out.push('label does not compose from _dhLabel');
+  return out;
+}
+check('AG-2: _dhFxAgedLabel(4) === "Current · 4 d old", composes from _dhLabel (' + ag2Failures(SRC).join('; ') + ')', ag2Failures(SRC).length === 0);
+check('AG-2 control: changing the table word changes the output', (function () {
+  const ctx = loadFxAged(swap(SRC, "'aged-but-valid': 'Current'", "'aged-but-valid': 'Recent'"));
+  return !!ctx && ctx._dhFxAgedLabel(4) === 'Recent · 4 d old';
+})());
+
+// AG-3: _pfFxAgeWholeDays uses effectiveAt + floor, the same basis as
+// _pfFxState; invalid record -> null.
+function ag3Failures(content) {
+  const ctx = loadFxAged(content);
+  if (!ctx) return ['not extractable'];
+  const out = [];
+  const EFF = '2026-09-01T00:00:00.000Z';
+  const base = Date.parse(EFF);
+  const DAY = 24 * 60 * 60 * 1000;
+  for (const [days, expected] of [[3.5, 3], [4.0, 4], [6.0, 6]]) {
+    const got = ctx._pfFxAgeWholeDays({ rate: 4.05, effectiveAt: EFF }, base + days * DAY);
+    if (got !== expected) out.push(days + 'd -> ' + got + ' (expected ' + expected + ')');
+  }
+  if (ctx._pfFxAgeWholeDays({ rate: 0, effectiveAt: EFF }, base) !== null) out.push('invalid rate does not yield null');
+  if (ctx._pfFxAgeWholeDays(null, base) !== null) out.push('null cache does not yield null');
+  const cacheWithFetched = { rate: 4.05, effectiveAt: EFF, fetchedAt: new Date(base + 10 * DAY).toISOString() };
+  if (ctx._pfFxAgeWholeDays(cacheWithFetched, base + 4 * DAY) !== 4) out.push('age basis is not effectiveAt');
+  return out;
+}
+check('AG-3: _pfFxAgeWholeDays uses effectiveAt + floor, same basis as _pfFxState, invalid -> null (' +
+  ag3Failures(SRC).join('; ') + ')', ag3Failures(SRC).length === 0);
+{
+  const f = extractFunctionSource(SRC, '_pfFxAgeWholeDays');
+  const EFF = '2026-09-01T00:00:00.000Z';
+  const base = Date.parse(EFF);
+  const DAY = 24 * 60 * 60 * 1000;
+  const mutatedRound = swap(SRC, f, f.replace('Math.floor', 'Math.round'));
+  const ctxRound = loadFxAged(mutatedRound);
+  check('AG-3 control: Math.round instead of floor is detected',
+    !!ctxRound && ctxRound._pfFxAgeWholeDays({ rate: 4.05, effectiveAt: EFF }, base + 3.5 * DAY) !== 3);
+  const mutatedBasis = swap(SRC, f, f.replace('cache.effectiveAt', 'cache.fetchedAt'));
+  const ctxBasis = loadFxAged(mutatedBasis);
+  check('AG-3 control: fetchedAt as the age basis is detected',
+    !!ctxBasis && ctxBasis._pfFxAgeWholeDays({ rate: 4.05, effectiveAt: EFF, fetchedAt: new Date(base + 10 * DAY).toISOString() }, base + 4 * DAY) !== 4);
+}
+
+// AG-4: sweeping aged-but-valid ages 3.01d-6.00d in 0.25d steps: whenever
+// _pfFxState says aged-but-valid, the label is 'Current · N d old' with
+// 3 <= N <= 6.
+function ag4Failures(content) {
+  const ctx = loadFxAged(content);
+  if (!ctx) return ['not extractable'];
+  const out = [];
+  const EFF = '2026-09-01T00:00:00.000Z';
+  const base = Date.parse(EFF);
+  const DAY = 24 * 60 * 60 * 1000;
+  for (let days = 3.01; days <= 6.001; days += 0.25) {
+    const nowMs = base + days * DAY;
+    const cache = { rate: 4.05, effectiveAt: EFF };
+    if (ctx._pfFxState(cache, nowMs) !== 'aged-but-valid') continue;
+    const wholeDays = ctx._pfFxAgeWholeDays(cache, nowMs);
+    const label = ctx._dhFxAgedLabel(wholeDays);
+    if (label !== 'Current · ' + wholeDays + ' d old') out.push('days=' + days + ' label mismatch: ' + label);
+    if (wholeDays < 3 || wholeDays > 6) out.push('days=' + days + ' N out of range: ' + wholeDays);
+  }
+  return out;
+}
+check('AG-4: sweeping aged-but-valid ages 3.01-6.00d, label Current · N d old with 3<=N<=6 (' +
+  ag4Failures(SRC).join('; ') + ')', ag4Failures(SRC).length === 0);
+check('AG-4 control: hard-coding N breaks the sweep', (function () {
+  const f = extractFunctionSource(SRC, '_dhFxAgedLabel');
+  const mutated = swap(SRC, f, "function _dhFxAgedLabel(days) {\n  return _dhLabel('state', 'aged-but-valid') + ' · 4 d old';\n}");
+  return ag4Failures(mutated).length > 0;
+})());
+
+// AG-5: site checks in _renderPortfolioPanel — the chip and qualifier lines
+// carry the exact E4 after-text once each; ' (aged)' occurs 0 times
+// file-wide; the aged-branch condition and both amber colour lines are
+// byte-unchanged.
+const AG5_CHIP_AFTER = "fxChipVal.textContent = 'FX ' + fxLabel + ' — ' + _dhFxAgedLabel(_pfFxAgeWholeDays(fxCache));";
+const AG5_QUALIFIER_AFTER = "totalQualifier.textContent = 'FX as of ' + new Date(fxCache.effectiveAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' — ' + _dhFxAgedLabel(_pfFxAgeWholeDays(fxCache));";
+const AG5_COLOR_LINES = [
+  ["fxChipVal.style.color = 'var(--yellow2)';", 2],
+  ["totalQualifier.style.cssText = 'font-size:10px;color:var(--yellow2);margin-top:2px';", 1]
+];
+function ag5Failures(content) {
+  const f = extractFunctionSource(content, PANEL);
+  if (!f) return ['function not extractable'];
+  const out = [];
+  if (count(f, AG5_CHIP_AFTER) !== 1) out.push('chip after-text not present exactly once');
+  if (count(f, AG5_QUALIFIER_AFTER) !== 1) out.push('qualifier after-text not present exactly once');
+  if (count(content, "' (aged)'") !== 0) out.push("' (aged)' still present file-wide");
+  if (count(f, "fxState === 'aged-but-valid'") !== 2) out.push('aged-branch condition count changed (expected 2: chip + qualifier)');
+  for (const [lit, expected] of AG5_COLOR_LINES) if (count(f, lit) !== expected) out.push('colour line changed/missing: ' + lit);
+  return out;
+}
+check('AG-5: chip/qualifier carry the exact after-text once each, no " (aged)" left file-wide, condition and colour lines unchanged (' +
+  ag5Failures(SRC).join('; ') + ')', ag5Failures(SRC).length === 0);
+{
+  const f = extractFunctionSource(SRC, PANEL);
+  const mutated = swap(SRC, f, f.replace(AG5_CHIP_AFTER, "fxChipVal.textContent = 'FX ' + fxLabel + ' (aged)';"));
+  check('AG-5 control: restoring the old chip literal is detected', ag5Failures(mutated).length > 0);
+}
+
+// AG-6: purity / no drift — _pfFxState, _pfFxRateValid and _dhLabel are
+// byte-equal to baseline; the two new helpers reference no storage/DOM/
+// scoring surface; the UV-6 hashes and CONST_HASH are unchanged.
+const AG6_HASHES = {
+  _pfFxState: 'e59989a2b68b42bbca26f52e282867edf808d973431368ebc5229feeedbfe0fc',
+  _pfFxRateValid: 'b444b89c17e2f6e87810f117d02903f8e03878a9b3c38fb6780e5ccda0f52678',
+  _dhLabel: '900eb54bd0ac78d8a55067b02acc17d874ff1b15c3e01005f7c95dc389fd5683'
+};
+function ag6Failures(content) {
+  const out = [];
+  for (const name of Object.keys(AG6_HASHES)) {
+    const f = extractFunctionSource(content, name);
+    if (!f || sha(f) !== AG6_HASHES[name]) out.push(name + ' changed from baseline');
+  }
+  for (const name of ['_dhFxAgedLabel', '_pfFxAgeWholeDays']) {
+    const f = extractFunctionSource(content, name);
+    if (!f) { out.push(name + ' not extractable'); continue; }
+    if (/localStorage|\bdocument\b|fetch\s*\(|_ptScore|orchestrate\(|analyzeChunk\(|enforceScoreConsistency/.test(f)) {
+      out.push(name + ' references storage/DOM/scoring');
+    }
+  }
+  if (constHash(content) !== CONST_HASH) out.push('CONST_HASH changed');
+  for (const name of Object.keys(FN_HASHES)) {
+    const f = extractFunctionSource(content, name);
+    if (!f || sha(f) !== FN_HASHES[name]) out.push(name + ' (UV-6) changed');
+  }
+  return out;
+}
+check('AG-6: _pfFxState/_pfFxRateValid/_dhLabel byte-unchanged; new helpers pure; UV-6 hashes and CONST_HASH unchanged (' +
+  ag6Failures(SRC).join('; ') + ')', ag6Failures(SRC).length === 0);
+check('AG-6 control: a changed _pfFxState is detected', (function () {
+  const f = extractFunctionSource(SRC, '_pfFxState');
+  const mutated = swap(SRC, f, f.replace('fresh', 'fresh2'));
+  return ag6Failures(mutated).length > 0;
+})());
 
 // -------------------------------------------------------------------- result
 if (failures) {
