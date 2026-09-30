@@ -880,7 +880,7 @@ function withMutantSource(mutateFn) {
 
 test('MUT: L12 record check skipped -> land proceeds without any approval record (caught)', () => {
   const mutSrc = withMutantSource((s) => s.replace(
-    "  const record = parseRecord(readRecordFile(commonDir, LAND_RECORD_NAME), 'LAND');\n  if (!record || record.task !== task || record.tip !== l3.tip || record.base !== l3.base) {\n    return refuse('L12', 'no/stale LAND approval', l3.base, l3.tip);\n  }\n",
+    "  const record = parseRecord(readRecordFile(commonDir, LAND_RECORD_NAME), 'LAND');\r\n  if (!record || record.task !== task || record.tip !== l3.tip || record.base !== l3.base) {\r\n    return refuse('L12', 'no/stale LAND approval', l3.base, l3.tip);\r\n  }\r\n",
     ''
   ));
   const fx = buildFixture({ taskShort: 'mu1', toolSource: mutSrc });
@@ -893,7 +893,7 @@ test('MUT: L12 record check skipped -> land proceeds without any approval record
 
 test('MUT: L3 ancestor check skipped -> Second LAND is not caught (caught)', () => {
   const mutSrc = withMutantSource((s) => s.replace(
-    "  const anc = G(['merge-base', '--is-ancestor', base, tip], canonicalRoot, { read: true });\n  if (anc.status !== 0) return { ok: false, reason: 'branch-dev moved: Second LAND (Owner rebase, R3m)' };\n",
+    "  const anc = G(['merge-base', '--is-ancestor', base, tip], canonicalRoot, { read: true });\r\n  if (anc.status !== 0) return { ok: false, reason: 'branch-dev moved: Second LAND (Owner rebase, R3m)' };\r\n",
     ''
   ));
   const fx = buildFixture({ taskShort: 'mu2', toolSource: mutSrc });
@@ -912,8 +912,8 @@ test('MUT: L3 ancestor check skipped -> Second LAND is not caught (caught)', () 
 
 test('MUT: scope check dropped (diff allowed unconditionally) -> outside-scope diff is not caught (caught)', () => {
   const mutSrc = withMutantSource((s) => s.replace(
-    '  const outside = files.filter((f) => !allowed.has(f));\n  if (outside.length) return { ok: false, reason: \'diff outside land-scope: \' + outside.join(\', \') };\n',
-    '  const outside = [];\n'
+    '  const outside = files.filter((f) => !allowed.has(f));\r\n  if (outside.length) return { ok: false, reason: \'diff outside land-scope: \' + outside.join(\', \') };\r\n',
+    '  const outside = [];\r\n'
   ));
   const fx = buildFixture({ taskShort: 'mu3', toolSource: mutSrc });
   try {
