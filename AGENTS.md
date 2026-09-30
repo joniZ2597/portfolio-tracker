@@ -424,7 +424,9 @@ centrally allocated id, no lookup table, no registry.
   smallest scoped diff, how it will be validated. It may be drafted directly at
   `work/<id>/brief.md` before approval — the required sequence is: draft `work/<id>/brief.md`
   → Owner reviews the exact current contents → Owner approves the exact brief-only commit →
-  the Owner makes it in a normal terminal (RC2) → commit it unchanged → implementation may
+  the Owner writes the approval record (`.git/pt-brief-approval`, R11) and the Git/bootstrap
+  Worker makes the commit through the R11 gate — or the Owner makes it in a normal terminal →
+  commit it unchanged → implementation may
   begin. **An uncommitted or merely staged brief does not authorize implementation** — only the
   tracked, committed brief whose exact contents were Owner-approved does.
 - `plan.md` (untracked, gitignored via `work/*/plan.md`) — the requirement→test map and the
@@ -539,7 +541,7 @@ above.
   deploys/previews, environment-variable changes, and any other Netlify mutation. Read-only
   Netlify inspection does not require approval.
 - Live external API canaries (SEC, Perplexity, or similar).
-- Commits outside the r9 gate — the main checkout, brief-only commits, any commit staging a DENY-tier or protected path, any denied form — are made by the Owner in a normal terminal (RC2).
+- Commits outside the r9 and R11 gates — any other main-checkout commit, any commit staging a DENY-tier or protected path, any denied form — are made by the Owner in a normal terminal (RC2). An R11 brief-only commit requires the Owner's approval record.
 - `git merge`, `rebase`, `pull`, and any ref move of `main`/`branch-dev` — the Owner, in a normal terminal.
 - Environment/runtime mutations, and protected governance changes (the hook and settings, through the Owner copy/hash workflow).
 
@@ -563,5 +565,6 @@ above.
 - **Current-guard check** before any non-Manual session: the slot's task branch descends from the
   current `branch-dev`, and `git status --porcelain .claude` is empty.
 - The Git/bootstrap Worker performs approved, deterministic mechanical Git/worktree setup (slots,
-  task branches, refs, hashes, status) only where the hook permits. It is never a bypass; anything
-  the hook denies goes to the Owner's terminal.
+  task branches, refs, hashes, status), and an Owner-approved brief-only commit through the R11
+  gate only where the hook permits. It is never a bypass; anything the hook denies goes to the
+  Owner's terminal.

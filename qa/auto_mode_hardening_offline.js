@@ -14,6 +14,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -1214,7 +1215,7 @@ const cd = (m, cmd, cwd, head, staged, repo) => { try { return m.decide({ tool_n
 const selfRoot = (c) => c; // a repoRoot that agrees with whatever root the (mutated) slot resolver produced, so only the defence under test can deny
 // (1) RC2
 mutantCatchesMulti('non-slot commit allowed (RC2 dropped)',
-  [["if (!slot) return commitDeny('denied outside a Worker slot');", ''], ['return m ? m[1] : null;', 'return m ? m[1] : s;']],
+  [['if (!slot) return briefCommitGate(f, cwd, gitCount, deps);', ''], ['return m ? m[1] : null;', 'return m ? m[1] : s;']],
   (m) => cd(m, 'git commit -m x', MAIN, undefined, undefined, selfRoot) === 'deny' && cd(m, 'git commit -m x', 'C:\\somewhere\\else', undefined, undefined, selfRoot) === 'deny');
 mutantCatchesMulti('missing cwd trusted (unknown session commits)',
   [["if (typeof cwd !== 'string' || !cwd) return commitDeny(", 'if (false) return commitDeny('], ['return m ? m[1] : null;', 'return m ? m[1] : s;']],
@@ -1365,6 +1366,23 @@ const EXPECT_ALLOW = [...BASE_ALLOW, ...RC5_ALLOW_ADDED];
 const HOOK_COMMAND = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/pretooluse-guard.js"';
 // r10 R10-6: the Owner-applied matcher extends coverage to the file tools.
 const R10_MATCHER = 'Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit';
+// R11 Amendment 1 (A1-1, Owner-applied copy/hash): these twelve inert Write(...) rules are removed
+// from settings.json at c35f76e lines 19,21,30,74,76,78,80,82,84,86,107,109. Each has an Edit(...)
+// twin, in the SAME tier, that stays (the table in work/brief-commit-gate/brief.md "Amendment 1").
+const R11_WRITE_REMOVED = [
+  'Write(./.claude/settings.json)', 'Write(./.claude/settings.local.json)', 'Write(./.claude/hooks/**)',
+  'Write(./CLAUDE.md)', 'Write(./AGENTS.md)', 'Write(./.gitignore)', 'Write(./.claude/rules/**)',
+  'Write(./qa/run-offline.js)', 'Write(./work/*/brief.md)', 'Write(./netlify.toml)',
+  'Write(./package.json)', 'Write(./package-lock.json)'
+];
+const R11_WRITE_REMOVED_TIER = {
+  'Write(./.claude/settings.json)': 'deny', 'Write(./.claude/settings.local.json)': 'deny', 'Write(./.claude/hooks/**)': 'deny',
+  'Write(./CLAUDE.md)': 'ask', 'Write(./AGENTS.md)': 'ask', 'Write(./.gitignore)': 'ask', 'Write(./.claude/rules/**)': 'ask',
+  'Write(./qa/run-offline.js)': 'ask', 'Write(./work/*/brief.md)': 'ask', 'Write(./netlify.toml)': 'ask',
+  'Write(./package.json)': 'ask', 'Write(./package-lock.json)': 'ask'
+};
+const EXPECT_DENY_R11 = [...BASE_DENY, ...ADD_DENY].filter((x) => R11_WRITE_REMOVED.indexOf(x) === -1);
+const EXPECT_ASK_R11 = EXPECT_ASK.filter((x) => R11_WRITE_REMOVED.indexOf(x) === -1);
 
 function sameSet(a, b) {
   const sa = new Set(a);
@@ -1378,12 +1396,18 @@ function settingsProblems(s) {
   const deny = Array.isArray(perms.deny) ? perms.deny : [];
   const ask = Array.isArray(perms.ask) ? perms.ask : [];
   const allow = Array.isArray(perms.allow) ? perms.allow : [];
-  if (!sameSet(deny, [...BASE_DENY, ...ADD_DENY])) p.push('deny set is not base + §5 additions');
-  if (!sameSet(ask, EXPECT_ASK)) p.push('ask set is not (base − moved) + §5 additions − RC5 commit entries');
+  if (!sameSet(deny, EXPECT_DENY_R11)) p.push('deny set is not base + §5 additions - R11 Write(...) removals (A1-1)');
+  if (!sameSet(ask, EXPECT_ASK_R11)) p.push('ask set is not (base − moved) + §5 additions − RC5 commit entries − R11 Write(...) removals (A1-1)');
   if (!sameSet(allow, EXPECT_ALLOW)) p.push('allow set is not base + RC5 (Bash(git commit) and Bash(git commit *))');
   if (allow.some((r) => /^Bash\(npm run \*\)$|node -e|python3? -c/.test(r))) p.push('broad allow (npm run * / node -e / python3 -c) present');
   if (perms.defaultMode !== 'default') p.push('defaultMode is not default (Manual)');
   if (/bypassPermissions|"auto"/.test(JSON.stringify(s))) p.push('bypassPermissions/auto present');
+  if ([...deny, ...ask, ...allow].some((r) => /^Write\(/.test(r))) p.push('a Write(...) rule is present (R11 A1-1: none may remain)');
+  for (const [entry, tier] of Object.entries(R11_WRITE_REMOVED_TIER)) {
+    const editTwin = entry.replace(/^Write\(/, 'Edit(');
+    const list = tier === 'deny' ? deny : ask;
+    if (list.indexOf(editTwin) === -1) p.push('Edit twin missing/misplaced for ' + editTwin + ' (expected ' + tier + ')');
+  }
   const pre = s && s.hooks && s.hooks.PreToolUse;
   const wired = Array.isArray(pre) && pre.some((e) => e && e.matcher === R10_MATCHER && Array.isArray(e.hooks) &&
     e.hooks.some((h) => h && h.type === 'command' && h.command === HOOK_COMMAND && h.timeout === 10));
@@ -1394,8 +1418,8 @@ function appliedSettings() {
   return {
     hooks: { PreToolUse: [{ matcher: R10_MATCHER, hooks: [{ type: 'command', command: HOOK_COMMAND, timeout: 10 }] }] },
     permissions: {
-      deny: [...BASE_DENY, ...ADD_DENY],
-      ask: EXPECT_ASK.slice(),
+      deny: EXPECT_DENY_R11.slice(),
+      ask: EXPECT_ASK_R11.slice(),
       allow: EXPECT_ALLOW.slice(),
       defaultMode: 'default'
     }
@@ -1427,6 +1451,60 @@ check('AH-8 control: §5-applied fixture has no problems', settingsProblems(appl
       ask: [...EXPECT_ASK, ...RC5_ASK_REMOVED], allow: BASE_ALLOW.slice() }) })).length > 0);
   check('AH-8 planted negative: pre-§5 baseline settings are rejected',
     settingsProblems({ permissions: { deny: BASE_DENY, ask: BASE_ASK, allow: BASE_ALLOW, defaultMode: 'acceptEdits' } }).length > 0);
+}
+// AH-8-W (R11 Amendment 1, A1-1): the twelve Write(...) rules are gone, their Edit(...) twins stay in tier, and
+// no re-added Write(...), dropped Edit(...), tier-moved Edit(...) or allow-listed one of the 12 paths is accepted.
+check('AH-8-W1: no rule in deny/ask/allow starts with Write( on the §5+A1-1 fixture',
+  [...appliedSettings().permissions.deny, ...appliedSettings().permissions.ask, ...appliedSettings().permissions.allow]
+    .every((r) => !/^Write\(/.test(r)));
+{
+  const negatives = [];
+  for (const removed of R11_WRITE_REMOVED) {
+    const m = clone(appliedSettings());
+    m.permissions[R11_WRITE_REMOVED_TIER[removed] === 'deny' ? 'deny' : 'ask'].push(removed);
+    negatives.push(m);
+  }
+  check('AH-8-W1 negative: re-adding any one removed Write(...) entry is rejected', negatives.every((m) => settingsProblems(m).length > 0));
+}
+{
+  const negatives = [];
+  for (const removed of R11_WRITE_REMOVED) {
+    const editTwin = removed.replace(/^Write\(/, 'Edit(');
+    const tier = R11_WRITE_REMOVED_TIER[removed];
+    const list = tier === 'deny' ? 'deny' : 'ask';
+    // dropping the Edit(...) twin
+    const mDrop = clone(appliedSettings());
+    mDrop.permissions[list] = mDrop.permissions[list].filter((x) => x !== editTwin);
+    negatives.push(mDrop);
+    // moving a deny-tier Edit(...) into ask (only meaningful for the 3 deny-tier paths)
+    if (tier === 'deny') {
+      const mMove = clone(appliedSettings());
+      mMove.permissions.deny = mMove.permissions.deny.filter((x) => x !== editTwin);
+      mMove.permissions.ask.push(editTwin);
+      negatives.push(mMove);
+    }
+    // adding one of the 12 paths' Edit(...) to allow
+    const mAllow = clone(appliedSettings());
+    mAllow.permissions.allow.push(editTwin);
+    negatives.push(mAllow);
+  }
+  check('AH-8-W2 negatives: dropping/moving an Edit(...) twin, or adding one to allow, is rejected', negatives.every((m) => settingsProblems(m).length > 0));
+  check('AH-8-W2 control: every one of the 12 Edit(...) twins is present in exactly the table tier on the §5+A1-1 fixture',
+    Object.keys(R11_WRITE_REMOVED_TIER).every((removed) => {
+      const editTwin = removed.replace(/^Write\(/, 'Edit(');
+      const tier = R11_WRITE_REMOVED_TIER[removed];
+      const s = appliedSettings().permissions;
+      return (tier === 'deny' ? s.deny : s.ask).indexOf(editTwin) !== -1;
+    }));
+}
+check('AH-8-W3: Edit(...) is the only file-tool rule family (no MultiEdit(/NotebookEdit( rule) on the §5+A1-1 fixture',
+  [...appliedSettings().permissions.deny, ...appliedSettings().permissions.ask, ...appliedSettings().permissions.allow]
+    .every((r) => !/^(MultiEdit|NotebookEdit)\(/.test(r)));
+{
+  const mIntroduced = clone(appliedSettings());
+  mIntroduced.permissions.deny.push('MultiEdit(./.claude/hooks/**)');
+  check('AH-8-W3 negative: an introduced MultiEdit(...) rule does not silently pass (informational; deny-set-equality already rejects it)',
+    settingsProblems(mIntroduced).length > 0);
 }
 let realSettings = null;
 try { realSettings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8')); } catch (e) { realSettings = null; }
@@ -1806,6 +1884,363 @@ if (guard && integrity && spawnSync('git', ['--version'], { encoding: 'utf8' }).
       (mod) => { const future = new Date(Date.now() + 86400000).toISOString(); const rl = path.join(mcanon, '.git', 'logs', 'refs', 'heads', 'branch-dev'); const saved = fs.readFileSync(rl); fs.rmSync(rl, { force: true }); const r = mod.runIntegrity({ root: mcanon, gitExec: 'git', baseMain: bMain, baseDev: bDev, task: 'task/x', since: future }).failures.some((f) => /^C2/.test(f)); fs.mkdirSync(path.dirname(rl), { recursive: true }); fs.writeFileSync(rl, saved); return r; });
   } finally { try { G(mcanon, 'worktree', 'prune'); } catch (e) { /* ignore */ } fs.rmSync(mbase, { recursive: true, force: true }); }
 }
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// AH-19 — R11 Owner-approved brief-only commit gate for the canonical checkout
+// (work/brief-commit-gate/brief.md §2-3, Amendment 1). Table rows inject the R11 readers so
+// they never touch real fs/git; AH-19-13 drives the REAL readers against a temp canonical repo.
+// Pattern reused from AH-16 depsOf()/dc() (table rows never touch real fs/git) and AH-18's
+// real-git temp-repo fixtures (mkdtempSync + a `G()` git runner with a fixed identity).
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// A real directory with a real (empty) .git DIRECTORY on disk, distinct from any pt-wt-worker-[ab]
+// slot: briefCommitGate's canonical-identity step does an un-injectable fs.statSync(root + '/.git'),
+// so table rows need this to exist for real (AH-16's depsOf() has no such constraint; R11 does).
+const R11_CANON = fs.mkdtempSync(path.join(os.tmpdir(), 'ah19-canon-'));
+fs.mkdirSync(path.join(R11_CANON, '.git'));
+const R11_BRIEF_PATH = 'work/brief-commit-gate/brief.md';
+const R11_HASH = 'a'.repeat(64);
+const R11_OID = 'b'.repeat(40);
+const R11_VALID_MSG = 'git commit -m "docs(work): add x brief"';
+const R11_VALID_AMEND_MSG = 'git commit -m "docs(work): amend x brief"';
+function r11Record(overrides) { return Object.assign({ hash: R11_HASH, path: R11_BRIEF_PATH, oid: R11_OID }, overrides); }
+function r11Entry(overrides) { return Object.assign({ kind: '1', xy: 'A.', sub: 'N...', path: R11_BRIEF_PATH }, overrides); }
+function r11Status(overrides) { return Object.assign({ branch: 'branch-dev', oid: R11_OID, entries: [r11Entry()] }, overrides); }
+function depsR11(opts) {
+  const o = opts || {};
+  const log = o.log;
+  return Object.assign({}, R10_STUBS, {
+    repoRoot: (cwd) => { if (log) log.push(['repo', cwd]); return typeof o.repoRoot === 'function' ? o.repoRoot(cwd) : (o.repoRoot !== undefined ? o.repoRoot : R11_CANON); },
+    briefApproval: (root) => {
+      if (log) log.push(['approval', root]);
+      if (typeof o.briefApproval === 'function') return o.briefApproval(root);
+      return o.briefApproval !== undefined ? o.briefApproval : r11Record();
+    },
+    canonicalStatus: (root) => {
+      if (log) log.push(['status', root]);
+      return typeof o.canonicalStatus === 'function' ? o.canonicalStatus(root) : (o.canonicalStatus !== undefined ? o.canonicalStatus : r11Status());
+    },
+    indexBlobSha256: (root, p) => {
+      if (log) log.push(['blob', root, p]);
+      return typeof o.indexBlobSha256 === 'function' ? o.indexBlobSha256(root, p) : (o.indexBlobSha256 !== undefined ? o.indexBlobSha256 : R11_HASH);
+    },
+    protectedConfigState: (root) => { if (log) log.push(['cfg', root]); return typeof o.protectedConfigState === 'function' ? o.protectedConfigState(root) : OK_CFG(); },
+    hooksState: (root) => { if (log) log.push(['hooks', root]); return typeof o.hooksState === 'function' ? o.hooksState(root) : OK_HOOKS(); }
+  });
+}
+function r11DecideOn(mod, cmd, opts) {
+  const o = opts || {};
+  const saved = process.env.CLAUDE_PROJECT_DIR;
+  const projectDir = Object.prototype.hasOwnProperty.call(o, 'projectDir') ? o.projectDir : R11_CANON;
+  if (projectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = projectDir;
+  try {
+    const cwd = Object.prototype.hasOwnProperty.call(o, 'cwd') ? o.cwd : R11_CANON;
+    const input = { tool_name: o.tool || 'Bash', tool_input: { command: cmd } };
+    if (cwd !== NO_CWD) input.cwd = cwd;
+    return mod.decide(input, depsR11(o));
+  } catch (e) {
+    return { decision: 'THROW', reason: String(e && e.message) };
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = saved;
+  }
+}
+function r11Decide(cmd, opts) { return guard ? r11DecideOn(guard, cmd, opts) : { decision: 'NOMODULE', reason: '' }; }
+
+// AH-19-1/2: valid new brief (A.) and valid amendment (M.)
+check('AH-19-1 valid: canonical cwd, record matches, one A. entry, blob hash matches, config/hooks ok -> allow',
+  r11Decide(R11_VALID_MSG).decision === 'allow');
+check('AH-19-2 valid amendment: one M. entry -> allow',
+  r11Decide(R11_VALID_AMEND_MSG, { canonicalStatus: () => r11Status({ entries: [r11Entry({ xy: 'M.' })] }) }).decision === 'allow');
+
+// AH-19-3: a second staged file / an untracked extra file / an unstaged change elsewhere / the brief itself also modified (AM) -> deny x4
+const AH19_3_ROWS = [
+  ['a second staged file', r11Status({ entries: [r11Entry(), r11Entry({ path: 'work/x/other.md' })] })],
+  ['an untracked extra file', r11Status({ entries: [r11Entry(), { kind: '?' }] })],
+  ['an unstaged change elsewhere', r11Status({ entries: [r11Entry(), r11Entry({ xy: '.M', path: 'index.html' })] })],
+  ['the brief itself also modified in the worktree (AM)', r11Status({ entries: [r11Entry({ xy: 'AM' })] })]
+];
+for (const [label, status] of AH19_3_ROWS) {
+  check('AH-19-3 ' + label + ' -> deny', r11Decide(R11_VALID_MSG, { canonicalStatus: () => status }).decision === 'deny');
+}
+
+// AH-19-4: the single entry is an implementation file, or the record path points at it -> deny
+check('AH-19-4 staged entry is an implementation file (path mismatch) -> deny',
+  r11Decide(R11_VALID_MSG, { canonicalStatus: () => r11Status({ entries: [r11Entry({ path: 'index.html' })] }) }).decision === 'deny');
+check('AH-19-4 record path points at an implementation file (path mismatch) -> deny',
+  r11Decide(R11_VALID_MSG, { briefApproval: () => r11Record({ path: 'index.html' }) }).decision === 'deny');
+
+// AH-19-5: record path shapes -> deny (exercised end-to-end against the REAL reader in AH-19-13, which
+// enforces R11_RECORD_PATH_RE; the injected-deps rows above already cover the entry/record equality check).
+
+// AH-19-6: branch.head = main, another branch, or missing -> deny
+for (const branch of ['main', 'task/x', null, undefined, '(detached)']) {
+  check('AH-19-6 branch.head=' + JSON.stringify(branch) + ' -> deny',
+    r11Decide(R11_VALID_MSG, { canonicalStatus: () => r11Status({ branch }) }).decision === 'deny');
+}
+
+// AH-19-7: hash mismatch / record absent / malformed / path mismatch / stale parent-OID -> deny
+check('AH-19-7 hash mismatch -> deny', r11Decide(R11_VALID_MSG, { indexBlobSha256: () => 'f'.repeat(64) }).decision === 'deny');
+check('AH-19-7 record absent (null) -> deny', r11Decide(R11_VALID_MSG, { briefApproval: () => null }).decision === 'deny');
+for (const bad of [{ hash: R11_HASH }, { hash: R11_HASH, path: R11_BRIEF_PATH }, 'x', 42, {}, undefined]) {
+  check('AH-19-7 record malformed ' + JSON.stringify(bad) + ' -> deny', r11Decide(R11_VALID_MSG, { briefApproval: () => bad }).decision === 'deny');
+}
+check('AH-19-7 record path mismatch -> deny', r11Decide(R11_VALID_MSG, { briefApproval: () => r11Record({ path: 'work/other/brief.md' }) }).decision === 'deny');
+check('AH-19-7 stale parent-OID -> deny', r11Decide(R11_VALID_MSG, { briefApproval: () => r11Record({ oid: 'c'.repeat(40) }) }).decision === 'deny');
+
+// AH-19-8: form deviations -> deny with the UNCHANGED r9 R3c reason and zero reads (§3 "Order matters")
+const R11_FORM_DENY = [
+  'git commit --amend -m "docs(work): x"', 'git commit --fixup=HEAD -m "docs(work): x"', 'git commit --squash=HEAD -m "docs(work): x"',
+  'git commit -a -m "docs(work): x"', 'git commit -m "docs(work): x" file.txt', 'git commit -F msg.txt', 'git commit -s -m "docs(work): x"',
+  'git commit --allow-empty -m "docs(work): x"', 'git commit --no-verify -m "docs(work): x"', 'git commit -m "docs(work): x" -m "docs(work): y"',
+  'git commit -m "not-docs-work: x"', 'git commit -m "docs(work):x"', 'git -C x commit -m "docs(work): x"', 'git -c k=v commit -m "docs(work): x"',
+  'GIT_INDEX_FILE=/tmp/i git commit -m "docs(work): x"', 'git commit -m "docs(work): x" && git status', 'git commit -m "docs(work): x"; git log',
+  "echo x | git commit -F -", 'bash -c \'git commit -m "docs(work): x"\'', 'git commit -m "docs(work): x"\ngit status'
+];
+for (const cmd of R11_FORM_DENY) {
+  const log = [];
+  const r = r11Decide(cmd, { log });
+  check('AH-19-8 form deny, zero reads: ' + JSON.stringify(cmd) + ' (got ' + r.decision + ', reads ' + log.length + ')',
+    r.decision === 'deny' && /R3c/.test(r.reason) && log.length === 0);
+}
+{
+  // PowerShell: §3.1 "the tool must be Bash" — decide() never reaches commitGate for a PowerShell
+  // commit at all (the R2 git-program blanket denies it first), so this is zero R11 reads by construction.
+  const log = [];
+  const r = r11Decide(R11_VALID_MSG, { tool: 'PowerShell', log });
+  check('AH-19-8 PowerShell tool -> deny (R2, not R11/R3c), zero reads', r.decision === 'deny' && /R2/.test(r.reason) && log.length === 0);
+}
+
+// AH-19-9: session env overrides / CLAUDE_PROJECT_DIR missing or different / .git is a file -> deny
+for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CONFIG_GLOBAL']) {
+  const saved = process.env[key];
+  process.env[key] = 'x';
+  try {
+    check('AH-19-9 session env ' + key + ' set -> deny', r11Decide(R11_VALID_MSG).decision === 'deny');
+  } finally {
+    if (saved === undefined) delete process.env[key]; else process.env[key] = saved;
+  }
+}
+check('AH-19-9 CLAUDE_PROJECT_DIR missing -> deny', r11Decide(R11_VALID_MSG, { projectDir: undefined }).decision === 'deny');
+check('AH-19-9 CLAUDE_PROJECT_DIR different from repoRoot -> deny', r11Decide(R11_VALID_MSG, { projectDir: 'C:\\elsewhere' }).decision === 'deny');
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ah19-gitfile-'));
+  fs.writeFileSync(path.join(dir, '.git'), 'gitdir: ../x\n');
+  try {
+    check('AH-19-9 .git is a file (linked worktree, not canonical) -> deny',
+      r11Decide(R11_VALID_MSG, { cwd: dir, projectDir: dir, repoRoot: () => dir }).decision === 'deny');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// AH-19-10: R10-3 integrity (protected config / non-sample hooks) -> deny
+check('AH-19-10 protected git config active -> deny', r11Decide(R11_VALID_MSG, { protectedConfigState: () => ({ ok: false, bad: ['core.hooksPath=x'] }) }).decision === 'deny');
+check('AH-19-10 non-sample git hooks installed -> deny', r11Decide(R11_VALID_MSG, { hooksState: () => ({ ok: false, bad: ['pre-commit'] }) }).decision === 'deny');
+
+// AH-19-11: fail-closed on a thrown reader or a malformed return value
+const boomR11 = () => { throw new Error('planted read failure'); };
+for (const dep of ['repoRoot', 'briefApproval', 'canonicalStatus', 'indexBlobSha256', 'protectedConfigState', 'hooksState']) {
+  check('AH-19-11 ' + dep + ' throws -> deny', r11Decide(R11_VALID_MSG, { [dep]: boomR11 }).decision === 'deny');
+}
+for (const odd of [null, undefined, 'x', 42, {}, []]) {
+  check('AH-19-11 canonicalStatus returns ' + JSON.stringify(odd) + ' -> deny', r11Decide(R11_VALID_MSG, { canonicalStatus: () => odd }).decision === 'deny');
+}
+// Budget exhaustion / timeout: decide() computes its own deadline (Date.now() + R10_BUDGET_MS) and
+// applies it to gateDeps AFTER the injected deps are merged, so a shortened deadline cannot be
+// injected from a table row (the same constraint AH-16/R10-7's mutant-only coverage lives under).
+// The closest constructible proxy — a reader that throws a timeout-shaped error — is exercised by
+// the per-dep throw loop above; each of those readers is exactly where a real subprocess timeout
+// (spawnBudgetMs throwing "r10 time budget exhausted") or ECONNRESET-style failure would surface.
+check('AH-19-11 timeout-shaped reader error (proxy for a real subprocess timeout) -> deny',
+  r11Decide(R11_VALID_MSG, { canonicalStatus: () => { const e = new Error('r10 time budget exhausted'); e.code = 'ETIMEDOUT'; throw e; } }).decision === 'deny');
+
+// AH-19-12: CLI — the valid case exits 0; a deny exits 2 with R11/R3c in stderr
+function r11Cli(cmd, opts) {
+  const o = opts || {};
+  const saved = process.env.CLAUDE_PROJECT_DIR;
+  const projectDir = Object.prototype.hasOwnProperty.call(o, 'projectDir') ? o.projectDir : R11_CANON;
+  if (projectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = projectDir;
+  try {
+    return guard.runCli(payload(cmd, Object.prototype.hasOwnProperty.call(o, 'cwd') ? o.cwd : R11_CANON), { deps: depsR11(o) });
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = saved;
+  }
+}
+if (guard) {
+  const okR = r11Cli(R11_VALID_MSG);
+  check('AH-19-12 CLI valid -> exit 0, empty stdout/stderr', okR.code === 0 && okR.stdout === '' && okR.stderr === '');
+  const denyR = r11Cli(R11_VALID_MSG, { canonicalStatus: () => r11Status({ branch: 'main' }) });
+  check('AH-19-12 CLI deny -> exit 2, empty stdout, R11 on stderr', denyR.code === 2 && denyR.stdout === '' && /R11/.test(denyR.stderr));
+  const denyFormR = r11Cli('git commit -m x');
+  check('AH-19-12 CLI form deny -> exit 2, empty stdout, R3c on stderr (unchanged reason)', denyFormR.code === 2 && denyFormR.stdout === '' && /R3c/.test(denyFormR.stderr));
+} else {
+  check('AH-19-12 CLI rows need the hook module', false);
+}
+
+// AH-19-13: REAL readers against a temp canonical repo (offline; git runs only inside os.tmpdir()).
+{
+  const gitVersion = spawnSync('git', ['--version'], { encoding: 'utf8' });
+  check('AH-19-13: git is available on PATH', gitVersion.status === 0);
+  if (guard && gitVersion.status === 0) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ah19-real-'));
+    const G = (...a) => spawnSync('git', ['-c', 'user.name=ah', '-c', 'user.email=ah@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...a], { cwd: root, encoding: 'utf8' });
+    const savedProjectDir = process.env.CLAUDE_PROJECT_DIR;
+    const writeRecord = (buf) => fs.writeFileSync(path.join(root, '.git', 'pt-brief-approval'), buf);
+    const realDecide = (cmd) => guard.decide({ tool_name: 'Bash', tool_input: { command: cmd }, cwd: root });
+    try {
+      G('init', '-q', '-b', 'main');
+      fs.writeFileSync(path.join(root, 'keep.txt'), 'k\n');
+      G('add', '-A'); G('commit', '-q', '-m', 'seed');
+      G('branch', 'branch-dev'); G('checkout', '-q', 'branch-dev');
+      fs.mkdirSync(path.join(root, 'work', 'x'), { recursive: true });
+      const briefText = 'brief text\n';
+      fs.writeFileSync(path.join(root, 'work', 'x', 'brief.md'), briefText);
+      G('add', 'work/x/brief.md');
+      const parentOid = G('rev-parse', 'branch-dev').stdout.trim();
+      const blobHash = crypto.createHash('sha256').update(Buffer.from(briefText)).digest('hex');
+      writeRecord(blobHash + ' work/x/brief.md ' + parentOid);
+      process.env.CLAUDE_PROJECT_DIR = root;
+
+      check('AH-19-13 real-git valid -> allow', realDecide(R11_VALID_MSG).decision === 'allow');
+      // G1 (brief §6 "Also run"): a real hook-process spawn for the allow case.
+      {
+        const spawnEnv = Object.assign({}, process.env, { CLAUDE_PROJECT_DIR: root });
+        const g1 = spawnSync(process.execPath, [HOOK_PATH], { input: payload(R11_VALID_MSG, root), env: spawnEnv, encoding: 'utf8', timeout: 15000 });
+        check('G1 real hook-process spawn, allow case -> exit 0, empty stdout/stderr', g1.status === 0 && g1.stdout === '' && g1.stderr === '');
+      }
+      const cm = G('commit', '-m', 'docs(work): add x brief');
+      check('AH-19-13 real-git commit succeeds', cm.status === 0);
+      const changed = G('show', '--name-only', '--format=', 'HEAD').stdout.trim().split(/\r?\n/).filter(Boolean);
+      check('AH-19-13 real-git commit touches exactly one path (work/x/brief.md)', changed.length === 1 && changed[0] === 'work/x/brief.md');
+
+      // Fresh amendment round for the negatives, isolated from the committed state above.
+      const newParent = G('rev-parse', 'branch-dev').stdout.trim();
+      const amendText = briefText + 'amend\n';
+      fs.writeFileSync(path.join(root, 'work', 'x', 'brief.md'), amendText);
+      G('add', 'work/x/brief.md');
+      const amendHash = crypto.createHash('sha256').update(Buffer.from(amendText)).digest('hex');
+      writeRecord(amendHash + ' work/x/brief.md ' + newParent);
+
+      const spawnDeny = (label, msg) => {
+        const spawnEnv = Object.assign({}, process.env, { CLAUDE_PROJECT_DIR: root });
+        const r = spawnSync(process.execPath, [HOOK_PATH], { input: payload(msg, root), env: spawnEnv, encoding: 'utf8', timeout: 15000 });
+        check(label + ' -> exit 2, empty stdout, R11 on stderr', r.status === 2 && r.stdout === '' && /R11/.test(r.stderr));
+      };
+
+      fs.writeFileSync(path.join(root, 'stray.txt'), 'x\n');
+      check('AH-19-13 real-git extra untracked file -> deny', realDecide(R11_VALID_AMEND_MSG).decision === 'deny');
+      spawnDeny('G2 real hook-process spawn, extra untracked file', R11_VALID_AMEND_MSG);
+      fs.rmSync(path.join(root, 'stray.txt'));
+
+      writeRecord(amendHash + ' work/x/brief.md ' + 'f'.repeat(40));
+      check('AH-19-13 real-git stale parent -> deny', realDecide(R11_VALID_AMEND_MSG).decision === 'deny');
+      spawnDeny('G3 real hook-process spawn, stale parent', R11_VALID_AMEND_MSG);
+
+      writeRecord('f'.repeat(64) + ' work/x/brief.md ' + newParent);
+      check('AH-19-13 real-git wrong hash -> deny', realDecide(R11_VALID_AMEND_MSG).decision === 'deny');
+      spawnDeny('G4 real hook-process spawn, wrong hash', R11_VALID_AMEND_MSG);
+
+      // AH-19-5: record path shapes the real reader must reject.
+      for (const badPath of ['work/x/notes.md', 'work/x/y/brief.md', 'work/../brief.md', 'WORK/x/brief.md', 'work/.x/brief.md']) {
+        writeRecord(amendHash + ' ' + badPath + ' ' + newParent);
+        check('AH-19-5 real-git record path shape ' + JSON.stringify(badPath) + ' -> deny', realDecide(R11_VALID_AMEND_MSG).decision === 'deny');
+      }
+
+      writeRecord(amendHash + ' work/x/brief.md ' + newParent);
+      check('AH-19-13 real-git amendment (M.) -> allow', realDecide(R11_VALID_AMEND_MSG).decision === 'allow');
+
+      // AH-19-7: malformed record forms the real reader must reject.
+      const goodRecordBuf = fs.readFileSync(path.join(root, '.git', 'pt-brief-approval'));
+      writeRecord(Buffer.from(amendHash + ' work/x/brief.md ' + newParent + '\u00e9', 'utf8'));
+      check('AH-19-7 real-git record non-ASCII -> deny', realDecide(R11_VALID_AMEND_MSG).decision === 'deny');
+      writeRecord(Buffer.from(amendHash + ' work/x/brief.md ' + newParent + '\nextra\n', 'ascii'));
+      check('AH-19-7 real-git record multi-line -> deny', realDecide(R11_VALID_AMEND_MSG).decision === 'deny');
+      writeRecord(Buffer.alloc(0));
+      check('AH-19-7 real-git record empty -> deny', realDecide(R11_VALID_AMEND_MSG).decision === 'deny');
+      fs.rmSync(path.join(root, '.git', 'pt-brief-approval'), { force: true });
+      check('AH-19-7 real-git record missing -> deny', realDecide(R11_VALID_AMEND_MSG).decision === 'deny');
+      writeRecord(goodRecordBuf);
+    } finally {
+      if (savedProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = savedProjectDir;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  } else {
+    check('AH-19-13 real-git rows need the hook module and git', false);
+  }
+}
+
+// AH-19-14: every existing AH-16 row (including the RC2 reasons/zero-reads rows) is exercised unmodified
+// above this point in the file and passed; a slot commit staging work/x/brief.md is still denied by
+// STAGED_DENY (unchanged R11 scope: the brief-only gate only ever applies to a NON-slot session).
+check('AH-19-14 slot commit staging work/x/brief.md is still denied by STAGED_DENY (R11 does not touch the slot path)',
+  dc('git commit -m x', SLOT_A, HEAD_TASK, ['work/x/brief.md']).decision === 'deny');
+
+// ── R11 mutants (≥10), each caught ──
+mutantCatches('R11 narrow-form check dropped (any message reaches the gate)', "if (!isNarrowBriefCommitForm(f, gitCount)) return commitDeny('denied outside a Worker slot');",
+  "if (false) return commitDeny('denied outside a Worker slot');",
+  (m) => r11DecideOn(m, 'git commit -m x').decision === 'deny');
+mutantCatches('R11 message regex widened (prefix-only match)', 'const R11_BRIEF_MSG_RE = /^docs\\(work\\): \\S[^\\r\\n]{0,150}$/;', 'const R11_BRIEF_MSG_RE = /^docs\\(work\\)/;',
+  (m) => r11DecideOn(m, 'git commit -m "docs(work)x"').decision === 'deny');
+mutantCatches('R11 single-entry check dropped', "if (!Array.isArray(status.entries) || status.entries.length !== 1) return r11Deny('the staged/working set is not exactly one entry');",
+  'if (false) { /* dropped */ }',
+  (m) => r11DecideOn(m, R11_VALID_MSG, { canonicalStatus: () => r11Status({ entries: [r11Entry(), r11Entry({ path: 'work/x/other.md' })] }) }).decision === 'deny');
+mutantCatches('R11 XY tier widened (D. accepted)', "(entry.xy !== 'A.' && entry.xy !== 'M.')", "(entry.xy !== 'A.' && entry.xy !== 'M.' && entry.xy !== 'D.')",
+  (m) => r11DecideOn(m, R11_VALID_MSG, { canonicalStatus: () => r11Status({ entries: [r11Entry({ xy: 'D.' })] }) }).decision === 'deny');
+mutantCatches('R11 branch check dropped', "if (!status || status.branch !== 'branch-dev') return r11Deny('HEAD is not branch-dev');", 'if (!status) return r11Deny(\'HEAD is not branch-dev\');',
+  (m) => r11DecideOn(m, R11_VALID_MSG, { canonicalStatus: () => r11Status({ branch: 'main' }) }).decision === 'deny');
+mutantCatches('R11 parent-OID binding dropped (stale record accepted)', "if (status.oid !== record.oid) return r11Deny('branch-dev has moved since the approval record was written (stale parent)');",
+  'if (false) { /* dropped */ }',
+  (m) => r11DecideOn(m, R11_VALID_MSG, { briefApproval: () => r11Record({ oid: 'c'.repeat(40) }) }).decision === 'deny');
+mutantCatches('R11 hash check dropped', "if (typeof blobHash !== 'string' || blobHash.toLowerCase() !== record.hash.toLowerCase()) {", 'if (false) {',
+  (m) => r11DecideOn(m, R11_VALID_MSG, { indexBlobSha256: () => 'f'.repeat(64) }).decision === 'deny');
+{
+  // A real directory with a real .git DIRECTORY (not a worktree file), distinct from R11_CANON, so the
+  // probe below isolates the canonical-identity string comparison from the separate dotGitStat defense.
+  const identityFixture = fs.mkdtempSync(path.join(os.tmpdir(), 'ah19-identity-'));
+  spawnSync('git', ['init', '-q'], { cwd: identityFixture });
+  try {
+    mutantCatches('R11 canonical-identity check dropped', 'if (typeof root !== \'string\' || normalizePath(root).replace(/\\/+$/, \'\') !== normalizePath(projectDir).replace(/\\/+$/, \'\')) {',
+      'if (false) {',
+      (m) => r11DecideOn(m, R11_VALID_MSG, { repoRoot: () => identityFixture }).decision === 'deny');
+  } finally {
+    fs.rmSync(identityFixture, { recursive: true, force: true });
+  }
+}
+mutantCatches('R11 R10-3 config/hooks readers skipped', "if (!cfg || cfg.ok !== true) return r11Deny('protected git config is active');", 'if (false) { /* dropped */ }',
+  (m) => r11DecideOn(m, R11_VALID_MSG, { protectedConfigState: () => ({ ok: false, bad: ['core.hooksPath=x'] }) }).decision === 'deny');
+mutantCatches('R11 staged-entry path match dropped (wrong file accepted)', "if (entry.path !== record.path) return r11Deny('the staged entry does not match the approved brief path');",
+  'if (false) { /* dropped */ }',
+  (m) => r11DecideOn(m, R11_VALID_MSG, { canonicalStatus: () => r11Status({ entries: [r11Entry({ path: 'index.html' })] }) }).decision === 'deny');
+mutantCatches('R11 sub (submodule) field not checked (submodule entry accepted)', "entry.sub !== 'N...'", 'false',
+  (m) => r11DecideOn(m, R11_VALID_MSG, { canonicalStatus: () => r11Status({ entries: [r11Entry({ sub: 'S..U' })] }) }).decision === 'deny');
+{
+  // Path regex widened: drives the REAL briefApprovalFs reader (not injected) against a real
+  // .git/pt-brief-approval holding a non-brief.md path, so only R11_RECORD_PATH_RE is exercised.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ah19-pathregex-'));
+  fs.mkdirSync(path.join(dir, '.git'));
+  const badPath = 'work/x/notes.md';
+  const hash = 'd'.repeat(64);
+  const oid = 'e'.repeat(40);
+  fs.writeFileSync(path.join(dir, '.git', 'pt-brief-approval'), hash + ' ' + badPath + ' ' + oid);
+  try {
+    mutantCatches('R11 record-path regex widened (non-brief.md path accepted)',
+      "const R11_RECORD_PATH_RE = /^work\\/[a-z0-9][a-z0-9._-]*\\/brief\\.md$/;", 'const R11_RECORD_PATH_RE = /^work\\/.*$/;',
+      (m) => {
+        const deps = depsR11({ repoRoot: () => dir, canonicalStatus: () => r11Status({ oid, entries: [r11Entry({ path: badPath })] }), indexBlobSha256: () => hash });
+        delete deps.briefApproval; // let DEFAULT_DEPS.briefApproval (the real reader under test) run
+        const saved = process.env.CLAUDE_PROJECT_DIR;
+        process.env.CLAUDE_PROJECT_DIR = dir;
+        try { return m.decide({ tool_name: 'Bash', tool_input: { command: R11_VALID_MSG }, cwd: dir }, deps).decision === 'deny'; }
+        finally { if (saved === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = saved; }
+      });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+mutantCatchesMulti('R11 reads-before-form order swapped (narrow-form check moved after the readers)',
+  [["if (!isNarrowBriefCommitForm(f, gitCount)) return commitDeny('denied outside a Worker slot');\n\n  // 2. Environment.", '// 2. Environment.'],
+   ['  // 7. R10-3 integrity.', "  if (!isNarrowBriefCommitForm(f, gitCount)) return commitDeny('denied outside a Worker slot');\n\n  // 7. R10-3 integrity."]],
+  (m) => { const log = []; const r = r11DecideOn(m, 'git commit -m x', { log }); return r.decision === 'deny' && log.length === 0; });
+fs.rmSync(R11_CANON, { recursive: true, force: true });
 
 if (failures) {
   console.log('Auto-mode hardening: FAIL (' + failures + ' of ' + asserts + ' assertions)');

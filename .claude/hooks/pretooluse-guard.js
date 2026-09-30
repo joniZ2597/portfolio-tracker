@@ -20,6 +20,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const crypto = require('crypto');
 
 const FAIL_CLOSED_EXIT = 2;
 const MAX_WRAPPER_DEPTH = 6;
@@ -934,6 +935,7 @@ function classifyGit(args, out, wrapped) {
     out.push({
       cls: 'commit',
       reason: 'git commit',
+      args: rest,
       formIssue: i !== 0 ? 'git global options (-C / -c / --git-dir / --work-tree / --no-pager ...) are not allowed before commit'
         : wrapped ? 'wrapped, env-prefixed or non-plain git invocation' : commitFormIssue(rest)
     });
@@ -1325,6 +1327,151 @@ function resolveFileToolTargetFs(cwd, raw) {
   const ancestor = realpath(probe);
   return path.join(ancestor, ...missing);
 }
+// ── R11: Owner-approved brief-only commit gate for the canonical checkout (work/brief-commit-gate/brief.md §2-3) ──
+const R11_BRIEF_MSG_RE = /^docs\(work\): \S[^\r\n]{0,150}$/;
+const R11_RECORD_PATH_RE = /^work\/[a-z0-9][a-z0-9._-]*\/brief\.md$/;
+function briefApprovalFs(root) {
+  const p = path.join(root, '.git', 'pt-brief-approval');
+  if (!fs.existsSync(p)) return null;
+  const buf = fs.readFileSync(p);
+  if (buf.length === 0 || buf.length > 256) return null;
+  for (let k = 0; k < buf.length; k += 1) if (buf[k] > 0x7e || (buf[k] < 0x20 && buf[k] !== 0x0d && buf[k] !== 0x0a)) return null;
+  const text = buf.toString('ascii').replace(/\r\n$|\r$|\n$/, '');
+  if (/[\r\n]/.test(text)) return null;
+  const parts = text.split(' ');
+  if (parts.length !== 3) return null;
+  const [hash, recPath, oid] = parts;
+  if (!/^[0-9a-fA-F]{64}$/.test(hash)) return null;
+  if (!R11_RECORD_PATH_RE.test(recPath)) return null;
+  if (!/^[0-9a-f]{40}$/.test(oid)) return null;
+  return { hash, path: recPath, oid };
+}
+// One `git status --porcelain=v2 -z --branch --untracked-files=all --no-renames` read, GIT_* stripped, locks optional, R10-7 budget.
+function canonicalStatusGit(root, deadline) {
+  const env = {};
+  for (const k of Object.keys(process.env)) if (!/^GIT_/i.test(k)) env[k] = process.env[k];
+  env.GIT_OPTIONAL_LOCKS = '0';
+  const r = spawnSync('git', ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all', '--no-renames'], {
+    cwd: root, env, encoding: 'utf8', timeout: spawnBudgetMs(deadline), windowsHide: true, maxBuffer: 16 * 1024 * 1024
+  });
+  if (r.error) throw r.error;
+  if (r.status !== 0) throw new Error('git status exited ' + r.status);
+  if (typeof r.stdout !== 'string') throw new Error('git status produced no output');
+  const records = r.stdout.split('\0').filter((rec) => rec.length > 0);
+  let branch = null;
+  let oid = null;
+  const entries = [];
+  for (const rec of records) {
+    if (rec.startsWith('# branch.head ')) { branch = rec.slice('# branch.head '.length); continue; }
+    if (rec.startsWith('# branch.oid ')) { oid = rec.slice('# branch.oid '.length); continue; }
+    if (rec.startsWith('# ')) continue;
+    const kind = rec.charAt(0);
+    if (kind === '1') {
+      const fields = rec.split(' ');
+      // "1 XY sub mH mI mW hH hI path" - path may itself contain spaces, so re-join from field index 8.
+      if (fields.length < 9) throw new Error('unrecognised porcelain v2 ordinary-entry record');
+      entries.push({ kind: '1', xy: fields[1], sub: fields[2], path: fields.slice(8).join(' ') });
+    } else if (kind === '2') {
+      entries.push({ kind: '2' });
+    } else if (kind === 'u') {
+      entries.push({ kind: 'u' });
+    } else if (kind === '?') {
+      entries.push({ kind: '?' });
+    } else {
+      throw new Error('unrecognised porcelain v2 record kind ' + kind);
+    }
+  }
+  return { branch, oid, entries };
+}
+// One `git cat-file blob :<path>` read of the STAGED blob, hashed as a Buffer (never text-decoded).
+function indexBlobSha256Git(root, relPath, deadline) {
+  const env = {};
+  for (const k of Object.keys(process.env)) if (!/^GIT_/i.test(k)) env[k] = process.env[k];
+  env.GIT_OPTIONAL_LOCKS = '0';
+  const r = spawnSync('git', ['cat-file', 'blob', ':' + relPath], {
+    cwd: root, env, encoding: 'buffer', timeout: spawnBudgetMs(deadline), windowsHide: true, maxBuffer: 16 * 1024 * 1024
+  });
+  if (r.error) throw r.error;
+  if (r.status !== 0) throw new Error('git cat-file exited ' + r.status);
+  if (!Buffer.isBuffer(r.stdout)) throw new Error('git cat-file produced no output');
+  return crypto.createHash('sha256').update(r.stdout).digest('hex');
+}
+function isNarrowBriefCommitForm(f, gitCount) {
+  if (gitCount !== 1) return false;
+  if (f.formIssue) return false;
+  if (f.plainCtx !== true) return false;
+  if (!Array.isArray(f.args) || f.args.length !== 2) return false;
+  if (f.args[0] !== '-m') return false;
+  return typeof f.args[1] === 'string' && R11_BRIEF_MSG_RE.test(f.args[1]);
+}
+function r11Deny(why) {
+  return { decision: 'deny', reason: 'R11: ' + why + ' - commit from a normal terminal' };
+}
+// Order matters: every form/context check below runs before any read (§3 "Order matters").
+function briefCommitGate(f, cwd, gitCount, deps) {
+  // 1. Narrow form, or the unchanged r9 denial (byte-identical reason, zero reads).
+  if (!isNarrowBriefCommitForm(f, gitCount)) return commitDeny('denied outside a Worker slot');
+
+  // 2. Environment.
+  const envBad = Object.keys(process.env).find((k) => GIT_ENV_OVERRIDE_RE.test(k) || R10_GIT_CONFIG_ENV_RE.test(k));
+  if (envBad !== undefined) return r11Deny('the session environment sets ' + envBad);
+
+  // 3. Canonical identity.
+  if (typeof cwd !== 'string' || !cwd) return r11Deny('the session cwd is unknown');
+  const projectDir = process.env.CLAUDE_PROJECT_DIR;
+  if (typeof projectDir !== 'string' || !projectDir) return r11Deny('CLAUDE_PROJECT_DIR is not set');
+  let root;
+  try { root = deps.repoRoot(cwd); }
+  catch (e) { return r11Deny('the repository root could not be resolved (' + (e && e.message ? e.message : String(e)) + ')'); }
+  if (typeof root !== 'string' || normalizePath(root).replace(/\/+$/, '') !== normalizePath(projectDir).replace(/\/+$/, '')) {
+    return r11Deny('the session is not in the canonical checkout (CLAUDE_PROJECT_DIR)');
+  }
+  let dotGitStat;
+  try { dotGitStat = fs.statSync(path.join(root, '.git')); }
+  catch (e) { return r11Deny('.git could not be verified'); }
+  if (!dotGitStat.isDirectory()) return r11Deny('.git is not a directory (linked worktree, not the canonical checkout)');
+
+  // 4. Approval record.
+  let record;
+  try { record = deps.briefApproval(root); }
+  catch (e) { return r11Deny('the approval record could not be read'); }
+  if (!record || typeof record.hash !== 'string' || typeof record.path !== 'string' || typeof record.oid !== 'string') {
+    return r11Deny('there is no valid Owner approval record (.git/pt-brief-approval)');
+  }
+
+  // 5. Repository state.
+  let status;
+  try { status = deps.canonicalStatus(root, deps.deadline); }
+  catch (e) { return r11Deny('the repository status could not be verified'); }
+  if (!status || status.branch !== 'branch-dev') return r11Deny('HEAD is not branch-dev');
+  if (status.oid !== record.oid) return r11Deny('branch-dev has moved since the approval record was written (stale parent)');
+  if (!Array.isArray(status.entries) || status.entries.length !== 1) return r11Deny('the staged/working set is not exactly one entry');
+  const entry = status.entries[0];
+  if (!entry || entry.kind !== '1' || (entry.xy !== 'A.' && entry.xy !== 'M.') || entry.sub !== 'N...') {
+    return r11Deny('the single entry is not a plain added/modified file (A./M., no submodule)');
+  }
+  if (entry.path !== record.path) return r11Deny('the staged entry does not match the approved brief path');
+
+  // 6. Content.
+  let blobHash;
+  try { blobHash = deps.indexBlobSha256(root, entry.path, deps.deadline); }
+  catch (e) { return r11Deny('the staged content hash could not be verified'); }
+  if (typeof blobHash !== 'string' || blobHash.toLowerCase() !== record.hash.toLowerCase()) {
+    return r11Deny('the staged content does not match the approved hash');
+  }
+
+  // 7. R10-3 integrity.
+  let cfg;
+  try { cfg = deps.protectedConfigState(root, deps.deadline); }
+  catch (e) { return r11Deny('git config integrity could not be verified'); }
+  if (!cfg || cfg.ok !== true) return r11Deny('protected git config is active');
+  let hooks;
+  try { hooks = deps.hooksState(root); }
+  catch (e) { return r11Deny('git hooks integrity could not be verified'); }
+  if (!hooks || hooks.ok !== true) return r11Deny('non-sample git hooks are installed');
+
+  return { decision: 'allow', reason: 'brief-only commit gate passed (R11: Owner-approved brief, branch-dev, single file)' };
+}
 const DEFAULT_DEPS = {
   readHeadRef: readHeadRefFs,
   stagedPaths: stagedPathsGit,
@@ -1332,7 +1479,10 @@ const DEFAULT_DEPS = {
   protectedConfigState: protectedConfigStateGit,
   hooksState: hooksStateFs,
   pathExists: (p) => fs.existsSync(p),
-  resolveFileToolTarget: resolveFileToolTargetFs
+  resolveFileToolTarget: resolveFileToolTargetFs,
+  briefApproval: briefApprovalFs,
+  canonicalStatus: canonicalStatusGit,
+  indexBlobSha256: indexBlobSha256Git
 };
 
 function commitDeny(cause) {
@@ -1340,7 +1490,7 @@ function commitDeny(cause) {
 }
 const GIT_ENV_OVERRIDE_RE = /^GIT_(?:DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)$/;
 function commitGate(f, cwd, slot, gitCount, deps) {
-  if (!slot) return commitDeny('denied outside a Worker slot');
+  if (!slot) return briefCommitGate(f, cwd, gitCount, deps);
   if (typeof cwd !== 'string' || !cwd) return commitDeny('the session cwd is unknown, so the slot cannot be verified');
   if (f.formIssue) return commitDeny(f.formIssue);
   const envOverride = Object.keys(process.env).find((k) => GIT_ENV_OVERRIDE_RE.test(k));
