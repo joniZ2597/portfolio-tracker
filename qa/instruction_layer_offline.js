@@ -156,7 +156,7 @@ check('W4 optimization-rules.md: a distorted preview is not evidence of disk cor
 // Fingerprint baseline. Drift is a deliberate act; this suite makes it visible rather than
 // silently accepting a changed instruction layer.
 const FINGERPRINTS = {
-  'CLAUDE.md': '79fc282799080d80568fce5c653386d8266d531343caa3da5eac8875b72e2090',
+  'CLAUDE.md': '867dd8887298dd4e795aef8360fc1c90d0d07691e5d966246a108bae66c077a5',
   '.claude/skills/portfolio-skill-router/SKILL.md': '7702d67d91a7e8706a4ae2528dee0f11683d0be1427063039281650d90339056',
   '.claude/skills/approval-flow-optimizer/references/optimization-rules.md': '44b03e3e2bdc8dc77c3af5e284d01174e7c5f584ff00524f4fba9d840a07446c'
 };

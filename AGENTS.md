@@ -116,7 +116,7 @@ commit) or on a STOP condition below.
 
 **Then, at the commit boundary — gated, never bypassed:**
 
-13. **Commit on the task branch, then STOP.**
+13. **Commit on the task branch, then request LAND.**
     - Commit only in the Worker's own slot, with HEAD on `task/<id>`, through the r9 commit gate
       (HOOK-DENY).
     - Stage explicit paths with `git add` in one call, then run a plain `git commit -m "…"` in a
@@ -129,8 +129,16 @@ commit) or on a STOP condition below.
       Any FAIL is **STOP-6**.
     - The integrity result is **LAND evidence**: report it only in the step-13 STOP report (the `CLAUDE.md` task-completion report). It is never written into `review.md` — no amend, and no second commit made only to record it — and `review.md` does not list it as pending.
     - If a FAIL comes from a baseline or ruling issue that the Owner resolves, and a re-run PASSes without any implementation change, the task proceeds to LAND with the original task commit unchanged.
-    - Then **STOP**: report the implementation, QA, Codex and integrity results, and request LAND.
-    - The Worker never merges, rebases, pulls, pushes or lands.
+    - Then report the implementation, QA, Codex and integrity results and continue with step 14.
+    - The Worker never runs `git merge`, `rebase`, `pull` or `push` (HOOK-DENY). It LANDs and pushes only through steps 14–15.
+
+14. **LAND — Owner-approved (R12).** If the committed brief has a `land-scope` block and the task diff touches no ASK- or DENY-tier or protected path:
+    - run `node .claude/hooks/pt-land.js land-request task/<id>`, show its report, print its approval line **exactly**, and **STOP until the Owner answers**;
+    - the Owner approves by typing that exact line with `!` (the only permitted use of `!`), or declines — then nothing happens;
+    - after the Owner confirms, run `node .claude/hooks/pt-land.js land task/<id>`. Any refusal is **STOP-6**; "branch-dev moved" means Second LAND.
+
+    Otherwise (no `land-scope` block, or a protected path): **STOP** and request an Owner LAND.
+15. **Push — Owner-approved (R12).** Run `node .claude/hooks/pt-land.js push-request`, show its report — including the public Netlify DEV deploy notice and the commits to publish — print its approval line exactly, and **STOP until the Owner answers**. After the Owner enters it with `!`, run `node .claude/hooks/pt-land.js push`; it verifies `branch-dev == origin/branch-dev`. Any refusal is **STOP-6**. If the Owner declines, the task ends LANDed and unpushed. Then **STOP** with the final completion report.
 
 **The Owner does not approve individual file edits, inspect code previews, relay Codex
 findings, or decide ordinary in-scope implementation questions — LAND approval remains the
@@ -514,7 +522,7 @@ above.
 
 ## Owner LAND / SHIP boundaries
 
-- **LAND** integrates the reviewed task into `branch-dev`: fast-forward only, one task at a time, run by the Owner in a normal terminal (merge/rebase/pull are HOOK-DENY, R3m).
+- **LAND** integrates the reviewed task into `branch-dev`: fast-forward only, one task at a time, run by the Worker through `pt-land.js land` after the Owner's single-use LAND record (step 14), or by the Owner in a normal terminal for tasks the tool refuses; a direct merge/rebase/pull stays HOOK-DENY (R3m).
   - Before LAND:
     - `npm run qa:offline` passes at the final commit;
     - `git status` is clean;
@@ -522,13 +530,12 @@ above.
     - `node qa/guard_integrity_check.js` passes (this covers an empty `core.hooksPath` and only
       `.sample` git hooks) — run after the task commit and reported in the Worker's step-13
       report or by the Owner, never recorded in the committed `review.md`.
-  - Claude Code may prepare and request LAND; the Owner confirms it.
+  - Claude Code may prepare and request LAND; the Owner confirms it by entering the LAND record.
   - **Second LAND:** when another task landed first, the Owner rebases the task branch in a normal
     terminal. The Worker then re-runs `npm run qa:offline`, the relevant targeted tests and the
     integrity check (against the rebased commit) in its slot and reports, before LAND — the
     post-rebase integrity result is LAND evidence only, never recorded in `review.md`.
-- **Push** is run by the Owner in a normal terminal only (R3g). One consolidated push after a batch
-  is preferred.
+- **Push** runs only through `pt-land.js push` after the Owner's single-use PUSH record (step 15), or by the Owner in a normal terminal; a direct `git push` stays HOOK-DENY (R3g). A push publishes the public Netlify DEV deploy of `branch-dev`; the PUSH record is the explicit approval for that branch deploy. One consolidated push after a batch is preferred.
 - **SHIP** (`branch-dev` → `main`/production): always requires explicit, separate Owner
   approval, on top of a landed and QA'd `branch-dev` state. Never bundled with a LAND approval.
 
@@ -543,6 +550,7 @@ above.
 - Live external API canaries (SEC, Perplexity, or similar).
 - Commits outside the r9 and R11 gates — any other main-checkout commit, any commit staging a DENY-tier or protected path, any denied form — are made by the Owner in a normal terminal (RC2). An R11 brief-only commit requires the Owner's approval record.
 - `git merge`, `rebase`, `pull`, and any ref move of `main`/`branch-dev` — the Owner, in a normal terminal.
+  Exception: a fast-forward LAND of `task/*` into `branch-dev` and a `branch-dev` push through `pt-land.js` under the Owner's single-use records (R12).
 - Environment/runtime mutations, and protected governance changes (the hook and settings, through the Owner copy/hash workflow).
 
 ## Worker slot model
@@ -559,7 +567,7 @@ above.
   Slices a slot sits detached and clean at `branch-dev`.
 - A slot keeps its `node_modules/`; step 0 of the Worker execution contract refreshes it when it
   is missing or older than `package-lock.json`.
-- LAND, push, and every other protected action are unchanged (see "Owner LAND / SHIP boundaries"
+- LAND and push follow steps 14–15 (R12); every other protected action is unchanged (see "Owner LAND / SHIP boundaries"
   and "Protected actions").
 - A Worker session runs only in its own slot (cwd) — never in the other slot or the main checkout.
 - **Current-guard check** before any non-Manual session: the slot's task branch descends from the

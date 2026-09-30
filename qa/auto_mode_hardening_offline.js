@@ -2240,6 +2240,132 @@ mutantCatchesMulti('R11 reads-before-form order swapped (narrow-form check moved
   [["if (!isNarrowBriefCommitForm(f, gitCount)) return commitDeny('denied outside a Worker slot');\n\n  // 2. Environment.", '// 2. Environment.'],
    ['  // 7. R10-3 integrity.', "  if (!isNarrowBriefCommitForm(f, gitCount)) return commitDeny('denied outside a Worker slot');\n\n  // 7. R10-3 integrity."]],
   (m) => { const log = []; const r = r11DecideOn(m, 'git commit -m x', { log }); return r.decision === 'deny' && log.length === 0; });
+
+// ── AH-20 (hook R12): pt-land.js LAND/push tool gate (work/worker-land-push/brief.md §4) ──
+// R11_CANON (a real dir with a real .git DIRECTORY) doubles as the canonical checkout here -
+// R12's canonical-identity branch does the same un-injectable fs.statSync(root + '/.git').
+const R12_FORMS = [
+  'node .claude/hooks/pt-land.js land-request task/x',
+  'node .claude/hooks/pt-land.js land task/x',
+  'node .claude/hooks/pt-land.js push-request',
+  'node .claude/hooks/pt-land.js push'
+];
+function r12DecideOn(mod, cmd, opts) {
+  const o = opts || {};
+  const saved = process.env.CLAUDE_PROJECT_DIR;
+  const projectDir = Object.prototype.hasOwnProperty.call(o, 'projectDir') ? o.projectDir : R11_CANON;
+  if (projectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = projectDir;
+  try {
+    const cwd = Object.prototype.hasOwnProperty.call(o, 'cwd') ? o.cwd : SLOT_A;
+    const input = { tool_name: o.tool || 'Bash', tool_input: { command: cmd } };
+    if (cwd !== NO_CWD) input.cwd = cwd;
+    const deps = o.repoRoot ? Object.assign({}, R10_STUBS, { repoRoot: o.repoRoot }) : undefined;
+    return mod.decide(input, deps);
+  } catch (e) {
+    return { decision: 'THROW', reason: String(e && e.message) };
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = saved;
+  }
+}
+function r12Decide(cmd, opts) { return guard ? r12DecideOn(guard, cmd, opts) : { decision: 'NOMODULE', reason: '' }; }
+
+// AH-20 allow (no opinion): the four exact forms, from a slot cwd and from the canonical cwd.
+for (const form of R12_FORMS) {
+  check('AH-20 allow, slot cwd: ' + JSON.stringify(form), r12Decide(form, { cwd: SLOT_A }).decision === 'allow');
+  check('AH-20 allow, canonical cwd: ' + JSON.stringify(form), r12Decide(form, { cwd: R11_CANON, projectDir: R11_CANON }).decision === 'allow');
+}
+
+// AH-20 deny: every named deviation, from the slot cwd (representative - the identity branch is
+// covered separately below).
+const R12_DENY_FORMS = [
+  ['trailing space', 'node .claude/hooks/pt-land.js push '],
+  ['double space', 'node .claude/hooks/pt-land.js  land-request task/x'],
+  ['leading ./', 'node ./.claude/hooks/pt-land.js push'],
+  ['absolute path', 'node C:/repo/.claude/hooks/pt-land.js push'],
+  ['../portfolio-tracker/.claude/...', 'node ../portfolio-tracker/.claude/hooks/pt-land.js push'],
+  ['env prefix', 'FOO=bar node .claude/hooks/pt-land.js push'],
+  ['bash -c wrapper', 'bash -c "node .claude/hooks/pt-land.js push"'],
+  ['npm exec wrapper', 'npm exec -- node .claude/hooks/pt-land.js push'],
+  ['node -e requiring pt-land', 'node -e "require(\'./.claude/hooks/pt-land.js\').runPush({})"'],
+  ['compound &&', 'node .claude/hooks/pt-land.js push && echo done'],
+  ['compound ;', 'node .claude/hooks/pt-land.js push; echo done'],
+  ['pipe', 'node .claude/hooks/pt-land.js push-request | cat'],
+  ['escaped pt\\-land', 'node .claude/hooks/pt\\-land.js push'],
+  ['quoted arguments', 'node .claude/hooks/pt-land.js "push"'],
+  ['unknown verb', 'node .claude/hooks/pt-land.js status'],
+  ['land without a task', 'node .claude/hooks/pt-land.js land'],
+  ['non-task/ ref', 'node .claude/hooks/pt-land.js land branch-dev']
+];
+for (const [label, cmd] of R12_DENY_FORMS) {
+  check('AH-20 deny (' + label + ')', r12Decide(cmd, { cwd: SLOT_A }).decision === 'deny');
+}
+check('AH-20 deny: the PowerShell tool', r12Decide('node .claude/hooks/pt-land.js push', { cwd: SLOT_A, tool: 'PowerShell' }).decision === 'deny');
+check('AH-20 deny: a missing cwd', r12Decide('node .claude/hooks/pt-land.js push', { cwd: NO_CWD }).decision === 'deny');
+check('AH-20 deny: an empty-string cwd', r12Decide('node .claude/hooks/pt-land.js push', { cwd: '' }).decision === 'deny');
+check('AH-20 deny: cwd outside the slots and canonical',
+  r12Decide('node .claude/hooks/pt-land.js push', { cwd: 'C:\\Users\\Owner\\Documents\\Project\\somewhere-else', projectDir: R11_CANON }).decision === 'deny');
+for (const key of ['GIT_DIR', 'GIT_CONFIG_COUNT']) {
+  const saved = process.env[key];
+  process.env[key] = 'x';
+  try {
+    check('AH-20 deny: session env ' + key + ' set', r12Decide('node .claude/hooks/pt-land.js push', { cwd: SLOT_A }).decision === 'deny');
+  } finally {
+    if (saved === undefined) delete process.env[key]; else process.env[key] = saved;
+  }
+}
+// canonical-identity branch: repoRoot resolving to a DIFFERENT real .git dir than CLAUDE_PROJECT_DIR -> deny
+{
+  const otherReal = fs.mkdtempSync(path.join(os.tmpdir(), 'ah20-other-'));
+  fs.mkdirSync(path.join(otherReal, '.git'));
+  try {
+    check('AH-20 deny: canonical-identity mismatch (repoRoot != CLAUDE_PROJECT_DIR)',
+      r12Decide('node .claude/hooks/pt-land.js push', { cwd: otherReal, projectDir: R11_CANON, repoRoot: () => otherReal }).decision === 'deny');
+  } finally {
+    fs.rmSync(otherReal, { recursive: true, force: true });
+  }
+}
+
+// AH-20 unchanged: direct git merge/push and a Claude write of the approval record stay denied
+// with their existing R3m/R3g/R10 reasons - R12 never opens a new path for these.
+check('AH-20 unchanged: git merge --ff-only task/x still denied (R3m)',
+  dec(guard, 'git merge --ff-only task/x', SLOT_A).decision === 'deny' && /R3m/.test(dec(guard, 'git merge --ff-only task/x', SLOT_A).reason));
+check('AH-20 unchanged: git push origin branch-dev still denied (R3g/push)',
+  dec(guard, 'git push origin branch-dev', SLOT_A).decision === 'deny');
+check('AH-20 unchanged: git -C ../portfolio-tracker merge x still denied',
+  dec(guard, 'git -C ../portfolio-tracker merge x', SLOT_A).decision === 'deny');
+check('AH-20 unchanged: a Bash redirect into .git/pt-land-approval still denied (R10-3c)',
+  dec(guard, "printf 'x' > .git/pt-land-approval", SLOT_A).decision === 'deny');
+
+// AH-20 mutants (5, each caught): the R12-specific guard-side invariants.
+mutantCatches('R12 form regex widened (any pt-land invocation accepted)',
+  "const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push)$/;",
+  'const R12_FORM_RE = /pt-land/;',
+  (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js push extra-arg', { cwd: SLOT_A }).decision === 'deny');
+mutantCatches('R12 tool check dropped (PowerShell accepted)',
+  "if (tool !== 'Bash') return r12Deny('the PowerShell tool');",
+  'if (false) { /* dropped */ }',
+  // The canonical (non-slot) cwd, not a slot cwd: R2's earlier "PowerShell - denied in
+  // Worker-slot sessions" already catches a slot cwd regardless of this check, so a slot-cwd
+  // probe would mask the mutation rather than exercise it.
+  (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js push', { cwd: R11_CANON, projectDir: R11_CANON, tool: 'PowerShell' }).decision === 'deny');
+mutantCatches('R12 cwd check dropped (outside slot/canonical accepted)',
+  "if (!r12Slot && !r12Canonical) return r12Deny('the cwd is neither a Worker slot nor the canonical checkout');",
+  'if (false) { /* dropped */ }',
+  (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js push', { cwd: 'C:\\Users\\Owner\\Documents\\Project\\somewhere-else', projectDir: R11_CANON }).decision === 'deny');
+mutantCatches('R12 env check dropped (GIT_DIR override accepted)',
+  "if (r12EnvBad !== undefined) return r12Deny('the session environment sets ' + r12EnvBad);",
+  'if (false) { /* dropped */ }',
+  (m) => {
+    const saved = process.env.GIT_DIR;
+    process.env.GIT_DIR = 'x';
+    try { return r12DecideOn(m, 'node .claude/hooks/pt-land.js push', { cwd: SLOT_A }).decision === 'deny'; }
+    finally { if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved; }
+  });
+mutantCatches('R12 trigger dropped (the whole gate is skipped)',
+  "if (R12_TRIGGER_RE.test(command) || R12_TRIGGER_RE.test(stripShellEscapes(command, tool))) {",
+  'if (false) {',
+  (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js push extra-arg', { cwd: SLOT_A }).decision === 'deny');
+
 fs.rmSync(R11_CANON, { recursive: true, force: true });
 
 if (failures) {

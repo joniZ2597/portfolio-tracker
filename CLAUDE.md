@@ -58,13 +58,13 @@ Stop and report without proceeding on:
 - Line-ending or format churn in the diff
 - Any condition that does not match the expected clean state
 
-Never commit or push unless specifically approved for that exact action and scope — except a Worker's own `task/*` branch commit through the r9 commit gate, as defined in `AGENTS.md`. Small scoped diffs only — no unrelated changes in a commit.
+Never commit or push unless specifically approved for that exact action and scope — except a Worker's own `task/*` branch commit through the r9 commit gate, as defined in `AGENTS.md`. A LAND or push through the R12 tool is approved by the Owner's single-use record for that action. Small scoped diffs only — no unrelated changes in a commit.
 
 ## Tool and environment routing
 
 | Task | Use |
 |------|-----|
-| Real-repo file edits, local validation, Git actions | Claude Code (Bash tool) in the assigned Worker slot; LAND merge/rebase and push in the Owner's normal terminal |
+| Real-repo file edits, local validation, Git actions | Claude Code (Bash tool) in the assigned Worker slot; LAND and push through the R12 tool after the Owner's single-use records; rebase and any other merge/push in the Owner's normal terminal |
 | Hosted browser QA, read-only visual/runtime verification | Cowork / browser-capable session |
 | Netlify / environment changes | Verify exact site and branch-only scope first; no production changes without separate explicit Owner approval; require explicit approval before writes |
 
@@ -126,7 +126,7 @@ Do not duplicate or hard-code changing project state in this file.
 
 <deployment_and_qa_policy>
 
-- Every Netlify write requires explicit Owner approval — including branch deploys, deploy previews, production deploys, environment-variable changes, and any other Netlify mutation. Read-only Netlify inspection does not require approval.
+- Every Netlify write requires explicit Owner approval — including branch deploys, deploy previews, production deploys, environment-variable changes, and any other Netlify mutation. Read-only Netlify inspection does not require approval. A `branch-dev` push approved through the R12 push record is that explicit approval for the resulting DEV branch deploy.
 - Local validation remains required before requesting a DEV deploy whenever feasible; batch related fixes when practical.
 - DEV deploy approval does not authorize scope expansion, state/localStorage/scoring/provenance changes, uncontrolled runtime testing, or production actions.
 - Explicit approval remains required before live external API/SEC/Perplexity canaries, repeated or long-running Function/background-runtime tests, commits outside the Worker task-branch gate, push, merge, or any `main`/production change.
