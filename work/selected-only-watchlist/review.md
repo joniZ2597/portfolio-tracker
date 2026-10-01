@@ -148,7 +148,7 @@ No fourth Codex round was run after this one-line documentation fix (no code or 
 
 ## Status
 
-STOP, per Owner instruction: **do not commit, LAND, push, deploy, or touch `main`.**
+Owner approved the task commit on base `6411f70`.
 
 - Targeted suite, `qa/ui_hygiene_offline.js`, and one full `qa:offline` run were green on base
   `6411f70` (53 suites) **before** this round's SO-1/SO-2 tightening.
@@ -161,3 +161,7 @@ STOP, per Owner instruction: **do not commit, LAND, push, deploy, or touch `main
   and this review file: **zero Class I findings**; one Class II finding (this file's own stale
   "pending" sentence, now fixed in this revision). No fourth Codex round was run after that
   one-line documentation fix.
+- Task commit made on `task/selected-only-watchlist` (r9 gate); post-commit
+  `qa/guard_integrity_check.js` PASS. LAND/push remain pending separate Owner approval (R12).
+
+LAND-EVIDENCE: qa-offline=PASS 53; targeted=PASS; codex-classI-unresolved=0
