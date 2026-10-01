@@ -414,6 +414,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .btn-cancel-scan:hover{background:rgba(220,38,38,.28);border-color:rgba(248,113,113,.6)}
 .scan-badge{background:rgba(255,255,255,.2);border-radius:10px;font-size:9px;font-weight:700;padding:1px 7px;letter-spacing:0;min-width:20px;text-align:center}
 .scan-note{font-size:9px;color:var(--text3);line-height:1.5;margin-top:6px;padding:0 2px}
+.scan-selected-only{display:flex;align-items:center;gap:5px;font-size:9px;color:var(--text3);margin-top:6px;padding:0 2px;cursor:pointer;user-select:none}
+.scan-selected-only input{width:12px;height:12px;cursor:pointer;accent-color:var(--blue2)}
 /* Missing key warning strip (Improvement 4) */
 .key-warn{display:flex;flex-direction:column;gap:3px;margin-top:5px;padding:5px 6px;background:rgba(234,179,8,.07);border-left:2px solid rgba(234,179,8,.4);border-radius:2px;}
 .key-warn-line{display:flex;align-items:baseline;gap:5px;font-size:9px;font-family:var(--mono);color:var(--yellow2);line-height:1.4;}
@@ -895,6 +897,10 @@ select.edit-inp{appearance:none;cursor:pointer}
       <div class="prog-wrap" id="progressWrap"><div class="prog-bar" id="progressBar"></div></div>
       <span id="progressLabel"></span>
       <div class="scan-note" id="scanNote">Checked tickers are included in the next scan. Unchecking does not remove them from the watchlist.</div>
+      <label class="scan-selected-only" for="selectedOnlyToggle">
+        <input type="checkbox" id="selectedOnlyToggle" onchange="toggleSelectedOnly()"/>
+        Selected only
+      </label>
       <!-- Missing key warning — shown by checkAndShowKeyWarn() on startup and on key save -->
       <div id="key-warn" class="key-warn" style="display:none"></div>
       <!-- View Results button — shown only when scan results exist (Phase 5D) -->
@@ -6610,6 +6616,8 @@ let _dd0CardCollapsed = true;
 
 let _activeTab   = 'watchlist';
 let _filterQuery = '';
+let _selectedOnly = false; // UI-only view filter; resets on reload — never persisted
+let _selectedOnlyPinned = null; // Set<symbol> snapshot; null when _selectedOnly is false
 
 function toggleScanInclusion(symbol) {
   const entry = findTicker(symbol);
@@ -6619,6 +6627,17 @@ function toggleScanInclusion(symbol) {
   // Update checkbox in place — avoids full re-render and focus loss
   const cb = document.getElementById('cb-' + symbol);
   if (cb) cb.checked = entry.inScan;
+}
+
+function toggleSelectedOnly() {
+  _selectedOnly = !_selectedOnly;
+  if (_selectedOnly) {
+    _selectedOnlyPinned = new Set(watchlist.filter(e => e.inScan).map(e => e.symbol));
+  } else {
+    _selectedOnlyPinned = null;
+  }
+  renderWatchlistRows();
+  updateRunScanCount();
 }
 
 function updateScanColToggle() {
@@ -6634,6 +6653,9 @@ function updateScanColToggle() {
       (e.sector     || '').toUpperCase().includes(_filterQuery) ||
       (e.sectorEtf  || '').toUpperCase().includes(_filterQuery)
     );
+  }
+  if (_selectedOnly) {
+    visibleRows = visibleRows.filter(e => _selectedOnlyPinned.has(e.symbol));
   }
   const total   = visibleRows.length;
   const checked = visibleRows.filter(e => e.inScan).length;
@@ -7413,6 +7435,11 @@ function filterWatchlistRows(query) {
   const normalised = (query || '').trim().toUpperCase();
   if (normalised === _filterQuery) return; // no change — skip re-render
   _filterQuery = normalised;
+  if (_selectedOnly) {
+    // Query actually changed — this is the "filter/search state changes" moment
+    // after which a previously-unchecked-but-pinned row may drop out.
+    _selectedOnlyPinned = new Set(watchlist.filter(e => e.inScan).map(e => e.symbol));
+  }
   renderWatchlistRows();
   // Restore focus to input so user can keep typing after re-render
   const inp = document.getElementById('tickerInput');
@@ -7430,6 +7457,9 @@ function toggleAllVisibleScanInclusion() {
       (e.sector     || '').toUpperCase().includes(_filterQuery) ||
       (e.sectorEtf  || '').toUpperCase().includes(_filterQuery)
     );
+  }
+  if (_selectedOnly) {
+    visibleRows = visibleRows.filter(e => _selectedOnlyPinned.has(e.symbol));
   }
   if (!visibleRows.length) return;
   // Check all if any are unchecked; uncheck all if all are checked
@@ -7457,11 +7487,16 @@ function renderWatchlistRows(scanResults) {
       (e.sectorEtf || '').toUpperCase().includes(_filterQuery)
     );
   }
+  if (_selectedOnly) {
+    rows = rows.filter(e => _selectedOnlyPinned.has(e.symbol));
+  }
 
   if (!rows.length) {
     list.innerHTML = watchlist.length === 0
       ? '<div class="wl-empty">Add tickers to get started</div>'
-      : '<div class="wl-empty">No tickers match</div>';
+      : _selectedOnly
+        ? '<div class="wl-empty">No tickers selected for the next scan.</div>'
+        : '<div class="wl-empty">No tickers match</div>';
     return;
   }
 
