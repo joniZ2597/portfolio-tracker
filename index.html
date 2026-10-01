@@ -3033,7 +3033,8 @@ function _eodBuildPacket(args) {
   } else if (reporting.fxState === 'stale-invalid') {
     addLimitation('fx', 'FX: Stale — cross-currency totals are not reported.');
   } else if (preload.fxCache.rate) {
-    addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' + reporting.fxState + '.');
+    addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' +
+      _dhLabel('state', reporting.fxState) + (reporting.fxState === 'aged-but-valid' ? ' [aged-but-valid]' : '') + '.');
   }
   symbols.forEach(function(sym) {
     var h = holdings[sym];

@@ -1024,6 +1024,48 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
   check('RD-AG1 planted negative: restoring the removed lowering line makes the aged-only fixture degrade again',
     ag1Mutated.packet.readiness.verdict === 'degraded' && !!reasonFor(ag1Mutated.packet, 'fx-aged'));
 
+  // ── RD-FL1 (DH-M4c, new, work/dh-fx-limitation-wording/brief.md §6, G-1):
+  // the 'fx' limitation's trailing word composes from DH_DISPLAY for every
+  // reachable fxState, never the raw internal code; missing/stale-invalid
+  // (DH-M4a) are unaffected (control) ────────────────────────────────────
+  function fxLimitation(packet) { return packet.limitations.find(function (l) { return l.code === 'fx'; }); }
+  const fl1Fresh = CTL; // ctlSeed() default FX = fresh (1 day) — built above
+  const fl1Aged = ag1; // fxSeed(4 * DAY) = aged-but-valid — built above
+  const fl1StaleInvalid = n3; // fxSeed(7 * DAY) = stale-invalid — built above
+  const fl1Missing = build({ pt_holdings: JSON.stringify(CTL_HOLD),
+    pt_cash: JSON.stringify({ amountILS: 500, asOf: '2026-09-15' }), pt_eod_cache: JSON.stringify(CTL_EOD) }); // no pt_fx key -> missing
+  const fl1FreshLim = fxLimitation(fl1Fresh.packet);
+  const fl1AgedLim = fxLimitation(fl1Aged.packet);
+  const fl1StaleLim = fxLimitation(fl1StaleInvalid.packet);
+  const fl1MissingLim = fxLimitation(fl1Missing.packet);
+  const FL1_PREFIX_FRESH = 'FX: rate 3, USD/ILS, as of ' + iso(NOW_MS - 1 * DAY) + ', ';
+  const FL1_PREFIX_AGED = 'FX: rate 3, USD/ILS, as of ' + iso(NOW_MS - 4 * DAY) + ', ';
+  check('RD-FL1: fresh fxState -> fx limitation text ends ", Current." (no raw code, no bracket)',
+    !!fl1FreshLim && fl1FreshLim.code === 'fx' && fl1FreshLim.text === FL1_PREFIX_FRESH + 'Current.' &&
+    fl1FreshLim.text.indexOf('fresh') === -1 && fl1FreshLim.text.indexOf('[') === -1);
+  check('RD-FL1: aged-but-valid fxState -> fx limitation text ends ", Current [aged-but-valid]."',
+    !!fl1AgedLim && fl1AgedLim.code === 'fx' && fl1AgedLim.text === FL1_PREFIX_AGED + 'Current [aged-but-valid].' &&
+    fl1AgedLim.text.indexOf('aged-but-valid.') === -1);
+  check('RD-FL1 (control, DH-M4a, unaffected): stale-invalid fx limitation text is byte-identical to today',
+    !!fl1StaleLim && fl1StaleLim.code === 'fx' &&
+    fl1StaleLim.text === 'FX: Stale — cross-currency totals are not reported.');
+  check('RD-FL1 (control, DH-M4a, unaffected): missing fx limitation text is byte-identical to today',
+    !!fl1MissingLim && fl1MissingLim.code === 'fx' &&
+    fl1MissingLim.text === 'FX: Unavailable (no rate fetched) — cross-currency totals are not reported.');
+
+  // ── RD-FL1 planted negative: reverting to the pre-E1 raw-code literal
+  // breaks the fresh/aged-but-valid assertions above ──────────────────────
+  const FL1_RAW_AFTER = "addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' +\r\n" +
+    "      _dhLabel('state', reporting.fxState) + (reporting.fxState === 'aged-but-valid' ? ' [aged-but-valid]' : '') + '.');";
+  const FL1_RAW_BEFORE = "addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' + reporting.fxState + '.');";
+  const fl1Mutated = build(ctlSeed(), { patchSrc: { _eodBuildPacket: function (fnSrc) {
+    if (fnSrc.indexOf(FL1_RAW_AFTER) === -1) throw new Error('RD-FL1 planted-negative anchor missing (E1 not applied yet)');
+    return fnSrc.replace(FL1_RAW_AFTER, FL1_RAW_BEFORE);
+  } } });
+  const fl1MutatedLim = fxLimitation(fl1Mutated.packet);
+  check('RD-FL1 planted negative: reverting E1 makes the fresh fixture read the raw code again',
+    !!fl1MutatedLim && fl1MutatedLim.text === FL1_PREFIX_FRESH + 'fresh.');
+
   // ── RD-AC5: marketBasis value set; a third token is not accepted ─────────────
   const ac5Eod = JSON.parse(JSON.stringify(CTL_EOD));
   ac5Eod.AAA = Object.assign(usEntry('2026-09-15'), { market: 'TASE', marketBasis: 'symbol-suffix-fallback' });
@@ -1182,7 +1224,7 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
     },
     {
       "code": "fx",
-      "text": "FX: rate 3, USD/ILS, as of 2026-09-15T12:00:00.000Z, fresh."
+      "text": "FX: rate 3, USD/ILS, as of 2026-09-15T12:00:00.000Z, Current."
     },
     {
       "code": "staleness:AAA",

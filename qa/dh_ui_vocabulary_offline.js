@@ -364,25 +364,25 @@ check('FW-3: _pfComputePortfolioReporting carries both E3 after-literals once wi
   check('FW-3 control: restoring the old missing-branch text is detected', fw3Failures(mutated).length > 0);
 }
 
-// FW-4: _eodBuildPacket has the exact three-branch E4 block; the aged/fresh
-// 'FX: rate ' branch is byte-equal to baseline; the old merged-branch literal
-// is absent.
+// FW-4: _eodBuildPacket has the exact three-branch E4 block (missing/stale-invalid
+// literals plus the opening of the third branch); the old merged-branch literal
+// is absent. DH-M4c retired this check's aged/fresh-branch byte-equality
+// sub-check (that branch's text is no longer byte-equal to the DH-M4a
+// baseline — see FL-1/FL-2/RD-FL1, which supersede it for that branch only).
 const FW4_BLOCK = "if (reporting.fxState === 'missing') {\n" +
   "    addLimitation('fx', 'FX: Unavailable (no rate fetched) — cross-currency totals are not reported.');\n" +
   "  } else if (reporting.fxState === 'stale-invalid') {\n" +
   "    addLimitation('fx', 'FX: Stale — cross-currency totals are not reported.');\n" +
   "  } else if (preload.fxCache.rate) {";
-const FW4_AGED_FRESH_BRANCH = "addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' + reporting.fxState + '.');";
 function fw4Failures(content) {
   const f = extractFunctionSource(content, '_eodBuildPacket');
   if (!f) return ['function not extractable'];
   const out = [];
   if (count(f, FW4_BLOCK) !== 1) out.push('three-branch E4 block not present exactly once');
-  if (count(f, FW4_AGED_FRESH_BRANCH) !== 1) out.push('aged/fresh branch text not byte-equal to baseline');
   if (count(f, "'FX unavailable — cross-currency") !== 0) out.push('old merged-branch literal still present');
   return out;
 }
-check('FW-4: _eodBuildPacket carries the exact three-branch E4 block, aged/fresh branch unchanged, old literal absent (' +
+check('FW-4: _eodBuildPacket carries the exact three-branch E4 block (missing/stale-invalid literals + third-branch opening), old literal absent (' +
   fw4Failures(SRC).join('; ') + ')', fw4Failures(SRC).length === 0);
 {
   const f = extractFunctionSource(SRC, '_eodBuildPacket');
@@ -651,6 +651,78 @@ check('AG-6 control: a changed _pfFxState is detected', (function () {
   const f = extractFunctionSource(SRC, '_pfFxState');
   const mutated = swap(SRC, f, f.replace('fresh', 'fresh2'));
   return ag6Failures(mutated).length > 0;
+})());
+
+// ------------------------------------------------------------------- DH-M4c
+// work/dh-fx-limitation-wording/brief.md §4/§6 (FL-1, FL-2) — the third
+// (aged/fresh) branch of _eodBuildPacket's 'fx' limitation (G-1) now composes
+// its trailing state word from DH_DISPLAY via _dhLabel, with a bracketed
+// '[aged-but-valid]' disambiguator mirroring _eodReadinessLines' existing FX
+// line, instead of concatenating the raw internal fxState code. The
+// missing/stale-invalid branches (DH-M4a) are untouched (FW-4, above).
+
+const FL1_AFTER = "addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' +\n" +
+  "      _dhLabel('state', reporting.fxState) + (reporting.fxState === 'aged-but-valid' ? ' [aged-but-valid]' : '') + '.');";
+const FL1_BEFORE = "addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' + reporting.fxState + '.');";
+
+// FL-1: the third branch contains the exact E1 after-text once; composes from
+// the evaluated DH_DISPLAY (a table edit to state['fresh']/['aged-but-valid']
+// changes the composed value — control).
+function fl1Failures(content) {
+  const f = extractFunctionSource(content, '_eodBuildPacket');
+  if (!f) return ['function not extractable'];
+  const out = [];
+  if (count(f, FL1_AFTER) !== 1) out.push('E1 after-text not present exactly once');
+  const ctx = loadDisplay(content);
+  const d = ctx && ctx.DH_DISPLAY;
+  if (!d) { out.push('DH_DISPLAY not extractable'); return out; }
+  const freshWord = d.state['fresh'];
+  const agedWord = d.state['aged-but-valid'];
+  if (FL1_AFTER.indexOf("_dhLabel('state', reporting.fxState)") === -1) out.push('after-text does not call _dhLabel');
+  // Behavioural composition check: simulate both reachable fxState values.
+  function composed(fxState) {
+    const word = ctx._dhLabel('state', fxState);
+    return word + (fxState === 'aged-but-valid' ? ' [aged-but-valid]' : '');
+  }
+  if (composed('fresh') !== freshWord) out.push('fresh composition mismatch');
+  if (composed('aged-but-valid') !== agedWord + ' [aged-but-valid]') out.push('aged-but-valid composition mismatch');
+  return out;
+}
+check('FL-1: _eodBuildPacket third fx-branch carries the exact E1 after-text once, composes from DH_DISPLAY (' +
+  fl1Failures(SRC).join('; ') + ')', fl1Failures(SRC).length === 0);
+check('FL-1 control: reverting to the pre-E1 raw-code literal is detected', (function () {
+  const f = extractFunctionSource(SRC, '_eodBuildPacket');
+  const mutated = swap(SRC, f, f.replace(FL1_AFTER, FL1_BEFORE));
+  return fl1Failures(mutated).length > 0;
+})());
+check('FL-1 control: a DH_DISPLAY table edit changes the composed word (state[\'fresh\'])', (function () {
+  const mutated = swap(SRC, "'current': 'Current', 'fresh': 'Current', 'present': 'Current',", "'current': 'Current', 'fresh': 'Recent', 'present': 'Current',");
+  const ctx = loadDisplay(mutated);
+  return !!ctx && ctx._dhLabel('state', 'fresh') === 'Recent';
+})());
+
+// FL-2: file-wide, the raw-code concatenation is absent (0 times); the two
+// missing/stale-invalid branches (DH-M4a wording) are present and
+// byte-unchanged.
+const FL2_RAW_CONCAT = "+ reporting.fxState + '.'";
+const FL2_UNCHANGED = [
+  "addLimitation('fx', 'FX: Unavailable (no rate fetched) — cross-currency totals are not reported.');",
+  "addLimitation('fx', 'FX: Stale — cross-currency totals are not reported.');"
+];
+function fl2Failures(content) {
+  const out = [];
+  if (count(content, FL2_RAW_CONCAT) !== 0) out.push('raw-code concatenation still present file-wide');
+  const f = extractFunctionSource(content, '_eodBuildPacket');
+  if (!f) { out.push('function not extractable'); return out; }
+  for (const lit of FL2_UNCHANGED) if (count(f, lit) !== 1) out.push('missing/stale-invalid literal changed/missing: ' + lit);
+  return out;
+}
+check('FL-2: the raw fxState concatenation occurs 0 times file-wide; missing/stale-invalid branches unchanged (' +
+  fl2Failures(SRC).join('; ') + ')', fl2Failures(SRC).length === 0);
+check('FL-2 control: reintroducing the raw-code concatenation is detected', (function () {
+  const f = extractFunctionSource(SRC, '_eodBuildPacket');
+  const mutated = swap(SRC, f, f.replace(FL1_AFTER, FL1_BEFORE));
+  return fl2Failures(mutated).length > 0;
 })());
 
 // -------------------------------------------------------------------- result

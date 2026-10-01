@@ -113,9 +113,10 @@ if (missingExtract.length > 0) {
 // this suite applies to `content` above), recorded in review.md.
 // DH-M4a re-pin: _eodBuildPacket (E4), DH_DISPLAY (E1)
 // DH-M4b re-pin: _eodComputeReadiness (E5), DH_DISPLAY (E1)
+// DH-M4c re-pin: _eodBuildPacket (E1)
 const BASELINE_SHA256 = {
   _eodComputeReadiness: '75dd711f2911d0a5a01bf1c08b7f1c341c828ee7ab9ac258fa25d72a876772ba',
-  _eodBuildPacket: '38c399f34bdd2c98be59bef832be2b9d842705d8d09700bb908932ad4b424401',
+  _eodBuildPacket: '7624e7139a698516fad5a76f3b258179480be92044a195d2a1e3d0c34bd272a0',
   _eodReadinessLines: 'd1b7c64763db7a28f0719e0c0047e29f8d37e452675ac7dca0c85388204771e9',
   _eodPacketToMarkdown: 'bdaba2e2a460b07e6873a25ff64e3a8351dfbd1663be61047e268ad482879967',
   _eodPacketToBriefing: '120d02d68633dc9343555bcddb51cd8043b851e6affc307888c7531d80806869',
