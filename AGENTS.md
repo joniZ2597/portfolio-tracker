@@ -30,6 +30,8 @@ below for how this becomes an Owner-approved `work/<id>/brief.md`.
 survive. *(Dependency sweeps that check only `require()`/import miss this class — a suite can
 read a file it never imports.)*
 
+**Backlog row (required).** Every brief has a Backlog row naming the `BACKLOG.md` entry or entries it concerns and the expected effect: `close`, `partial` or `none`. If the effect is `close` or `partial` — or the task may otherwise change `BACKLOG.md` — `BACKLOG.md` is listed in the brief's implementation file set **and** its `land-scope` block. If the effect is `none`, the task makes no `BACKLOG.md` edit; a stale entry discovered along the way is recorded as a `[backlog]` lesson.
+
 ## Worker execution contract
 
 Once a tracked, Owner-approved `brief.md` exists, the Worker executes the whole task inside
@@ -72,12 +74,13 @@ commit) or on a STOP condition below.
 9. Classify every finding **FIX / DEFER / REJECT** (see "Codex findings" below) and resolve
    every FIX autonomously.
 10. Run full `npm run qa:offline`.
+10a. **Backlog reconciliation (mandatory).** Check the brief's Backlog row against the finished work. If the effect is `close` or `partial`, update `BACKLOG.md` in this task, and only: the affected entry's heading/status text, plus — when an entry closes — one line in DONE / HISTORY, in entry-number order, of the form ``**<n>** <title> — `work/<id>/` ``. Never edit the snapshot table, counts or unrelated entries. If the finished work's effect differs from the brief's Backlog row and `BACKLOG.md` is not in scope, that is **STOP-1**. If the effect is `none`, make no `BACKLOG.md` edit. Record the result in `review.md` (step 11).
 11. Write `work/<id>/review.md`.
 12. Run one final lightweight Codex check against the task diff (the sole, authoritative
     "complete final diff" defined under "Codex as diff reviewer" above) — since `review.md`'s
     own content, and any late touch-ups it prompts, have not yet been reviewed. Classify every
     finding before editing.
-    - **Class I** (implementation, scope, security, correctness, or brief conflict): FIX /
+    - **Class I** (implementation, scope, security, correctness, brief conflict, or a missing or incorrect backlog reconciliation): FIX /
       DEFER / REJECT as above. A FIX to an implementation file re-runs the relevant QA and gets
       one more Codex pass **scoped to the changed hunks only** — a deliberate, narrower
       exception to "Codex must receive every part of whichever diff applies," which governs the
@@ -384,7 +387,7 @@ it down is free; acting on it is not.
 | Tag | Means | Acted on |
 |---|---|---|
 | `[covered]` | an existing rule/doc already says this | never — it is a confirmation |
-| `[backlog]` | product or workflow work | now, under the standing finalization allowance below |
+| `[backlog]` | product or workflow work | now, when `BACKLOG.md` is in the brief's scope (step 10a); otherwise recorded `— pending routing` |
 | `[rule]` | destination-ready rule text for `AGENTS.md` or `.claude/rules/**` | later, by the task that owns that destination |
 | `[design]` | destination-ready capability/design text for `work/<capability>/breakdown.md` | later, by the task that owns that destination |
 | `[local]` | true of this task only | never |
@@ -397,18 +400,15 @@ Pending routing is derived on demand — grep each tracked `work/*/review.md` fo
 `[design]` lessons whose destination-ready text is absent from the named destination — not by
 any scheduled or nightly process.
 
-## Finalization allowance
+## Finalization and backlog reconciliation
 
-A task's final commit may include `work/<id>/review.md` and single-line `BACKLOG.md`
-additions/amendments for backlog items this task references.
+A task's final commit includes `work/<id>/review.md` and — when the brief's Backlog row is
+`close` or `partial` — its `BACKLOG.md` reconciliation (step 10a). **There is no exception for
+`BACKLOG.md`:** like every other file, it may be edited only when the approved brief lists it,
+including in `land-scope`. Every other unlisted file remains STOP-1.
 
-**`BACKLOG.md` is the single named exception to the brief-listing rule.** A task may make
-one-line additions or amendments to `BACKLOG.md` items it references, in its final commit,
-without `BACKLOG.md` appearing in `brief.md`. Every other unlisted file remains STOP-1.
-
-An explicit "not in scope" exclusion in the approved brief overrides this allowance. Under such
-a brief a `[backlog]` lesson is recorded in `review.md` as `[backlog] <lesson text> — pending
-routing` and is not acted on by the task.
+When `BACKLOG.md` is not in the brief's scope, a `[backlog]` lesson is recorded in `review.md` as
+`[backlog] <lesson text> — pending routing` and is not acted on by the task.
 
 No standing allowance exists for `AGENTS.md`, `.claude/rules/**`, or
 `work/<capability>/breakdown.md`. Those wait for a task that owns them.
@@ -449,7 +449,10 @@ centrally allocated id, no lookup table, no registry.
   for this task.
 - `review.md` (tracked) — final evidence: QA result, Codex outcome, and the FIX / DEFER /
   REJECT ledger with a reason for every DEFER and REJECT. It holds pre-commit evidence only; the
-  post-commit integrity check is LAND evidence (step 13). Populated after Codex reviews the
+  post-commit integrity check is LAND evidence (step 13). It always contains a `## Backlog
+  reconciliation` section: the brief's Backlog row; the action taken (`closed`, `updated` or
+  `none`); each affected entry's heading before → after; and a one-line confirmation that the new
+  BACKLOG text matches the diff, the QA results and the work being landed. Populated after Codex reviews the
   implementation diff and any required fixes/QA re-runs are done; then one final lightweight
   Codex check runs against the task diff (see "Codex as diff reviewer" for its authoritative
   definition), so the complete final diff — including `review.md` itself — is reviewed before
@@ -507,7 +510,8 @@ together.
 **Task diff** — the complete implementation diff, plus tracked task evidence intended for
 repository history: `git diff <base> -- work/<id>/brief.md work/<id>/review.md`; if `review.md`
 is still untracked at final-review time, its contents are included directly (this is how a
-still-untracked `review.md` reaches the final check); plus any permitted `BACKLOG.md` change.
+still-untracked `review.md` reaches the final check); plus the task's `BACKLOG.md`
+reconciliation (step 10a), when the brief lists it.
 `plan.md`, `codex.md`, and `qa.log` stay untracked/gitignored task evidence — available as
 supporting evidence but not part of the task diff. The final Codex check (step 12), the step-13
 commit and the LAND request refer to the task diff; it is the sole, authoritative definition of
@@ -518,8 +522,8 @@ untracked in-scope files' contents — never the tracked diff alone. A brief nev
 its own `brief.md` or `review.md` in its implementation scope — they are evidence, outside the
 implementation diff by definition. **This changes no permission:** `work/*/brief.md` remains
 ASK-tier and the brief-listing rule is unchanged. The governed commit shape requires a
-brief-only commit, then a final implementation + `review.md` commit (+ permitted `BACKLOG.md`
-one-liners) — this does not imply the task's history contains only two commits total;
+brief-only commit, then a final implementation + `review.md` commit (+ the step-10a `BACKLOG.md`
+reconciliation, when the brief lists it) — this does not imply the task's history contains only two commits total;
 intermediate functional commits before the final commit are unaffected, per "Test commands"
 above.
 
