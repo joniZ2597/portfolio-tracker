@@ -280,3 +280,57 @@ in `review.md`): each P-new text present exactly once; each P-old text absent; s
 - `review.md` includes `## Backlog reconciliation` reading `none`;
 - Codex: no unresolved Class I finding;
 - STOP before the Owner's commit and LAND (this task's own protected files predate the gate).
+
+## 8. Amendment A1 — `qa/guard_integrity_check.js` C6 (Owner-ruled 2026-10-02; scope expansion)
+
+**Why.** `qa/guard_integrity_check.js` C6 fails any `base-dev...task` diff that touches `.claude/hooks/**` or
+`.claude/settings*.json`, and `land` runs that module at L10 after the revised L8 (§2 G3). Without this
+amendment a PROTECTED-approved hook or settings file clears L8 and is refused at L10, and the step-13 integrity
+run prescribed by §4 P3b fails on every governance task — the §1 objective ("4 Owner actions for a governance
+task") could not be met for the targets §2 lists first. This amendment has operational effect only when the
+Owner has approved these exact contents and re-pinned the brief; until then §5's seven-file set stands and
+`qa/guard_integrity_check.js` is not edited.
+
+**File set.** §5 becomes exactly **8** files: the seven above plus
+
+```
+qa/guard_integrity_check.js            C6 revision (§8), Worker-edited (ordinary tier; not ASK/DENY, not in PROTECTED_PATH_RES)
+```
+
+**Exact minimal C6 change** (`runIntegrity`, check 6 only; C1–C5, C7, the CLI, the exit codes and the module
+exports are unchanged; the existing `STAGED_DENY_RES` filter line is kept verbatim so the R10-8 mutant anchors in
+`qa/auto_mode_hardening_offline.js` stay valid):
+
+- A hit `p` in the `base-dev...task` diff that matches `STAGED_DENY_RES` is **exempt** from the C6 failure only
+  if **all** of these hold:
+  1. `p` does not match `/^work\/[^/]+\/brief\.md$/i`, `/^checkpoint\.md$/i` or `/^\.env[\w.-]*$/i` (never exempt);
+  2. `<git common dir>/pt-land-log` contains an entry with `verb === 'protected-commit'`, `result === 'ok'`,
+     `task === opts.task`, and string `to` and `tree` fields, whose `to` is an ancestor of `opts.task`'s tip
+     (`git merge-base --is-ancestor <to> <task>`) and whose `to^{tree}` equals the entry's `tree`; the most recent
+     such entry wins;
+  3. `p`'s blob at the task tip (`git rev-parse <task>:<p>`) equals its blob in that tree (`git rev-parse <tree>:<p>`).
+- Every other hit fails C6 exactly as today (`C6 base-dev...task touches protected paths: …`). Malformed audit
+  lines are skipped. All reads keep `GIT_OPTIONAL_LOCKS=0`; no new side effect.
+- The exemption is evaluated only when `opts.task` is set (as C6 already is), and the log is read from the
+  common dir resolved for `root` (as C4 already does).
+
+**QA coverage (added, all offline, real-git fixtures, each row with a planted negative):**
+
+- `qa/auto_mode_hardening_offline.js`, AH-18 extension (real fixture, `integrity.runIntegrity` with `task`):
+  C6 PASS when the hook-path diff is PROTECTED-approved (an `ok` `protected-commit` audit line whose `to` is
+  the task tip's ancestor, `to^{tree}` equals `tree`, blob equal); C6 FAIL when: no entry · entry for another
+  task · `to` not an ancestor · entry `tree` ≠ `to^{tree}` · blob changed after approval · a never-exempt path
+  (`work/x/brief.md`, `CHECKPOINT.md`, `.env`) even with a matching entry. The existing AH-18 "C6 touches
+  protected → FAIL" row and the R10-8 "C6 protected-diff check dropped" mutant stay as they are. New R10-8
+  mutant: the approval clause forced true → an unapproved hooks diff passes C6 (caught).
+- `qa/pt_land_offline.js`: PL-46 proves the full governed path end-to-end for a `.claude/hooks/**` target —
+  protected-request → `!` record → protected-commit → land-request (L8 **and** L10 PASS, protected listing) →
+  `!` record → land fast-forwards `branch-dev`; the AGENTS.md variant stays as a second target; the former
+  "scope note" row (L10 refusal) is removed. PL-47..PL-51 continue to refuse at L8 (unchanged). MUT-OAG-7 asserts
+  that the L8 never-allowed refusal disappears under the mutant (C6 remains a second, independent layer for
+  `work/*/brief.md`).
+
+**Flow / Definition of Done (added):** the amended brief is Owner-approved and re-pinned before
+`qa/guard_integrity_check.js` is edited; DoD adds "C6 revision applied exactly as §8; a PROTECTED-approved
+`.claude/hooks/**` target LANDs end-to-end through `land` in QA (PL-46); every §8 QA row and mutant PASS".
+Everything else in §1–§7 is unchanged, including every STOP condition.
