@@ -1343,7 +1343,7 @@ function resolveFileToolTargetFs(cwd, raw) {
 // ── R11: Owner-approved brief-only commit gate for the canonical checkout (work/brief-commit-gate/brief.md §2-3) ──
 // ── R12: Owner-approved LAND/push tool gate consts (work/worker-land-push/brief.md §4) ──
 const R12_TRIGGER_RE = /pt-land/i;
-const R12_FORM_RE = /^node \.claude\/hooks\/pt-land\.js (?:(?:land-request|land|cleanup) task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*|push-request|push)$/;
+const R12_FORM_RE = /^node \.claude\/hooks\/pt-land\.js (?:(?:land-request|land|cleanup) task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*|push-request|push|brief-request work\/[a-z0-9][a-z0-9._-]*\/brief\.md|(?:protected-request|protected-commit) task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)$/;
 const R11_BRIEF_MSG_RE = /^docs\(work\): \S[^\r\n]{0,150}$/;
 const R11_RECORD_PATH_RE = /^work\/[a-z0-9][a-z0-9._-]*\/brief\.md$/;
 function briefApprovalFs(root) {
@@ -1635,7 +1635,7 @@ function decide(input, deps) {
   if (R12_TRIGGER_RE.test(command) || R12_TRIGGER_RE.test(stripShellEscapes(command, tool))) {
     const r12Deny = (why) => ({ decision: 'deny', reason: 'R12: ' + why + ' - run pt-land.js only in the exact form' });
     if (tool !== 'Bash') return r12Deny('the PowerShell tool');
-    if (!R12_FORM_RE.test(command)) return r12Deny('the command is not exactly one of the four permitted forms');
+    if (!R12_FORM_RE.test(command)) return r12Deny('the command is not exactly one of the permitted forms');
     if (typeof input.cwd !== 'string' || !input.cwd) return r12Deny('the session cwd is unknown');
     const r12Slot = isWorkerSlot(input.cwd);
     let r12Canonical = false;

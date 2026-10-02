@@ -9,6 +9,8 @@
  * canonical clone at <tmp>/portfolio-tracker (main + branch-dev, with a committed copy of the real
  * pt-land.js and qa/guard_integrity_check.js and a brief with a land-scope block), and linked
  * worktrees <tmp>/pt-wt-worker-a (on task/x) and <tmp>/pt-wt-worker-b.
+ * PL-32..55 (work/owner-one-action-gates/brief.md §6): G1 brief-request, G2 protected-request /
+ * protected-commit (manifest under <os.tmpdir()>/pt-<id>/protected/), G3 land L8 revision, shape rule.
  */
 
 const assert = require('assert');
@@ -71,6 +73,9 @@ function buildFixture(opts) {
   const landEvidenceLine = opts.landEvidenceLine === undefined ? DEFAULT_LAND_EVIDENCE : opts.landEvidenceLine;
   const scopeRelPaths = opts.scopeRelPaths || ['work/' + taskShort + '/foo.txt'];
   const noLandScope = opts.noLandScope === true;
+  // PL-32..55: paths listed in land-scope that the fixture never writes, and an optional protected-scope block.
+  const landScopeOnlyPaths = opts.landScopeOnlyPaths || [];
+  const protectedScopeRelPaths = opts.protectedScopeRelPaths || null;
   const twoLandScopeBlocks = opts.twoLandScopeBlocks === true;
   const originUrl = opts.originUrl; // if set, used instead of the bare dir path (P4 fixtures)
 
@@ -115,10 +120,13 @@ function buildFixture(opts) {
 
   let briefBody = '# brief\n\n';
   if (!noLandScope) {
-    briefBody += '<!-- land-scope:begin -->\n' + scopeRelPaths.map((p) => '- ' + p).join('\n') + '\n<!-- land-scope:end -->\n';
+    briefBody += '<!-- land-scope:begin -->\n' + scopeRelPaths.concat(landScopeOnlyPaths).map((p) => '- ' + p).join('\n') + '\n<!-- land-scope:end -->\n';
     if (twoLandScopeBlocks) {
       briefBody += '<!-- land-scope:begin -->\n- ' + scopeRelPaths[0] + '\n<!-- land-scope:end -->\n';
     }
+  }
+  if (protectedScopeRelPaths) {
+    briefBody += '<!-- protected-scope:begin -->\n' + protectedScopeRelPaths.map((p) => '- ' + p).join('\n') + '\n<!-- protected-scope:end -->\n';
   }
   W(path.join(canon, 'work', taskShort, 'brief.md'), briefBody);
   G(['add', 'work/' + taskShort + '/brief.md'], canon);
@@ -1324,6 +1332,960 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
       const archived = fs.readFileSync(path.join(archiveRoot, 'mu7', '20260101T000000Z', 'plan.md'), 'utf8');
       assert.ok(/CORRUPT$/.test(archived), 'the corrupted copy was written and never caught');
       assert.ok(!fs.existsSync(path.join(fx.slotA, 'work', 'mu7', 'plan.md')), 'the (now-unverified) original was still deleted');
+    } finally { fx.cleanup(); }
+  });
+})();
+
+// ── PL-32..PL-55: owner-one-action-gates (work/owner-one-action-gates/brief.md §2 / §6) ───────
+// G1 brief-request, G2 protected-request / protected-commit, G3 land (L8 revision), the approval-
+// line shape rule, plus mutants. Like PL-1..31 these rows run against REAL_TOOL_PATH and are red
+// against the real DENY-tier path until the Owner has applied the reviewed candidate.
+(function plOwnerOneActionGates() {
+  const crypto = require('crypto');
+  const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+  const REAL_HOOK_PATH = path.join(ROOT, '.claude', 'hooks', 'pretooluse-guard.js');
+  const APPROVAL_LINE_RE = /^! printf '%s\\n' '[^']+' > '[^']+\/pt-(brief|protected|land|push)-approval'$/;
+  const fwd = (p) => String(p).replace(/\\/g, '/');
+  function Graw(args, cwd) { return spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }); }
+
+  // Precondition: the tool under test exports the OAG verbs (one informative failure instead of a
+  // TypeError per row when the Owner has not applied the candidate yet).
+  let hasVerbs = false;
+  test('PL-32..55 precondition: the tool exports runBriefRequest / runProtectedRequest / runProtectedCommit / parseProtectedScope / approvalLine', () => {
+    delete require.cache[require.resolve(REAL_TOOL_PATH)];
+    const T = require(REAL_TOOL_PATH);
+    for (const k of ['runBriefRequest', 'runProtectedRequest', 'runProtectedCommit', 'parseProtectedScope', 'approvalLine']) {
+      assert.strictEqual(typeof T[k], 'function', k + ' missing (Owner has not applied the OAG candidate yet)');
+    }
+    hasVerbs = true;
+  });
+  if (!hasVerbs) return;
+
+  // ── fixture helpers ─────────────────────────────────────────────────────────────────────
+  // The tool reads candidates from <os.tmpdir()>/pt-<id>/protected/manifest.json (brief §2) - the
+  // path is derived, not injectable, so every G2 row owns a unique short id and removes its dir.
+  function manifestRoot(taskShort) { return path.join(os.tmpdir(), 'pt-' + taskShort); }
+  function writeManifest(taskShort, files, rawManifest) {
+    const dir = path.join(manifestRoot(taskShort), 'protected');
+    rmrf(manifestRoot(taskShort));
+    fs.mkdirSync(dir, { recursive: true });
+    for (const f of files) if (f.content !== undefined) fs.writeFileSync(path.join(dir, f.source), f.content);
+    const manifest = rawManifest !== undefined ? rawManifest : JSON.stringify({ files: files.map((f) => ({ target: f.target, source: f.source })) });
+    fs.writeFileSync(path.join(dir, 'manifest.json'), manifest);
+    return dir;
+  }
+  const DEFAULT_TARGET = '.claude/hooks/sample-hook.js';
+  const CAND_V1 = 'module.exports = 1; // candidate v1\n';
+  // brief with a protected-scope block (and the target also in land-scope, never written by the
+  // fixture's impl commit); slot A on task/<id> with the impl + review.md commit; a manifest.
+  function buildProtectedFixture(opts) {
+    opts = opts || {};
+    const target = opts.target || DEFAULT_TARGET;
+    const fx = buildFixture(Object.assign({}, opts, {
+      scopeRelPaths: ['work/' + opts.taskShort + '/foo.txt'],
+      landScopeOnlyPaths: [target].concat(opts.landScopeOnlyPaths || []),
+      protectedScopeRelPaths: [target].concat(opts.extraProtectedScope || [])
+    }));
+    fx.target = target;
+    if (opts.manifest !== false) {
+      fx.manifestDir = writeManifest(fx.taskShort, opts.files || [{ target, source: 'cand.js', content: CAND_V1 }], opts.rawManifest);
+    }
+    const inner = fx.cleanup;
+    fx.cleanup = () => { rmrf(manifestRoot(fx.taskShort)); inner(); };
+    fx.writeProtectedRecord = (text) => fs.writeFileSync(path.join(fx.commonDir, 'pt-protected-approval'), text);
+    fx.readAudit = () => {
+      const p = path.join(fx.commonDir, 'pt-land-log');
+      return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+    };
+    fx.rewriteAudit = (fn) => {
+      const p = path.join(fx.commonDir, 'pt-land-log');
+      fs.writeFileSync(p, fx.readAudit().map(fn).map((e) => JSON.stringify(e)).join('\n') + '\n');
+    };
+    return fx;
+  }
+  // The Owner's `!` line: `! printf '%s\n' '<payload>' > '<record>'` writes payload + "\n".
+  function payloadOf(line) {
+    const m = /^! printf '%s\\n' '([^']+)' > '([^']+)'$/.exec(line);
+    assert.ok(m, 'approval line shape: ' + line);
+    return { payload: m[1], recordPath: m[2] };
+  }
+  function approveProtected(fx, TOOL) {
+    const req = TOOL.runProtectedRequest({ cwd: fx.slotA, task: fx.task });
+    assert.strictEqual(req.ok, true, 'protected-request: ' + JSON.stringify(req));
+    const p = payloadOf(req.approvalLine);
+    fs.writeFileSync(p.recordPath, p.payload + '\n');
+    return req;
+  }
+  // PL-35 "nothing written but objects": refs, both indexes (content), both worktrees, the slot
+  // HEAD and every .git/pt-* record/log file - compared before/after as one value.
+  function snapshotRepo(fx) {
+    Graw(['update-index', '--refresh'], fx.canon);
+    Graw(['update-index', '--refresh'], fx.slotA);
+    const records = fs.readdirSync(fx.commonDir).filter((n) => /^pt-/.test(n)).sort()
+      .map((n) => n + ':' + sha256(fs.readFileSync(path.join(fx.commonDir, n)))).join('|');
+    return {
+      refs: G(['for-each-ref'], fx.canon),
+      canonIndex: G(['ls-files', '--stage'], fx.canon),
+      slotIndex: G(['ls-files', '--stage'], fx.slotA),
+      canonStatus: G(['status', '--porcelain=v2', '--untracked-files=all'], fx.canon),
+      slotStatus: G(['status', '--porcelain=v2', '--untracked-files=all'], fx.slotA),
+      slotHead: G(['rev-parse', 'HEAD'], fx.slotA),
+      records
+    };
+  }
+  function assertRefusedUnchanged(fx, headBefore, r, reasonRe) {
+    assert.strictEqual(r.ok, false, JSON.stringify(r));
+    assert.strictEqual(r.exitCode, 1);
+    assert.match(r.reason, reasonRe);
+    assert.strictEqual(G(['rev-parse', 'HEAD'], fx.slotA).trim(), headBefore, 'slot HEAD unchanged');
+    assert.strictEqual(G(['status', '--porcelain'], fx.slotA).trim(), '', 'slot clean');
+    assert.strictEqual(G(['rev-parse', 'refs/heads/branch-dev'], fx.canon).trim(), fx.base, 'branch-dev untouched');
+    assert.ok(!fs.existsSync(path.join(fx.commonDir, 'pt-land.lock')), 'no lock left behind');
+  }
+  function canonSnapshot(fx) {
+    return {
+      dir: fs.readdirSync(fx.commonDir).sort().join('|'),
+      refs: G(['for-each-ref'], fx.canon),
+      status: G(['status', '--porcelain=v2', '--untracked-files=all'], fx.canon)
+    };
+  }
+
+  // ── G1: brief-request ────────────────────────────────────────────────────────────────────
+  test('PL-32: valid brief-request from the canonical checkout -> exact line (sha256 of the staged blob, path, branch-dev OID); nothing written', () => {
+    const fx = buildFixture({ taskShort: 'oag1', withSlotA: false, withSlotB: false });
+    try {
+      const TOOL = fx.requireTool();
+      const briefText = '# new brief\n\nbody\n';
+      W(path.join(fx.canon, 'work', 'g1x', 'brief.md'), briefText);
+      G(['add', 'work/g1x/brief.md'], fx.canon);
+      const devOid = G(['rev-parse', 'refs/heads/branch-dev'], fx.canon).trim();
+      const before = canonSnapshot(fx);
+      const r = TOOL.runBriefRequest({ cwd: fx.canon, path: 'work/g1x/brief.md' });
+      assert.strictEqual(r.ok, true, JSON.stringify(r));
+      assert.strictEqual(r.exitCode, 0);
+      assert.strictEqual(r.verb, 'brief-request');
+      const expectedHash = sha256(Buffer.from(briefText));
+      assert.strictEqual(r.sha256, expectedHash);
+      assert.strictEqual(r.oid, devOid);
+      assert.strictEqual(r.path, 'work/g1x/brief.md');
+      assert.strictEqual(r.approvalLine,
+        "! printf '%s\\n' '" + expectedHash + ' work/g1x/brief.md ' + devOid + "' > '" + fwd(fx.commonDir) + "/pt-brief-approval'");
+      assert.deepStrictEqual(canonSnapshot(fx), before, 'brief-request must write nothing');
+    } finally { fx.cleanup(); }
+  });
+
+  (function plBriefRequestRefusals() {
+    const cases = [
+      ['two staged entries', (fx) => { G(['add', 'work/g1x/brief.md'], fx.canon); W(path.join(fx.canon, 'other.txt'), 'x\n'); G(['add', 'other.txt'], fx.canon); }, /G1: .*not exactly one entry/],
+      ['an unstaged change on the staged brief (AM)', (fx) => { G(['add', 'work/g1x/brief.md'], fx.canon); fs.appendFileSync(path.join(fx.canon, 'work', 'g1x', 'brief.md'), 'more\n'); }, /G1: .*(not exactly one entry|not a plain added\/modified file)/],
+      ['an untracked extra file', (fx) => { G(['add', 'work/g1x/brief.md'], fx.canon); W(path.join(fx.canon, 'zz-extra.txt'), 'x\n'); }, /G1: .*not exactly one entry/],
+      ['the brief only in the working tree (not staged)', (fx) => {}, /G1: .*(not exactly one entry|not a plain added\/modified file)/],
+      ['a different brief staged than requested', (fx) => { rmrf(path.join(fx.canon, 'work', 'g1x')); W(path.join(fx.canon, 'work', 'g1y', 'brief.md'), 'y\n'); G(['add', 'work/g1y/brief.md'], fx.canon); }, /G1: .*does not match the requested path/],
+      ['not on branch-dev', (fx) => { G(['add', 'work/g1x/brief.md'], fx.canon); G(['checkout', '-q', '-b', 'other-dev'], fx.canon); }, /G1: HEAD is not branch-dev/],
+      ['a non-sample git hook present', (fx) => {
+        G(['add', 'work/g1x/brief.md'], fx.canon);
+        fs.mkdirSync(path.join(fx.commonDir, 'hooks'), { recursive: true });
+        fs.writeFileSync(path.join(fx.commonDir, 'hooks', 'pre-commit'), '#!/bin/sh\nexit 0\n');
+      }, /G1: non-sample git hooks are installed/],
+      ['core.hooksPath configured', (fx) => { G(['add', 'work/g1x/brief.md'], fx.canon); G(['config', 'core.hooksPath', '/tmp/somewhere'], fx.canon); }, /G1: protected git config is active/]
+    ];
+    for (const [label, mutate, re] of cases) {
+      test('PL-33: brief-request with ' + label + ' -> refuse (exit 1); nothing written', () => {
+        const fx = buildFixture({ taskShort: 'oag2', withSlotA: false, withSlotB: false });
+        try {
+          const TOOL = fx.requireTool();
+          W(path.join(fx.canon, 'work', 'g1x', 'brief.md'), '# brief\n');
+          mutate(fx);
+          const before = canonSnapshot(fx);
+          const r = TOOL.runBriefRequest({ cwd: fx.canon, path: 'work/g1x/brief.md' });
+          assert.strictEqual(r.ok, false, label + ': ' + JSON.stringify(r));
+          assert.strictEqual(r.exitCode, 1, label);
+          assert.match(r.reason, re, label);
+          assert.deepStrictEqual(canonSnapshot(fx), before, label + ': a refusal must write nothing');
+        } finally { fx.cleanup(); }
+      });
+    }
+    test('PL-33: brief-request with a GIT_* override in the session environment -> refuse', () => {
+      const fx = buildFixture({ taskShort: 'oag2b', withSlotA: false, withSlotB: false });
+      const saved = process.env.GIT_DIR;
+      try {
+        const TOOL = fx.requireTool();
+        W(path.join(fx.canon, 'work', 'g1x', 'brief.md'), '# brief\n');
+        G(['add', 'work/g1x/brief.md'], fx.canon);
+        process.env.GIT_DIR = 'x';
+        const r = TOOL.runBriefRequest({ cwd: fx.canon, path: 'work/g1x/brief.md' });
+        assert.strictEqual(r.ok, false, JSON.stringify(r));
+        assert.match(r.reason, /G1: the session environment sets GIT_DIR/);
+      } finally {
+        if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved;
+        fx.cleanup();
+      }
+    });
+    for (const badPath of ['work/g1x/review.md', 'work/G1X/brief.md', 'work/g1x/sub/brief.md', 'brief.md', 'work/../brief.md', '']) {
+      test('PL-33: brief-request with a wrong path shape ' + JSON.stringify(badPath) + ' -> usage error (exit 3)', () => {
+        const fx = buildFixture({ taskShort: 'oag2c', withSlotA: false, withSlotB: false });
+        try {
+          const r = fx.requireTool().runBriefRequest({ cwd: fx.canon, path: badPath });
+          assert.strictEqual(r.ok, false);
+          assert.strictEqual(r.exitCode, 3);
+        } finally { fx.cleanup(); }
+      });
+    }
+    test('PL-33: brief-request from a Worker slot cwd -> refuse (canonical checkout only)', () => {
+      const fx = buildFixture({ taskShort: 'oag2d' });
+      try {
+        W(path.join(fx.canon, 'work', 'g1x', 'brief.md'), '# brief\n');
+        G(['add', 'work/g1x/brief.md'], fx.canon);
+        const r = fx.requireTool().runBriefRequest({ cwd: fx.slotA, path: 'work/g1x/brief.md' });
+        assert.strictEqual(r.ok, false, JSON.stringify(r));
+        assert.match(r.reason, /G1: brief-request runs only from the canonical checkout/);
+      } finally { fx.cleanup(); }
+    });
+  })();
+
+  test('PL-34: end-to-end - the printed sha256/OID written as the record are exactly what R11 accepts (real hook: allow; a tampered blob: deny); the plain commit then touches only the brief', () => {
+    const fx = buildFixture({ taskShort: 'oag3', withSlotA: false, withSlotB: false });
+    const savedProjectDir = process.env.CLAUDE_PROJECT_DIR;
+    try {
+      const TOOL = fx.requireTool();
+      delete require.cache[require.resolve(REAL_HOOK_PATH)];
+      // eslint-disable-next-line global-require, import/no-dynamic-require
+      const guard = require(REAL_HOOK_PATH);
+      const briefText = '# brief z\n';
+      W(path.join(fx.canon, 'work', 'g1z', 'brief.md'), briefText);
+      G(['add', 'work/g1z/brief.md'], fx.canon);
+      const r = TOOL.runBriefRequest({ cwd: fx.canon, path: 'work/g1z/brief.md' });
+      assert.strictEqual(r.ok, true, JSON.stringify(r));
+      const p = payloadOf(r.approvalLine);
+      assert.strictEqual(p.recordPath, fwd(fx.commonDir) + '/pt-brief-approval');
+      process.env.CLAUDE_PROJECT_DIR = fx.canon;
+      const cmd = 'git commit -m "docs(work): add g1z brief"';
+      // planted negative first: without the record the same commit is denied by R11 - this proves the
+      // commit is routed through the brief-only gate (an R11 allow carries the hook's generic reason).
+      const noRecord = guard.decide({ tool_name: 'Bash', tool_input: { command: cmd }, cwd: fx.canon });
+      assert.strictEqual(noRecord.decision, 'deny', JSON.stringify(noRecord));
+      assert.match(noRecord.reason, /R11: there is no valid Owner approval record/);
+      fs.writeFileSync(p.recordPath, p.payload + '\n');
+      const allow = guard.decide({ tool_name: 'Bash', tool_input: { command: cmd }, cwd: fx.canon });
+      assert.strictEqual(allow.decision, 'allow', JSON.stringify(allow));
+      // planted negative: the same record against a different staged blob is denied by the same hook
+      fs.writeFileSync(path.join(fx.canon, 'work', 'g1z', 'brief.md'), briefText + 'tampered\n');
+      G(['add', 'work/g1z/brief.md'], fx.canon);
+      const deny = guard.decide({ tool_name: 'Bash', tool_input: { command: cmd }, cwd: fx.canon });
+      assert.strictEqual(deny.decision, 'deny', JSON.stringify(deny));
+      assert.match(deny.reason, /R11: the staged content does not match the approved hash/);
+      fs.writeFileSync(path.join(fx.canon, 'work', 'g1z', 'brief.md'), briefText);
+      G(['add', 'work/g1z/brief.md'], fx.canon);
+      assert.strictEqual(guard.decide({ tool_name: 'Bash', tool_input: { command: cmd }, cwd: fx.canon }).decision, 'allow');
+      const cm = Graw(['commit', '-m', 'docs(work): add g1z brief'], fx.canon);
+      assert.strictEqual(cm.status, 0, cm.stderr);
+      const changed = G(['show', '--name-only', '--format=', 'HEAD'], fx.canon).trim().split(/\r?\n/).filter(Boolean);
+      assert.deepStrictEqual(changed, ['work/g1z/brief.md']);
+      assert.strictEqual(G(['status', '--porcelain'], fx.canon).trim(), '');
+    } finally {
+      if (savedProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = savedProjectDir;
+      fx.cleanup();
+    }
+  });
+
+  // ── G2: protected-request / protected-commit ─────────────────────────────────────────────
+  test('PL-35: valid protected-request -> tree OID, per-file blob + sha256, exact line; writes nothing but unreferenced objects', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag4' });
+    try {
+      const TOOL = fx.requireTool();
+      const before = snapshotRepo(fx);
+      const r = TOOL.runProtectedRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(r.ok, true, JSON.stringify(r));
+      assert.strictEqual(r.exitCode, 0);
+      assert.strictEqual(r.verb, 'protected-request');
+      assert.match(r.tree, /^[0-9a-f]{40}$/);
+      assert.strictEqual(r.head, fx.tip);
+      assert.deepStrictEqual(r.files.map((f) => f.target), [fx.target]);
+      assert.strictEqual(r.files[0].sha256, sha256(Buffer.from(CAND_V1)));
+      assert.strictEqual(r.approvalLine,
+        "! printf '%s\\n' 'PROTECTED " + fx.task + ' ' + fx.tip + ' ' + r.tree + "' > '" + fwd(fx.commonDir) + "/pt-protected-approval'");
+      // the tree exists as an (unreferenced) object and is HEAD's tree plus exactly the candidate
+      assert.strictEqual(G(['cat-file', '-t', r.tree], fx.canon).trim(), 'tree');
+      const diff = G(['diff-tree', '-r', '--name-only', fx.tip + '^{tree}', r.tree], fx.canon).trim().split(/\r?\n/).filter(Boolean);
+      assert.deepStrictEqual(diff, [fx.target]);
+      assert.strictEqual(G(['rev-parse', r.tree + ':' + fx.target], fx.canon).trim(), r.files[0].blobOid);
+      assert.deepStrictEqual(snapshotRepo(fx), before, 'protected-request must write nothing but objects');
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-36: valid protected-commit -> HEAD^{tree} == approved tree, parent == recorded HEAD, exactly the target staged, record deleted, one ok audit line, slot clean', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag5' });
+    try {
+      const TOOL = fx.requireTool();
+      const req = approveProtected(fx, TOOL);
+      const r = TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(r.ok, true, JSON.stringify(r));
+      assert.strictEqual(r.exitCode, 0);
+      assert.strictEqual(r.verb, 'protected-commit');
+      const head = G(['rev-parse', 'HEAD'], fx.slotA).trim();
+      assert.notStrictEqual(head, fx.tip);
+      assert.strictEqual(G(['rev-parse', 'HEAD^{tree}'], fx.slotA).trim(), req.tree);
+      assert.strictEqual(G(['rev-parse', 'HEAD^'], fx.slotA).trim(), fx.tip);
+      assert.strictEqual(G(['rev-parse', 'refs/heads/' + fx.task], fx.canon).trim(), head, 'the task branch moved with the slot HEAD');
+      // the blob is LF (asserted via the tree above); the working copy may be CRLF under core.autocrlf=true
+      assert.strictEqual(fs.readFileSync(path.join(fx.slotA, fx.target), 'utf8').replace(/\r\n/g, '\n'), CAND_V1);
+      assert.strictEqual(G(['status', '--porcelain'], fx.slotA).trim(), '');
+      assert.deepStrictEqual(G(['show', '--name-only', '--format=', 'HEAD'], fx.slotA).trim().split(/\r?\n/).filter(Boolean), [fx.target]);
+      assert.strictEqual(G(['log', '-1', '--format=%s'], fx.slotA).trim(),
+        'chore(protected): apply Owner-approved files (' + fx.task + ', tree ' + req.tree.slice(0, 12) + ')');
+      assert.ok(!fs.existsSync(path.join(fx.commonDir, 'pt-protected-approval')), 'record deleted (single-use)');
+      assert.ok(!fs.existsSync(path.join(fx.commonDir, 'pt-land.lock')), 'lock released');
+      const audit = fx.readAudit();
+      assert.strictEqual(audit.length, 1);
+      assert.deepStrictEqual(
+        { verb: audit[0].verb, task: audit[0].task, from: audit[0].from, to: audit[0].to, tree: audit[0].tree, result: audit[0].result },
+        { verb: 'protected-commit', task: fx.task, from: fx.tip, to: head, tree: req.tree, result: 'ok' });
+      assert.strictEqual(G(['rev-parse', 'refs/heads/branch-dev'], fx.canon).trim(), fx.base, 'branch-dev untouched');
+      assert.strictEqual(r.message, 'PROTECTED-COMMITTED ' + fx.task + ' ' + fx.tip + '..' + head + ' tree ' + req.tree);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-36 (Codex FIX): the ok audit entry is load-bearing - when it cannot be recorded, protected-commit reports failure (exit 1), keeps the record, and the task cannot LAND through the governed path', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag5b' });
+    try {
+      const TOOL = fx.requireTool();
+      const req = approveProtected(fx, TOOL);
+      fs.mkdirSync(path.join(fx.commonDir, 'pt-land-log')); // the audit path is a directory: the append throws
+      const r = TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(r.ok, false, JSON.stringify(r));
+      assert.strictEqual(r.exitCode, 1);
+      assert.match(r.reason, /^G2: protected-commit made and verified .* but the approval audit entry could not be recorded/);
+      const head = G(['rev-parse', 'HEAD'], fx.slotA).trim();
+      assert.notStrictEqual(head, fx.tip, 'the commit itself was made and verified');
+      assert.strictEqual(G(['rev-parse', 'HEAD^{tree}'], fx.slotA).trim(), req.tree);
+      assert.ok(fs.existsSync(path.join(fx.commonDir, 'pt-protected-approval')), 'the record is not consumed');
+      assert.ok(!fs.existsSync(path.join(fx.commonDir, 'pt-land.lock')), 'lock released');
+      fs.rmdirSync(path.join(fx.commonDir, 'pt-land-log'));
+      const lr = TOOL.runLandRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(lr.ok, false, JSON.stringify(lr));
+      assert.match(lr.reason, /^L8: protected path not PROTECTED-approved: Owner LAND/);
+    } finally { fx.cleanup(); }
+  });
+
+  // §9: a logging git shim (CDX-1's NODE_OPTIONS --require pattern, delegating to real git) records
+  // every git call the tool makes ({sub, args, cwd, indexFile}) and can advance the task ref by one
+  // plain commit right before delegating the first `update-ref` (the compare-and-swap negative).
+  function makeLoggingGitShim(dir, shimOpts) {
+    const logFile = path.join(dir, 'git-calls.jsonl');
+    const marker = path.join(dir, 'git-calls.advanced');
+    const intercept = path.join(dir, 'logging-git-intercept.js');
+    const advance = !!(shimOpts && shimOpts.advanceRefOnUpdateRef);
+    fs.writeFileSync(intercept,
+      "'use strict';\n" +
+      "const fs = require('fs');\n" +
+      "const path = require('path');\n" +
+      "const { spawnSync } = require('child_process');\n" +
+      "const rawArgs = process.argv.slice(1);\n" +
+      "const sub = path.basename(rawArgs[0] || '');\n" +
+      "const rest = rawArgs.slice(1);\n" +
+      'fs.appendFileSync(' + JSON.stringify(logFile) + ", JSON.stringify({ sub, args: rest, cwd: process.cwd(), indexFile: typeof process.env.GIT_INDEX_FILE === 'string' }) + '\\n');\n" +
+      (advance
+        ? "if (sub === 'update-ref' && !fs.existsSync(" + JSON.stringify(marker) + ')) {\n' +
+          '  fs.writeFileSync(' + JSON.stringify(marker) + ", '1');\n" +
+          "  spawnSync('git', ['commit', '-q', '--allow-empty', '-m', 'race: another writer advanced the task ref'], { stdio: 'ignore', windowsHide: true });\n" +
+          '}\n'
+        : '') +
+      "const r = spawnSync('git', [sub].concat(rest), { stdio: 'inherit', windowsHide: true });\n" +
+      'process.exit(r.status === null ? 1 : r.status);\n');
+    return {
+      gitExec: process.execPath,
+      nodeOptions: '--require ' + intercept,
+      calls: () => (fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [])
+    };
+  }
+  function withShim(shim, fn) {
+    const saved = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = shim.nodeOptions;
+    try { return fn(); } finally { if (saved === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = saved; }
+  }
+  const samePath = (a, b) => fwd(a).toLowerCase().replace(/\/+$/, '') === fwd(b).toLowerCase().replace(/\/+$/, '');
+
+  test('PL-36 (atomic, brief §9): protected-commit creates the commit from the approved tree (commit-tree <tree> -p <HEAD>), moves the task ref by compare-and-swap (update-ref <ref> <new> <HEAD>), checks out exactly the targets from HEAD, and never runs add / commit / write-tree against the slot index', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag5c' });
+    try {
+      const TOOL = fx.requireTool();
+      const req = approveProtected(fx, TOOL);
+      const shim = makeLoggingGitShim(fx.tmp);
+      const r = withShim(shim, () => TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task, gitExec: shim.gitExec }));
+      assert.strictEqual(r.ok, true, JSON.stringify(r));
+      const head = G(['rev-parse', 'HEAD'], fx.slotA).trim();
+      const calls = shim.calls();
+      const ct = calls.filter((c) => c.sub === 'commit-tree');
+      assert.strictEqual(ct.length, 1, 'exactly one commit-tree');
+      assert.deepStrictEqual(ct[0].args.slice(0, 4), [req.tree, '-p', fx.tip, '-m']);
+      assert.deepStrictEqual(calls.filter((c) => c.sub === 'update-ref').map((c) => c.args), [['refs/heads/' + fx.task, head, fx.tip]]);
+      const co = calls.filter((c) => c.sub === 'checkout');
+      assert.deepStrictEqual(co.map((c) => c.args), [['HEAD', '--', fx.target]]);
+      assert.ok(samePath(co[0].cwd, fx.slotA), 'checkout runs in the slot');
+      assert.deepStrictEqual(calls.filter((c) => c.sub === 'add' || c.sub === 'commit'), [], 'never git add / git commit');
+      assert.ok(calls.some((c) => c.sub === 'write-tree'), 'the request-side temporary-index build ran');
+      assert.ok(calls.filter((c) => c.sub === 'write-tree').every((c) => c.indexFile === true), 'write-tree only ever on the temporary index (GIT_INDEX_FILE set)');
+      assert.strictEqual(G(['rev-parse', 'HEAD^{tree}'], fx.slotA).trim(), req.tree);
+      assert.strictEqual(G(['rev-parse', 'HEAD^'], fx.slotA).trim(), fx.tip);
+      assert.strictEqual(G(['rev-parse', ':' + fx.target], fx.slotA).trim(), G(['rev-parse', req.tree + ':' + fx.target], fx.canon).trim(), 'index blob == approved blob');
+      assert.strictEqual(G(['status', '--porcelain'], fx.slotA).trim(), '');
+      assert.strictEqual(fs.readFileSync(path.join(fx.slotA, fx.target), 'utf8').replace(/\r\n/g, '\n'), CAND_V1);
+      assert.ok(!fs.existsSync(path.join(fx.commonDir, 'pt-protected-approval')), 'record consumed');
+      assert.strictEqual(fx.readAudit().filter((e) => e.result === 'ok').length, 1);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-36 (CAS negative, brief §9): the task ref advanced by another writer right before update-ref -> refuse (compare-and-swap); HEAD is that writer\'s commit, the approved tree was not committed onto it, slot clean, record kept', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag5d' });
+    try {
+      const TOOL = fx.requireTool();
+      const req = approveProtected(fx, TOOL);
+      const shim = makeLoggingGitShim(fx.tmp, { advanceRefOnUpdateRef: true });
+      const r = withShim(shim, () => TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task, gitExec: shim.gitExec }));
+      assert.strictEqual(r.ok, false, JSON.stringify(r));
+      assert.strictEqual(r.exitCode, 1);
+      assert.match(r.reason, /^G2: the task ref moved since the approval \(compare-and-swap\)/);
+      assert.strictEqual(G(['log', '-1', '--format=%s'], fx.slotA).trim(), 'race: another writer advanced the task ref');
+      assert.strictEqual(G(['rev-parse', 'HEAD^'], fx.slotA).trim(), fx.tip, 'exactly the race commit sits on the recorded HEAD');
+      assert.notStrictEqual(G(['rev-parse', 'HEAD^{tree}'], fx.slotA).trim(), req.tree, 'the approved tree was not committed onto the moved ref');
+      assert.strictEqual(G(['status', '--porcelain'], fx.slotA).trim(), '');
+      assert.ok(fs.existsSync(path.join(fx.commonDir, 'pt-protected-approval')), 'record kept');
+      assert.ok(!fs.existsSync(path.join(fx.commonDir, 'pt-land.lock')), 'lock released');
+      assert.strictEqual(fx.readAudit().filter((e) => e.result === 'ok').length, 0, 'no ok entry');
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-36 (live index, brief §9): an index/working-tree difference on the target path never reaches the committed tree - the dirty slot is refused before any commit', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag5e' });
+    try {
+      const TOOL = fx.requireTool();
+      approveProtected(fx, TOOL);
+      W(path.join(fx.slotA, fx.target), 'module.exports = 99; // live-index content\n');
+      G(['add', fx.target], fx.slotA);
+      const r = TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(r.ok, false, JSON.stringify(r));
+      assert.match(r.reason, /G2: the slot is not clean/);
+      assert.strictEqual(G(['rev-parse', 'HEAD'], fx.slotA).trim(), fx.tip);
+      assert.ok(fs.existsSync(path.join(fx.commonDir, 'pt-protected-approval')), 'record kept');
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-37: candidate edited after the request (tree mismatch) -> protected-commit refuses; nothing changes', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag6' });
+    try {
+      const TOOL = fx.requireTool();
+      approveProtected(fx, TOOL);
+      fs.writeFileSync(path.join(fx.manifestDir, 'cand.js'), 'module.exports = 2; // edited after approval\n');
+      const r = TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task });
+      assertRefusedUnchanged(fx, fx.tip, r, /G2: the candidate tree no longer matches the approved tree/);
+      assert.ok(fs.existsSync(path.join(fx.commonDir, 'pt-protected-approval')), 'the record is not consumed by a refusal');
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-38: stale HEAD (slot advanced after the request) -> protected-commit refuses; nothing changes', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag7' });
+    try {
+      const TOOL = fx.requireTool();
+      approveProtected(fx, TOOL);
+      W(path.join(fx.slotA, 'work', fx.taskShort, 'later.txt'), 'later\n');
+      G(['add', 'work/' + fx.taskShort + '/later.txt'], fx.slotA);
+      G(['commit', '-q', '-m', 'later'], fx.slotA);
+      const head2 = G(['rev-parse', 'HEAD'], fx.slotA).trim();
+      const r = TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task });
+      assertRefusedUnchanged(fx, head2, r, /G2: no\/stale PROTECTED approval/);
+    } finally { fx.cleanup(); }
+  });
+
+  (function plRecordMismatch() {
+    const cases = [
+      ['another task', (fx, req) => 'PROTECTED task/other ' + req.head + ' ' + req.tree + '\n', /G2: no\/stale PROTECTED approval/],
+      ['another HEAD', (fx, req) => 'PROTECTED ' + fx.task + ' ' + '0'.repeat(40) + ' ' + req.tree + '\n', /G2: no\/stale PROTECTED approval/],
+      ['another tree', (fx, req) => 'PROTECTED ' + fx.task + ' ' + req.head + ' ' + '0'.repeat(40) + '\n', /G2: the candidate tree no longer matches the approved tree/],
+      ['a LAND record in the PROTECTED file', (fx, req) => 'LAND ' + fx.task + ' ' + req.head + ' ' + req.tree + '\n', /G2: no\/stale PROTECTED approval/],
+      ['no record', () => null, /G2: no\/stale PROTECTED approval/]
+    ];
+    for (const [label, record, re] of cases) {
+      test('PL-39: protected-commit with ' + label + ' -> refuse; nothing changes', () => {
+        const fx = buildProtectedFixture({ taskShort: 'oag8' });
+        try {
+          const TOOL = fx.requireTool();
+          const req = TOOL.runProtectedRequest({ cwd: fx.slotA, task: fx.task });
+          assert.strictEqual(req.ok, true, JSON.stringify(req));
+          const text = record(fx, req);
+          if (text !== null) fx.writeProtectedRecord(text);
+          const r = TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task });
+          assertRefusedUnchanged(fx, fx.tip, r, re);
+        } finally { fx.cleanup(); }
+      });
+    }
+  })();
+
+  test('PL-40: a target not listed in the protected-scope block -> protected-request refuses (even though it matches an allowed-target pattern)', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag9', files: [{ target: '.claude/hooks/other.js', source: 'o.js', content: 'x\n' }] });
+    try {
+      const r = fx.requireTool().runProtectedRequest({ cwd: fx.slotA, task: fx.task });
+      assertRefusedUnchanged(fx, fx.tip, r, /G2: target not approvable \(\.claude\/hooks\/other\.js\)/);
+    } finally { fx.cleanup(); }
+  });
+  test('PL-40: a target listed in protected-scope but outside the allowed-target list (index.html) -> protected-request refuses', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag9b', extraProtectedScope: ['index.html'], files: [{ target: 'index.html', source: 'i.html', content: 'x\n' }] });
+    try {
+      const r = fx.requireTool().runProtectedRequest({ cwd: fx.slotA, task: fx.task });
+      assertRefusedUnchanged(fx, fx.tip, r, /G2: target not approvable \(index\.html\)/);
+    } finally { fx.cleanup(); }
+  });
+
+  for (const never of ['work/x/brief.md', 'CHECKPOINT.md', '.env', '.env.local', '.claude/settings.local.json', '.git/x', '.git/hooks/pre-commit']) {
+    test('PL-41: never-approvable target ' + JSON.stringify(never) + ' -> protected-request refuses even when the brief lists it', () => {
+      const fx = buildProtectedFixture({ taskShort: 'oag10', extraProtectedScope: [never], files: [{ target: never, source: 'n.txt', content: 'x\n' }] });
+      try {
+        const r = fx.requireTool().runProtectedRequest({ cwd: fx.slotA, task: fx.task });
+        assertRefusedUnchanged(fx, fx.tip, r, /G2: target not approvable/);
+      } finally { fx.cleanup(); }
+    });
+  }
+
+  (function plManifestRefusals() {
+    const cases = [
+      ['a path-traversal target (../x)', { files: [{ target: '../x', source: 'c.js', content: 'x\n' }] }, /G2: manifest target is not a safe relative path/],
+      ['a dot-segment target (./a/./b)', { files: [{ target: 'a/./b', source: 'c.js', content: 'x\n' }] }, /G2: manifest target is not a safe relative path/],
+      ['an absolute source', { files: [{ target: DEFAULT_TARGET, source: path.join(os.tmpdir(), 'abs.js'), content: undefined }] }, /G2: manifest source is not a flat file name/],
+      ['a source with a directory component', { files: [{ target: DEFAULT_TARGET, source: 'sub/c.js', content: undefined }] }, /G2: manifest source is not a flat file name/],
+      ['a duplicate target', { files: [{ target: DEFAULT_TARGET, source: 'a.js', content: 'a\n' }, { target: DEFAULT_TARGET, source: 'b.js', content: 'b\n' }] }, /G2: duplicate manifest target/],
+      ['a missing source file', { files: [{ target: DEFAULT_TARGET, source: 'missing.js', content: undefined }] }, /G2: manifest source does not exist/],
+      ['invalid JSON', { files: [], rawManifest: '{ not json' }, /G2: manifest\.json is not valid JSON/],
+      ['an empty files list', { files: [], rawManifest: '{"files":[]}' }, /G2: manifest\.json has no files/],
+      ['a malformed entry', { files: [], rawManifest: '{"files":[{"target":".claude/hooks/sample-hook.js"}]}' }, /G2: manifest\.json has a malformed entry/],
+      ['no manifest at all', { manifest: false }, /G2: manifest\.json not found/]
+    ];
+    for (const [label, opts, re] of cases) {
+      test('PL-42: manifest with ' + label + ' -> protected-request refuses; nothing changes', () => {
+        const fx = buildProtectedFixture(Object.assign({ taskShort: 'oag11' }, opts));
+        try {
+          const r = fx.requireTool().runProtectedRequest({ cwd: fx.slotA, task: fx.task });
+          assertRefusedUnchanged(fx, fx.tip, r, re);
+        } finally { fx.cleanup(); }
+      });
+    }
+  })();
+
+  test('PL-43: a dirty slot -> protected-request refuses, and protected-commit (approved while clean) refuses; nothing changes', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag12' });
+    try {
+      const TOOL = fx.requireTool();
+      approveProtected(fx, TOOL);
+      W(path.join(fx.slotA, 'stray.txt'), 'x\n');
+      const req = TOOL.runProtectedRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(req.ok, false, JSON.stringify(req));
+      assert.match(req.reason, /G2: the slot is not clean/);
+      const r = TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(r.ok, false, JSON.stringify(r));
+      assert.match(r.reason, /G2: the slot is not clean/);
+      assert.strictEqual(G(['rev-parse', 'HEAD'], fx.slotA).trim(), fx.tip);
+      assert.strictEqual(G(['status', '--porcelain'], fx.slotA).trim(), '?? stray.txt');
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-44: planted non-sample git hooks are never executed by protected-commit (commit still made, hooks path empty)', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag13' });
+    try {
+      const marker = path.join(fx.tmp, 'protected-hook-ran.txt');
+      const hooksDir = path.join(fx.commonDir, 'hooks');
+      fs.mkdirSync(hooksDir, { recursive: true });
+      const body = '#!/bin/sh\necho ran >> "' + marker.replace(/\\/g, '/') + '"\n';
+      for (const name of ['pre-commit', 'commit-msg', 'post-commit', 'post-checkout', 'reference-transaction']) {
+        fs.writeFileSync(path.join(hooksDir, name), body);
+        try { fs.chmodSync(path.join(hooksDir, name), 0o755); } catch (e) { /* best effort */ }
+      }
+      const TOOL = fx.requireTool();
+      const req = approveProtected(fx, TOOL);
+      const r = TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(r.ok, true, JSON.stringify(r));
+      assert.strictEqual(G(['rev-parse', 'HEAD^{tree}'], fx.slotA).trim(), req.tree);
+      assert.ok(!fs.existsSync(marker), 'the planted hooks must not have run');
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-45: record reuse (same record re-written after a successful protected-commit) -> refuse; HEAD unchanged', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag14' });
+    try {
+      const TOOL = fx.requireTool();
+      const req = approveProtected(fx, TOOL);
+      assert.strictEqual(TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task }).ok, true);
+      const head2 = G(['rev-parse', 'HEAD'], fx.slotA).trim();
+      fx.writeProtectedRecord('PROTECTED ' + fx.task + ' ' + fx.tip + ' ' + req.tree + '\n');
+      const r = TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task });
+      assertRefusedUnchanged(fx, head2, r, /G2: no\/stale PROTECTED approval/);
+      assert.strictEqual(fx.readAudit().filter((e) => e.result === 'ok').length, 1, 'exactly one ok protected-commit entry');
+    } finally { fx.cleanup(); }
+  });
+
+  // ── G3: land (L8 revision) ───────────────────────────────────────────────────────────────
+  // Two targets: AGENTS.md (an ordinary allowed target) and a .claude/hooks/** target, which also
+  // crosses L10 - qa/guard_integrity_check.js C6 exempts a PROTECTED-approved path (brief §8).
+  const AGENTS_V2 = '# AGENTS v2\n';
+  function buildApprovedLandFixture(taskShort, target, content) {
+    const fx = buildProtectedFixture({ taskShort, target, files: [{ target, source: 'cand.txt', content }] });
+    const TOOL = fx.requireTool();
+    const req = approveProtected(fx, TOOL);
+    const pc = TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task });
+    assert.strictEqual(pc.ok, true, 'fixture setup: protected-commit: ' + JSON.stringify(pc));
+    fx.TOOL = TOOL;
+    fx.req = req;
+    fx.tip2 = G(['rev-parse', 'HEAD'], fx.slotA).trim();
+    return fx;
+  }
+
+  test('PL-46: LAND allowed when the protected blob equals the approved tree - land-request lists path/blob/approving tree, LAND line unchanged, land fast-forwards branch-dev', () => {
+    const fx = buildApprovedLandFixture('oag15', 'AGENTS.md', AGENTS_V2);
+    try {
+      const lr = fx.TOOL.runLandRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(lr.ok, true, JSON.stringify(lr));
+      assert.ok(lr.report.files.indexOf('AGENTS.md') !== -1);
+      const blob = G(['rev-parse', fx.tip2 + ':AGENTS.md'], fx.canon).trim();
+      assert.deepStrictEqual(lr.report.protectedFiles, [{ path: 'AGENTS.md', blob, tree: fx.req.tree }]);
+      assert.strictEqual(G(['rev-parse', fx.req.tree + ':AGENTS.md'], fx.canon).trim(), blob, 'the blob is the one in the approved tree');
+      assert.strictEqual(lr.approvalLine,
+        "! printf '%s\\n' 'LAND " + fx.task + ' ' + fx.tip2 + ' ' + fx.base + "' > '" + fwd(fx.commonDir) + "/pt-land-approval'");
+      // the CLI report shows the protected listing
+      const toolPath = path.join(fx.canon, '.claude', 'hooks', 'pt-land.js');
+      const cli = spawnSync('node', [toolPath, 'land-request', fx.task], { cwd: fx.slotA, encoding: 'utf8' });
+      assert.strictEqual(cli.status, 0, cli.stderr);
+      assert.match(cli.stdout, /protected \(PROTECTED-approved\):\n\s+AGENTS\.md {2}blob [0-9a-f]{40} {2}tree [0-9a-f]{40}\n/);
+      fx.writeLandRecord('LAND ' + fx.task + ' ' + fx.tip2 + ' ' + fx.base + '\n');
+      const land = fx.TOOL.runLand({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(land.ok, true, JSON.stringify(land));
+      assert.strictEqual(G(['rev-parse', 'refs/heads/branch-dev'], fx.canon).trim(), fx.tip2);
+      assert.strictEqual(fs.readFileSync(path.join(fx.canon, 'AGENTS.md'), 'utf8').replace(/\r\n/g, '\n'), AGENTS_V2);
+      assert.strictEqual(G(['rev-parse', 'HEAD:AGENTS.md'], fx.canon).trim(), blob, 'the landed blob is the approved one');
+    } finally { fx.cleanup(); }
+  });
+  test('PL-46 (brief §8): a PROTECTED-approved .claude/hooks target LANDs end-to-end through the governed path - request, record, protected-commit, land-request (L8 and L10 PASS, protected listing), record, land', () => {
+    const fx = buildApprovedLandFixture('oag15b', DEFAULT_TARGET, CAND_V1);
+    try {
+      const lr = fx.TOOL.runLandRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(lr.ok, true, JSON.stringify(lr));
+      assert.ok(lr.report.checks.indexOf('L8 PASS') !== -1 && lr.report.checks.indexOf('L10 PASS') !== -1);
+      const blob = G(['rev-parse', fx.tip2 + ':' + DEFAULT_TARGET], fx.canon).trim();
+      assert.deepStrictEqual(lr.report.protectedFiles, [{ path: DEFAULT_TARGET, blob, tree: fx.req.tree }]);
+      fx.writeLandRecord('LAND ' + fx.task + ' ' + fx.tip2 + ' ' + fx.base + '\n');
+      const land = fx.TOOL.runLand({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(land.ok, true, JSON.stringify(land));
+      assert.strictEqual(G(['rev-parse', 'refs/heads/branch-dev'], fx.canon).trim(), fx.tip2);
+      assert.strictEqual(G(['rev-parse', 'HEAD:' + DEFAULT_TARGET], fx.canon).trim(), blob, 'the landed blob is the approved one');
+      assert.strictEqual(fs.readFileSync(path.join(fx.canon, DEFAULT_TARGET), 'utf8').replace(/\r\n/g, '\n'), CAND_V1);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-47: a protected file changed after approval -> land-request refuses "not PROTECTED-approved"', () => {
+    const fx = buildApprovedLandFixture('oag16', 'AGENTS.md', AGENTS_V2);
+    try {
+      fs.writeFileSync(path.join(fx.slotA, 'AGENTS.md'), AGENTS_V2 + 'post-approval edit\n');
+      G(['add', 'AGENTS.md'], fx.slotA);
+      G(['commit', '-q', '-m', 'edit after approval'], fx.slotA);
+      const lr = fx.TOOL.runLandRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(lr.ok, false, JSON.stringify(lr));
+      assert.match(lr.reason, /^L8: protected path not PROTECTED-approved: Owner LAND \(AGENTS\.md, changed after approval\)$/);
+      assert.strictEqual(G(['rev-parse', 'refs/heads/branch-dev'], fx.canon).trim(), fx.base);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-48: a protected path in both scope blocks but committed directly (no approval entry) -> land-request refuses "not PROTECTED-approved"', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag17', target: 'AGENTS.md', manifest: false });
+    try {
+      W(path.join(fx.slotA, 'AGENTS.md'), AGENTS_V2);
+      G(['add', 'AGENTS.md'], fx.slotA);
+      G(['commit', '-q', '-m', 'direct protected edit'], fx.slotA);
+      const lr = fx.requireTool().runLandRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(lr.ok, false, JSON.stringify(lr));
+      assert.match(lr.reason, /^L8: protected path not PROTECTED-approved: Owner LAND \(AGENTS\.md\)$/);
+    } finally { fx.cleanup(); }
+  });
+  test('PL-48: a protected path in protected-scope but NOT in land-scope -> land-request refuses at L8', () => {
+    const fx = buildFixture({ taskShort: 'oag17b', scopeRelPaths: ['work/oag17b/foo.txt'], protectedScopeRelPaths: ['AGENTS.md'] });
+    try {
+      W(path.join(fx.slotA, 'AGENTS.md'), AGENTS_V2);
+      G(['add', 'AGENTS.md'], fx.slotA);
+      G(['commit', '-q', '-m', 'protected edit outside land-scope'], fx.slotA);
+      const lr = fx.requireTool().runLandRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(lr.ok, false, JSON.stringify(lr));
+      assert.match(lr.reason, /^L8: /);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-49: the approval entry belongs to another task -> land-request refuses "not PROTECTED-approved"', () => {
+    const fx = buildApprovedLandFixture('oag18', 'AGENTS.md', AGENTS_V2);
+    try {
+      fx.rewriteAudit((e) => (e.verb === 'protected-commit' ? Object.assign({}, e, { task: 'task/other' }) : e));
+      const lr = fx.TOOL.runLandRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(lr.ok, false, JSON.stringify(lr));
+      assert.match(lr.reason, /^L8: protected path not PROTECTED-approved: Owner LAND \(AGENTS\.md\)$/);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-50: the approving commit is no longer an ancestor (task rebased after a Second LAND) -> land-request refuses "not PROTECTED-approved" (not a Second-LAND refusal)', () => {
+    const fx = buildApprovedLandFixture('oag19', 'AGENTS.md', AGENTS_V2);
+    try {
+      W(path.join(fx.canon, 'other.txt'), 'x\n');
+      G(['add', 'other.txt'], fx.canon);
+      G(['commit', '-q', '-m', 'another task landed first'], fx.canon);
+      const rb = Graw(['rebase', 'refs/heads/branch-dev'], fx.slotA);
+      assert.strictEqual(rb.status, 0, 'fixture rebase: ' + rb.stderr);
+      const newTip = G(['rev-parse', 'HEAD'], fx.slotA).trim();
+      assert.notStrictEqual(newTip, fx.tip2, 'the approving commit was rewritten');
+      assert.strictEqual(G(['rev-parse', 'HEAD^{tree}:AGENTS.md'], fx.slotA).trim(), G(['rev-parse', fx.req.tree + ':AGENTS.md'], fx.canon).trim(), 'the blob itself is unchanged - only the ancestry broke');
+      const lr = fx.TOOL.runLandRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(lr.ok, false, JSON.stringify(lr));
+      assert.match(lr.reason, /^L8: protected path not PROTECTED-approved: Owner LAND \(AGENTS\.md\)$/);
+      assert.doesNotMatch(lr.reason, /Second LAND/);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-51: the approving commit\'s tree differs from the audit entry -> land-request refuses "not PROTECTED-approved"', () => {
+    const fx = buildApprovedLandFixture('oag20', 'AGENTS.md', AGENTS_V2);
+    try {
+      fx.rewriteAudit((e) => (e.verb === 'protected-commit' ? Object.assign({}, e, { tree: '0'.repeat(40) }) : e));
+      const lr = fx.TOOL.runLandRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(lr.ok, false, JSON.stringify(lr));
+      assert.match(lr.reason, /^L8: protected path not PROTECTED-approved: Owner LAND \(AGENTS\.md\)$/);
+    } finally { fx.cleanup(); }
+  });
+
+  for (const never of ['work/other/brief.md', 'CHECKPOINT.md', '.env']) {
+    test('PL-52: ' + never + ' is always refused by land, even with both scope listings and a forged ok approval entry', () => {
+      const fx = buildFixture({ taskShort: 'oag21', scopeRelPaths: ['work/oag21/foo.txt'], landScopeOnlyPaths: [never], protectedScopeRelPaths: [never] });
+      try {
+        W(path.join(fx.slotA, never), 'x\n');
+        G(['add', '-f', never], fx.slotA);
+        G(['commit', '-q', '-m', 'never-allowed path'], fx.slotA);
+        const tip2 = G(['rev-parse', 'HEAD'], fx.slotA).trim();
+        const forged = { ts: '2026-01-01T00:00:00.000Z', verb: 'protected-commit', task: fx.task, from: fx.tip, to: tip2, tree: G(['rev-parse', tip2 + '^{tree}'], fx.slotA).trim(), result: 'ok' };
+        fs.writeFileSync(path.join(fx.commonDir, 'pt-land-log'), JSON.stringify(forged) + '\n');
+        const lr = fx.requireTool().runLandRequest({ cwd: fx.slotA, task: fx.task });
+        assert.strictEqual(lr.ok, false, JSON.stringify(lr));
+        assert.match(lr.reason, new RegExp('^L8: protected path: Owner LAND \\(' + never.replace(/[.\/]/g, '\\$&') + '\\)$'));
+        assert.doesNotMatch(lr.reason, /PROTECTED-approved/);
+      } finally { fx.cleanup(); }
+    });
+  }
+
+  // ── shape rule ───────────────────────────────────────────────────────────────────────────
+  test('PL-53: every printed approval line has the one fixed shape; LAND and PUSH lines are byte-identical to the pre-refactor templates', () => {
+    const fx = buildFixture({ taskShort: 'oag22' });
+    const pfx = buildProtectedFixture({ taskShort: 'oag23' });
+    try {
+      const TOOL = fx.requireTool();
+      const cd = fwd(fx.commonDir);
+      const lr = TOOL.runLandRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(lr.ok, true, JSON.stringify(lr));
+      // pre-refactor buildLandApprovalLine / buildPushApprovalLine output, reproduced literally
+      const oldLand = "! printf '%s\\n' 'LAND " + fx.task + ' ' + fx.tip + ' ' + fx.base + "' > '" + cd + '/' + 'pt-land-approval' + "'";
+      assert.strictEqual(lr.approvalLine, oldLand);
+      fx.writeLandRecord('LAND ' + fx.task + ' ' + fx.tip + ' ' + fx.base + '\n');
+      assert.strictEqual(TOOL.runLand({ cwd: fx.slotA, task: fx.task }).ok, true);
+      const pr = TOOL.runPushRequest({ cwd: fx.canon, expectedOriginUrls: [fx.originUrl] });
+      assert.strictEqual(pr.ok, true, JSON.stringify(pr));
+      const oldPush = "! printf '%s\\n' 'PUSH branch-dev " + pr.L + ' ' + pr.R + "' > '" + cd + '/' + 'pt-push-approval' + "'";
+      assert.strictEqual(pr.approvalLine, oldPush);
+      W(path.join(fx.canon, 'work', 'shape', 'brief.md'), '# shape\n');
+      G(['add', 'work/shape/brief.md'], fx.canon);
+      const br = TOOL.runBriefRequest({ cwd: fx.canon, path: 'work/shape/brief.md' });
+      assert.strictEqual(br.ok, true, JSON.stringify(br));
+      const PT = pfx.requireTool();
+      const preq = PT.runProtectedRequest({ cwd: pfx.slotA, task: pfx.task });
+      assert.strictEqual(preq.ok, true, JSON.stringify(preq));
+      const lines = { land: lr.approvalLine, push: pr.approvalLine, brief: br.approvalLine, protected: preq.approvalLine };
+      for (const kind of Object.keys(lines)) {
+        const m = APPROVAL_LINE_RE.exec(lines[kind]);
+        assert.ok(m, kind + ' line shape: ' + lines[kind]);
+        assert.strictEqual(m[1], kind, kind + ' line names its own record kind');
+      }
+      // the module-level helper is the single producer: it reproduces both legacy templates exactly
+      assert.strictEqual(TOOL.approvalLine('land', 'LAND ' + fx.task + ' ' + fx.tip + ' ' + fx.base, fx.commonDir), oldLand);
+      assert.strictEqual(TOOL.approvalLine('push', 'PUSH branch-dev ' + pr.L + ' ' + pr.R, fx.commonDir), oldPush);
+    } finally { pfx.cleanup(); fx.cleanup(); }
+  });
+
+  test('PL-54: approvalLine refuses a payload containing \', ;, $, a backtick or a newline (no line can carry a second command)', () => {
+    // eslint-disable-next-line global-require
+    const TOOL = require(REAL_TOOL_PATH);
+    const A = 'a'.repeat(40);
+    for (const bad of ["LAND task/x' ; rm -rf /; echo '", 'LAND task/x; echo hi', 'LAND $(whoami)', 'LAND `whoami`', 'LAND task/x\necho hi', 'LAND task/x\r', 42, null, undefined]) {
+      assert.throws(() => TOOL.approvalLine('land', bad, '/repo/.git'), /approvalLine: unsafe payload/, 'payload ' + JSON.stringify(bad));
+    }
+    const ok = TOOL.approvalLine('land', 'LAND task/x ' + A + ' ' + A, 'C:\\repo\\.git');
+    assert.strictEqual(ok, "! printf '%s\\n' 'LAND task/x " + A + ' ' + A + "' > 'C:/repo/.git/pt-land-approval'");
+    assert.match(ok, APPROVAL_LINE_RE);
+  });
+
+  // ── CLI ──────────────────────────────────────────────────────────────────────────────────
+  test('PL-55: CLI exit codes for the new verbs - usage 3, refusal 1, success 0 with the report and the line on stdout', () => {
+    const fx = buildProtectedFixture({ taskShort: 'oag24' });
+    try {
+      const toolPath = path.join(fx.canon, '.claude', 'hooks', 'pt-land.js');
+      const run = (args, cwd) => spawnSync('node', [toolPath].concat(args), { cwd, encoding: 'utf8' });
+      assert.strictEqual(run(['protected-request'], fx.slotA).status, 3, 'protected-request without a task');
+      assert.strictEqual(run(['protected-commit'], fx.slotA).status, 3, 'protected-commit without a task');
+      assert.strictEqual(run(['protected-apply', fx.task], fx.slotA).status, 3, 'unknown verb');
+      assert.strictEqual(run(['brief-request'], fx.canon).status, 3, 'brief-request without a path');
+      assert.strictEqual(run(['brief-request', 'work/x/notes.md'], fx.canon).status, 3, 'brief-request with a wrong path shape');
+      const pc = run(['protected-commit', fx.task], fx.slotA);
+      assert.strictEqual(pc.status, 1, 'protected-commit without a record');
+      assert.match(pc.stderr, /G2: no\/stale PROTECTED approval/);
+      const preq = run(['protected-request', fx.task], fx.slotA);
+      assert.strictEqual(preq.status, 0, preq.stderr);
+      assert.match(preq.stdout, /^PROTECTED REQUEST for task\/oag24\n {2}HEAD: [0-9a-f]{40}\n {2}tree: [0-9a-f]{40}\n {2}files:\n {4}\.claude\/hooks\/sample-hook\.js {2}[0-9a-f]{40} {2}sha256=[0-9a-f]{64}\n\n! printf /);
+      assert.ok(APPROVAL_LINE_RE.test(preq.stdout.trim().split('\n').pop()), 'the last stdout line is the approval line');
+      const notStaged = run(['brief-request', 'work/nothere/brief.md'], fx.canon);
+      assert.strictEqual(notStaged.status, 1, 'brief-request with nothing staged');
+      assert.match(notStaged.stderr, /G1: /);
+      W(path.join(fx.canon, 'work', 'cli', 'brief.md'), '# cli\n');
+      G(['add', 'work/cli/brief.md'], fx.canon);
+      const br = run(['brief-request', 'work/cli/brief.md'], fx.canon);
+      assert.strictEqual(br.status, 0, br.stderr);
+      assert.match(br.stdout, /^BRIEF REQUEST for work\/cli\/brief\.md\n {2}branch-dev OID: [0-9a-f]{40}\n {2}sha256: {9}[0-9a-f]{64}\n\n! printf /);
+      assert.ok(APPROVAL_LINE_RE.test(br.stdout.trim().split('\n').pop()), 'the last stdout line is the approval line');
+    } finally { fx.cleanup(); }
+  });
+
+  // ── mutants (each planted in the production source, committed into a fresh fixture) ───────
+  test('MUT-OAG-1: G1 single-entry check dropped -> a second (untracked) entry is accepted (caught)', () => {
+    const mutSrc = withMutantSource((s) => s.replace(
+      "  if (lines.length !== 1) return { ok: false, exitCode: 1, reason: 'G1: the staged/working set is not exactly one entry' };\r\n",
+      ''
+    ));
+    const fx = buildFixture({ taskShort: 'mo1', withSlotA: false, withSlotB: false, toolSource: mutSrc });
+    try {
+      W(path.join(fx.canon, 'work', 'g1m', 'brief.md'), '# m\n');
+      G(['add', 'work/g1m/brief.md'], fx.canon);
+      W(path.join(fx.canon, 'zz-extra.txt'), 'x\n');
+      const r = fx.requireTool().runBriefRequest({ cwd: fx.canon, path: 'work/g1m/brief.md' });
+      assert.strictEqual(r.ok, true, 'mutant should have accepted two entries: ' + JSON.stringify(r));
+    } finally { fx.cleanup(); }
+  });
+  test('MUT-OAG-2: G1 hooks check dropped -> a planted non-sample hook is accepted (caught)', () => {
+    const mutSrc = withMutantSource((s) => s.replace(
+      "  const hooks = hooksClean(commonDir);\r\n  if (!hooks.ok) return { ok: false, exitCode: 1, reason: 'G1: ' + hooks.reason };\r\n",
+      ''
+    ));
+    const fx = buildFixture({ taskShort: 'mo2', withSlotA: false, withSlotB: false, toolSource: mutSrc });
+    try {
+      W(path.join(fx.canon, 'work', 'g1m', 'brief.md'), '# m\n');
+      G(['add', 'work/g1m/brief.md'], fx.canon);
+      fs.mkdirSync(path.join(fx.commonDir, 'hooks'), { recursive: true });
+      fs.writeFileSync(path.join(fx.commonDir, 'hooks', 'pre-commit'), '#!/bin/sh\nexit 0\n');
+      const r = fx.requireTool().runBriefRequest({ cwd: fx.canon, path: 'work/g1m/brief.md' });
+      assert.strictEqual(r.ok, true, 'mutant should have accepted a planted hook: ' + JSON.stringify(r));
+    } finally { fx.cleanup(); }
+  });
+  test('MUT-OAG-3: approvalLine payload guard dropped -> a payload carrying a second command is printed (caught)', () => {
+    const mutSrc = withMutantSource((s) => s.replace(
+      "  if (typeof payload !== 'string' || /['\\r\\n;$`]/.test(payload)) {\r\n    throw new Error('approvalLine: unsafe payload for kind ' + kind);\r\n  }\r\n",
+      ''
+    ));
+    // eslint-disable-next-line global-require, import/no-dynamic-require
+    const M = require(mutSrc);
+    const line = M.approvalLine('land', "LAND task/x' ; echo pwned ; echo '", '/repo/.git');
+    assert.strictEqual(typeof line, 'string', 'mutant should have returned a line instead of throwing');
+    assert.match(line, /echo pwned/);
+  });
+  test('MUT-OAG-4: G2 protected-scope membership dropped from targetApprovable -> an unlisted hooks target is accepted (caught)', () => {
+    const mutSrc = withMutantSource((s) => s.replace(
+      '  return Array.isArray(scopePaths) && scopePaths.indexOf(target) !== -1;\r\n',
+      '  return true;\r\n'
+    ));
+    const fx = buildProtectedFixture({ taskShort: 'mo4', toolSource: mutSrc, files: [{ target: '.claude/hooks/other.js', source: 'o.js', content: 'x\n' }] });
+    try {
+      const r = fx.requireTool().runProtectedRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(r.ok, true, 'mutant should have accepted a target outside protected-scope: ' + JSON.stringify(r));
+    } finally { fx.cleanup(); }
+  });
+  test('MUT-OAG-5: G2 step-2 tree check dropped -> an edited candidate is no longer refused (caught); under §9 the committed tree is still exactly the approved one', () => {
+    const mutSrc = withMutantSource((s) => s.replace(
+      "    if (built.tree !== record.tree) return refuse('the candidate tree no longer matches the approved tree');\r\n",
+      ''
+    ));
+    const fx = buildProtectedFixture({ taskShort: 'mo5', toolSource: mutSrc });
+    try {
+      const TOOL = fx.requireTool();
+      const req = approveProtected(fx, TOOL);
+      fs.writeFileSync(path.join(fx.manifestDir, 'cand.js'), 'module.exports = 2; // edited after approval\n');
+      const r = TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(r.ok, true, 'mutant should no longer refuse the edited candidate: ' + JSON.stringify(r));
+      assert.strictEqual(G(['rev-parse', 'HEAD^{tree}'], fx.slotA).trim(), req.tree, 'commit-tree still committed exactly the approved tree');
+      assert.strictEqual(fs.readFileSync(path.join(fx.slotA, fx.target), 'utf8').replace(/\r\n/g, '\n'), CAND_V1, 'the slot holds the approved content, not the edited candidate');
+    } finally { fx.cleanup(); }
+  });
+  test('MUT-OAG-6: G3 blob-equality check dropped -> a protected file changed after approval passes L8 (caught)', () => {
+    const mutSrc = withMutantSource((s) => s.replace(
+      "    if (tipBlobR.status !== 0 || String(tipBlobR.stdout).trim() !== approval.blob) {\r\n      return { ok: false, reason: 'protected path not PROTECTED-approved: Owner LAND (' + f + ', changed after approval)' };\r\n    }\r\n",
+      ''
+    ));
+    const fx = buildProtectedFixture({ taskShort: 'mo6', toolSource: mutSrc, target: 'AGENTS.md', files: [{ target: 'AGENTS.md', source: 'a.md', content: AGENTS_V2 }] });
+    try {
+      const TOOL = fx.requireTool();
+      approveProtected(fx, TOOL);
+      assert.strictEqual(TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task }).ok, true);
+      fs.writeFileSync(path.join(fx.slotA, 'AGENTS.md'), AGENTS_V2 + 'post-approval edit\n');
+      G(['add', 'AGENTS.md'], fx.slotA);
+      G(['commit', '-q', '-m', 'edit after approval'], fx.slotA);
+      const lr = TOOL.runLandRequest({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(lr.ok, true, 'mutant should have let a post-approval change pass L8: ' + JSON.stringify(lr));
+    } finally { fx.cleanup(); }
+  });
+  test('MUT-OAG-7: G3 never-allowed check dropped -> work/*/brief.md with a forged approval entry passes L8 (caught)', () => {
+    const mutSrc = withMutantSource((s) => s.replace(
+      "    if (PROTECTED_NEVER_LAND_RE.test(lower)) return { ok: false, reason: 'protected path: Owner LAND (' + f + ')' };\r\n",
+      ''
+    ));
+    const fx = buildFixture({ taskShort: 'mo7', toolSource: mutSrc, scopeRelPaths: ['work/mo7/foo.txt'], landScopeOnlyPaths: ['work/other/brief.md'], protectedScopeRelPaths: ['work/other/brief.md'] });
+    try {
+      W(path.join(fx.slotA, 'work', 'other', 'brief.md'), 'x\n');
+      G(['add', 'work/other/brief.md'], fx.slotA);
+      G(['commit', '-q', '-m', 'brief path'], fx.slotA);
+      const tip2 = G(['rev-parse', 'HEAD'], fx.slotA).trim();
+      const forged = { ts: '2026-01-01T00:00:00.000Z', verb: 'protected-commit', task: fx.task, from: fx.tip, to: tip2, tree: G(['rev-parse', tip2 + '^{tree}'], fx.slotA).trim(), result: 'ok' };
+      fs.writeFileSync(path.join(fx.commonDir, 'pt-land-log'), JSON.stringify(forged) + '\n');
+      const lr = fx.requireTool().runLandRequest({ cwd: fx.slotA, task: fx.task });
+      // With the L8 never-allowed check gone the forged entry satisfies L8; the refusal (if any) can only
+      // come from the later, independent L10 layer (guard_integrity_check C6 never exempts brief.md).
+      assert.doesNotMatch(lr.reason || '', /^L8/, 'mutant should have let a brief.md path pass L8: ' + JSON.stringify(lr));
+      assert.ok(lr.ok === true || /^L10: integrity FAIL: .*C6 /.test(lr.reason), JSON.stringify(lr));
+    } finally { fx.cleanup(); }
+  });
+  test('MUT-OAG-8: compare-and-swap dropped (update-ref without the old value) -> a ref advanced by another writer is silently overwritten and the commit succeeds (caught)', () => {
+    const mutSrc = withMutantSource((s) => s.replace(
+      "    const urR = slotGit(['update-ref', 'refs/heads/' + pre.task, newHead, pre.headOid]);\r\n",
+      "    const urR = slotGit(['update-ref', 'refs/heads/' + pre.task, newHead]);\r\n"
+    ));
+    const fx = buildProtectedFixture({ taskShort: 'mo8', toolSource: mutSrc });
+    try {
+      const TOOL = fx.requireTool();
+      approveProtected(fx, TOOL);
+      const shim = makeLoggingGitShim(fx.tmp, { advanceRefOnUpdateRef: true });
+      const r = withShim(shim, () => TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task, gitExec: shim.gitExec }));
+      assert.strictEqual(r.ok, true, 'mutant should have overwritten the moved ref: ' + JSON.stringify(r));
+      assert.strictEqual(G(['rev-parse', 'HEAD^'], fx.slotA).trim(), fx.tip, 'the other writer\'s commit was silently orphaned');
+    } finally { fx.cleanup(); }
+  });
+  test('MUT-OAG-9: both slot-clean checks dropped -> a dirty slot is no longer refused (caught); the committed tree is still exactly the approved one, independent of the live index (brief §9)', () => {
+    const mutSrc = withMutantSource((s) => {
+      const a = "  if (String(st.stdout).trim()) return { ok: false, exitCode: 1, reason: 'G2: the slot is not clean' };\r\n";
+      const b = "    if (stB.status !== 0 || String(stB.stdout).trim() || headB.status !== 0 || String(headB.stdout).trim() !== pre.headOid) {\r\n";
+      const b2 = "    if (stB.status !== 0 || headB.status !== 0 || String(headB.stdout).trim() !== pre.headOid) {\r\n";
+      assert.ok(s.indexOf(a) !== -1 && s.indexOf(b) !== -1, 'mutant anchors present in production source');
+      return s.replace(a, '').replace(b, b2);
+    });
+    const fx = buildProtectedFixture({ taskShort: 'mo9', toolSource: mutSrc });
+    try {
+      const TOOL = fx.requireTool();
+      const req = approveProtected(fx, TOOL);
+      W(path.join(fx.slotA, fx.target), 'module.exports = 99; // live-index content\n');
+      G(['add', fx.target], fx.slotA);
+      const r = TOOL.runProtectedCommit({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(r.ok, true, 'mutant should no longer refuse the dirty slot: ' + JSON.stringify(r));
+      assert.strictEqual(G(['rev-parse', 'HEAD^{tree}'], fx.slotA).trim(), req.tree, 'the live index never reached the committed tree');
+      assert.strictEqual(fs.readFileSync(path.join(fx.slotA, fx.target), 'utf8').replace(/\r\n/g, '\n'), CAND_V1, 'checkout from HEAD replaced the live-index content');
     } finally { fx.cleanup(); }
   });
 })();

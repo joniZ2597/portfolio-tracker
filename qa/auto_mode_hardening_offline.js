@@ -1362,6 +1362,12 @@ const ADD_ASK = [
 const RC5_ASK_REMOVED = ['Bash(git commit)', 'Bash(git commit *)', 'Bash(git -C * commit*)', 'Bash(git -c * commit*)'];
 const RC5_ALLOW_ADDED = ['Bash(git commit)', 'Bash(git commit *)'];
 const EXPECT_ASK = [...BASE_ASK.filter((x) => MOVED_TO_DENY.indexOf(x) === -1), ...ADD_ASK].filter((x) => RC5_ASK_REMOVED.indexOf(x) === -1);
+// work/owner-one-action-gates/brief.md §3: exactly these two entries added to permissions.allow
+// (brief-request and protected-request - protected-commit stays prompting, record-gated).
+const OAG_ALLOW_ADDED = [
+  'Bash(node .claude/hooks/pt-land.js brief-request *)',
+  'Bash(node .claude/hooks/pt-land.js protected-request *)'
+];
 // work/worker-continuous-flow/brief.md §3 (AL-1): exactly these 23 entries added to permissions.allow.
 // Read-only inspection, offline QA, Codex read-only review, the pt-land.js request/cleanup verbs
 // and the /tmp/pt-<task-id>/ scratch rule. No deny/ask/defaultMode/matcher change (AL-1).
@@ -1375,7 +1381,7 @@ const WCF_ALLOW_ADDED = [
   'Bash(node .claude/hooks/pt-land.js land-request *)', 'Bash(node .claude/hooks/pt-land.js push-request)',
   'Bash(node .claude/hooks/pt-land.js cleanup *)', 'Edit(//tmp/pt-*/**)'
 ];
-const EXPECT_ALLOW = [...BASE_ALLOW, ...RC5_ALLOW_ADDED, ...WCF_ALLOW_ADDED];
+const EXPECT_ALLOW = [...BASE_ALLOW, ...RC5_ALLOW_ADDED, ...WCF_ALLOW_ADDED, ...OAG_ALLOW_ADDED];
 const HOOK_COMMAND = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/pretooluse-guard.js"';
 // r10 R10-6: the Owner-applied matcher extends coverage to the file tools.
 const R10_MATCHER = 'Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit';
@@ -1537,8 +1543,12 @@ if (realSettings) {
     'Bash(node .claude/hooks/pt-land.js land-request *)', 'Bash(node .claude/hooks/pt-land.js push-request)',
     'Bash(node .claude/hooks/pt-land.js cleanup *)'
   ];
+  // owner-one-action-gates: the two new request verbs need the same treatment - a real task/<id>
+  // or work/<id>/brief.md sample and real slot/canonical context (G1/G2 below), not AH-10's blind
+  // "*" -> "x" substitution.
   const bashAllow = ((realSettings.permissions && realSettings.permissions.allow) || [])
-    .filter((r) => /^Bash\(.*\)$/.test(r) && RC5_ALLOW_ADDED.indexOf(r) === -1 && WCF_PTLAND_ALLOW.indexOf(r) === -1);
+    .filter((r) => /^Bash\(.*\)$/.test(r) && RC5_ALLOW_ADDED.indexOf(r) === -1 &&
+      WCF_PTLAND_ALLOW.indexOf(r) === -1 && OAG_ALLOW_ADDED.indexOf(r) === -1);
   const sample = (rule) => rule.slice(5, -1).replace(/\*/g, 'x');
   check('AH-10 found existing Bash allow patterns to instantiate', bashAllow.length >= BASE_ALLOW.filter((r) => /^Bash\(/.test(r)).length);
   for (const rule of bashAllow) {
@@ -1769,6 +1779,69 @@ for (const cmd of ['g\\it push', 'git p', 'git config core.hooksPath /tmp/h', 'g
       const c6 = run({ baseMain, baseDev, task: 'task/x' });
       check('AH-18 C6 base-dev...task touches protected -> FAIL', c6.ok === false && c6.failures.some((f) => /^C6/.test(f)));
       G(slotA, 'reset', '-q', '--hard', 'branch-dev');
+      // AH-18 C6 exemption (work/owner-one-action-gates/brief.md §8): a PROTECTED-approved hit - an ok
+      // protected-commit audit entry for the task whose `to` is an ancestor of the task tip with
+      // to^{tree} == tree, and the blob at the tip equal to the blob in that tree - passes C6; every
+      // other hit, and every never-exempt path, still FAILs.
+      {
+        const auditPath = path.join(canonical, '.git', 'pt-land-log');
+        const writeAudit = (entries) => fs.writeFileSync(auditPath, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+        put(slotA, '.claude/hooks/approved.js', 'module.exports = 1;\n');
+        G(slotA, 'add', '.claude/hooks/approved.js');
+        G(slotA, 'commit', '-q', '-m', 'chore(protected): apply Owner-approved files (task/x, tree x)');
+        const tipA = G(slotA, 'rev-parse', 'HEAD').stdout.trim();
+        const treeA = G(slotA, 'rev-parse', 'HEAD^{tree}').stdout.trim();
+        const entry = (o) => Object.assign({ ts: '2026-01-01T00:00:00.000Z', verb: 'protected-commit', task: 'task/x', from: baseDev, to: tipA, tree: treeA, result: 'ok' }, o);
+        const c6Hit = (r) => r.failures.some((f) => /^C6 .*approved\.js/.test(f));
+        writeAudit([entry()]);
+        const c6ok = run({ baseMain, baseDev, task: 'task/x' });
+        check('AH-18 C6 PROTECTED-approved hooks diff (ok entry, ancestor, tree + blob match) -> PASS: ' + c6ok.failures.join('; '), c6ok.ok === true && !c6Hit(c6ok));
+        for (const [label, entries] of [
+          ['no entry', null],
+          ['entry for another task', [entry({ task: 'task/y' })]],
+          ['entry with result refuse', [entry({ result: 'refuse' })]],
+          ['entry for another verb', [entry({ verb: 'land' })]],
+          ['entry tree != to^{tree}', [entry({ tree: '0'.repeat(40) })]],
+          ['malformed audit line only', 'not json\n']
+        ]) {
+          if (entries === null) fs.rmSync(auditPath, { force: true });
+          else if (typeof entries === 'string') fs.writeFileSync(auditPath, entries);
+          else writeAudit(entries);
+          const r = run({ baseMain, baseDev, task: 'task/x' });
+          check('AH-18 C6 ' + label + ' -> FAIL', r.ok === false && c6Hit(r));
+        }
+        // `to` not an ancestor of the task tip: an otherwise-valid ok entry pointing at slot B's commit.
+        put(slotB, '.claude/hooks/approved.js', 'module.exports = 1;\n');
+        G(slotB, 'add', '.claude/hooks/approved.js');
+        G(slotB, 'commit', '-q', '-m', 'other task');
+        writeAudit([entry({ to: G(slotB, 'rev-parse', 'HEAD').stdout.trim(), tree: G(slotB, 'rev-parse', 'HEAD^{tree}').stdout.trim() })]);
+        const c6anc = run({ baseMain, baseDev, task: 'task/x' });
+        check('AH-18 C6 entry `to` not an ancestor of the task tip -> FAIL', c6anc.ok === false && c6Hit(c6anc));
+        G(slotB, 'reset', '-q', '--hard', 'branch-dev');
+        // blob changed after approval -> FAIL; a later ok entry for the new tip (most recent wins) -> PASS.
+        writeAudit([entry()]);
+        put(slotA, '.claude/hooks/approved.js', 'module.exports = 2;\n');
+        G(slotA, 'add', '.claude/hooks/approved.js');
+        G(slotA, 'commit', '-q', '-m', 'edit after approval');
+        const c6blob = run({ baseMain, baseDev, task: 'task/x' });
+        check('AH-18 C6 blob changed after approval -> FAIL', c6blob.ok === false && c6Hit(c6blob));
+        const tipA2 = G(slotA, 'rev-parse', 'HEAD').stdout.trim();
+        writeAudit([entry(), entry({ from: tipA, to: tipA2, tree: G(slotA, 'rev-parse', 'HEAD^{tree}').stdout.trim() })]);
+        const c6later = run({ baseMain, baseDev, task: 'task/x' });
+        check('AH-18 C6 a later ok entry for the re-approved blob (most recent wins) -> PASS: ' + c6later.failures.join('; '), c6later.ok === true && !c6Hit(c6later));
+        // never-exempt paths FAIL even with a matching ok entry.
+        for (const never of ['work/x/brief.md', 'CHECKPOINT.md', '.env']) {
+          G(slotA, 'reset', '-q', '--hard', 'branch-dev');
+          put(slotA, never, 'x\n');
+          G(slotA, 'add', '-f', never);
+          G(slotA, 'commit', '-q', '-m', 'never-exempt path');
+          writeAudit([entry({ to: G(slotA, 'rev-parse', 'HEAD').stdout.trim(), tree: G(slotA, 'rev-parse', 'HEAD^{tree}').stdout.trim() })]);
+          const r = run({ baseMain, baseDev, task: 'task/x' });
+          check('AH-18 C6 never-exempt ' + never + ' with a matching ok entry -> FAIL', r.ok === false && r.failures.some((f) => f.indexOf('C6 ') === 0 && f.indexOf(never) !== -1));
+        }
+        fs.rmSync(auditPath, { force: true });
+        G(slotA, 'reset', '-q', '--hard', 'branch-dev');
+      }
       // C7 extra worktree
       const extra = path.join(base, 'pt-wt-worker-extra');
       G(canonical, 'worktree', 'add', '-q', '-b', 'task/extra', extra, 'branch-dev');
@@ -1897,6 +1970,8 @@ if (guard && integrity && spawnSync('git', ['--version'], { encoding: 'utf8' }).
       (mod) => { G(mcanon, 'config', 'alias.foo', 'status'); const r = mod.runIntegrity({ root: mcanon, gitExec: 'git', baseMain: bMain, baseDev: bDev, task: 'task/x' }).ok === false; G(mcanon, 'config', '--unset', 'alias.foo'); return r; });
     integrityMutantCatches('R10-8 C6 protected-diff check dropped', '.filter((p) => STAGED_DENY_RES.some((re) => re.test(p.replace(/\\\\/g, \'/\'))))', '.filter(() => false)',
       (mod) => { fs.writeFileSync(path.join(mbase, 'pt-wt-worker-a', '.claude', 'settings.json'), '{"a":9}\n'); const sa = path.join(mbase, 'pt-wt-worker-a'); G(sa, 'add', '.claude/settings.json'); G(sa, 'commit', '-q', '-m', 't'); const r = mod.runIntegrity({ root: mcanon, gitExec: 'git', baseMain: bMain, baseDev: bDev, task: 'task/x' }).ok === false; G(sa, 'reset', '-q', '--hard', 'branch-dev'); return r; });
+    integrityMutantCatches('R10-8 C6 approval exemption forced true (brief §8)', "const unapproved = hits.filter((p) => !protectedApprovedInTask(G, root, opts.task, p.replace(/\\\\/g, '/')));", 'const unapproved = [];',
+      (mod) => { fs.writeFileSync(path.join(mbase, 'pt-wt-worker-a', '.claude', 'settings.json'), '{"a":8}\n'); const sa = path.join(mbase, 'pt-wt-worker-a'); G(sa, 'add', '.claude/settings.json'); G(sa, 'commit', '-q', '-m', 't'); const r = mod.runIntegrity({ root: mcanon, gitExec: 'git', baseMain: bMain, baseDev: bDev, task: 'task/x' }).ok === false; G(sa, 'reset', '-q', '--hard', 'branch-dev'); return r; });
     integrityMutantCatches('R10-8 C5 misses untracked governance (Codex FIX)', "['status', '--porcelain', '--', '.claude']", "['diff', '--name-only', 'HEAD', '--', '.claude']",
       (mod) => { const p = path.join(mbase, 'pt-wt-worker-a', '.claude', 'hooks'); fs.mkdirSync(p, { recursive: true }); fs.writeFileSync(path.join(p, 'evil.js'), '//\n'); const r = mod.runIntegrity({ root: mcanon, gitExec: 'git', baseMain: bMain, baseDev: bDev, task: 'task/x' }).failures.some((f) => /^C5/.test(f)); fs.rmSync(path.join(p, 'evil.js'), { force: true }); return r; });
     integrityMutantCatches('R10-8 C3 remote-fetch hardcoded to origin (Codex FIX)', "'+refs/heads/*:refs/remotes/' + rname + '/*'", "'+refs/heads/*:refs/remotes/origin/*'",
@@ -2389,7 +2464,10 @@ const AH23_FORBIDDEN_ALLOW_SUBSTRINGS = [
   'Bash(git clean', 'Bash(git stash', 'Bash(git config', 'Bash(git remote', 'Bash(git fetch',
   'Bash(git worktree',
   'Bash(rm', 'Bash(sed', 'Bash(node -e', 'Bash(bash', 'Bash(sh ', 'Bash(npx', 'Bash(npm run *)', 'Bash(npm exec',
-  'pt-land.js land task', 'pt-land.js push)'
+  'pt-land.js land task', 'pt-land.js push)',
+  // owner-one-action-gates: protected-commit mutates and is record-gated - it stays prompting,
+  // never allow-listed, same tier as land/push themselves.
+  'pt-land.js protected-commit'
 ];
 // The one pre-existing, narrow, read-only exception: 'git branch --show-current' prints the
 // current branch name - no mutation, no wildcard - and predates this brief by several ARCs.
@@ -2445,6 +2523,87 @@ check('AH-23 control: a planted forbidden entry is detected',
   }
 }
 
+// ── AH-24 (work/owner-one-action-gates/brief.md §3) ──────────────────────────────────────
+// R12 gains exactly three new alternatives: brief-request work/<id>/brief.md,
+// protected-request task/<id>, protected-commit task/<id>. The shared trigger/cwd/env/identity
+// branching (AH-20 above) is not re-specialized per verb, so only the form-shape rows differ.
+const OAG_FORMS = [
+  'node .claude/hooks/pt-land.js brief-request work/x/brief.md',
+  'node .claude/hooks/pt-land.js protected-request task/x',
+  'node .claude/hooks/pt-land.js protected-commit task/x'
+];
+for (const form of OAG_FORMS) {
+  check('AH-24 allow, slot cwd: ' + JSON.stringify(form), r12Decide(form, { cwd: SLOT_A }).decision === 'allow');
+  check('AH-24 allow, canonical cwd: ' + JSON.stringify(form), r12Decide(form, { cwd: R11_CANON, projectDir: R11_CANON }).decision === 'allow');
+}
+const OAG_DENY_FORMS = [
+  ['brief-request trailing space', 'node .claude/hooks/pt-land.js brief-request work/x/brief.md '],
+  ['brief-request no path', 'node .claude/hooks/pt-land.js brief-request'],
+  ['brief-request review.md, not brief.md', 'node .claude/hooks/pt-land.js brief-request work/x/review.md'],
+  ['brief-request uppercase id (R11 pattern is lowercase-only)', 'node .claude/hooks/pt-land.js brief-request work/X/brief.md'],
+  ['brief-request env prefix', 'FOO=bar node .claude/hooks/pt-land.js brief-request work/x/brief.md'],
+  ['brief-request bash -c wrapper', 'bash -c "node .claude/hooks/pt-land.js brief-request work/x/brief.md"'],
+  ['protected-request no task', 'node .claude/hooks/pt-land.js protected-request'],
+  ['protected-request non-task/ ref', 'node .claude/hooks/pt-land.js protected-request branch-dev'],
+  ['protected-request trailing space', 'node .claude/hooks/pt-land.js protected-request task/x '],
+  ['protected-request compound &&', 'node .claude/hooks/pt-land.js protected-request task/x && echo done'],
+  ['protected-commit no task', 'node .claude/hooks/pt-land.js protected-commit'],
+  ['protected-commit bash -c wrapper', 'bash -c "node .claude/hooks/pt-land.js protected-commit task/x"'],
+  ['protected-commit compound &&', 'node .claude/hooks/pt-land.js protected-commit task/x && echo done'],
+  ['unknown verb protected-apply', 'node .claude/hooks/pt-land.js protected-apply task/x']
+];
+for (const [label, cmd] of OAG_DENY_FORMS) {
+  check('AH-24 deny (' + label + ')', r12Decide(cmd, { cwd: SLOT_A }).decision === 'deny');
+}
+// Differential: swap the real, on-disk R12_FORM_RE line (post-OAG) for its pre-OAG shape and
+// reload - over the pre-existing corpus (every AH-1 ALLOWED command, every R12/R13 form/deny
+// form), the two modules must disagree ONLY on the three new OAG forms (R12_FORM_RE only gains
+// alternatives; nothing else in the hook changes - brief §3 "Nothing else changes"). This check
+// is red until the Owner applies the candidate (HOOK_PATH still has the pre-OAG line), matching
+// every other "real on-disk hook" check in this suite (AH-8/AH-23 above).
+{
+  const postOagLine = 'const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land|cleanup) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push|brief-request work\\/[a-z0-9][a-z0-9._-]*\\/brief\\.md|(?:protected-request|protected-commit) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*)$/;';
+  const preOagLine = 'const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land|cleanup) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push)$/;';
+  const normalizedSrc = fs.readFileSync(HOOK_PATH, 'utf8').replace(/\r\n/g, '\n');
+  const found = normalizedSrc.split(postOagLine).length - 1;
+  check('AH-24 differential sanity: the post-OAG R12_FORM_RE line was found exactly once', found === 1);
+  if (found === 1) {
+    const srcBeforeOag = normalizedSrc.replace(postOagLine, preOagLine);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ah-oag-diff-'));
+    let modBeforeOag = null;
+    try {
+      const file = path.join(dir, 'pretooluse-guard.js');
+      fs.writeFileSync(file, srcBeforeOag);
+      modBeforeOag = require(file);
+    } catch (e) { /* handled by the null check below */ } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    check('AH-24 differential sanity: the pre-OAG module loads', modBeforeOag !== null);
+    if (modBeforeOag) {
+      const corpus = [...ALLOWED, ...R12_FORMS, ...R12_DENY_FORMS.map((row) => row[1]), ...R13_RISKY_FORMS, ...R13_CONTROL_FORMS];
+      const changed = [];
+      for (const cmd of corpus) {
+        const before = dec(modBeforeOag, cmd, SLOT_A).decision;
+        const after = dec(guard, cmd, SLOT_A).decision;
+        if (before !== after) changed.push(cmd + ' (' + before + ' -> ' + after + ')');
+      }
+      check('AH-24 differential: the pre-existing corpus is unaffected by the OAG alternation (' + changed.join('; ') + ')',
+        changed.length === 0);
+    }
+  }
+}
+
+// AH-24 CLI (brief §6 "G1-G3 hook spawns"): a real hook-process spawn for each new form - allow from
+// a slot cwd (exit 0, silent) - and the wrapped / compound variants deny with R12 on stderr.
+for (const form of OAG_FORMS) {
+  const r = spawnCliEnv(payload(form, SLOT_A), undefined);
+  check('AH-24 CLI allow [slot] ' + form + ' -> exit 0, empty stdout/stderr', r.status === 0 && r.stdout === '' && r.stderr === '');
+}
+for (const [label, cmd] of OAG_DENY_FORMS.filter((row) => /wrapper|compound/.test(row[0]))) {
+  const r = spawnCliEnv(payload(cmd, SLOT_A), undefined);
+  check('AH-24 CLI deny (' + label + ') -> exit 2, empty stdout, R12 on stderr', r.status === 2 && r.stdout === '' && /R12/.test(r.stderr));
+}
+
 // AH-20 unchanged: direct git merge/push and a Claude write of the approval record stay denied
 // with their existing R3m/R3g/R10 reasons - R12 never opens a new path for these.
 check('AH-20 unchanged: git merge --ff-only task/x still denied (R3m)',
@@ -2458,7 +2617,8 @@ check('AH-20 unchanged: a Bash redirect into .git/pt-land-approval still denied 
 
 // AH-20 mutants (5, each caught): the R12-specific guard-side invariants.
 mutantCatches('R12 form regex widened (any pt-land invocation accepted)',
-  "const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land|cleanup) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push)$/;",
+  // owner-one-action-gates: the anchor is the post-OAG line (three new alternatives, brief §3).
+  "const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land|cleanup) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push|brief-request work\\/[a-z0-9][a-z0-9._-]*\\/brief\\.md|(?:protected-request|protected-commit) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*)$/;",
   'const R12_FORM_RE = /pt-land/;',
   (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js push extra-arg', { cwd: SLOT_A }).decision === 'deny');
 mutantCatches('R12 tool check dropped (PowerShell accepted)',

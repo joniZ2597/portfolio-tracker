@@ -5,12 +5,15 @@
  * R12: Owner-approved LAND + push tool (work/worker-land-push/brief.md §2-3).
  * DENY-tier (.claude/hooks/**) - changed only through the Owner copy/hash workflow.
  *
- * Verbs: land-request task/<id> | land task/<id> | push-request | push | cleanup task/<id>
+ * Verbs: brief-request work/<id>/brief.md | protected-request task/<id> | protected-commit task/<id> |
+ *        land-request task/<id> | land task/<id> | push-request | push | cleanup task/<id>
  * Exit 0 success, 1 refusal (fail closed), 3 usage error.
  *
- * Module API (for QA): runLandRequest(opts), runLand(opts), runPushRequest(opts), runPush(opts),
- * runCleanup(opts), parseRecord(text, kind), parseLandScope(briefText).
- * opts = { cwd, task?, gitExec?, expectedOriginUrls?, now?, archiveRoot? }.
+ * Module API (for QA): runBriefRequest(opts), runProtectedRequest(opts), runProtectedCommit(opts),
+ * runLandRequest(opts), runLand(opts), runPushRequest(opts), runPush(opts), runCleanup(opts),
+ * parseRecord(text, kind), parseLandScope(briefText), parseProtectedScope(briefText),
+ * approvalLine(kind, payload, commonDir).
+ * opts = { cwd, task?, path?, gitExec?, expectedOriginUrls?, now?, archiveRoot? }.
  */
 
 const fs = require('fs');
@@ -26,13 +29,45 @@ const EXPECTED_ORIGIN_URLS = [
 const WORKER_SLOT_NAMES = ['pt-wt-worker-a', 'pt-wt-worker-b'];
 const LAND_RECORD_NAME = 'pt-land-approval';
 const PUSH_RECORD_NAME = 'pt-push-approval';
+const BRIEF_RECORD_NAME = 'pt-brief-approval';
+const PROTECTED_RECORD_NAME = 'pt-protected-approval';
 const LOCK_NAME = 'pt-land.lock';
 const AUDIT_NAME = 'pt-land-log';
 const LAND_EVIDENCE_RE = /^LAND-EVIDENCE: qa-offline=PASS \d+; targeted=PASS; codex-classI-unresolved=0$/;
 const LAND_SCOPE_BEGIN = '<!-- land-scope:begin -->';
 const LAND_SCOPE_END = '<!-- land-scope:end -->';
+const PROTECTED_SCOPE_BEGIN = '<!-- protected-scope:begin -->';
+const PROTECTED_SCOPE_END = '<!-- protected-scope:end -->';
 const TASK_RE = /^task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 const OID_RE = /^[0-9a-f]{40}$/;
+const BRIEF_PATH_RE = /^work\/[a-z0-9][a-z0-9._-]*\/brief\.md$/;
+const R10_PROTECTED_CONFIG_RE = /^(?:core\.hookspath|core\.fsmonitor|include\.path|includeif\..*\.path)$/i;
+// G1 "no GIT_* overrides" = R11's own pair (pretooluse-guard.js GIT_ENV_OVERRIDE_RE + R10_GIT_CONFIG_ENV_RE):
+// a harmless GIT_EDITOR / GIT_PAGER in the session is not an override and must not refuse.
+const GIT_ENV_OVERRIDE_RE = /^GIT_(?:DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)$/;
+const R10_GIT_CONFIG_ENV_RE = /^GIT_CONFIG_/i;
+// G2 brief §2 "Allowed targets": a candidate target must match one of these AND be listed in the
+// brief's protected-scope block (checked separately - this list alone is necessary, not sufficient).
+const PROTECTED_TARGET_RES = [
+  /^\.claude\/hooks\//,
+  /^\.claude\/settings\.json$/,
+  /^\.claude\/rules\//,
+  /^agents\.md$/,
+  /^claude\.md$/,
+  /^\.gitignore$/,
+  /^qa\/run-offline\.js$/,
+  /^netlify\.toml$/,
+  /^package\.json$/,
+  /^package-lock\.json$/
+];
+// G2 brief §2 "Never approvable": checked before PROTECTED_TARGET_RES, always wins.
+const PROTECTED_NEVER_RES = [
+  /^work\/[^/]+\/brief\.md$/,
+  /^checkpoint\.md$/,
+  /^\.env/,
+  /^\.claude\/settings\.local\.json$/,
+  /^\.git(?:\/|$)/
+];
 
 // Protected paths - the union of the ASK/DENY tiers and other named-protected paths (brief §3 L8).
 // Every pattern is written lowercase and matched against a lowercased candidate (see diffCheck) -
@@ -120,6 +155,13 @@ function parseRecord(raw, kind) {
     if (!OID_RE.test(l) || !OID_RE.test(r)) return null;
     return { kind: 'PUSH', branch, L: l, R: r };
   }
+  if (kind === 'PROTECTED') {
+    const [verb, task, head, tree] = parts;
+    if (verb !== 'PROTECTED') return null;
+    if (!TASK_RE.test(task)) return null;
+    if (!OID_RE.test(head) || !OID_RE.test(tree)) return null;
+    return { kind: 'PROTECTED', task, head, tree };
+  }
   return null;
 }
 
@@ -137,6 +179,30 @@ function parseLandScope(text) {
     .filter(Boolean);
   if (paths.length === 0) return null;
   return { paths };
+}
+
+function parseProtectedScope(text) {
+  if (typeof text !== 'string') return null;
+  const beginCount = text.split(PROTECTED_SCOPE_BEGIN).length - 1;
+  const endCount = text.split(PROTECTED_SCOPE_END).length - 1;
+  if (beginCount !== 1 || endCount !== 1) return null;
+  const bi = text.indexOf(PROTECTED_SCOPE_BEGIN);
+  const ei = text.indexOf(PROTECTED_SCOPE_END);
+  if (bi === -1 || ei === -1 || ei < bi) return null;
+  const body = text.slice(bi + PROTECTED_SCOPE_BEGIN.length, ei);
+  const paths = body.split(/\r\n|\r|\n/)
+    .map((l) => l.replace(/^\s*[-*]\s*/, '').replace(/`/g, '').trim())
+    .filter(Boolean);
+  if (paths.length === 0) return null;
+  return { paths };
+}
+
+// ── shape rule (brief §2 "Shape rule"): every approval line in exactly one shape/function. ──
+function approvalLine(kind, payload, commonDir) {
+  if (typeof payload !== 'string' || /['\r\n;$`]/.test(payload)) {
+    throw new Error('approvalLine: unsafe payload for kind ' + kind);
+  }
+  return "! printf '%s\\n' '" + payload + "' > '" + toForwardSlash(commonDir) + '/pt-' + kind + "-approval'";
 }
 
 function readRecordFile(commonDir, name) {
@@ -210,6 +276,39 @@ function selfIntegrity(G, canonicalRoot) {
   const blobHash = String(blobR.stdout).trim();
   if (runningHash !== blobHash) return { ok: false, reason: 'self-integrity: the running pt-land.js differs from the branch-dev blob' };
   return { ok: true };
+}
+
+// ── config/hooks cleanliness (G1/G2; mirrors R11's protectedConfigState/hooksState in
+// pretooluse-guard.js - that module exports neither, so this tool re-implements the equivalent
+// read-only predicate here rather than reaching into hook internals). ──────────────────────────
+function configClean(G, canonicalRoot) {
+  const r = G(['config', '--null', '--list'], canonicalRoot, { read: true });
+  if (r.status !== 0) return { ok: false, reason: 'git config integrity could not be verified' };
+  for (const rec of String(r.stdout).split('\0')) {
+    if (!rec) continue;
+    const nl = rec.indexOf('\n');
+    const key = (nl === -1 ? rec : rec.slice(0, nl)).trim();
+    const value = nl === -1 ? '' : rec.slice(nl + 1).trim();
+    if (/^core\.fsmonitor$/i.test(key)) {
+      if (!/^(?:true|false|yes|no|on|off|0|1)$/i.test(value)) return { ok: false, reason: 'protected git config is active (' + key + ')' };
+    } else if (R10_PROTECTED_CONFIG_RE.test(key)) {
+      return { ok: false, reason: 'protected git config is active (' + key + ')' };
+    }
+  }
+  return { ok: true };
+}
+function hooksClean(commonDir) {
+  const dir = path.join(commonDir, 'hooks');
+  if (!fs.existsSync(dir)) return { ok: true };
+  const bad = fs.readdirSync(dir).filter((name) => !/\.sample$/i.test(name));
+  if (bad.length) return { ok: false, reason: 'non-sample git hooks are installed (' + bad.join(', ') + ')' };
+  return { ok: true };
+}
+function catFileBlobBuffer(gitExec, cwd, spec) {
+  const r = spawnSync(gitExec || 'git', ['cat-file', 'blob', spec],
+    { cwd, env: stripGitEnv(), encoding: 'buffer', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+  if (r.status !== 0 || !Buffer.isBuffer(r.stdout)) return null;
+  return r.stdout;
 }
 
 function loadIntegrityModule(canonicalRoot) {
@@ -289,7 +388,43 @@ function briefUnedited(G, canonicalRoot, task, base, tip) {
   return { ok: true, briefPath };
 }
 
-function diffCheck(G, canonicalRoot, base, tip, scopePaths, reviewPath) {
+// G3 (brief §2 "land (L8 revision)"): the audit log is the record of 'ok' protected-commit
+// entries. Malformed lines are skipped rather than thrown on - the audit log is append-only and
+// best-effort (see bestEffortAudit), so L8 must stay robust to a partial/odd line.
+function readAuditEntries(commonDir) {
+  const p = path.join(commonDir, AUDIT_NAME);
+  if (!fs.existsSync(p)) return [];
+  let text;
+  try { text = fs.readFileSync(p, 'utf8'); } catch (e) { return []; }
+  const entries = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try { entries.push(JSON.parse(line)); } catch (e) { /* skip malformed line */ }
+  }
+  return entries;
+}
+// Finds an 'ok' protected-commit entry for this task whose `to` commit is an ancestor of tip and
+// whose `to^{tree}` still equals the entry's recorded tree (a rewritten/rebased `to` fails this),
+// then resolves targetPath's blob inside that approved tree. Most-recent-first: a later approval
+// for the same task supersedes an earlier one.
+function protectedApproval(G, canonicalRoot, commonDir, task, tip, targetPath) {
+  const entries = readAuditEntries(commonDir).filter((e) => e && e.verb === 'protected-commit' &&
+    e.task === task && e.result === 'ok' && typeof e.to === 'string' && typeof e.tree === 'string');
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const e = entries[i];
+    const anc = G(['merge-base', '--is-ancestor', e.to, tip], canonicalRoot, { read: true });
+    if (anc.status !== 0) continue;
+    const toTreeR = G(['rev-parse', '-q', '--verify', e.to + '^{tree}'], canonicalRoot, { read: true });
+    if (toTreeR.status !== 0 || String(toTreeR.stdout).trim() !== e.tree) continue;
+    const blobInTreeR = G(['rev-parse', '-q', '--verify', e.tree + ':' + targetPath], canonicalRoot, { read: true });
+    if (blobInTreeR.status !== 0) continue;
+    return { ok: true, blob: String(blobInTreeR.stdout).trim(), tree: e.tree };
+  }
+  return { ok: false };
+}
+const PROTECTED_NEVER_LAND_RE = /^work\/[^/]+\/brief\.md$|^checkpoint\.md$|^\.env/;
+
+function diffCheck(G, canonicalRoot, commonDir, task, base, tip, scopePaths, protectedScopePaths, reviewPath) {
   const d = G(['diff', '--name-only', '--no-renames', base, tip], canonicalRoot, { read: true });
   if (d.status !== 0) return { ok: false, reason: 'git diff --name-only base tip failed' };
   const files = String(d.stdout).split('\n').map((s) => s.trim()).filter(Boolean);
@@ -300,9 +435,23 @@ function diffCheck(G, canonicalRoot, base, tip, scopePaths, reviewPath) {
   // Case-insensitive: Windows/macOS filesystems resolve a differently-cased path to the same
   // on-disk file (e.g. ".CLAUDE/hooks/x" aliases ".claude/hooks/x"), so a land-scope entry must
   // not be able to alias a protected path by case alone.
-  const protectedHit = files.find((f) => PROTECTED_PATH_RES.some((re) => re.test(f.toLowerCase())));
-  if (protectedHit) return { ok: false, reason: 'protected path: Owner LAND (' + protectedHit + ')' };
-  return { ok: true, files };
+  // brief §2 G3: land-request lists every protected path with its blob and the approving tree.
+  const protectedFiles = [];
+  for (const f of files) {
+    const lower = f.toLowerCase();
+    if (!PROTECTED_PATH_RES.some((re) => re.test(lower))) continue;
+    if (PROTECTED_NEVER_LAND_RE.test(lower)) return { ok: false, reason: 'protected path: Owner LAND (' + f + ')' };
+    const inScope = Array.isArray(protectedScopePaths) && protectedScopePaths.indexOf(f) !== -1 && scopePaths.indexOf(f) !== -1;
+    if (!inScope) return { ok: false, reason: 'protected path not PROTECTED-approved: Owner LAND (' + f + ')' };
+    const approval = protectedApproval(G, canonicalRoot, commonDir, task, tip, f);
+    if (!approval.ok) return { ok: false, reason: 'protected path not PROTECTED-approved: Owner LAND (' + f + ')' };
+    const tipBlobR = G(['rev-parse', '-q', '--verify', tip + ':' + f], canonicalRoot, { read: true });
+    if (tipBlobR.status !== 0 || String(tipBlobR.stdout).trim() !== approval.blob) {
+      return { ok: false, reason: 'protected path not PROTECTED-approved: Owner LAND (' + f + ', changed after approval)' };
+    }
+    protectedFiles.push({ path: f, blob: approval.blob, tree: approval.tree });
+  }
+  return { ok: true, files, protectedFiles };
 }
 
 function landEvidenceCheck(G, canonicalRoot, tip, reviewPath) {
@@ -338,7 +487,7 @@ function bestEffortAudit(commonDir, entry) {
 
 // ── LAND (land-request / land) ──────────────────────────────────────────────────────────
 function buildLandApprovalLine(task, tip, base, commonDir) {
-  return "! printf '%s\\n' 'LAND " + task + ' ' + tip + ' ' + base + "' > '" + toForwardSlash(commonDir) + '/' + LAND_RECORD_NAME + "'";
+  return approvalLine('land', 'LAND ' + task + ' ' + tip + ' ' + base, commonDir);
 }
 
 function runLandCore(opts, doLand) {
@@ -381,7 +530,9 @@ function runLandCore(opts, doLand) {
 
   const idPart = task.replace(/^task\//, '');
   const reviewPath = 'work/' + idPart + '/review.md';
-  const l8 = diffCheck(G, canonicalRoot, l3.base, l3.tip, scope.paths, reviewPath);
+  const protectedScope = parseProtectedScope(String(briefTextR.stdout));
+  const l8 = diffCheck(G, canonicalRoot, commonDir, task, l3.base, l3.tip, scope.paths,
+    protectedScope ? protectedScope.paths : [], reviewPath);
   if (!l8.ok) return refuse('L8', l8.reason, l3.base, l3.tip);
 
   const l9 = landEvidenceCheck(G, canonicalRoot, l3.tip, reviewPath);
@@ -395,7 +546,7 @@ function runLandCore(opts, doLand) {
   if (!ires.ok) return refuse('L10', 'integrity FAIL: ' + ires.failures.join('; '), l3.base, l3.tip);
 
   const report = {
-    task, tip: l3.tip, base: l3.base, commitCount: l3.count, files: l8.files,
+    task, tip: l3.tip, base: l3.base, commitCount: l3.count, files: l8.files, protectedFiles: l8.protectedFiles,
     checks: ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10'].map((id) => id + ' PASS')
   };
   const approvalLine = buildLandApprovalLine(task, l3.tip, l3.base, commonDir);
@@ -510,7 +661,7 @@ function remoteMatchesTracking(G, canonicalRoot, R) {
 }
 
 function buildPushApprovalLine(L, R, commonDir) {
-  return "! printf '%s\\n' 'PUSH branch-dev " + L + ' ' + R + "' > '" + toForwardSlash(commonDir) + '/' + PUSH_RECORD_NAME + "'";
+  return approvalLine('push', 'PUSH branch-dev ' + L + ' ' + R, commonDir);
 }
 
 function runPushCore(opts, doPush) {
@@ -615,6 +766,311 @@ function runPushCore(opts, doPush) {
 }
 function runPushRequest(opts) { return safeRun(() => runPushCore(opts, false)); }
 function runPush(opts) { return safeRun(() => runPushCore(opts, true)); }
+
+// ── G1: brief-request (work/owner-one-action-gates/brief.md §2) ─────────────────────────────
+// Read-only; canonical checkout only; re-implements R11's own predicate set (pretooluse-guard.js
+// exports neither protectedConfigState nor hooksState, and the hook itself is out of scope here -
+// §3 "Nothing else changes" - so the equivalent check is written once more, read-only, in this
+// tool). Writes nothing; prints the line the Owner types with `!`.
+function runBriefRequestCore(opts) {
+  const briefPath = opts.path;
+  if (typeof briefPath !== 'string' || !BRIEF_PATH_RE.test(briefPath)) {
+    return { ok: false, exitCode: 3, reason: 'usage: pt-land.js brief-request work/<id>/brief.md' };
+  }
+  const G = makeGitRunner(opts.gitExec);
+  const caller = resolveCaller(G, opts.cwd, null);
+  if (!caller.ok) return { ok: false, exitCode: 1, reason: 'G1: ' + caller.reason };
+  if (caller.kind !== 'canonical') return { ok: false, exitCode: 1, reason: 'G1: brief-request runs only from the canonical checkout' };
+  const canonicalRoot = caller.canonicalRoot;
+  const commonDir = path.join(canonicalRoot, '.git');
+
+  const envBad = Object.keys(process.env).find((k) => GIT_ENV_OVERRIDE_RE.test(k) || R10_GIT_CONFIG_ENV_RE.test(k));
+  if (envBad !== undefined) return { ok: false, exitCode: 1, reason: 'G1: the session environment sets ' + envBad };
+
+  const head = headRef(G, canonicalRoot);
+  if (head !== 'refs/heads/branch-dev') return { ok: false, exitCode: 1, reason: 'G1: HEAD is not branch-dev' };
+
+  const st = G(['status', '--porcelain=v2', '--untracked-files=all'], canonicalRoot, { read: true });
+  if (st.status !== 0) return { ok: false, exitCode: 1, reason: 'G1: the canonical status could not be read' };
+  const lines = String(st.stdout).split('\n').filter(Boolean);
+  if (lines.length !== 1) return { ok: false, exitCode: 1, reason: 'G1: the staged/working set is not exactly one entry' };
+  const fields = lines[0].split(' ');
+  if (fields[0] !== '1' || (fields[1] !== 'A.' && fields[1] !== 'M.') || fields[2] !== 'N...') {
+    return { ok: false, exitCode: 1, reason: 'G1: the single entry is not a plain added/modified file (A./M., no submodule)' };
+  }
+  const entryPath = fields.slice(8).join(' ');
+  if (entryPath !== briefPath) return { ok: false, exitCode: 1, reason: 'G1: the staged entry does not match the requested path' };
+
+  const cfg = configClean(G, canonicalRoot);
+  if (!cfg.ok) return { ok: false, exitCode: 1, reason: 'G1: ' + cfg.reason };
+  const hooks = hooksClean(commonDir);
+  if (!hooks.ok) return { ok: false, exitCode: 1, reason: 'G1: ' + hooks.reason };
+
+  const devOid = G(['rev-parse', 'refs/heads/branch-dev'], canonicalRoot, { read: true });
+  if (devOid.status !== 0) return { ok: false, exitCode: 1, reason: 'G1: could not resolve the branch-dev OID' };
+  const oid = String(devOid.stdout).trim();
+
+  const buf = catFileBlobBuffer(opts.gitExec, canonicalRoot, ':' + briefPath);
+  if (!buf) return { ok: false, exitCode: 1, reason: 'G1: could not read the staged blob' };
+  const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+
+  const line = approvalLine('brief', sha256 + ' ' + briefPath + ' ' + oid, commonDir);
+  return { ok: true, exitCode: 0, verb: 'brief-request', path: briefPath, oid, sha256, approvalLine: line };
+}
+function runBriefRequest(opts) { return safeRun(() => runBriefRequestCore(opts)); }
+
+// ── G2: protected-request / protected-commit (work/owner-one-action-gates/brief.md §2) ──────
+function targetApprovable(target, scopePaths) {
+  const lower = target.toLowerCase();
+  if (PROTECTED_NEVER_RES.some((re) => re.test(lower))) return false;
+  if (!PROTECTED_TARGET_RES.some((re) => re.test(lower))) return false;
+  return Array.isArray(scopePaths) && scopePaths.indexOf(target) !== -1;
+}
+// Manifest: <os.tmpdir()>/pt-<id>/protected/manifest.json, {"files":[{"target":"...","source":"flat-name"}]}.
+// Flat source names only (no '/', no leading '.', not absolute) - keeps every candidate path out
+// of .claude/... so R10's protected-write rules still apply to this Worker's own writes while
+// building it (brief §2 "Flat source names keep candidate paths free of .claude/...").
+function loadManifest(idPart) {
+  const dir = path.join(os.tmpdir(), 'pt-' + idPart, 'protected');
+  const manifestPath = path.join(dir, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) return { ok: false, reason: 'manifest.json not found at ' + manifestPath };
+  let raw;
+  try { raw = fs.readFileSync(manifestPath, 'utf8'); } catch (e) { return { ok: false, reason: 'manifest.json could not be read' }; }
+  let data;
+  try { data = JSON.parse(raw); } catch (e) { return { ok: false, reason: 'manifest.json is not valid JSON' }; }
+  if (!data || !Array.isArray(data.files) || data.files.length === 0) return { ok: false, reason: 'manifest.json has no files' };
+  const seenTargets = new Set();
+  const files = [];
+  for (const f of data.files) {
+    if (!f || typeof f.target !== 'string' || typeof f.source !== 'string' || !f.target || !f.source) {
+      return { ok: false, reason: 'manifest.json has a malformed entry' };
+    }
+    if (path.isAbsolute(f.source) || /[\\/]/.test(f.source) || f.source === '.' || f.source === '..') {
+      return { ok: false, reason: 'manifest source is not a flat file name (' + f.source + ')' };
+    }
+    const target = toForwardSlash(f.target).replace(/^\.\//, '');
+    if (path.isAbsolute(f.target) || target.startsWith('/') ||
+      target.split('/').some((seg) => seg === '..' || seg === '.' || seg === '')) {
+      return { ok: false, reason: 'manifest target is not a safe relative path (' + f.target + ')' };
+    }
+    if (seenTargets.has(target)) return { ok: false, reason: 'duplicate manifest target (' + target + ')' };
+    seenTargets.add(target);
+    const srcAbs = path.join(dir, f.source);
+    if (!fs.existsSync(srcAbs)) return { ok: false, reason: 'manifest source does not exist (' + f.source + ')' };
+    files.push({ target, srcAbs });
+  }
+  return { ok: true, dir, files };
+}
+// Builds the would-be tree in a temporary index file under os.tmpdir() - GIT_INDEX_FILE is set
+// only for this function's own child processes (stripGitEnv's `extra` arg), never on
+// process.env, so it can never leak into any other call in this process. The only side effect is
+// unreferenced objects written by hash-object -w (brief's one stated allowed exception).
+function buildCandidateTree(gitExec, canonicalRoot, headOid, files) {
+  const idxDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pt-protected-idx-'));
+  const tmpIndex = path.join(idxDir, 'index');
+  const run = (args) => spawnSync(gitExec || 'git', args, {
+    cwd: canonicalRoot, env: stripGitEnv({ GIT_INDEX_FILE: tmpIndex }), encoding: 'utf8',
+    windowsHide: true, maxBuffer: 32 * 1024 * 1024
+  });
+  try {
+    const rt = run(['read-tree', headOid]);
+    if (rt.status !== 0) return { ok: false, reason: 'read-tree failed: ' + String(rt.stderr || '').trim() };
+    const perFile = [];
+    for (const f of files) {
+      const hashR = run(['hash-object', '-w', '--path=' + f.target, '--', f.srcAbs]);
+      if (hashR.status !== 0) return { ok: false, reason: 'hash-object failed for ' + f.target + ': ' + String(hashR.stderr || '').trim() };
+      const blobOid = String(hashR.stdout).trim();
+      let mode = '100644';
+      const lsR = run(['ls-tree', headOid, '--', f.target]);
+      if (lsR.status === 0 && String(lsR.stdout).trim()) {
+        const m = /^(\d+)\s/.exec(String(lsR.stdout));
+        if (m) mode = m[1];
+      }
+      const ciR = run(['update-index', '--add', '--cacheinfo', mode + ',' + blobOid + ',' + f.target]);
+      if (ciR.status !== 0) return { ok: false, reason: 'update-index failed for ' + f.target + ': ' + String(ciR.stderr || '').trim() };
+      const sha256 = crypto.createHash('sha256').update(fs.readFileSync(f.srcAbs)).digest('hex');
+      perFile.push({ target: f.target, blobOid, sha256 });
+    }
+    const wt = run(['write-tree']);
+    if (wt.status !== 0) return { ok: false, reason: 'write-tree failed: ' + String(wt.stderr || '').trim() };
+    return { ok: true, tree: String(wt.stdout).trim(), perFile };
+  } finally {
+    try { fs.rmSync(idxDir, { recursive: true, force: true }); } catch (e) { /* best effort */ }
+  }
+}
+// Shared preconditions for protected-request and protected-commit (brief §2 bullet list).
+function protectedPreconditions(G, opts) {
+  const task = opts.task;
+  if (typeof task !== 'string' || !TASK_RE.test(task)) {
+    return { ok: false, exitCode: 3, reason: 'usage: pt-land.js protected-request|protected-commit task/<id>' };
+  }
+  const caller = resolveCaller(G, opts.cwd, task);
+  if (!caller.ok) return { ok: false, exitCode: 1, reason: 'G2: ' + caller.reason };
+  if (caller.kind !== 'slot') return { ok: false, exitCode: 1, reason: 'G2: protected-request/protected-commit runs only from a Worker slot' };
+  const canonicalRoot = caller.canonicalRoot;
+  const slotRoot = caller.slotRoot;
+  const commonDir = path.join(canonicalRoot, '.git');
+
+  const si = selfIntegrity(G, canonicalRoot);
+  if (!si.ok) return { ok: false, exitCode: 1, reason: 'G2: ' + si.reason };
+
+  const st = G(['status', '--porcelain=v2', '--untracked-files=all'], slotRoot, { read: true });
+  if (st.status !== 0) return { ok: false, exitCode: 1, reason: 'G2: the slot status could not be read' };
+  if (String(st.stdout).trim()) return { ok: false, exitCode: 1, reason: 'G2: the slot is not clean' };
+
+  const headR = G(['rev-parse', 'HEAD'], slotRoot, { read: true });
+  if (headR.status !== 0) return { ok: false, exitCode: 1, reason: 'G2: could not resolve the slot HEAD' };
+  const headOid = String(headR.stdout).trim();
+
+  const idPart = task.replace(/^task\//, '');
+  const briefPath = 'work/' + idPart + '/brief.md';
+  const baseR = G(['merge-base', 'refs/heads/branch-dev', headOid], canonicalRoot, { read: true });
+  if (baseR.status !== 0) return { ok: false, exitCode: 1, reason: 'G2: could not resolve the task base' };
+  const base = String(baseR.stdout).trim();
+  const baseBlob = G(['rev-parse', '-q', '--verify', base + ':' + briefPath], canonicalRoot, { read: true });
+  if (baseBlob.status !== 0) return { ok: false, exitCode: 1, reason: 'G2: work/<id>/brief.md is missing at the base' };
+  const tipBlob = G(['rev-parse', '-q', '--verify', headOid + ':' + briefPath], canonicalRoot, { read: true });
+  if (tipBlob.status !== 0) return { ok: false, exitCode: 1, reason: 'G2: work/<id>/brief.md is missing at the slot HEAD' };
+  if (String(baseBlob.stdout).trim() !== String(tipBlob.stdout).trim()) {
+    return { ok: false, exitCode: 1, reason: 'G2: work/<id>/brief.md was edited by the task' };
+  }
+
+  const briefTextR = G(['show', headOid + ':' + briefPath], canonicalRoot, { read: true });
+  if (briefTextR.status !== 0) return { ok: false, exitCode: 1, reason: 'G2: could not read work/<id>/brief.md' };
+  const scope = parseProtectedScope(String(briefTextR.stdout));
+  if (!scope) return { ok: false, exitCode: 1, reason: 'G2: no protected-scope block in work/<id>/brief.md' };
+
+  const manifest = loadManifest(idPart);
+  if (!manifest.ok) return { ok: false, exitCode: 1, reason: 'G2: ' + manifest.reason };
+
+  for (const f of manifest.files) {
+    if (!targetApprovable(f.target, scope.paths)) {
+      return { ok: false, exitCode: 1, reason: 'G2: target not approvable (' + f.target + ')' };
+    }
+  }
+
+  return { ok: true, task, idPart, canonicalRoot, slotRoot, commonDir, headOid, briefPath, scope, manifest };
+}
+
+function runProtectedRequestCore(opts) {
+  const G = makeGitRunner(opts.gitExec);
+  const pre = protectedPreconditions(G, opts);
+  if (!pre.ok) return pre;
+
+  const built = buildCandidateTree(opts.gitExec, pre.canonicalRoot, pre.headOid, pre.manifest.files);
+  if (!built.ok) return { ok: false, exitCode: 1, reason: 'G2: ' + built.reason };
+
+  const line = approvalLine('protected', 'PROTECTED ' + pre.task + ' ' + pre.headOid + ' ' + built.tree, pre.commonDir);
+  return {
+    ok: true, exitCode: 0, verb: 'protected-request', task: pre.task, head: pre.headOid, tree: built.tree,
+    files: built.perFile, approvalLine: line
+  };
+}
+function runProtectedRequest(opts) { return safeRun(() => runProtectedRequestCore(opts)); }
+
+function runProtectedCommitCore(opts) {
+  const G = makeGitRunner(opts.gitExec);
+  const pre = protectedPreconditions(G, opts);
+  if (!pre.ok) return pre;
+
+  function refuse(reason) {
+    bestEffortAudit(pre.commonDir, { ts: nowIso(opts), verb: 'protected-commit', task: pre.task, from: pre.headOid, to: null, result: 'refuse', reason });
+    return { ok: false, exitCode: 1, reason: 'G2: ' + reason };
+  }
+
+  const record = parseRecord(readRecordFile(pre.commonDir, PROTECTED_RECORD_NAME), 'PROTECTED');
+  if (!record || record.task !== pre.task || record.head !== pre.headOid) {
+    return refuse('no/stale PROTECTED approval');
+  }
+
+  const lock = acquireLock(pre.commonDir);
+  if (!lock.ok) return refuse(lock.reason);
+  try {
+    const stB = G(['status', '--porcelain=v2', '--untracked-files=all'], pre.slotRoot, { read: true });
+    const headB = G(['rev-parse', 'HEAD'], pre.slotRoot, { read: true });
+    if (stB.status !== 0 || String(stB.stdout).trim() || headB.status !== 0 || String(headB.stdout).trim() !== pre.headOid) {
+      return refuse('the repository state changed since preflight (race)');
+    }
+
+    const built = buildCandidateTree(opts.gitExec, pre.canonicalRoot, pre.headOid, pre.manifest.files);
+    if (!built.ok) return refuse(built.reason);
+    if (built.tree !== record.tree) return refuse('the candidate tree no longer matches the approved tree');
+
+    const targets = pre.manifest.files.map((f) => f.target);
+    // Brief §9: the slot's live index is never the source of the committed tree. Hooks are
+    // suppressed for the mutating children through the GIT_CONFIG_* triple (git's own carrier for
+    // `-c`), set only on these child processes like GIT_INDEX_FILE on the request-side build - the
+    // argv then starts with the subcommand, which the QA git shim relies on.
+    const hooksDir = emptyHooksDir();
+    const noHooksEnv = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: toForwardSlash(hooksDir) };
+    const slotGit = (args) => spawnSync(opts.gitExec || 'git', args,
+      { cwd: pre.slotRoot, env: stripGitEnv(noHooksEnv), encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+
+    // 3. The commit object is created from the approved tree OID directly (no path copied, nothing staged).
+    const commitMsg = 'chore(protected): apply Owner-approved files (' + pre.task + ', tree ' + record.tree.slice(0, 12) + ')';
+    const ctR = slotGit(['commit-tree', record.tree, '-p', pre.headOid, '-m', commitMsg]);
+    const newHead = ctR.status === 0 ? String(ctR.stdout).trim() : '';
+    if (ctR.status !== 0 || !OID_RE.test(newHead)) {
+      return refuse('git commit-tree failed: ' + String(ctR.stderr || '').trim());
+    }
+
+    // 4. Compare-and-swap: the task ref moves only if it still equals the recorded HEAD.
+    const urR = slotGit(['update-ref', 'refs/heads/' + pre.task, newHead, pre.headOid]);
+    if (urR.status !== 0) {
+      return refuse('the task ref moved since the approval (compare-and-swap): ' + String(urR.stderr || '').trim());
+    }
+
+    // 5. Index and working tree for exactly the approved targets, from the committed tree.
+    const coR = slotGit(['checkout', 'HEAD', '--'].concat(targets));
+    if (coR.status !== 0) {
+      bestEffortAudit(pre.commonDir, { ts: nowIso(opts), verb: 'protected-commit', task: pre.task, from: pre.headOid, to: newHead, result: 'fail', reason: 'G2: checkout of the approved targets failed after the ref move' });
+      return { ok: false, exitCode: 1, reason: 'G2: the commit ' + newHead + ' exists and the task ref moved, but checkout of the approved targets failed (' + String(coR.stderr || '').trim() + ') - STOP (the tool never undoes a commit or a ref move)' };
+    }
+
+    // 6. Verify tree, parent, every target's index blob and a clean slot.
+    const newHeadR = G(['rev-parse', 'HEAD'], pre.slotRoot, { read: true });
+    const newTreeR = G(['rev-parse', 'HEAD^{tree}'], pre.slotRoot, { read: true });
+    const parentR = G(['rev-parse', 'HEAD^'], pre.slotRoot, { read: true });
+    const stAfter = G(['status', '--porcelain=v2', '--untracked-files=all'], pre.slotRoot, { read: true });
+    let blobsOk = true;
+    for (const t of targets) {
+      const idx = G(['rev-parse', '-q', '--verify', ':' + t], pre.slotRoot, { read: true });
+      const inTree = G(['rev-parse', '-q', '--verify', record.tree + ':' + t], pre.slotRoot, { read: true });
+      if (idx.status !== 0 || inTree.status !== 0 || String(idx.stdout).trim() !== String(inTree.stdout).trim()) { blobsOk = false; break; }
+    }
+    const okAfter = newHeadR.status === 0 && String(newHeadR.stdout).trim() === newHead &&
+      newTreeR.status === 0 && String(newTreeR.stdout).trim() === record.tree &&
+      parentR.status === 0 && String(parentR.stdout).trim() === pre.headOid &&
+      stAfter.status === 0 && !String(stAfter.stdout).trim() && blobsOk;
+    if (!okAfter) {
+      bestEffortAudit(pre.commonDir, { ts: nowIso(opts), verb: 'protected-commit', task: pre.task, from: pre.headOid, to: newHead, result: 'fail', reason: 'G2: protected-commit verification failed' });
+      return { ok: false, exitCode: 1, reason: 'G2: protected-commit verification failed - STOP (the tool never undoes a commit or a ref move)' };
+    }
+
+    // The ok audit entry IS the approval that land (L8) and guard_integrity_check (C6) later verify
+    // against - unlike the informational land/push/cleanup audit lines it is load-bearing, so a
+    // failed append is a failure, not a warning: the commit exists and is verified, but the task
+    // cannot LAND through the governed path. The record is consumed only once the entry is recorded.
+    try {
+      appendAudit(pre.commonDir, { ts: nowIso(opts), verb: 'protected-commit', task: pre.task, from: pre.headOid, to: newHead, tree: record.tree, result: 'ok' });
+    } catch (e) {
+      return {
+        ok: false, exitCode: 1,
+        reason: 'G2: protected-commit made and verified (' + pre.headOid + '..' + newHead + ', tree ' + record.tree +
+          ') but the approval audit entry could not be recorded (' + (e && e.message ? e.message : String(e)) +
+          ') - STOP: without the ok entry the task falls back to an Owner LAND'
+      };
+    }
+    try { fs.unlinkSync(path.join(pre.commonDir, PROTECTED_RECORD_NAME)); } catch (e) { /* already gone */ }
+    return {
+      ok: true, exitCode: 0, verb: 'protected-commit',
+      message: 'PROTECTED-COMMITTED ' + pre.task + ' ' + pre.headOid + '..' + newHead + ' tree ' + record.tree
+    };
+  } finally {
+    releaseLock(lock.path);
+  }
+}
+function runProtectedCommit(opts) { return safeRun(() => runProtectedCommitCore(opts)); }
 
 // ── CLEANUP (work/worker-continuous-flow/brief.md §5, AL-4: mechanical, no approval record) ──
 // K1-K9, every check fails closed; any refusal -> exit 1, no change. Never touches branch-dev,
@@ -787,6 +1243,10 @@ function printLandRequest(res) {
   process.stdout.write('  base: ' + res.report.base + '\n');
   process.stdout.write('  commits: ' + res.report.commitCount + '\n');
   process.stdout.write('  files:\n' + res.report.files.map((f) => '    ' + f).join('\n') + '\n');
+  if (res.report.protectedFiles && res.report.protectedFiles.length) {
+    process.stdout.write('  protected (PROTECTED-approved):\n' +
+      res.report.protectedFiles.map((p) => '    ' + p.path + '  blob ' + p.blob + '  tree ' + p.tree).join('\n') + '\n');
+  }
   process.stdout.write('  checks:\n' + res.report.checks.map((c) => '    ' + c).join('\n') + '\n');
   process.stdout.write('\n' + res.approvalLine + '\n');
 }
@@ -794,6 +1254,19 @@ function printPushRequest(res) {
   process.stdout.write('PUSH REQUEST\n');
   if (res.commits) process.stdout.write(res.commits + '\n');
   process.stdout.write('\n' + res.notice + '\n');
+  process.stdout.write('\n' + res.approvalLine + '\n');
+}
+function printBriefRequest(res) {
+  process.stdout.write('BRIEF REQUEST for ' + res.path + '\n');
+  process.stdout.write('  branch-dev OID: ' + res.oid + '\n');
+  process.stdout.write('  sha256:         ' + res.sha256 + '\n');
+  process.stdout.write('\n' + res.approvalLine + '\n');
+}
+function printProtectedRequest(res) {
+  process.stdout.write('PROTECTED REQUEST for ' + res.task + '\n');
+  process.stdout.write('  HEAD: ' + res.head + '\n');
+  process.stdout.write('  tree: ' + res.tree + '\n');
+  process.stdout.write('  files:\n' + res.files.map((f) => '    ' + f.target + '  ' + f.blobOid + '  sha256=' + f.sha256).join('\n') + '\n');
   process.stdout.write('\n' + res.approvalLine + '\n');
 }
 function output(res, verb) {
@@ -806,8 +1279,12 @@ function output(res, verb) {
   else if (verb === 'push-request') printPushRequest(res);
   else if (verb === 'push') process.stdout.write(res.message + '\n');
   else if (verb === 'cleanup') process.stdout.write(res.message + '\n');
+  else if (verb === 'brief-request') printBriefRequest(res);
+  else if (verb === 'protected-request') printProtectedRequest(res);
+  else if (verb === 'protected-commit') process.stdout.write(res.message + '\n');
   // The Owner reads the mutation result from CLI output; a successful merge/push/cleanup whose
-  // audit append failed must still surface that warning here, not only in the module-API result.
+  // audit append failed must still surface that warning here, not only in the module-API result
+  // (protected-commit has no such path: its audit entry is load-bearing and a failed append refuses).
   if (res.auditWarning) process.stderr.write('pt-land: WARNING - ' + res.auditWarning + '\n');
   process.exit(0);
 }
@@ -837,6 +1314,22 @@ function main(argv) {
     }
     opts.task = argv[1];
     output(runCleanup(opts), verb);
+  } else if (verb === 'brief-request') {
+    if (argv.length !== 2 || typeof argv[1] !== 'string' || !argv[1]) {
+      process.stderr.write('pt-land: usage error - usage: pt-land.js brief-request work/<id>/brief.md\n');
+      process.exit(3);
+      return;
+    }
+    opts.path = argv[1];
+    output(runBriefRequest(opts), verb);
+  } else if (verb === 'protected-request' || verb === 'protected-commit') {
+    if (argv.length !== 2 || typeof argv[1] !== 'string' || !argv[1]) {
+      process.stderr.write('pt-land: usage error - usage: pt-land.js ' + verb + ' task/<id>\n');
+      process.exit(3);
+      return;
+    }
+    opts.task = argv[1];
+    output(verb === 'protected-commit' ? runProtectedCommit(opts) : runProtectedRequest(opts), verb);
   } else {
     process.stderr.write('pt-land: usage error - unknown verb ' + JSON.stringify(verb) + '\n');
     process.exit(3);
@@ -844,7 +1337,9 @@ function main(argv) {
 }
 
 module.exports = {
-  runLandRequest, runLand, runPushRequest, runPush, runCleanup, parseRecord, parseLandScope
+  runLandRequest, runLand, runPushRequest, runPush, runCleanup,
+  runBriefRequest, runProtectedRequest, runProtectedCommit,
+  parseRecord, parseLandScope, parseProtectedScope, approvalLine
 };
 
 if (require.main === module) {

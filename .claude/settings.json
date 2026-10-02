@@ -147,6 +147,8 @@
       "Bash(node .claude/hooks/pt-land.js land-request *)",
       "Bash(node .claude/hooks/pt-land.js push-request)",
       "Bash(node .claude/hooks/pt-land.js cleanup *)",
+      "Bash(node .claude/hooks/pt-land.js brief-request *)",
+      "Bash(node .claude/hooks/pt-land.js protected-request *)",
       "Edit(//tmp/pt-*/**)"
     ],
     "defaultMode": "default"

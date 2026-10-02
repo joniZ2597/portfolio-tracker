@@ -32,6 +32,8 @@ read a file it never imports.)*
 
 **Backlog row (required).** Every brief has a Backlog row naming the `BACKLOG.md` entry or entries it concerns and the expected effect: `close`, `partial` or `none`. If the effect is `close` or `partial` — or the task may otherwise change `BACKLOG.md` — `BACKLOG.md` is listed in the brief's implementation file set **and** its `land-scope` block. If the effect is `none`, the task makes no `BACKLOG.md` edit; a stale entry discovered along the way is recorded as a `[backlog]` lesson.
 
+**Protected-scope block (governance briefs).** A brief that changes a protected path lists each target in a `<!-- protected-scope:begin --> … <!-- protected-scope:end -->` block and also in its `land-scope` block. Only listed targets can pass the PROTECTED gate (step 13a). `work/*/brief.md`, `CHECKPOINT.md`, `.env*`, `.claude/settings.local.json` and anything under `.git` are never approvable.
+
 ## Worker execution contract
 
 Once a tracked, Owner-approved `brief.md` exists, the Worker executes the whole task inside
@@ -125,9 +127,11 @@ commit) or on a STOP condition below.
     - Stage explicit paths with `git add` in one call, then run a plain `git commit -m "…"` in a
       separate call. Never amend; never stage a protected path.
     - A final commit that must include a DENY-tier or protected path is made by the Owner in a
-      normal terminal.
+      normal terminal, unless the brief has a `protected-scope` block — then those paths go in only
+      through step 13a.
     - A gate denial is **STOP-6**.
-    - After the final commit, run
+    - After the final commit — for a brief with a `protected-scope` block, after the step-13a
+      protected commit — run
       `node qa/guard_integrity_check.js --base-main <main oid> --base-dev <brief base> --task task/<id> --since <task-start ISO> --root <canonical checkout>`.
       Any FAIL is **STOP-6**.
     - The integrity result is **LAND evidence**: report it only in the step-13 STOP report (the `CLAUDE.md` task-completion report). It is never written into `review.md` — no amend, and no second commit made only to record it — and `review.md` does not list it as pending.
@@ -135,14 +139,18 @@ commit) or on a STOP condition below.
     - Then report the implementation, QA, Codex and integrity results and continue with step 14.
     - The Worker never runs `git merge`, `rebase`, `pull` or `push` (HOOK-DENY). It LANDs and pushes only through steps 14–15.
 
-14. **LAND — Owner-approved (R12).** If the committed brief has a `land-scope` block and the task diff touches no ASK- or DENY-tier or protected path:
+13a. **PROTECTED gate (only for a brief with a `protected-scope` block).** After the step-13 task commit (the slot is then clean) and before the integrity check: build each protected candidate as a flat file under `<os.tmpdir()>/pt-<id>/protected/` with a `manifest.json` (`{"files":[{"target":"<repo path>","source":"<flat name>"}]}`). Run `node .claude/hooks/pt-land.js protected-request task/<id>`, show its report, print its approval line **exactly**, and **STOP until the Owner answers**. After the Owner enters it with `!`, run `node .claude/hooks/pt-land.js protected-commit task/<id>`; it commits exactly the approved tree or refuses. Any refusal is **STOP-6**. The Worker never stages a protected path itself. The request's only side effect is unreferenced Git objects — an allowed exception.
+
+14. **LAND — Owner-approved (R12).** If the committed brief has a `land-scope` block and the task diff touches no ASK- or DENY-tier or protected path except PROTECTED-approved files (step 13a; the tool verifies each one against the approved tree):
     - run `node .claude/hooks/pt-land.js land-request task/<id>`, show its report, print its approval line **exactly**, and **STOP until the Owner answers**;
-    - the Owner approves by typing that exact line with `!` (the only permitted use of `!`), or declines — then nothing happens;
+    - the Owner approves by typing that exact line with `!` (see "The `!` rule" below), or declines — then nothing happens;
     - after the Owner confirms, run `node .claude/hooks/pt-land.js land task/<id>`. Any refusal is **STOP-6**; "branch-dev moved" means Second LAND.
 
-    Otherwise (no `land-scope` block, or a protected path): **STOP** and request an Owner LAND.
+    Otherwise (no `land-scope` block, or a protected path that is not PROTECTED-approved — including after a Second-LAND rebase): **STOP** and request an Owner LAND.
 15. **Push — Owner-approved (R12).** Run `node .claude/hooks/pt-land.js push-request`, show its report — including the public Netlify DEV deploy notice and the commits to publish — print its approval line exactly, and **STOP until the Owner answers**. After the Owner enters it with `!`, run `node .claude/hooks/pt-land.js push`; it verifies `branch-dev == origin/branch-dev`. Any refusal is **STOP-6**. If the Owner declines, the task ends LANDed and unpushed. Then run step 16.
 16. **Cleanup.** After a verified push, run `node .claude/hooks/pt-land.js cleanup task/<id>` — it archives the task's ignored evidence (`plan.md`, `codex.md`, `qa.log`) to `pt-work-artifacts/<id>/`, detaches the slot at `branch-dev` and safely deletes the local task branch. A refusal is reported, not retried. Then **STOP** with the final completion report.
+
+**The `!` rule.** After `!`, the Owner types only a line printed by `pt-land.js` (`brief-request`, `protected-request`, `land-request` or `push-request`) in the exact shape `! printf '%s\n' '<payload>' > '<common-dir>/pt-<kind>-approval'`, where `<kind>` is `brief`, `protected`, `land` or `push` — nothing else. Claude never writes an approval record.
 
 **The Owner does not approve individual file edits, inspect code previews, relay Codex
 findings, or decide ordinary in-scope implementation questions — LAND approval remains the
@@ -201,8 +209,9 @@ PLAN, IMPLEMENT and MANUAL remain **postures** inside any mode.
 | **ORDINARY** | the approved brief | everything else in the approved brief |
 
 `ask` is a convenience, not a safety boundary: it has been observed not to prompt. A brief that lists
-any ASK- or DENY-tier file is `Mode: Manual`. DENY-tier files are changed only by the Owner, through
-the copy/hash workflow.
+any ASK- or DENY-tier file is `Mode: Manual`. DENY-tier files are changed only with the Owner's
+explicit approval: through the PROTECTED gate (step 13a, one Owner `!` line bound to the exact
+approved tree) or the Owner's copy/hash workflow.
 
 **The brief-listing rule:** an ASK-tier file may be edited only if the approved `brief.md`
 lists it by path. Listed → the brief is `Mode: Manual`; the Worker adopts the MANUAL posture for
@@ -435,7 +444,9 @@ centrally allocated id, no lookup table, no registry.
   smallest scoped diff, how it will be validated. It may be drafted directly at
   `work/<id>/brief.md` before approval — the required sequence is: draft `work/<id>/brief.md`
   → Owner reviews the exact current contents → Owner approves the exact brief-only commit →
-  the Owner writes the approval record (`.git/pt-brief-approval`, R11) and the Git/bootstrap
+  the Git/bootstrap Worker stages the brief and runs
+  `node .claude/hooks/pt-land.js brief-request work/<id>/brief.md`; the Owner writes the approval
+  record (`.git/pt-brief-approval`, R11) by typing the printed line with `!`; the Git/bootstrap
   Worker makes the commit through the R11 gate — or the Owner makes it in a normal terminal →
   commit it unchanged → implementation may
   begin. **An uncommitted or merely staged brief does not authorize implementation** — only the
@@ -555,10 +566,10 @@ above.
   deploys/previews, environment-variable changes, and any other Netlify mutation. Read-only
   Netlify inspection does not require approval.
 - Live external API canaries (SEC, Perplexity, or similar).
-- Commits outside the r9 and R11 gates — any other main-checkout commit, any commit staging a DENY-tier or protected path, any denied form — are made by the Owner in a normal terminal (RC2). An R11 brief-only commit requires the Owner's approval record.
+- Commits outside the r9 and R11 gates — any other main-checkout commit, any commit staging a DENY-tier or protected path, any denied form — are made by the Owner in a normal terminal (RC2). An R11 brief-only commit requires the Owner's approval record (the line printed by `brief-request`). A PROTECTED commit requires the Owner's PROTECTED record and is made only by `pt-land.js protected-commit` (step 13a).
 - `git merge`, `rebase`, `pull`, and any ref move of `main`/`branch-dev` — the Owner, in a normal terminal.
   Exception: a fast-forward LAND of `task/*` into `branch-dev` and a `branch-dev` push through `pt-land.js` under the Owner's single-use records (R12).
-- Environment/runtime mutations, and protected governance changes (the hook and settings, through the Owner copy/hash workflow).
+- Environment/runtime mutations, and protected governance changes (the hook and settings, through the PROTECTED gate or the Owner copy/hash workflow).
 
 ## Worker slot model
 

@@ -52,6 +52,47 @@ function parseArgs(argv) {
   return o;
 }
 
+// C6 exemption (work/owner-one-action-gates/brief.md §8): a protected-path hit in base-dev...task is
+// exempt only when it is PROTECTED-approved for this task - an `ok` protected-commit audit entry for
+// opts.task whose `to` is an ancestor of the task tip with to^{tree} == tree (most recent such entry
+// wins), and the path's blob at the task tip equals its blob in that tree. work/*/brief.md,
+// CHECKPOINT.md and .env* are never exempt. Malformed audit lines are skipped. Reads only.
+const C6_NEVER_EXEMPT_RES = [/^work\/[^/]+\/brief\.md$/i, /^checkpoint\.md$/i, /^\.env[\w.-]*$/i];
+function readProtectedCommitEntries(commonAbs, task) {
+  const p = path.join(commonAbs, 'pt-land-log');
+  if (!fs.existsSync(p)) return [];
+  let text;
+  try { text = fs.readFileSync(p, 'utf8'); } catch (e) { return []; }
+  const out = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    let e;
+    try { e = JSON.parse(line); } catch (err) { continue; }
+    if (e && e.verb === 'protected-commit' && e.result === 'ok' && e.task === task && typeof e.to === 'string' && typeof e.tree === 'string') out.push(e);
+  }
+  return out;
+}
+function protectedApprovedInTask(G, root, task, p) {
+  if (C6_NEVER_EXEMPT_RES.some((re) => re.test(p))) return false;
+  const commonDirR = G(['rev-parse', '--git-common-dir'], root);
+  if (commonDirR.status !== 0) return false;
+  const cd = String(commonDirR.stdout).trim();
+  const commonAbs = path.isAbsolute(cd) ? cd : path.resolve(root, cd);
+  const entries = readProtectedCommitEntries(commonAbs, task);
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const e = entries[i];
+    if (G(['merge-base', '--is-ancestor', e.to, task], root).status !== 0) continue;
+    const toTree = G(['rev-parse', '-q', '--verify', e.to + '^{tree}'], root);
+    if (toTree.status !== 0 || String(toTree.stdout).trim() !== e.tree) continue;
+    const inTree = G(['rev-parse', '-q', '--verify', e.tree + ':' + p], root);
+    if (inTree.status !== 0) continue;
+    const atTip = G(['rev-parse', '-q', '--verify', task + ':' + p], root);
+    if (atTip.status !== 0) return false;
+    return String(inTree.stdout).trim() === String(atTip.stdout).trim();
+  }
+  return false;
+}
+
 function worktreeList(G, root) {
   const r = G(['worktree', 'list', '--porcelain'], root);
   if (r.status !== 0) throw new Error('worktree list failed');
@@ -170,7 +211,9 @@ function runIntegrity(opts) {
     const d = G(['diff', '--name-only', opts.baseDev + '...' + opts.task], root);
     if (d.status === 0) {
       const hits = String(d.stdout).split('\n').map((s) => s.trim()).filter(Boolean).filter((p) => STAGED_DENY_RES.some((re) => re.test(p.replace(/\\/g, '/'))));
-      if (hits.length) failures.push('C6 base-dev...task touches protected paths: ' + hits.join(', '));
+      // §8: a PROTECTED-approved hit is exempt; everything else fails exactly as before.
+      const unapproved = hits.filter((p) => !protectedApprovedInTask(G, root, opts.task, p.replace(/\\/g, '/')));
+      if (unapproved.length) failures.push('C6 base-dev...task touches protected paths: ' + unapproved.join(', '));
     } else failures.push('C6 diff ' + opts.baseDev + '...' + opts.task + ' failed');
   }
 
