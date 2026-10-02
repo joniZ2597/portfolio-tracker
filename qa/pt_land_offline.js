@@ -104,6 +104,15 @@ function buildFixture(opts) {
   G(['commit', '-m', 'add tool'], canon);
   if (!originUrl) G(['push', 'origin', 'branch-dev'], canon);
 
+  // PL-22..31 (cleanup): an optional .gitignore, committed before the slot worktree is created
+  // so ignored-evidence files (plan.md/codex.md/qa.log) are cleanly ignored, not merely untracked.
+  if (opts.gitignore) {
+    W(path.join(canon, '.gitignore'), opts.gitignore);
+    G(['add', '.gitignore'], canon);
+    G(['commit', '-m', 'add gitignore'], canon);
+    if (!originUrl) G(['push', 'origin', 'branch-dev'], canon);
+  }
+
   let briefBody = '# brief\n\n';
   if (!noLandScope) {
     briefBody += '<!-- land-scope:begin -->\n' + scopeRelPaths.map((p) => '- ' + p).join('\n') + '\n<!-- land-scope:end -->\n';
@@ -955,6 +964,369 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
     assert.strictEqual(r.ok, true, 'mutant should have let a malformed LAND-EVIDENCE line pass L9');
   } finally { fx.cleanup(); }
 });
+
+// ── PL-22..31: cleanup (work/worker-continuous-flow/brief.md §5/§8 K1-K9, AL-4) ──────────
+(function plCleanup() {
+  const crypto = require('crypto');
+  const GITIGNORE_TEXT = 'work/*/plan.md\nwork/*/codex.md\nwork/*/qa.log\n';
+  const EVIDENCE_NAMES = ['plan.md', 'codex.md', 'qa.log'];
+
+  function Graw(args, cwd) { return spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }); }
+
+  // Builds a cleanup fixture: buildFixture + a committed .gitignore, then (by default) lands and
+  // pushes the task for real via runLand/runPush, so "landed and pushed" is proven by the same
+  // tool under test, not merely asserted. opts.land=false / opts.push=false skip those steps.
+  function buildCleanupFixture(opts) {
+    opts = opts || {};
+    const fx = buildFixture(Object.assign({}, opts, { gitignore: GITIGNORE_TEXT }));
+    if (opts.land !== false && fx.slotA) {
+      const TOOL = fx.requireTool();
+      fx.writeLandRecord('LAND ' + fx.task + ' ' + fx.tip + ' ' + fx.base + '\n');
+      const landRes = TOOL.runLand({ cwd: fx.slotA, task: fx.task });
+      if (!landRes.ok) throw new Error('fixture setup: land failed: ' + landRes.reason);
+      if (opts.push !== false) {
+        const pr = TOOL.runPushRequest({ cwd: fx.canon, expectedOriginUrls: [fx.originUrl] });
+        if (!pr.ok) throw new Error('fixture setup: push-request failed: ' + pr.reason);
+        fx.writePushRecord('PUSH branch-dev ' + pr.L + ' ' + pr.R + '\n');
+        const pushRes = TOOL.runPush({ cwd: fx.canon, expectedOriginUrls: [fx.originUrl] });
+        if (!pushRes.ok) throw new Error('fixture setup: push failed: ' + pushRes.reason);
+      }
+    }
+    return fx;
+  }
+  function writeIgnoredEvidence(fx) {
+    const dir = path.join(fx.slotA, 'work', fx.taskShort);
+    for (const name of EVIDENCE_NAMES) W(path.join(dir, name), name.toUpperCase() + ' CONTENT\n');
+  }
+  // PL-30 (byte-identical before/after): origin main, origin tags, the canonical branch-dev, and
+  // the other slot (B) must never move as a side effect of any cleanup call, success or refusal.
+  function snapshotUntouched(fx) {
+    return {
+      mainBare: G(['rev-parse', 'main'], fx.bareDir).trim(),
+      devBare: G(['rev-parse', 'branch-dev'], fx.bareDir).trim(),
+      tagsBare: G(['tag'], fx.bareDir).trim(),
+      canonDev: G(['rev-parse', 'branch-dev'], fx.canon).trim(),
+      devRemoteTracking: G(['rev-parse', 'refs/remotes/origin/branch-dev'], fx.canon).trim(),
+      slotB: fx.slotB ? G(['rev-parse', 'HEAD'], fx.slotB).trim() : null,
+      slotBStatus: fx.slotB ? G(['status', '--porcelain'], fx.slotB).trim() : null
+    };
+  }
+  function assertUntouched(fx, before) {
+    const after = snapshotUntouched(fx);
+    assert.strictEqual(after.mainBare, before.mainBare, 'PL-30: origin main unchanged');
+    assert.strictEqual(after.devBare, before.devBare, 'PL-30: origin branch-dev unchanged');
+    assert.strictEqual(after.tagsBare, before.tagsBare, 'PL-30: origin tags unchanged');
+    assert.strictEqual(after.canonDev, before.canonDev, 'PL-30: canonical branch-dev unchanged');
+    assert.strictEqual(after.devRemoteTracking, before.devRemoteTracking, 'PL-30: canonical origin/branch-dev tracking ref unchanged');
+    if (fx.slotB) {
+      assert.strictEqual(after.slotB, before.slotB, 'PL-30: the other slot (B) HEAD untouched');
+      assert.strictEqual(after.slotBStatus, before.slotBStatus, 'PL-30: the other slot (B) status untouched');
+    }
+  }
+
+  test('PL-22: valid cleanup archives+sha256-verifies plan.md/codex.md/qa.log, deletes originals, detaches the slot at branch-dev\'s OID, deletes the branch, writes one audit line (+ PL-30)', () => {
+    const fx = buildCleanupFixture({ taskShort: 'cl1' });
+    try {
+      writeIgnoredEvidence(fx);
+      const beforeHash = {};
+      for (const name of EVIDENCE_NAMES) {
+        beforeHash[name] = crypto.createHash('sha256').update(fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name))).digest('hex');
+      }
+      const before = snapshotUntouched(fx);
+      const TOOL = fx.requireTool();
+      const archiveRoot = path.join(fx.tmp, 'pt-work-artifacts');
+      const devOid = G(['rev-parse', 'branch-dev'], fx.canon).trim();
+      const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task, archiveRoot, now: '2026-01-01T00:00:00.000Z' });
+      assert.strictEqual(r.ok, true, JSON.stringify(r));
+      assert.strictEqual(r.exitCode, 0);
+      assert.strictEqual(r.verb, 'cleanup');
+      const archiveDir = path.join(archiveRoot, 'cl1', '20260101T000000Z');
+      for (const name of EVIDENCE_NAMES) {
+        const orig = path.join(fx.slotA, 'work', 'cl1', name);
+        assert.ok(!fs.existsSync(orig), name + ' original deleted');
+        const archived = path.join(archiveDir, name);
+        assert.ok(fs.existsSync(archived), name + ' archived');
+        const h = crypto.createHash('sha256').update(fs.readFileSync(archived)).digest('hex');
+        assert.strictEqual(h, beforeHash[name], name + ' sha256 matches');
+      }
+      assert.strictEqual(G(['rev-parse', 'HEAD'], fx.slotA).trim(), devOid, 'slot HEAD == branch-dev OID');
+      assert.notStrictEqual(Graw(['symbolic-ref', '-q', 'HEAD'], fx.slotA).status, 0, 'slot HEAD is detached');
+      assert.strictEqual(G(['status', '--porcelain'], fx.slotA).trim(), '', 'slot status clean');
+      assert.notStrictEqual(Graw(['rev-parse', '--verify', '-q', 'refs/heads/' + fx.task], fx.canon).status, 0, 'branch deleted');
+      const audit = fs.readFileSync(path.join(fx.commonDir, 'pt-land-log'), 'utf8').trim().split('\n');
+      const last = JSON.parse(audit[audit.length - 1]);
+      assert.strictEqual(last.verb, 'cleanup');
+      assert.strictEqual(last.result, 'ok');
+      assertUntouched(fx, before);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-23: tip not an ancestor of branch-dev (not landed) -> refuse (K3); nothing changed (+ PL-30)', () => {
+    const fx = buildCleanupFixture({ taskShort: 'cl2', land: false });
+    try {
+      const before = snapshotUntouched(fx);
+      const TOOL = fx.requireTool();
+      const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(r.ok, false);
+      assert.match(r.reason, /K3/);
+      assert.match(r.reason, /not landed/);
+      assert.strictEqual(G(['rev-parse', 'HEAD'], fx.slotA).trim(), fx.tip, 'slot untouched');
+      assert.strictEqual(G(['status', '--porcelain'], fx.slotA).trim(), '');
+      assertUntouched(fx, before);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-24: landed but not pushed (local branch-dev ahead of the origin tracking ref) -> refuse (K3) (+ PL-30)', () => {
+    const fx = buildCleanupFixture({ taskShort: 'cl3', push: false });
+    try {
+      const before = snapshotUntouched(fx);
+      const TOOL = fx.requireTool();
+      const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(r.ok, false);
+      assert.match(r.reason, /K3/);
+      assert.match(r.reason, /not pushed/);
+      assertUntouched(fx, before);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-25: a tracked modification in the task worktree -> refuse (K4); no archive written (+ PL-30)', () => {
+    const fx = buildCleanupFixture({ taskShort: 'cl4' });
+    try {
+      writeIgnoredEvidence(fx);
+      fs.appendFileSync(path.join(fx.slotA, 'work', 'cl4', 'foo.txt'), 'dirty\n');
+      const before = snapshotUntouched(fx);
+      const TOOL = fx.requireTool();
+      const archiveRoot = path.join(fx.tmp, 'pt-work-artifacts');
+      const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task, archiveRoot });
+      assert.strictEqual(r.ok, false);
+      assert.match(r.reason, /K4/);
+      assert.ok(!fs.existsSync(archiveRoot), 'no archive written');
+      assertUntouched(fx, before);
+    } finally { fx.cleanup(); }
+  });
+  test('PL-25: an untracked, non-ignored file in the task worktree -> refuse (K4); no archive written (+ PL-30)', () => {
+    const fx = buildCleanupFixture({ taskShort: 'cl5' });
+    try {
+      writeIgnoredEvidence(fx);
+      W(path.join(fx.slotA, 'stray.txt'), 'x\n');
+      const before = snapshotUntouched(fx);
+      const TOOL = fx.requireTool();
+      const archiveRoot = path.join(fx.tmp, 'pt-work-artifacts');
+      const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task, archiveRoot });
+      assert.strictEqual(r.ok, false);
+      assert.match(r.reason, /K4/);
+      assert.ok(!fs.existsSync(archiveRoot), 'no archive written');
+      assertUntouched(fx, before);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-26: archive destination already occupied by a non-directory -> refuse (K6); originals intact, nothing deleted (+ PL-30)', () => {
+    const fx = buildCleanupFixture({ taskShort: 'cl6' });
+    try {
+      writeIgnoredEvidence(fx);
+      const archiveRoot = path.join(fx.tmp, 'pt-work-artifacts');
+      const archiveDir = path.join(archiveRoot, 'cl6', '20260101T000000Z');
+      fs.mkdirSync(path.dirname(archiveDir), { recursive: true });
+      W(archiveDir, 'occupied\n'); // the exact per-stamp archive directory path exists as a FILE
+      const beforeContent = {};
+      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', 'cl6', name), 'utf8');
+      const before = snapshotUntouched(fx);
+      const TOOL = fx.requireTool();
+      const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task, archiveRoot, now: '2026-01-01T00:00:00.000Z' });
+      assert.strictEqual(r.ok, false);
+      assert.match(r.reason, /K6/);
+      assert.match(r.reason, /nothing deleted/);
+      for (const name of EVIDENCE_NAMES) {
+        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', 'cl6', name), 'utf8'), beforeContent[name], name + ' original intact');
+      }
+      assertUntouched(fx, before);
+    } finally { fx.cleanup(); }
+  });
+  test('PL-26: one exact destination file already exists (never overwritten) -> refuse (K6); all originals intact, nothing deleted, no partial copy left behind (+ PL-30)', () => {
+    const fx = buildCleanupFixture({ taskShort: 'cl6b' });
+    try {
+      writeIgnoredEvidence(fx);
+      const archiveRoot = path.join(fx.tmp, 'pt-work-artifacts');
+      const archiveDir = path.join(archiveRoot, 'cl6b', '20260101T000000Z');
+      fs.mkdirSync(archiveDir, { recursive: true });
+      W(path.join(archiveDir, 'codex.md'), 'pre-existing, must not be overwritten\n'); // one exact destination FILE pre-occupied
+      const beforeContent = {};
+      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', 'cl6b', name), 'utf8');
+      const before = snapshotUntouched(fx);
+      const TOOL = fx.requireTool();
+      const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task, archiveRoot, now: '2026-01-01T00:00:00.000Z' });
+      assert.strictEqual(r.ok, false);
+      assert.match(r.reason, /K6/);
+      assert.match(r.reason, /already exists/);
+      for (const name of EVIDENCE_NAMES) {
+        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', 'cl6b', name), 'utf8'), beforeContent[name], name + ' original intact');
+      }
+      assert.strictEqual(fs.readFileSync(path.join(archiveDir, 'codex.md'), 'utf8'), 'pre-existing, must not be overwritten\n', 'the pre-existing destination file was never overwritten');
+      // plan.md sorts before codex.md alphabetically only by chance of the real ls-files order;
+      // assert generically that no OTHER file in the archive dir was left behind by the aborted copy.
+      const leftBehind = fs.readdirSync(archiveDir).filter((n) => n !== 'codex.md');
+      assert.deepStrictEqual(leftBehind, [], 'no partial copy left behind: ' + JSON.stringify(leftBehind));
+      assertUntouched(fx, before);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-27: a second cleanup of an already-cleaned task -> refuse (branch absent) (+ PL-30)', () => {
+    const fx = buildCleanupFixture({ taskShort: 'cl7' });
+    try {
+      writeIgnoredEvidence(fx);
+      const TOOL = fx.requireTool();
+      const archiveRoot = path.join(fx.tmp, 'pt-work-artifacts');
+      const first = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task, archiveRoot, now: '2026-01-01T00:00:00.000Z' });
+      assert.strictEqual(first.ok, true, JSON.stringify(first));
+      const before = snapshotUntouched(fx);
+      const second = TOOL.runCleanup({ cwd: fx.canon, task: fx.task, archiveRoot });
+      assert.strictEqual(second.ok, false);
+      assert.match(second.reason, /K3/);
+      assert.match(second.reason, /does not exist/);
+      assertUntouched(fx, before);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-28: the branch is checked out nowhere (branch-only cleanup) -> branch deleted, no slot step (+ PL-30)', () => {
+    const fx = buildCleanupFixture({ taskShort: 'cl8' });
+    try {
+      G(['worktree', 'remove', '--force', fx.slotA], fx.canon);
+      const before = snapshotUntouched(fx);
+      const TOOL = fx.requireTool();
+      const r = TOOL.runCleanup({ cwd: fx.canon, task: fx.task });
+      assert.strictEqual(r.ok, true, JSON.stringify(r));
+      assert.match(r.message, /no slot was checked out/);
+      assert.match(r.message, /no evidence to archive/);
+      assert.notStrictEqual(Graw(['rev-parse', '--verify', '-q', 'refs/heads/' + fx.task], fx.canon).status, 0, 'branch deleted');
+      assertUntouched(fx, before);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-29: a planted non-sample git hook is never executed during K7/K8 (+ PL-30)', () => {
+    const fx = buildCleanupFixture({ taskShort: 'cl9' });
+    try {
+      writeIgnoredEvidence(fx);
+      const marker = path.join(fx.tmp, 'hook-ran-marker.txt');
+      const hookBody = '#!/bin/sh\necho ran >> "' + marker.replace(/\\/g, '/') + '"\n';
+      // Linked worktrees share one hooks dir (fx.commonDir/hooks) - planting it once covers both
+      // K7 (slot switch --detach, in fx.slotA) and K8 (branch -d, in fx.canon).
+      const hooksDir = path.join(fx.commonDir, 'hooks');
+      fs.mkdirSync(hooksDir, { recursive: true });
+      for (const name of ['post-checkout', 'pre-commit', 'post-commit']) {
+        const hookPath = path.join(hooksDir, name);
+        fs.writeFileSync(hookPath, hookBody);
+        try { fs.chmodSync(hookPath, 0o755); } catch (e) { /* best effort on platforms without exec bits */ }
+      }
+      const before = snapshotUntouched(fx);
+      const TOOL = fx.requireTool();
+      const archiveRoot = path.join(fx.tmp, 'pt-work-artifacts');
+      const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task, archiveRoot, now: '2026-01-01T00:00:00.000Z' });
+      assert.strictEqual(r.ok, true, JSON.stringify(r));
+      assert.ok(!fs.existsSync(marker), 'planted hook never ran');
+      assertUntouched(fx, before);
+    } finally { fx.cleanup(); }
+  });
+
+  test('PL-31: CLI cleanup without a task -> exit 3; a refusal -> exit 1; a success -> exit 0', () => {
+    const fx = buildCleanupFixture({ taskShort: 'cl10' });
+    try {
+      const toolPath = path.join(fx.canon, '.claude', 'hooks', 'pt-land.js');
+      function run(args, cwd) { return spawnSync('node', [toolPath].concat(args), { cwd, encoding: 'utf8' }); }
+      const usage = run(['cleanup'], fx.slotA);
+      assert.strictEqual(usage.status, 3, usage.stderr);
+      const refusal = run(['cleanup', 'task/does-not-exist'], fx.slotA);
+      assert.strictEqual(refusal.status, 1, refusal.stderr);
+      const success = run(['cleanup', fx.task], fx.slotA);
+      assert.strictEqual(success.status, 0, success.stderr);
+      assert.match(success.stdout, /^CLEANED /);
+    } finally { fx.cleanup(); }
+  });
+
+  // ── cleanup mutants (brief §8): K3 dropped, K4 dropped, -d -> -D, archive verify skipped ──
+  test('MUT: cleanup K3 (landed/pushed ancestry) check skipped -> cleanup proceeds on a landed-but-unpushed task (caught)', () => {
+    // land:false would also be blocked by git's own "-d" safety net at K8 (the branch would be
+    // unmerged relative to canonical's own HEAD too, independent of K3) - that masks the
+    // mutation. landed-but-not-pushed isolates K3's "pushed" clause: canonical HEAD already
+    // contains the task (so "-d" alone would succeed), and nothing BUT K3 checks origin/branch-dev.
+    const mutSrc = withMutantSource((s) => s.replace(
+      "  const devAnc = G(['merge-base', '--is-ancestor', tip, 'refs/heads/branch-dev'], canonicalRoot, { read: true });\r\n  if (devAnc.status !== 0) return refuse('K3', 'not landed (tip is not an ancestor of branch-dev)');\r\n  const originAnc = G(['merge-base', '--is-ancestor', tip, 'refs/remotes/origin/branch-dev'], canonicalRoot, { read: true });\r\n  if (originAnc.status !== 0) return refuse('K3', 'not pushed (tip is not an ancestor of origin/branch-dev)');\r\n",
+      ''
+    ));
+    const fx = buildCleanupFixture({ taskShort: 'mu4', push: false, toolSource: mutSrc });
+    try {
+      const TOOL = fx.requireTool();
+      const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task });
+      assert.strictEqual(r.ok, true, 'mutant should have let cleanup proceed on an unpushed task without K3');
+    } finally { fx.cleanup(); }
+  });
+
+  test('MUT: cleanup K4 (slot-clean) check skipped -> archives/deletes-original/deletes-branch on a dirty slot before K9 (too late) catches it (caught)', () => {
+    // An untracked, non-ignored stray file left in the slot. K9's own post-condition (slot
+    // status empty) independently catches the leftover dirt, so the FINAL ok is still false
+    // either way - that alone would not distinguish "K4 present" from "K4 removed". The real,
+    // dangerous difference K4's absence causes is WHEN the tool notices: with K4 intact it
+    // refuses up front, before touching anything; with K4 removed it archives the evidence,
+    // deletes the originals, and deletes the branch FIRST, only failing afterward at K9 - by
+    // which point real, hard-to-reverse state has already changed. That is what this probes.
+    const mutSrc = withMutantSource((s) => s.replace(
+      "  if (hadSlot) {\r\n    const st = G(['status', '--porcelain=v2', '--untracked-files=all'], slotTree.path, { read: true });\r\n    if (st.status !== 0) return refuse('K4', 'the task worktree status could not be read');\r\n    if (String(st.stdout).trim()) return refuse('K4', 'slot not clean');\r\n  }\r\n",
+      ''
+    ));
+    const fx = buildCleanupFixture({ taskShort: 'mu5', toolSource: mutSrc });
+    try {
+      writeIgnoredEvidence(fx);
+      W(path.join(fx.slotA, 'stray.txt'), 'x\n');
+      const TOOL = fx.requireTool();
+      const archiveRoot = path.join(fx.tmp, 'pt-work-artifacts');
+      const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task, archiveRoot, now: '2026-01-01T00:00:00.000Z' });
+      assert.strictEqual(r.ok, false, JSON.stringify(r)); // K9 still ultimately catches it
+      assert.match(r.reason, /K9/);
+      // ... but only AFTER the irreversible steps K4 should have blocked up front already ran:
+      assert.ok(!fs.existsSync(path.join(fx.slotA, 'work', 'mu5', 'plan.md')), 'original already deleted before K9 fired');
+      assert.ok(fs.existsSync(path.join(archiveRoot, 'mu5', '20260101T000000Z', 'plan.md')), 'archive already written before K9 fired');
+      const branchCheck = spawnSync('git', ['rev-parse', '--verify', '-q', 'refs/heads/' + fx.task], { cwd: fx.canon, encoding: 'utf8' });
+      assert.notStrictEqual(branchCheck.status, 0, 'branch already deleted before K9 fired - exactly what K4 exists to prevent');
+    } finally { fx.cleanup(); }
+  });
+
+  test('MUT: cleanup K8 "-d" changed to "-D" -> force-deletes a branch unmerged relative to canonical HEAD (caught)', () => {
+    const mutSrc = withMutantSource((s) => s.replace(
+      "'branch', '-d', task",
+      "'branch', '-D', task"
+    ));
+    const fx = buildCleanupFixture({ taskShort: 'mu6', toolSource: mutSrc });
+    try {
+      // Move canonical's own checkout to a detached point BEFORE the task's commits, so the
+      // task branch is an ancestor of refs/heads/branch-dev (K3 still passes - a ref, not a
+      // checkout) but is NOT merged relative to canonical's CURRENT HEAD - exactly the
+      // condition git's own "-d" safety net (not K3) is the last line of defence against.
+      G(['checkout', '--detach', fx.base], fx.canon);
+      const TOOL = fx.requireTool();
+      const r = TOOL.runCleanup({ cwd: fx.canon, task: fx.task });
+      assert.strictEqual(r.ok, true, 'mutant -D should have force-deleted the HEAD-unmerged branch');
+      const check = spawnSync('git', ['rev-parse', '--verify', '-q', 'refs/heads/' + fx.task], { cwd: fx.canon, encoding: 'utf8' });
+      assert.notStrictEqual(check.status, 0, 'branch deleted by the mutant despite not being merged into canonical HEAD');
+    } finally { fx.cleanup(); }
+  });
+
+  test('MUT: cleanup K6 archive sha256 verification skipped -> a corrupted copy is archived and the original still deleted (caught)', () => {
+    const mutSrc = withMutantSource((s) => s.replace(
+      "          fs.writeFileSync(destAbs, buf, { flag: 'wx' });\r\n          const srcHash = crypto.createHash('sha256').update(buf).digest('hex');\r\n          const destHash = crypto.createHash('sha256').update(fs.readFileSync(destAbs)).digest('hex');\r\n          if (srcHash !== destHash) throw new Error('sha256 mismatch for ' + rel);\r\n",
+      "          fs.writeFileSync(destAbs, Buffer.concat([buf, Buffer.from('CORRUPT')]), { flag: 'wx' });\r\n"
+    ));
+    const fx = buildCleanupFixture({ taskShort: 'mu7', toolSource: mutSrc });
+    try {
+      writeIgnoredEvidence(fx);
+      const TOOL = fx.requireTool();
+      const archiveRoot = path.join(fx.tmp, 'pt-work-artifacts');
+      const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task, archiveRoot, now: '2026-01-01T00:00:00.000Z' });
+      assert.strictEqual(r.ok, true, 'mutant should have let a corrupted archive copy through without verification');
+      const archived = fs.readFileSync(path.join(archiveRoot, 'mu7', '20260101T000000Z', 'plan.md'), 'utf8');
+      assert.ok(/CORRUPT$/.test(archived), 'the corrupted copy was written and never caught');
+      assert.ok(!fs.existsSync(path.join(fx.slotA, 'work', 'mu7', 'plan.md')), 'the (now-unverified) original was still deleted');
+    } finally { fx.cleanup(); }
+  });
+})();
 
 // ── summary ──────────────────────────────────────────────────────────────────────────────
 if (failed > 0) {

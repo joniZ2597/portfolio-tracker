@@ -5,17 +5,18 @@
  * R12: Owner-approved LAND + push tool (work/worker-land-push/brief.md §2-3).
  * DENY-tier (.claude/hooks/**) - changed only through the Owner copy/hash workflow.
  *
- * Verbs: land-request task/<id> | land task/<id> | push-request | push
+ * Verbs: land-request task/<id> | land task/<id> | push-request | push | cleanup task/<id>
  * Exit 0 success, 1 refusal (fail closed), 3 usage error.
  *
  * Module API (for QA): runLandRequest(opts), runLand(opts), runPushRequest(opts), runPush(opts),
- * parseRecord(text, kind), parseLandScope(briefText).
- * opts = { cwd, task?, gitExec?, expectedOriginUrls?, now? }.
+ * runCleanup(opts), parseRecord(text, kind), parseLandScope(briefText).
+ * opts = { cwd, task?, gitExec?, expectedOriginUrls?, now?, archiveRoot? }.
  */
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 const EXPECTED_ORIGIN_URLS = [
@@ -54,6 +55,14 @@ const PROTECTED_PATH_RES = [
 function nowIso(opts) {
   if (opts && opts.now !== undefined) return typeof opts.now === 'function' ? opts.now() : opts.now;
   return new Date().toISOString();
+}
+// UTC yyyymmddThhmmssZ (brief AL-5 archive stamp format).
+function nowStamp(opts) {
+  const raw = opts && opts.now !== undefined ? (typeof opts.now === 'function' ? opts.now() : opts.now) : new Date().toISOString();
+  const d = new Date(raw);
+  const p2 = (n) => String(n).padStart(2, '0');
+  return d.getUTCFullYear() + p2(d.getUTCMonth() + 1) + p2(d.getUTCDate()) + 'T' +
+    p2(d.getUTCHours()) + p2(d.getUTCMinutes()) + p2(d.getUTCSeconds()) + 'Z';
 }
 function toForwardSlash(p) { return String(p).replace(/\\/g, '/'); }
 function normPath(p) { return toForwardSlash(p).toLowerCase().replace(/\/+$/, ''); }
@@ -143,7 +152,7 @@ function readRecordFile(commonDir, name) {
   return buf.toString('ascii');
 }
 
-// ── caller context (L1/P1) ─────────────────────────────────────────────────────────────
+// ── caller context (L1/P1/K1) ──────────────────────────────────────────────────────────
 function gitTopLevel(G, cwd) {
   const r = G(['rev-parse', '--show-toplevel'], cwd, { read: true });
   if (r.status !== 0) return null;
@@ -190,7 +199,7 @@ function resolveCaller(G, cwd, task) {
   return { ok: false, reason: 'the cwd is neither a Worker slot nor the canonical checkout' };
 }
 
-// ── self-integrity (L2/P2) ─────────────────────────────────────────────────────────────
+// ── self-integrity (L2/P2/K2) ──────────────────────────────────────────────────────────
 function selfIntegrity(G, canonicalRoot) {
   const rel = '.claude/hooks/pt-land.js';
   const hashR = G(['hash-object', '--path=' + rel, '--', __filename], canonicalRoot, { read: true });
@@ -607,6 +616,170 @@ function runPushCore(opts, doPush) {
 function runPushRequest(opts) { return safeRun(() => runPushCore(opts, false)); }
 function runPush(opts) { return safeRun(() => runPushCore(opts, true)); }
 
+// ── CLEANUP (work/worker-continuous-flow/brief.md §5, AL-4: mechanical, no approval record) ──
+// K1-K9, every check fails closed; any refusal -> exit 1, no change. Never touches branch-dev,
+// main, remotes, tags, git hooks, or any worktree other than refs/heads/task/<id>'s own.
+function runCleanupCore(opts) {
+  const task = opts.task;
+  if (typeof task !== 'string' || !TASK_RE.test(task)) {
+    return { ok: false, exitCode: 3, reason: 'usage: pt-land.js cleanup task/<id>' };
+  }
+  const G = makeGitRunner(opts.gitExec);
+
+  // K1: caller context (reuses L1's resolveCaller - if invoked from a Worker slot, that slot's
+  // HEAD must already be this exact task branch; invoked from the canonical checkout, any task
+  // may be named, including one checked out nowhere - branch-only cleanup).
+  const caller = resolveCaller(G, opts.cwd, task);
+  if (!caller.ok) return { ok: false, exitCode: 1, reason: 'K1: ' + caller.reason };
+  const canonicalRoot = caller.canonicalRoot;
+  const commonDir = path.join(canonicalRoot, '.git');
+
+  function refuse(step, reason, from, to) {
+    bestEffortAudit(commonDir, { ts: nowIso(opts), verb: 'cleanup', task, from: from || null, to: to || null, result: 'refuse', reason: step + ': ' + reason });
+    return { ok: false, exitCode: 1, reason: step + ': ' + reason };
+  }
+
+  // K2: self-integrity, same as L2/P2.
+  const si = selfIntegrity(G, canonicalRoot);
+  if (!si.ok) return refuse('K2', si.reason);
+
+  // K3: landed AND pushed - tip is an ancestor of both refs/heads/branch-dev and
+  // refs/remotes/origin/branch-dev.
+  const tipR = G(['rev-parse', '--verify', '-q', 'refs/heads/' + task], canonicalRoot, { read: true });
+  if (tipR.status !== 0) return refuse('K3', 'refs/heads/' + task + ' does not exist');
+  const tip = String(tipR.stdout).trim();
+  const devAnc = G(['merge-base', '--is-ancestor', tip, 'refs/heads/branch-dev'], canonicalRoot, { read: true });
+  if (devAnc.status !== 0) return refuse('K3', 'not landed (tip is not an ancestor of branch-dev)');
+  const originAnc = G(['merge-base', '--is-ancestor', tip, 'refs/remotes/origin/branch-dev'], canonicalRoot, { read: true });
+  if (originAnc.status !== 0) return refuse('K3', 'not pushed (tip is not an ancestor of origin/branch-dev)');
+
+  // K1 (continued): find whether any worktree currently has this branch checked out.
+  const trees = worktreeList(G, canonicalRoot);
+  if (!trees) return refuse('K1', 'could not list worktrees');
+  const slotTree = trees.find((t) => t.branch === task);
+  const hadSlot = !!slotTree;
+
+  // K4: the task worktree must be clean (ignored files allowed) - skipped when branch-only.
+  if (hadSlot) {
+    const st = G(['status', '--porcelain=v2', '--untracked-files=all'], slotTree.path, { read: true });
+    if (st.status !== 0) return refuse('K4', 'the task worktree status could not be read');
+    if (String(st.stdout).trim()) return refuse('K4', 'slot not clean');
+  }
+
+  // K5: lock.
+  const lock = acquireLock(commonDir);
+  if (!lock.ok) return refuse('K5', lock.reason);
+  try {
+    let archiveDir = null;
+    let devOid = null;
+    let archivedCount = 0;
+
+    // K6: archive the task's ignored evidence (plan.md, codex.md, qa.log, ...) - skipped when
+    // branch-only. Every copy is sha256-verified BEFORE any original is deleted; any failure
+    // refuses with nothing deleted (partial archive copies are rolled back).
+    if (hadSlot) {
+      const idPart = task.replace(/^task\//, '');
+      const workPrefix = 'work/' + idPart + '/';
+      const lsR = G(['ls-files', '--others', '--ignored', '--exclude-standard', '--', workPrefix], slotTree.path, { read: true });
+      if (lsR.status !== 0) return refuse('K6', 'could not list ignored files under ' + workPrefix);
+      const ignoredFiles = String(lsR.stdout).split('\n').map((s) => s.trim()).filter(Boolean);
+      const archiveRoot = opts.archiveRoot || path.join(canonicalRoot, '..', 'pt-work-artifacts');
+      const stamp = nowStamp(opts);
+      archiveDir = path.join(archiveRoot, idPart, stamp);
+      const archived = [];
+      try {
+        for (const rel of ignoredFiles) {
+          const relUnderWork = rel.slice(workPrefix.length);
+          const srcAbs = path.join(slotTree.path, rel);
+          const destAbs = path.join(archiveDir, relUnderWork);
+          if (fs.existsSync(destAbs)) throw new Error('archive destination already exists: ' + destAbs);
+          fs.mkdirSync(path.dirname(destAbs), { recursive: true });
+          const buf = fs.readFileSync(srcAbs);
+          fs.writeFileSync(destAbs, buf, { flag: 'wx' });
+          const srcHash = crypto.createHash('sha256').update(buf).digest('hex');
+          const destHash = crypto.createHash('sha256').update(fs.readFileSync(destAbs)).digest('hex');
+          if (srcHash !== destHash) throw new Error('sha256 mismatch for ' + rel);
+          archived.push({ srcAbs, destAbs });
+        }
+        archivedCount = archived.length;
+      } catch (e) {
+        for (const a of archived) { try { fs.unlinkSync(a.destAbs); } catch (e2) { /* best effort */ } }
+        return refuse('K6', 'archive failed (' + (e && e.message ? e.message : String(e)) + ') - nothing deleted');
+      }
+      // Originals are deleted only after every copy is written and sha256-verified above. A
+      // delete failure stops immediately (no detach, no branch delete) - the already-verified
+      // archive and any not-yet-deleted original are both left in place; nothing is guessed.
+      for (const a of archived) {
+        try { fs.unlinkSync(a.srcAbs); }
+        catch (e) { return refuse('K6', 'could not delete the original after archiving (' + a.srcAbs + '): ' + (e && e.message ? e.message : String(e))); }
+      }
+    }
+
+    // K7: detach the slot at branch-dev's current OID (by OID - R10-4's ref-name checks never
+    // see a name) - skipped when branch-only.
+    if (hadSlot) {
+      const devOidR = G(['rev-parse', 'refs/heads/branch-dev'], canonicalRoot, { read: true });
+      if (devOidR.status !== 0) return refuse('K7', 'could not resolve branch-dev OID');
+      devOid = String(devOidR.stdout).trim();
+      const hooksDir = emptyHooksDir();
+      const switchR = spawnSync(opts.gitExec || 'git',
+        ['-c', 'core.hooksPath=' + toForwardSlash(hooksDir), 'switch', '--detach', devOid],
+        { cwd: slotTree.path, env: stripGitEnv(), encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+      if (switchR.status !== 0) {
+        return refuse('K7', 'git switch --detach exited ' + switchR.status + ': ' + String(switchR.stderr || '').trim());
+      }
+    }
+
+    // K8: safe branch delete only (canonical checkout) - never -D, never on branch-dev/main.
+    const hooksDir2 = emptyHooksDir();
+    const delR = spawnSync(opts.gitExec || 'git',
+      ['-c', 'core.hooksPath=' + toForwardSlash(hooksDir2), 'branch', '-d', task],
+      { cwd: canonicalRoot, env: stripGitEnv(), encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+    if (delR.status !== 0) {
+      return refuse('K8', 'git branch -d exited ' + delR.status + ': ' + String(delR.stderr || '').trim());
+    }
+
+    // K9: verify.
+    if (hadSlot) {
+      const headR = G(['rev-parse', 'HEAD'], slotTree.path, { read: true });
+      const devOidR2 = G(['rev-parse', 'refs/heads/branch-dev'], canonicalRoot, { read: true });
+      const stAfter = G(['status', '--porcelain=v2', '--untracked-files=all'], slotTree.path, { read: true });
+      const symR = G(['symbolic-ref', '-q', 'HEAD'], slotTree.path, { read: true }); // fails (detached) by design
+      const detached = symR.status !== 0;
+      const okSlot = detached && headR.status === 0 && devOidR2.status === 0 &&
+        String(headR.stdout).trim() === String(devOidR2.stdout).trim() &&
+        stAfter.status === 0 && !String(stAfter.stdout).trim();
+      if (!okSlot) {
+        bestEffortAudit(commonDir, { ts: nowIso(opts), verb: 'cleanup', task, from: tip, to: null, result: 'fail', reason: 'K9: slot verification failed' });
+        return { ok: false, exitCode: 1, reason: 'K9: slot verification failed - STOP (cleanup never tries to undo)' };
+      }
+    }
+    const branchCheckR = G(['rev-parse', '--verify', '-q', 'refs/heads/' + task], canonicalRoot, { read: true });
+    if (branchCheckR.status === 0) {
+      bestEffortAudit(commonDir, { ts: nowIso(opts), verb: 'cleanup', task, from: tip, to: null, result: 'fail', reason: 'K9: branch still present' });
+      return { ok: false, exitCode: 1, reason: 'K9: branch still present after delete - STOP' };
+    }
+
+    let auditWarning = null;
+    try {
+      appendAudit(commonDir, { ts: nowIso(opts), verb: 'cleanup', task, from: tip, to: null, result: 'ok', reason: null });
+    } catch (e) {
+      auditWarning = 'audit log append failed: ' + (e && e.message ? e.message : String(e));
+    }
+    const success = {
+      ok: true, exitCode: 0, verb: 'cleanup',
+      message: 'CLEANED ' + task + (hadSlot
+        ? '; slot detached at ' + devOid + (archivedCount > 0 ? '; evidence archived to ' + archiveDir : '; no ignored evidence to archive')
+        : '; no slot was checked out; no evidence to archive')
+    };
+    if (auditWarning) success.auditWarning = auditWarning;
+    return success;
+  } finally {
+    releaseLock(lock.path);
+  }
+}
+function runCleanup(opts) { return safeRun(() => runCleanupCore(opts)); }
+
 // ── CLI ─────────────────────────────────────────────────────────────────────────────────
 function printLandRequest(res) {
   process.stdout.write('LAND REQUEST for ' + res.report.task + '\n');
@@ -632,8 +805,9 @@ function output(res, verb) {
   else if (verb === 'land') process.stdout.write(res.message + '\n');
   else if (verb === 'push-request') printPushRequest(res);
   else if (verb === 'push') process.stdout.write(res.message + '\n');
-  // The Owner reads the mutation result from CLI output; a successful merge/push whose audit
-  // append failed must still surface that warning here, not only in the module-API result object.
+  else if (verb === 'cleanup') process.stdout.write(res.message + '\n');
+  // The Owner reads the mutation result from CLI output; a successful merge/push/cleanup whose
+  // audit append failed must still surface that warning here, not only in the module-API result.
   if (res.auditWarning) process.stderr.write('pt-land: WARNING - ' + res.auditWarning + '\n');
   process.exit(0);
 }
@@ -655,13 +829,23 @@ function main(argv) {
       return;
     }
     output(verb === 'push' ? runPush(opts) : runPushRequest(opts), verb);
+  } else if (verb === 'cleanup') {
+    if (argv.length !== 2 || typeof argv[1] !== 'string' || !argv[1]) {
+      process.stderr.write('pt-land: usage error - usage: pt-land.js cleanup task/<id>\n');
+      process.exit(3);
+      return;
+    }
+    opts.task = argv[1];
+    output(runCleanup(opts), verb);
   } else {
     process.stderr.write('pt-land: usage error - unknown verb ' + JSON.stringify(verb) + '\n');
     process.exit(3);
   }
 }
 
-module.exports = { runLandRequest, runLand, runPushRequest, runPush, parseRecord, parseLandScope };
+module.exports = {
+  runLandRequest, runLand, runPushRequest, runPush, runCleanup, parseRecord, parseLandScope
+};
 
 if (require.main === module) {
   main(process.argv.slice(2));

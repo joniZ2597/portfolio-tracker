@@ -1069,6 +1069,19 @@ function classifyGit(args, out, wrapped) {
       return;
     }
   }
+
+  // R13 (work/worker-continuous-flow/brief.md §4): git diff/show/log/format-patch/whatchanged
+  // --output writes an arbitrary file, including inside .git/, outside every R10 writer rule
+  // (which only inspects Write/Edit/tee/sed -i/cp/mv-style targets, never a git subcommand's own
+  // output flag). Allowlisting these read subcommands (AL-3) is safe only with this guard.
+  if (['diff', 'show', 'log', 'format-patch', 'whatchanged'].indexOf(sub) !== -1) {
+    const risky = rest.some((a) => a === '--output' || a.startsWith('--output=') ||
+      (sub === 'format-patch' && (a === '-o' || a.startsWith('--output-directory'))));
+    if (risky) {
+      out.push({ cls: 'destructive', reason: 'git ' + sub + ' --output writes files - denied in every session (R13)' });
+      return;
+    }
+  }
 }
 
 // ── netlify ─────────────────────────────────────────────────────────────────────────────
@@ -1330,7 +1343,7 @@ function resolveFileToolTargetFs(cwd, raw) {
 // ── R11: Owner-approved brief-only commit gate for the canonical checkout (work/brief-commit-gate/brief.md §2-3) ──
 // ── R12: Owner-approved LAND/push tool gate consts (work/worker-land-push/brief.md §4) ──
 const R12_TRIGGER_RE = /pt-land/i;
-const R12_FORM_RE = /^node \.claude\/hooks\/pt-land\.js (?:(?:land-request|land) task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*|push-request|push)$/;
+const R12_FORM_RE = /^node \.claude\/hooks\/pt-land\.js (?:(?:land-request|land|cleanup) task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*|push-request|push)$/;
 const R11_BRIEF_MSG_RE = /^docs\(work\): \S[^\r\n]{0,150}$/;
 const R11_RECORD_PATH_RE = /^work\/[a-z0-9][a-z0-9._-]*\/brief\.md$/;
 function briefApprovalFs(root) {

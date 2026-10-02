@@ -138,7 +138,8 @@ commit) or on a STOP condition below.
     - after the Owner confirms, run `node .claude/hooks/pt-land.js land task/<id>`. Any refusal is **STOP-6**; "branch-dev moved" means Second LAND.
 
     Otherwise (no `land-scope` block, or a protected path): **STOP** and request an Owner LAND.
-15. **Push — Owner-approved (R12).** Run `node .claude/hooks/pt-land.js push-request`, show its report — including the public Netlify DEV deploy notice and the commits to publish — print its approval line exactly, and **STOP until the Owner answers**. After the Owner enters it with `!`, run `node .claude/hooks/pt-land.js push`; it verifies `branch-dev == origin/branch-dev`. Any refusal is **STOP-6**. If the Owner declines, the task ends LANDed and unpushed. Then **STOP** with the final completion report.
+15. **Push — Owner-approved (R12).** Run `node .claude/hooks/pt-land.js push-request`, show its report — including the public Netlify DEV deploy notice and the commits to publish — print its approval line exactly, and **STOP until the Owner answers**. After the Owner enters it with `!`, run `node .claude/hooks/pt-land.js push`; it verifies `branch-dev == origin/branch-dev`. Any refusal is **STOP-6**. If the Owner declines, the task ends LANDed and unpushed. Then run step 16.
+16. **Cleanup.** After a verified push, run `node .claude/hooks/pt-land.js cleanup task/<id>` — it archives the task's ignored evidence (`plan.md`, `codex.md`, `qa.log`) to `pt-work-artifacts/<id>/`, detaches the slot at `branch-dev` and safely deletes the local task branch. A refusal is reported, not retried. Then **STOP** with the final completion report.
 
 **The Owner does not approve individual file edits, inspect code previews, relay Codex
 findings, or decide ordinary in-scope implementation questions — LAND approval remains the
@@ -184,6 +185,8 @@ Every brief sets `Mode: Manual` or `Mode: Auto`.
 - the Owner becoming unavailable (the session ends; it never continues unattended).
 
 PLAN, IMPLEMENT and MANUAL remain **postures** inside any mode.
+
+**Auto-approved commands (settings allowlist).** Read-only inspection (`grep`, `cat`, `head`, `tail`, `wc`, and `git status|log|diff|show|rev-parse|ls-files`), offline QA (`npm run qa:offline`, `npm run test:*`, `node qa/*_offline.js`, `node qa/*_test.js`, `node qa/guard_integrity_check.js …`), Codex read-only review (`codex exec --sandbox read-only …`), scratch under `/tmp/pt-<task-id>/`, and the `pt-land.js` request and cleanup verbs run without a prompt. Everything else prompts in Manual. The hook remains the only enforced boundary. `sed` is deliberately not auto-approved; use the Read tool for line ranges.
 
 ### Protection tiers — the enforced layer
 

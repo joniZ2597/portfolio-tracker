@@ -1362,7 +1362,20 @@ const ADD_ASK = [
 const RC5_ASK_REMOVED = ['Bash(git commit)', 'Bash(git commit *)', 'Bash(git -C * commit*)', 'Bash(git -c * commit*)'];
 const RC5_ALLOW_ADDED = ['Bash(git commit)', 'Bash(git commit *)'];
 const EXPECT_ASK = [...BASE_ASK.filter((x) => MOVED_TO_DENY.indexOf(x) === -1), ...ADD_ASK].filter((x) => RC5_ASK_REMOVED.indexOf(x) === -1);
-const EXPECT_ALLOW = [...BASE_ALLOW, ...RC5_ALLOW_ADDED];
+// work/worker-continuous-flow/brief.md §3 (AL-1): exactly these 23 entries added to permissions.allow.
+// Read-only inspection, offline QA, Codex read-only review, the pt-land.js request/cleanup verbs
+// and the /tmp/pt-<task-id>/ scratch rule. No deny/ask/defaultMode/matcher change (AL-1).
+const WCF_ALLOW_ADDED = [
+  'Bash(grep *)', 'Bash(cat *)', 'Bash(head *)', 'Bash(tail *)', 'Bash(wc *)',
+  'Bash(git status)', 'Bash(git status *)', 'Bash(git log)', 'Bash(git log *)',
+  'Bash(git diff)', 'Bash(git diff *)', 'Bash(git show *)', 'Bash(git rev-parse *)',
+  'Bash(git ls-files)', 'Bash(git ls-files *)',
+  'Bash(node qa/*_test.js)', 'Bash(node qa/guard_integrity_check.js *)',
+  'Bash(codex exec --sandbox read-only *)', 'Bash(mkdir -p /tmp/pt-*)',
+  'Bash(node .claude/hooks/pt-land.js land-request *)', 'Bash(node .claude/hooks/pt-land.js push-request)',
+  'Bash(node .claude/hooks/pt-land.js cleanup *)', 'Edit(//tmp/pt-*/**)'
+];
+const EXPECT_ALLOW = [...BASE_ALLOW, ...RC5_ALLOW_ADDED, ...WCF_ALLOW_ADDED];
 const HOOK_COMMAND = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/pretooluse-guard.js"';
 // r10 R10-6: the Owner-applied matcher extends coverage to the file tools.
 const R10_MATCHER = 'Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit';
@@ -1517,7 +1530,15 @@ if (realSettings) {
   check('AH-6/AH-8 PowerShell(git *) and PowerShell(git.exe *) are deny rules', deny.indexOf('PowerShell(git *)') !== -1 && deny.indexOf('PowerShell(git.exe *)') !== -1);
   // AH-10: every existing allow Bash pattern instantiated with a sample -> hook allows (both cwds).
   // RC5: the two commit allow rules are gated by the hook (AH-16), not "always allowed", so they are not instantiated here.
-  const bashAllow = ((realSettings.permissions && realSettings.permissions.allow) || []).filter((r) => /^Bash\(.*\)$/.test(r) && RC5_ALLOW_ADDED.indexOf(r) === -1);
+  // WCF: the three pt-land.js-wrapping rules need a real task/<id> sample and a real canonical
+  // cwd/CLAUDE_PROJECT_DIR (R12), not AH-10's blind "*" -> "x" substitution and generic MAIN stub —
+  // they are gated by R12 (AH-20/AH-23 below), not "always allowed", so they are not instantiated here.
+  const WCF_PTLAND_ALLOW = [
+    'Bash(node .claude/hooks/pt-land.js land-request *)', 'Bash(node .claude/hooks/pt-land.js push-request)',
+    'Bash(node .claude/hooks/pt-land.js cleanup *)'
+  ];
+  const bashAllow = ((realSettings.permissions && realSettings.permissions.allow) || [])
+    .filter((r) => /^Bash\(.*\)$/.test(r) && RC5_ALLOW_ADDED.indexOf(r) === -1 && WCF_PTLAND_ALLOW.indexOf(r) === -1);
   const sample = (rule) => rule.slice(5, -1).replace(/\*/g, 'x');
   check('AH-10 found existing Bash allow patterns to instantiate', bashAllow.length >= BASE_ALLOW.filter((r) => /^Bash\(/.test(r)).length);
   for (const rule of bashAllow) {
@@ -2248,7 +2269,9 @@ const R12_FORMS = [
   'node .claude/hooks/pt-land.js land-request task/x',
   'node .claude/hooks/pt-land.js land task/x',
   'node .claude/hooks/pt-land.js push-request',
-  'node .claude/hooks/pt-land.js push'
+  'node .claude/hooks/pt-land.js push',
+  // AH-23 (work/worker-continuous-flow/brief.md §5/§8, R12 extended): the fifth verb, same form shape.
+  'node .claude/hooks/pt-land.js cleanup task/x'
 ];
 function r12DecideOn(mod, cmd, opts) {
   const o = opts || {};
@@ -2294,7 +2317,12 @@ const R12_DENY_FORMS = [
   ['quoted arguments', 'node .claude/hooks/pt-land.js "push"'],
   ['unknown verb', 'node .claude/hooks/pt-land.js status'],
   ['land without a task', 'node .claude/hooks/pt-land.js land'],
-  ['non-task/ ref', 'node .claude/hooks/pt-land.js land branch-dev']
+  ['non-task/ ref', 'node .claude/hooks/pt-land.js land branch-dev'],
+  // AH-23: cleanup-specific deviations (brief §8 R12-extended row).
+  ['cleanup trailing space', 'node .claude/hooks/pt-land.js cleanup task/x '],
+  ['cleanup env prefix', 'FOO=bar node .claude/hooks/pt-land.js cleanup task/x'],
+  ['cleanup no task', 'node .claude/hooks/pt-land.js cleanup'],
+  ['cleanup bash -c wrapper', 'bash -c "node .claude/hooks/pt-land.js cleanup task/x"']
 ];
 for (const [label, cmd] of R12_DENY_FORMS) {
   check('AH-20 deny (' + label + ')', r12Decide(cmd, { cwd: SLOT_A }).decision === 'deny');
@@ -2325,6 +2353,98 @@ for (const key of ['GIT_DIR', 'GIT_CONFIG_COUNT']) {
   }
 }
 
+// ── AH-23 (work/worker-continuous-flow/brief.md §3/§4/§8) ────────────────────────────────
+// R13 risky forms -> deny in slot, main and a missing cwd (the cwd/canonical checks that gate
+// R12 are irrelevant to R13 - the --output guard fires inside classifyGit itself, before any
+// cwd/slot/canonical branching, so it must deny regardless of context).
+const R13_RISKY_FORMS = [
+  'git diff --output=x', 'git diff --output x', 'git show --output=.git/hooks/pre-commit',
+  'git log --output=/tmp/x', 'git format-patch -o out', 'git format-patch --output-directory=o'
+];
+for (const cmd of R13_RISKY_FORMS) {
+  for (const cwd of [SLOT_A, MAIN, NO_CWD]) {
+    check('AH-23 R13 deny [' + (cwd === NO_CWD ? 'missing cwd' : cwd === MAIN ? 'main' : 'slot') + '] ' + cmd,
+      d(cmd, cwd === NO_CWD ? undefined : cwd).decision === 'deny');
+  }
+}
+// R13 controls -> allow (the guard has no opinion; these are read-only, no --output).
+const R13_CONTROL_FORMS = ['git diff --stat', 'git show HEAD:index.html', 'git log --oneline -5'];
+for (const cmd of R13_CONTROL_FORMS) {
+  check('AH-23 R13 control allow [slot] ' + cmd, d(cmd, SLOT_A).decision === 'allow');
+  check('AH-23 R13 control allow [main] ' + cmd, d(cmd, MAIN).decision === 'allow');
+}
+// R13 mutant: dropping the --output guard lets a risky form through.
+mutantCatches('R13 --output guard dropped (git diff --output=x accepted)',
+  "if (['diff', 'show', 'log', 'format-patch', 'whatchanged'].indexOf(sub) !== -1) {\n    const risky = rest.some((a) => a === '--output' || a.startsWith('--output=') ||\n      (sub === 'format-patch' && (a === '-o' || a.startsWith('--output-directory'))));\n    if (risky) {\n      out.push({ cls: 'destructive', reason: 'git ' + sub + ' --output writes files - denied in every session (R13)' });\n      return;\n    }\n  }",
+  '',
+  (m) => dec(m, 'git diff --output=x', SLOT_A).decision === 'deny');
+
+// Allow list contains none of these mutating-git / shell-escape / unbounded-wrapper families,
+// and neither of the two still-prompting pt-land.js verbs (land/push themselves, as opposed to
+// their request/cleanup forms).
+const AH23_FORBIDDEN_ALLOW_SUBSTRINGS = [
+  'Bash(git push', 'Bash(git merge', 'Bash(git rebase', 'Bash(git pull', 'Bash(git reset',
+  'Bash(git checkout', 'Bash(git switch', 'Bash(git branch', 'Bash(git update-ref',
+  'Bash(git symbolic-ref', 'Bash(git cherry-pick', 'Bash(git revert', 'Bash(git am',
+  'Bash(git clean', 'Bash(git stash', 'Bash(git config', 'Bash(git remote', 'Bash(git fetch',
+  'Bash(git worktree',
+  'Bash(rm', 'Bash(sed', 'Bash(node -e', 'Bash(bash', 'Bash(sh ', 'Bash(npx', 'Bash(npm run *)', 'Bash(npm exec',
+  'pt-land.js land task', 'pt-land.js push)'
+];
+// The one pre-existing, narrow, read-only exception: 'git branch --show-current' prints the
+// current branch name - no mutation, no wildcard - and predates this brief by several ARCs.
+const AH23_KNOWN_SAFE_ALLOW = ['Bash(git branch --show-current)'];
+function ah23ForbiddenHits(allowList) {
+  const candidates = allowList.filter((rule) => AH23_KNOWN_SAFE_ALLOW.indexOf(rule) === -1);
+  return AH23_FORBIDDEN_ALLOW_SUBSTRINGS.filter((sub) => candidates.some((rule) => rule.indexOf(sub) !== -1));
+}
+// Tests the REAL on-disk settings.json allow list (not just the suite's own EXPECT_ALLOW
+// expectation) - AH-8's set-equality check already proves real==EXPECT_ALLOW when it passes,
+// but this check stands on its own even if that one were ever weakened.
+const AH23_REAL_ALLOW = (realSettings && realSettings.permissions && Array.isArray(realSettings.permissions.allow))
+  ? realSettings.permissions.allow : EXPECT_ALLOW;
+check('AH-23: the real allow list contains none of the forbidden mutating-git/shell-escape/wrapper/bare-land-push substrings (' +
+  ah23ForbiddenHits(AH23_REAL_ALLOW).join('; ') + ')', ah23ForbiddenHits(AH23_REAL_ALLOW).length === 0);
+check('AH-23 control: a planted forbidden entry is detected',
+  ah23ForbiddenHits([...AH23_REAL_ALLOW, 'Bash(git push --force*)']).length > 0);
+
+// Differential: over a representative corpus (every AH-1 ALLOWED command, every R12 form/deny
+// form, and the R13 risky/control forms), the pre-R13 and post-R13 hook disagree on a decision
+// ONLY for the six R13-risky forms (or an R12 cleanup form, covered separately above and
+// unaffected by this specific diff, since R13 and the cleanup extension are independent edits
+// to disjoint lines) - R13 never widens or narrows any other existing decision.
+{
+  const r13Block = "\n  // R13 (work/worker-continuous-flow/brief.md §4): git diff/show/log/format-patch/whatchanged\n  // --output writes an arbitrary file, including inside .git/, outside every R10 writer rule\n  // (which only inspects Write/Edit/tee/sed -i/cp/mv-style targets, never a git subcommand's own\n  // output flag). Allowlisting these read subcommands (AL-3) is safe only with this guard.\n  if (['diff', 'show', 'log', 'format-patch', 'whatchanged'].indexOf(sub) !== -1) {\n    const risky = rest.some((a) => a === '--output' || a.startsWith('--output=') ||\n      (sub === 'format-patch' && (a === '-o' || a.startsWith('--output-directory'))));\n    if (risky) {\n      out.push({ cls: 'destructive', reason: 'git ' + sub + ' --output writes files - denied in every session (R13)' });\n      return;\n    }\n  }\n";
+  const normalizedSrc = fs.readFileSync(HOOK_PATH, 'utf8').replace(/\r\n/g, '\n');
+  const srcBeforeR13 = normalizedSrc.replace(r13Block, '');
+  check('AH-23 differential sanity: the R13 block was found and removed exactly once to build the pre-R13 module',
+    normalizedSrc.length - srcBeforeR13.length === r13Block.length);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ah-r13-diff-'));
+  let modBeforeR13 = null;
+  try {
+    const file = path.join(dir, 'pretooluse-guard.js');
+    fs.writeFileSync(file, srcBeforeR13);
+    modBeforeR13 = require(file);
+  } catch (e) { /* handled by the null check below */ } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  check('AH-23 differential sanity: the pre-R13 module loads', modBeforeR13 !== null);
+  if (modBeforeR13) {
+    const corpus = [...ALLOWED, ...R12_FORMS, ...R12_DENY_FORMS.map((row) => row[1]), ...R13_RISKY_FORMS, ...R13_CONTROL_FORMS];
+    const changed = [];
+    for (const cmd of corpus) {
+      const before = dec(modBeforeR13, cmd, SLOT_A).decision;
+      const after = dec(guard, cmd, SLOT_A).decision;
+      if (before !== after) changed.push(cmd + ' (' + before + ' -> ' + after + ')');
+    }
+    const expectedChanged = new Set(R13_RISKY_FORMS);
+    const onlyExpected = changed.every((entry) => expectedChanged.has(entry.split(' (')[0])) &&
+      R13_RISKY_FORMS.every((cmd) => changed.some((entry) => entry.startsWith(cmd + ' (')));
+    check('AH-23 differential: R13 changes a decision only on the six risky forms, nothing else in the corpus (' + changed.join('; ') + ')',
+      onlyExpected);
+  }
+}
+
 // AH-20 unchanged: direct git merge/push and a Claude write of the approval record stay denied
 // with their existing R3m/R3g/R10 reasons - R12 never opens a new path for these.
 check('AH-20 unchanged: git merge --ff-only task/x still denied (R3m)',
@@ -2338,7 +2458,7 @@ check('AH-20 unchanged: a Bash redirect into .git/pt-land-approval still denied 
 
 // AH-20 mutants (5, each caught): the R12-specific guard-side invariants.
 mutantCatches('R12 form regex widened (any pt-land invocation accepted)',
-  "const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push)$/;",
+  "const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land|cleanup) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push)$/;",
   'const R12_FORM_RE = /pt-land/;',
   (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js push extra-arg', { cwd: SLOT_A }).decision === 'deny');
 mutantCatches('R12 tool check dropped (PowerShell accepted)',
