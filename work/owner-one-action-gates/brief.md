@@ -334,3 +334,58 @@ exports are unchanged; the existing `STAGED_DENY_RES` filter line is kept verbat
 `qa/guard_integrity_check.js` is edited; DoD adds "C6 revision applied exactly as §8; a PROTECTED-approved
 `.claude/hooks/**` target LANDs end-to-end through `land` in QA (PL-46); every §8 QA row and mutant PASS".
 Everything else in §1–§7 is unchanged, including every STOP condition.
+
+## 9. Amendment A2 — atomic `protected-commit` (Owner-ruled 2026-10-02; Codex implementation-review finding 2, FIX)
+
+**Why.** §2 G2 steps 3–6 build the commit through the slot's live index (copy, `git add`, `git write-tree`
+check, `git commit`). The lock coordinates `pt-land.js` callers only; a concurrent writer in the slot could
+change the index between the `write-tree` check and `git commit`, and the mismatch would be caught only by the
+post-commit verification, after the commit exists. The commit must be created from the approved tree OID
+directly, so the live index can never be the source of the committed tree. This amendment has operational
+effect only when the Owner has approved these exact contents and re-pinned the brief.
+
+**§2 G2 `protected-commit`, steps 3–7 become (steps 1–2 unchanged: every request check re-run, record parsed
+exactly, lock taken, slot clean and HEAD == recorded HEAD re-checked, tree recomputed from the candidates and
+equal to the record tree, else refuse):**
+
+3. `git commit-tree <record tree> -p <recorded HEAD> -m "chore(protected): apply Owner-approved files
+   (task/<id>, tree <short>)"` — the commit object is created from the approved tree OID; no path is copied
+   into the slot and nothing is staged before the commit exists. (`commit-tree` runs no hooks; the `GIT_*`
+   environment stays stripped as for every other child process.)
+4. `git update-ref refs/heads/task/<id> <new commit> <recorded HEAD>` — compare-and-swap: the ref moves only
+   if it still equals the recorded HEAD, else refuse (`the task ref moved since the approval (compare-and-swap)`);
+   nothing is referenced on refusal and the slot is untouched.
+5. `git checkout HEAD -- <targets>` in the slot — the index and working tree are brought in line for exactly the
+   approved targets, from the committed tree (never the reverse).
+6. Verify `HEAD^{tree}` == record tree, `HEAD^` == recorded HEAD, every target's index blob == its blob in the
+   record tree, and the slot status is clean; a failure is reported as a failure (STOP; the tool never undoes a
+   commit or a ref move).
+7. Append the `ok` audit line `{verb:'protected-commit', task, from: recorded HEAD, to: new commit, tree,
+   result:'ok'}` **then** delete the record (a failed append is a failure and keeps the record — Codex finding 3).
+
+§2's "3. Copies the sources into the slot targets; stages exactly those paths" and "4. `git write-tree` must
+equal the record tree, else restore …" are withdrawn; "The Worker never stages a protected path itself" (§4
+P4) now holds for the tool as well — `protected-commit` never runs `git add`, `git commit` or `git write-tree`
+against the slot's index (the only `write-tree` is the request-side temporary-index build, §2). §7's STOP
+"a PROTECTED path that can stage anything not in the approved tree, or commit without an exact tree match"
+is unchanged and becomes structural.
+
+**QA coverage (added to `qa/pt_land_offline.js`, real-git fixtures, each with a planted negative):**
+
+- PL-36 (atomic): with a logging git shim (the CDX-1 `NODE_OPTIONS --require` pattern, delegating to real
+  git), a valid `protected-commit` invokes `commit-tree` with exactly the record tree and the recorded HEAD as
+  parent, `update-ref refs/heads/task/<id> <new> <recorded HEAD>`, and `checkout HEAD -- <targets>`; it never
+  invokes `add`, `commit` or `write-tree` in the slot (`write-tree` appears only with `GIT_INDEX_FILE` set, on
+  the request-side build). Post-conditions as PL-36.
+- PL-36 (CAS negative): the shim advances `refs/heads/task/<id>` by one plain commit immediately before
+  delegating the first `update-ref` → refuse with the compare-and-swap reason; HEAD == the advanced commit, no
+  protected commit reachable from it, slot clean, record kept.
+- PL-36 (live index): a tracked file the slot's index differs on for the **target path only** cannot change
+  the committed tree — the planted state is rejected at the race re-check (slot not clean), and MUT-OAG-9
+  covers the case where that re-check is dropped.
+- MUT-OAG-8: `update-ref` without the old-value argument (CAS dropped) → the CAS-negative scenario succeeds
+  wrongly (caught). MUT-OAG-9: the race re-check dropped → a dirty slot still yields `HEAD^{tree}` == record
+  tree (the committed tree is independent of the index; the mutant is caught by the dirty-slot refusal
+  disappearing, not by a wrong tree — and the row asserts both).
+
+Everything else in §1–§8 is unchanged.
