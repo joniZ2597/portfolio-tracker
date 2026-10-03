@@ -1009,7 +1009,10 @@ const CACHE_TTL_MS    = 15 * 60 * 1000; // 15 minutes
 const _inflight = {};
 
 // ── Technical snapshot cache ─────────────────────────────────────────────────
-// key: ticker symbol → { snap, computedAt }
+// key: ticker symbol → { base, computedAt, sectorEtf, snap, refInput }
+//   base/computedAt/sectorEtf — price-independent candle data; reused for CACHE_TTL_MS for the same benchmark only
+//   snap/refInput — the last snapshot and the price it was derived for (null = last-close fallback).
+//   A snapshot is never served for a different price (Entry 32).
 const _techCache = {};
 
 // ── Extended-hours display cache — session-only, never serialized ────────────
@@ -1126,21 +1129,36 @@ function buildTechSnapshotBlock(sym, snap, setupState) {
   );
 }
 
+/** Entry 32: the reference price a snapshot is derived for; null = last-close fallback. */
+function _techRefInput(p) {
+  return (typeof p === 'number' && isFinite(p) && p > 0) ? p : null;
+}
+
 /**
- * Async: fetch 1Y candles for ticker + benchmarks, compute snapshot, cache it.
- * Returns snapshot object. Never throws — all fields may be null.
+ * Entry 32: the price the Technical Setup panel displays in its header — the same rule
+ * renderMainPanel uses for its headline price. Read-only.
  */
-async function computeTechnicalSnapshot(symbol, sectorEtf, currentPrice) {
-  const sym = (symbol || '').toUpperCase();
-  if (!sym) return {};
+function _techPanelPrice(item) {
+  const e  = hasVerifiedMarketData(item) ? (_extendedMktCache[item.ticker] || null) : null;
+  const ms = e ? e.marketState : null;
+  return ((ms === 'PRE' || ms === 'POST') && typeof e.regularPrice === 'number') ? e.regularPrice : item._verifiedPrice;
+}
 
-  // Return cached if fresh (reuse historicalCache TTL)
-  const cached = _techCache[sym];
-  if (cached && (Date.now() - cached.computedAt) < CACHE_TTL_MS) return cached.snap;
+/**
+ * Entry 32: the cached snapshot for `symbol`, only if it was derived for `price`; otherwise {}.
+ * Read-only — never recomputes.
+ */
+function _techSnapFor(symbol, price) {
+  const entry = _techCache[(symbol || '').toUpperCase()];
+  return (entry && entry.snap && entry.refInput === _techRefInput(price)) ? entry.snap : {};
+}
 
-  try {
+/**
+ * Async: fetch 1Y candles for ticker + benchmarks and compute the price-independent base
+ * (candles, SMAs, volume, relative strength, SPY/QQQ day change). Entry 32.
+ */
+async function _techFetchBase(sym, etf) {
     // Fetch ticker + benchmarks in parallel; never throw
-    const etf     = (sectorEtf || '').toUpperCase();
     const fetches = [fetchHistoricalCandles(sym, '1Y')];
     const labels  = [sym];
     if (etf)   { fetches.push(fetchHistoricalCandles(etf,   '1Y')); labels.push(etf); }
@@ -1166,7 +1184,6 @@ async function computeTechnicalSnapshot(symbol, sectorEtf, currentPrice) {
       typeof qqqQR.value.change_percent === 'number') ? qqqQR.value.change_percent : null;
 
     const tc = candles[sym]; // ticker candles
-    const price = currentPrice || (tc.length ? tc[tc.length-1].close : null);
 
     // SMAs
     const sma20  = computeSMA(tc, 20);
@@ -1174,17 +1191,8 @@ async function computeTechnicalSnapshot(symbol, sectorEtf, currentPrice) {
     const sma150 = computeSMA(tc, 150);
     const sma200 = computeSMA(tc, 200);
 
-    // % distance from each MA
-    const pct20  = computePctDiff(price, sma20);
-    const pct50  = computePctDiff(price, sma50);
-    const pct150 = computePctDiff(price, sma150);
-    const pct200 = computePctDiff(price, sma200);
-
     // Volume
     const volMetrics = computeVolumeMetrics(tc);
-
-    // ATH distance
-    const athDist = computeATHDistance(tc, price);
 
     // Relative performance over 3M (~63 trading days)
     // Benchmark self-comparison (sym IS the benchmark) always returns a
@@ -1194,7 +1202,29 @@ async function computeTechnicalSnapshot(symbol, sectorEtf, currentPrice) {
     const rsSPY    = sym !== 'SPY' ? computeRelativePerf(tc, candles['SPY'], LOOKBACK) : null;
     const rsQQQ    = sym !== 'QQQ' ? computeRelativePerf(tc, candles['QQQ'], LOOKBACK) : null;
 
-    const snap = {
+    return { candles: tc, sma20, sma50, sma150, sma200, volMetrics, rsSector, rsSPY, rsQQQ,
+             sectorEtf: etf || null, spyChangePct, qqqChangePct };
+}
+
+/**
+ * Entry 32: derive the price-dependent snapshot from a base for one reference price.
+ * Pure. `refInput` null = last-close fallback. Same keys, same order as before the split.
+ */
+function _techDeriveSnap(base, refInput) {
+    const tc = base.candles;
+    const price = refInput || (tc.length ? tc[tc.length-1].close : null);
+    const { sma20, sma50, sma150, sma200, volMetrics, rsSector, rsSPY, rsQQQ, spyChangePct, qqqChangePct } = base;
+
+    // % distance from each MA
+    const pct20  = computePctDiff(price, sma20);
+    const pct50  = computePctDiff(price, sma50);
+    const pct150 = computePctDiff(price, sma150);
+    const pct200 = computePctDiff(price, sma200);
+
+    // ATH distance
+    const athDist = computeATHDistance(tc, price);
+
+    return {
       // MA levels
       sma20, sma50, sma150, sma200,
       pct20, pct50, pct150, pct200,
@@ -1209,16 +1239,37 @@ async function computeTechnicalSnapshot(symbol, sectorEtf, currentPrice) {
       athDist, hasATH: athDist !== null,
       // RS
       rsSector, rsSPY, rsQQQ,
-      sectorEtf: etf || null,
+      sectorEtf: base.sectorEtf,
       // Candle counts
       candleCount: tc.length,
       // Live benchmark daily change (same source as verified ticker prices; null if fetch failed)
       spyChangePct,
       qqqChangePct,
     };
+}
 
-    _techCache[sym] = { snap, computedAt: Date.now() };
-    console.log('[tech] snapshot computed for', sym, '— candles:', tc.length);
+/**
+ * Async: compute the technical snapshot for `currentPrice` and cache it.
+ * Candle data (base) is reused per symbol + benchmark for CACHE_TTL_MS; the price-dependent
+ * snapshot is derived on every call and never served for another price (Entry 32).
+ * Returns snapshot object. Never throws — all fields may be null.
+ */
+async function computeTechnicalSnapshot(symbol, sectorEtf, currentPrice) {
+  const sym = (symbol || '').toUpperCase();
+  if (!sym) return {};
+
+  try {
+    const etf      = (sectorEtf || '').toUpperCase();
+    const refInput = _techRefInput(currentPrice);
+
+    const cached     = _techCache[sym];
+    const reuse      = cached && cached.base && cached.sectorEtf === etf && (Date.now() - cached.computedAt) < CACHE_TTL_MS;
+    const base       = reuse ? cached.base : await _techFetchBase(sym, etf);
+    const computedAt = reuse ? cached.computedAt : Date.now();
+    const snap       = _techDeriveSnap(base, refInput);
+
+    _techCache[sym] = { base, computedAt, sectorEtf: etf, snap, refInput };
+    console.log('[tech] snapshot computed for', sym, '— candles:', base.candles.length);
     return snap;
   } catch(err) {
     console.warn('[tech] snapshot failed for', sym, err.message);
@@ -5963,7 +6014,7 @@ Output STRICT JSON only — no backticks:
 }
 
 // ── Orchestration layer ──────────────────────────────────────────────────────
-function orchestrate(claudeResults, pplxData, stockData) {
+function orchestrate(claudeResults, pplxData, stockData, techSnaps) {
   return claudeResults.map(item => {
     const sym = item.ticker;
     const mkt  = stockData?.[sym];
@@ -6009,7 +6060,7 @@ function orchestrate(claudeResults, pplxData, stockData) {
     if (chg > 5  && item.sentiment_score < 40) { console.warn(`[PT] Orchestrate: score override ${sym} up ${chg}%`);   item.sentiment_score = Math.max(item.sentiment_score, 55); item.sentiment = 'positive'; }
 
     // Phase 6A-1: Technical setup clamp + audit trail
-    const _snap6a    = (_techCache[sym] && _techCache[sym].snap) ? _techCache[sym].snap : {};
+    const _snap6a    = (techSnaps && techSnaps[sym]) ? techSnaps[sym] : {};
     const _setup6a   = classifyTechnicalSetup(_snap6a);
     const _pplx6a    = pplxData?.[sym] || pplxData?.['__raw__'];
     // Normalize AI fields that may arrive as the string "null" instead of actual null
@@ -6585,7 +6636,7 @@ async function analyzeChunk(batch, today) {
   }
 
   await Promise.allSettled([_crFetchPromise9B]); // 9B-2B: settle CR prefetch before nudge; side-effect only, never throws
-  const orchestrated = orchestrate(raw, pplxData, stockData);
+  const orchestrated = orchestrate(raw, pplxData, stockData, { [_sym6a]: _techSnap6a });
 
   // 7B-3D0: mirror the memory-only debug accumulator into _lastRunState for ergonomic access
   window._lastRunState = { stockData, pplxData, techSnap: _techSnap6a, setupState: _setupState6a, runId: Date.now(), timestamp: new Date().toISOString(), pplxDebug: window._pplxDebug || {} };
@@ -7683,13 +7734,19 @@ function renderTickerPlaceholder(ticker) {
 
 // ── refreshTechPanel: fire-and-forget async candle fetch + re-render ────────
 async function refreshTechPanel(symbol, sectorEtf, currentPrice) {
-  // Already cached — nothing to do (renderMainPanel already has snap data)
+  // Entry 32: the snapshot must match the price the panel displays (_techPanelPrice), not just be fresh
+  const panelItem = _cockpitResults.find(r => r.ticker === symbol);
+  const ref       = panelItem ? _techPanelPrice(panelItem) : currentPrice;
+
+  // Already cached for this price and benchmark — nothing to do (renderMainPanel already has snap data)
   const cached = _techCache[symbol];
-  if (cached && (Date.now() - cached.computedAt) < CACHE_TTL_MS) return;
+  if (cached && cached.snap && cached.refInput === _techRefInput(ref) &&
+      cached.sectorEtf === (sectorEtf || '').toUpperCase() &&
+      (Date.now() - cached.computedAt) < CACHE_TTL_MS) return;
 
   // Fetch in background; re-render when done if this ticker is still selected
   try {
-    await computeTechnicalSnapshot(symbol, sectorEtf, currentPrice);
+    await computeTechnicalSnapshot(symbol, sectorEtf, ref);
     if (_activeTicker === symbol) {
       const item = _cockpitResults.find(r => r.ticker === symbol);
       if (item) renderMainPanel(item);
@@ -7773,7 +7830,10 @@ function renderMainPanel(item) {
 
   // Timeframe Alignment — deterministic map from technical_setup (Phase 6A-3)
   const _tfMap={extended_near_ath:['EXTENDED','warn'],healthy_uptrend_near_ath:['BULLISH','pos'],healthy_uptrend:['BULLISH','pos'],pullback_in_uptrend:['MIXED','warn'],support_test:['MIXED','warn'],breakdown_risk:['BEARISH','neg'],below_key_mas:['BEARISH','neg']};
-  const [phase,phCls]=_tfMap[item.technical_setup]||['NEUTRAL','neutral-v'];
+  const _panelSnap  = _techSnapFor(item.ticker, _techPanelPrice(item)); // Entry 32: one snapshot for distances and Setup
+  const _panelSetup = hasData ? classifyTechnicalSetup(_panelSnap) : 'unknown';
+  const _fromScan   = hasData && _techPanelPrice(item) !== item._verifiedPrice; // Entry 32: displayed price differs from scan price
+  const [phase,phCls]=_panelSetup==='unknown'?['—','neutral-v']:(_tfMap[_panelSetup]||['NEUTRAL','neutral-v']);
 
   // State values
   const _scoreSt  = _ptScoreStates(score); // missing -> explicit '—' states, never MODERATE / IN LINE
@@ -7800,7 +7860,7 @@ function renderMainPanel(item) {
   const metaStr   = metaParts.length ? metaParts.join(' · ') : '';
 
   // Technical snapshot — read from cache (populated async by refreshTechPanel)
-  const snap  = (_techCache[item.ticker] && _techCache[item.ticker].snap) || {};
+  const snap  = _panelSnap;
   const maCls = v => v === 'pos' ? 'pos' : v === 'warn' ? 'warn' : v === 'neg' ? 'neg' : 'neutral-v';
 
   // Helper: format a pct diff for display
@@ -8080,7 +8140,7 @@ function renderMainPanel(item) {
     below_key_mas:            'Below key moving averages — structure is bearish',
     mixed:                    'Mixed MA alignment — no clear directional stack',
   };
-  const _tsAssess = hasData && item.technical_setup ? (_tsAssessMap[item.technical_setup] || '') : '';
+  const _tsAssess = _panelSetup !== 'unknown' ? (_tsAssessMap[_panelSetup] || '') : '';
   const _tsAssessHtml = _tsAssess ? `<div class="ts-assess">${_tsAssess}</div>` : '';
 
   // Backlog task 6 — gated row, filled post-render by _ts1FillRow. Gate OFF yields '' so the
@@ -8092,7 +8152,7 @@ function renderMainPanel(item) {
   const _dialColor = rCls === 'pos' ? 'var(--green2)' : rCls === 'neg' ? 'var(--red2)' : 'var(--blue2)';
   const _dial      = _ptScoreDial(score, _dialColor); // missing -> dashed no-score dial, no numeric fill
   const _dialHtml  = (item.action || actionable)
-    ? `<div class="at-dial-row"><div class="${_dial.cls}" style="${_dial.style}"><span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span></div><div><div class="at-dial-lbl">Score</div><div class="at-dial-val ${rCls}">${rating}</div></div></div>`
+    ? `<div class="at-dial-row"><div class="${_dial.cls}" style="${_dial.style}"><span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span></div><div><div class="at-dial-lbl">Score${_fromScan ? '<span style="margin-left:6px;text-transform:none;font-weight:400">from scan</span>' : ''}</div><div class="at-dial-val ${rCls}">${rating}</div></div></div>`
     : '';
 
   const _crn = item._crNudge;
@@ -8221,7 +8281,7 @@ function renderMainPanel(item) {
         <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
           <div class="rr-row"><span class="rr-lbl">ATH Distance</span><span class="rr-val ${snap.hasATH ? (snap.athDist < -15 ? 'warn' : snap.athDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">${snap.hasATH ? fmtPct(snap.athDist) : '—'}</span></div>
           <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score>=65?'pos':score>=40?'warn':'neg'}">${score} / 100</span></div>
+          <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score>=65?'pos':score>=40?'warn':'neg'}">${score} / 100${_fromScan ? '<span style="color:var(--text3);font-size:10px;margin-left:6px">from scan</span>' : ''}</span></div>
         </div>
         ${_tsAssessHtml}`}${_ts1RowHtml}
       </div>
@@ -8271,7 +8331,7 @@ function renderMainPanel(item) {
         ${item.action ? `
           <div>
             ${item.news_bias       ? `<div class="mp-act-row"><span class="mp-act-lbl">Bias</span><span class="mp-act-val">${_esc(item.news_bias)}</span></div>` : ''}
-            ${item.technical_setup ? `<div class="mp-act-row"><span class="mp-act-lbl">Setup</span><span class="mp-act-val">${_esc(item.technical_setup).replace(/_/g,' ')}</span></div>` : ''}
+            ${item.technical_setup ? `<div class="mp-act-row"><span class="mp-act-lbl">${_fromScan ? 'Scan setup' : 'Setup'}</span><span class="mp-act-val">${_esc(item.technical_setup).replace(/_/g,' ')}</span></div>` : ''}
             ${item.action          ? `<div class="mp-act-row"><span class="mp-act-lbl">Action</span><span class="mp-act-val">${_esc(item.action).replace(/_/g,' ')}</span></div>` : ''}
             ${item.conflict        ? `<div class="mp-act-row mp-act-conflict"><span class="mp-act-lbl">⚠ Conflict</span><span class="mp-act-val" style="color:var(--yellow2)">${_esc(item.conflict)}</span></div>` : ''}
             ${item.entry_zone      ? `<div class="mp-act-row"><span class="mp-act-lbl">Entry Zone</span><span class="mp-act-val">${_esc(item.entry_zone)}</span></div>` : ''}
@@ -13103,7 +13163,7 @@ async function _dd0RunCard(sym) {
   btn.textContent = '⟳ Running…';
   panel.style.display = 'none';
   panel.innerHTML = '';
-  const snap = (_techCache[sym] && _techCache[sym].snap) || {};
+  const snap = _techSnapFor(sym, item._verifiedPrice);
   let techSnapshotText = '';
   try { techSnapshotText = buildTechSnapshotBlock(sym, snap, item.technical_setup || 'unknown') || ''; }
   catch (e) { techSnapshotText = ''; }
