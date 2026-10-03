@@ -11,7 +11,7 @@ unchanged. Bug evidence was gathered read-only on DEV on 2026-10-03 and is summa
 | Mode | **Manual, attended** — the task changes the snapshot that feeds `orchestrate()`'s setup override and score clamps (a scoring surface): AGENTS.md excludes it from `Mode: Auto` and makes it an M5 trigger. The Worker still runs implementation → QA → Codex → fixes on its own, in the MANUAL posture for those edits; it stops only on STOP-1..6 or an Owner gate |
 | qa:offline | baseline at Step 0 → **+1** (`qa/tech_snapshot_cache_offline.js`) |
 | Parallel with | Worker A `task/second-finisher-resync` — no shared file. **Full `qa:offline` runs one at a time on the machine** (Owner rule). P2a and 22b (held) also edit `index.html` and re-pin after this lands |
-| Status | FINAL. Owner rulings 2026-10-03: bug confirmed (systemic, Track 2); D1 = (a); Setup-consistency correction; scan-time labels incl. the score dial. No decision open |
+| Status | FINAL. Owner rulings 2026-10-03: bug confirmed (systemic, Track 2); D1 = (a); Setup-consistency correction; scan-time labels incl. the score dial; amendment (7th file): the Tech Score default-exposure suite's `renderMainPanel` pin is updated, nothing else in that suite. No decision open |
 
 ## 1. Problem and rule
 
@@ -196,6 +196,15 @@ price and the snapshot always match; Setup and distances always come from the sa
 are never presented as current; Tech Score untouched. `review.md` records the old pin `d11b09a989f19ee1fa09770ac135e8f00ce518558b25cc7bce3ee23cf1b174ac`
 and the new one.
 
+**Amendment (Owner ruling 2026-10-03, brief-only).** The Tech Score default-exposure suite
+`qa/ts1_default_exposure_offline.js` pins `renderMainPanel` byte-for-byte (`BASE_HASHES.renderMainPanel`, TX-3), so
+I7 necessarily changes that pin. The suite is added as the **7th in-scope file**. Allowed change: **only** the
+`BASE_HASHES.renderMainPanel` value, set to the sha256 of the final CRLF-normalized `renderMainPanel`. No other test
+logic, assertion, negative case or pin in that file may change, and the TS1 protection is not weakened. Product scope
+is unchanged. Required proof (TC-13): the suite PASSES with that one pin updated; `review.md` records that its diff
+from `24fabf0` is exactly one line and that the other TX-3 pins (`runTechScoreV1`, `_ts1FillRow`, `_ts1RowText`) are
+byte-equal to the base.
+
 **Not in scope (later, no decision now):** before any re-scan, the panel of an old stored result shows distances
 from the *stored* price to *current* averages — consistent with the price it displays, but mixed-time.
 
@@ -215,8 +224,9 @@ fixture reproducing the pilot shape (SMAs ≈ 165.64 / 120.97 / 76.72; old price
   with identical inputs. No Git history is read at test time.
 - **"Byte-equal to the base"** (TC-9, TC-12b, TC-13): sha256 pins of the named regions, captured from the baseline
   at Step 0 and embedded in the suite (the caliper pattern).
-- **Review-time proofs** (recorded in `review.md`, from `git diff 24fabf0`): TC-11's one-line caliper diff and the
-  `qa/deep_dive_v0_offline.js` FNS-only diff.
+- **Review-time proofs** (recorded in `review.md`, from `git diff 24fabf0`): TC-11's one-line caliper diff, the
+  `qa/deep_dive_v0_offline.js` FNS-only diff, and TC-13's one-line `qa/ts1_default_exposure_offline.js` diff
+  (`BASE_HASHES.renderMainPanel` only; the other TX-3 pins unchanged).
 
 | ID | Owner requirement | Assertion |
 |---|---|---|
@@ -233,7 +243,7 @@ fixture reproducing the pilot shape (SMAs ≈ 165.64 / 120.97 / 76.72; old price
 | TC-12 | displayed price and snapshot always match | (a) `_techPanelPrice` over a state table — no extended cache; REGULAR; CLOSED; PRE and POST with `regularPrice`; PRE without `regularPrice`; `hasVerifiedMarketData` false — equals the headline price rule; (b) static: `renderMainPanel`'s `let price = …` line and its `_showExt && _extC` override block are byte-equal to the base; (c) **render harness:** `renderMainPanel` extracted with every free identifier stubbed to neutral values and a `mainPanel` stub capturing `innerHTML`; for each state in (a), plus a race (cache holding a snapshot for another price), the rendered MA20 distance either equals `fmtPct((displayed − sma20) / sma20 × 100)` for the rendered `ph-price` value or is `—`; never a distance from another price |
 | TC-14 | Setup and distances never from different price states | Render harness (as TC-12c), states: matching snapshot; ↻ PRE/POST refreshed headline price; race (snapshot for another price); stale stored result whose `item.technical_setup` (e.g. `below_key_mas`) differs from the classification at the displayed price; insufficient candles (`unknown`); no verified price. In every state the rendered Timeframe Alignment value and assessment line equal `_tfMap` / `_tsAssessMap` of `classifyTechnicalSetup(S)`, where S is the snapshot whose distances are rendered — or "—" / absent when there is no consistent S; they never equal a value derived only from `item.technical_setup`. Planted negatives: phase or assessment read from `item.technical_setup`; setup classified from a second, different snapshot |
 | TC-15 | scan-time values never presented as current | Render harness, `item.action` set, all three elements present. **Price differs** (↻ PRE/POST with `regularPrice ≠ _verifiedPrice`): the action-block label is "Scan setup" (never bare "Setup") with the unchanged `item.technical_setup` value; the Score row shows `NN / 100` followed by "from scan"; the dial's label block reads "Score" followed by the "from scan" indicator, and the dial markup (class, style, number, number colour, rating, rating class) equals the base render. **Price equal** (no extended cache; REGULAR; PRE/POST with `regularPrice === _verifiedPrice`): the Setup row, the Score row and `_dialHtml` are byte-equal to the base render. **No verified price:** no indicator anywhere. Score values (`_ptScoreText(score)`, dial fill) are identical in the differ and equal cases for the same item. Static: the literal `<span class="rr-lbl">Score</span>` occurs exactly once in `renderMainPanel`; `qa/run-offline.js` unedited and its T6 and dial checks PASS. Planted negatives: indicator missing on any of the three when prices differ; indicator shown when equal; dial number, fill or rating altered; Score label literal replaced |
-| TC-13 | Tech Score untouched | the TS1 region (from its banner comment to `end SCORE-V1-S1`), `_ts1FillRow` and `_initTsCard` byte-equal to the base; new code references no `_ts1*`, `runTechScoreV1` or `_techScoreDebug`; `qa/ts1_default_exposure_offline.js` and the `qa/run-offline.js` T6 checks PASS unmodified |
+| TC-13 | Tech Score untouched | the TS1 region (from its banner comment to `end SCORE-V1-S1`), `_ts1FillRow` and `_initTsCard` byte-equal to the base; new code references no `_ts1*`, `runTechScoreV1` or `_techScoreDebug`; `qa/ts1_default_exposure_offline.js` PASSES with **only** its `BASE_HASHES.renderMainPanel` pin updated (review-time proof: its diff from `24fabf0` is exactly one line, and the other TX-3 pins, every assertion and every negative case are unchanged); the `qa/run-offline.js` T6 checks PASS unmodified |
 | TC-9 | isolation (static) | `_techCache` occurs only in the cache declaration, I2–I4 helpers, the edit-flow delete and the existing self-test line; no `localStorage` / `pt_` in new code; `classifyTechnicalSetup`, `buildTechSnapshotBlock`, `compute*` helpers, the TS1 region and `enforceScoreConsistency` byte-equal to the base |
 
 Every row has a planted negative (cache hit ignoring price; `orchestrate` reading the global cache; panel or Deep
@@ -244,6 +254,8 @@ price; a TS1 byte changed).
 **Existing suites:** `qa/deep_dive_v0_offline.js` — add `'_techSnapFor'` and `'_techRefInput'` to its `FNS` list
 only (no assertion change; required because `_dd0RunCard` now calls the helper). `qa/vis_score_caliper_offline.js`
 — the `renderMainPanel` hash value only (D1 a), with the TC-10 revert-hash proof recorded in `review.md`.
+`qa/ts1_default_exposure_offline.js` — the `BASE_HASHES.renderMainPanel` value only (Owner amendment; one line, no
+other pin, assertion or negative case changes), with the TC-13 one-line-diff proof recorded in `review.md`.
 `qa/run-offline.js` (ASK-tier) is **not** edited.
 
 <!-- land-scope:begin -->
@@ -251,6 +263,7 @@ index.html
 qa/tech_snapshot_cache_offline.js
 qa/deep_dive_v0_offline.js
 qa/vis_score_caliper_offline.js
+qa/ts1_default_exposure_offline.js
 BACKLOG.md
 <!-- land-scope:end -->
 <!-- land-tests:begin -->
@@ -260,13 +273,14 @@ node qa/vis_score_caliper_offline.js
 node qa/ts1_default_exposure_offline.js
 <!-- land-tests:end -->
 
-## 6. Files — exactly 6
+## 6. Files — exactly 7
 
 ```
 index.html                              I1–I8 only
 qa/tech_snapshot_cache_offline.js       NEW — §5
 qa/deep_dive_v0_offline.js              FNS list +2 names only
 qa/vis_score_caliper_offline.js         renderMainPanel hash value only (D1 a)
+qa/ts1_default_exposure_offline.js      BASE_HASHES.renderMainPanel value only (amendment; one line)
 BACKLOG.md                              B1 and B2 only (step 10a, effect close)
 work/tech-snapshot-price-cache/review.md  NEW — ## Backlog reconciliation; old/new pin and TC-10 proof; LAND-EVIDENCE
 ```
@@ -291,17 +305,20 @@ confirm no other full run is active on the machine (Worker A); step 10a effect `
 `## Backlog reconciliation`; Codex review and FIX/DEFER/REJECT; LAND and push through R12 with the Owner's two
 lines; cleanup. No `main`, production, Netlify or live-API action.
 
-**STOP:** STOP-1..6; any `BACKLOG.md` edit beyond B1 and B2; any change outside I1–I8 and the two existing-suite edits; any change to snapshot keys or
+**STOP:** STOP-1..6; any `BACKLOG.md` edit beyond B1 and B2; any change outside I1–I8 and the three existing-suite edits; any change to snapshot keys or
 order, classification thresholds, score clamps, prompt text, `CACHE_TTL_MS` or the Tech Score v1 region; any
 ticker-specific code; any persistence or `pt_*` change; any `renderMainPanel` change beyond I7a–I7i; any change to
 the scan-time values themselves, the score calculation, `_ptScoreDial` / `_ptScoreText` / other pinned score
 functions, the other action rows, Position Take or AI text; any edit to
 `qa/run-offline.js`; any new CSS rule; any
-caliper change other than the `renderMainPanel` value; caliper revert proof failing; the render harness (TC-12c)
+caliper change other than the `renderMainPanel` value; any change to `qa/ts1_default_exposure_offline.js` other than
+the single `BASE_HASHES.renderMainPanel` line (a second changed line, another pin, an assertion or a negative case);
+caliper revert proof failing; the render harness (TC-12c)
 not buildable — STOP and report rather than weaken it; a `qa:offline` count other
 than baseline + 1.
 
 **Definition of Done:** I1–I8 (I7a–I7i) exact; TC-1…TC-15 and negatives PASS; existing suites PASS; full `qa:offline` =
-baseline + 1; `review.md` with `## Backlog reconciliation` (`close` / entry 32 DONE) and the caliper proof; Codex no
+baseline + 1; `review.md` with `## Backlog reconciliation` (`close` / entry 32 DONE), the caliper proof and the TS1
+one-line-diff proof; Codex no
 unresolved Class I; LANDed, pushed, cleaned; DEV check recorded when the Owner approves it.
 
