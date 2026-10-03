@@ -9,15 +9,11 @@ from Git, active worktrees, task evidence and QA results (`CLAUDE.md`, "Source o
 project state"). If this file and the repository disagree, the repository is right and this
 file is stale.
 
-## Base snapshot
+## Orientation
 
-| | |
-|---|---|
-| Normalized | 2026-09-29 |
-| `branch-dev` | `732f481` — second-LAND base for this reconciliation |
-| `origin/main` | `fbec2c1` — `branch-dev` is **112 commits ahead of production** |
-| Active entries | 21 |
-| `qa:offline` | **50** effective suites (auto-discovered, minus the denylist) |
+Commit positions, counts and suite totals are not recorded here — they go stale on every LAND.
+Read them from Git (`git log`, `git rev-list --count origin/main..branch-dev`) and from
+`npm run qa:offline`.
 
 **Active ARC:** S2 — the news-catalyst evidence pipeline (entry 4). The 23 legacy ARC
 directories under `.ai-reports/arcs/` remain **FROZEN / SUPERSEDED** as a class
@@ -75,20 +71,21 @@ only on a hub-class survivor in a new corpus.
 **Previous standing rule retired.** It sequenced entries 2 and 3 behind the TradingView pilot;
 the pilot landed (entry 1, DONE), so the condition no longer exists.
 
-### 7 · EOD data-readiness + data-state presentation contract
+### 7 · EOD data-readiness + data-state presentation contract — **DONE** (`dd389ba`)
 **Market Data / Pricing · Data honesty**
 
 Explicit readiness judgement so stale data never reads as current. Contract ratified
 (Amendment 2, `7510d546…`).
 
-*Landed:* DH-M1 readiness block + shared display table (`98d3d68`); DH-M2 U1–U8 display
-vocabulary (`5ad0a5f`). *Briefed:* DH-M2b — ruled words R1/R3/R4 on three render-only sites
-(brief `9be7717`). *What remains:* (a) R2 — usable-but-aged FX → `Current · N d old` —
-together with DH-M1's export reasons `fx-missing` / `fx-aged`: **needs an Owner ruling** on
-the age basis and on how the readiness verdict treats aged-but-valid FX; (b) R1's
-export/prompt-fed sites (needs-attention title, completeness reason, EOD limitation) —
-Manual; (c) DH-M3 pre-export warning, which must also explain that the first export after
-DH-M1 reads `not-representative` until each holding is refreshed once.
+*Closed 2026-10 on the committed closure census (`work/dh-entry7-closure-census/census.md`, base
+`e27ce1c`, one gap G-1) and its resolution by DH-M4c (`dd389ba`).* Landed slices: DH-M0a
+vocabulary census (`20a81e2`); DH-M1 readiness block + shared display table (`98d3d68`); DH-M2
+U1–U8 display vocabulary (`5ad0a5f`); DH-M2b ruled words R1/R3/R4 (`0522247`); DH-M3 pre-export
+warning (`6e3e64d`); DH-M4a ruled FX missing/stale export wording (`99d4844`); DH-M4b
+aged-but-valid FX → `Current · N d old`, no readiness lowering (`e27ce1c`); DH-M4c FX limitation
+line routed through `DH_DISPLAY` (`dd389ba`). *Split out:* the ResearchView `Stale` badge decision
+(census I-1) → **entry 30**. *Out of scope by design:* the API-connectivity status words (census
+I-2; a different domain).
 *Absorbed 2026-09-23 — the presentation half.* This entry now also owns the **global
 data-state presentation contract**: a single product-wide convention for **Degraded**,
 **Missing** and **Failed**, so the same state never renders three different ways. Carried from
@@ -115,8 +112,9 @@ evidence.
 *Deps:* none.
 *Legacy refs:* `WP-P1 Slice A`, `BC-3a`.
 
-### 11 · Selected-for-scan visibility
+### 11 · Selected-for-scan visibility — **DONE** (`5a32c4d`)
 **Search / Scan** · small.
+*Landed:* "Selected only" watchlist toggle (`5a32c4d`; `work/selected-only-watchlist/`).
 *Legacy refs:* `WP-P12`, `BC-8`.
 
 ### 12 · Asset-type classifier + ETF suppression
@@ -156,6 +154,7 @@ per dark surface would be inventory, not a plan.
 | 26 | Broker Observation Contract + Read-Only Observer Pilot | Portfolio / Verification | **Contract-first; added 2026-09-26.** One **source-agnostic observation contract** that later producers emit (Cowork browser, broker CSV/Excel, broker API, MCP): `source · observedAt · broker · maskedAccountRef · cashByCurrency[] · positions[] {symbol, quantity, positionValue, currency, avgCost?} · totalValue · confidence · runStatus · evidenceRef`. Observations are **verification evidence only** — Pulse remains the calculation engine; no broker-side writes. *Owner rulings 2026-09-26:* observations and evidence are stored **local only, outside Git**; account references are **masked**; **full account identifiers are never stored**. **Pilot:** Owner-initiated, never scheduled; read-only browser observation; the Owner signs in — **no credential or OTP capture**; no trade, transfer or settings action; **fail closed** on MFA, CAPTCHA, ambiguous values or layout changes; report only, with run status and evidence reference; **5–10 runs** before scheduling is considered. *Deferred to 26a:* symbol mapping, confidence rules, pilot broker/account scope. No observer code in this repository | — |
 | 27 | Portfolio Reconciliation / Verification | Portfolio / Verification | **Breakdown-first; added 2026-09-26.** Compares recorded Pulse state with one entry-26 observation. **v1 direct comparisons:** cash · symbol set · total portfolio value. **Informational only:** broker position value, average cost. **After schema support:** share quantities. **Mismatch classes:** `match · explained · unexplained-gap · structural · unverifiable`; reuses `pt_recon` concepts where they fit (tolerance, declared exclusions → explained, `unset/invalid/stale/total-incomplete` → unverifiable). Deposits/withdrawals surface as a **cash** mismatch; external trades as a **structural/value** mismatch. *Owner rulings 2026-09-26:* intake is **manual import of a contract JSON file** (not paste as the primary path); **Pulse never fetches broker data**. Recorded cash stays the **existing single ILS value** — no per-currency cash schema; broker cash-by-currency is normalized to ILS via the existing FX freshness owner (`_pfFxState`), and **if required FX is not Current the cash comparison is unverifiable/suppressed, never guessed**. **v1 is report-only — no Accept/write action;** any future Owner-confirmed update of cash, recon, holdings, quantity or cost basis needs its own explicit slice. **No transaction ledger.** DH-M1 scope unchanged — its old-cash rule remains the recorded-cash freshness fallback. *Deferred to the 27 Breakdown:* tolerances; whether a matching observation may later contribute to readiness. *Deps:* 26 (contract); quantities need the holdings-schema slice shared with 25 | — |
 | 28 | Broker API / MCP observation producer | Portfolio / Verification | **Placeholder; added 2026-09-26.** A future producer emitting **the same entry-26 contract** from a broker API or MCP instead of browser observation. Same read-only, fail-closed, report-only and storage rules; no broker writes. Not scheduled; considered only after the 26 pilot shows the contract holds | — |
+| 30 | ResearchView `Stale` badge — shared-contract decision | Data honesty | **Split from entry 7 at its closure (Owner ruling 2026-10-03).** The ResearchView result badge (`'Stale'` / `'Research'` in `_renderPortfolioPanel`) is an independent literal, text-identical to `DH_DISPLAY.state['stale']` but not routed through `_dhLabel`. Decide whether this local vocabulary joins the shared data-state contract (the DH-M0b ownership decision was never made for it); if yes, a small slice routes it through `DH_DISPLAY`. *Evidence:* `work/dh-entry7-closure-census/census.md` (I-1); `work/dh-vocabulary-census/census.md` | — |
 
 ---
 
@@ -219,10 +218,12 @@ chart/embed · `EG-10A` and `EG-15` design briefs · the ARC governance chain
 **3** Remove `services/history.js` — file deleted ·
 **5** Benchmark self-comparison guard — `9cade5b` ·
 **6** Technical Score v1 surfacing — `aa62aea` ·
+**7** EOD data-readiness + data-state presentation contract — `work/dh-entry7-closure-census/` ·
 **8a** `Rating:` regex de-duplication — `9f8171d` ·
 **9** UI hygiene bundle — `bf936de` ·
 **10** Scan Results HELD marker — `df5ad24` (narrowed by Owner ruling 2026-09-26: no
 Risk / Reward column or chips in Scan Results) ·
+**11** Selected-for-scan visibility — `work/selected-only-watchlist/` ·
 **S2 slices** S1.5 · S1.5.1 (H-A/H-B/H-C, `1eda72c`) · S1.5.2 (`d9395ea`) · A1 (`6e242fb`,
 `9327e47`) · A2 (`52c322b`) · A5 (`810586d`) · D-A2-2 / S2-M1 (`0526458`) ·
 A3a / S2-M2 (`28c2543`) ·
@@ -233,8 +234,7 @@ fund-facts `C1-S1…S6` · `C3-S1` provider · `T1-C1` · closed arcs `WU-P7A1`,
 task-folder convention.
 
 *Historical totals are approximate (~40 merged refs, ~50 retired, ~64 done) and deliberately
-not enumerated line-by-line. The **21** active entries above are exact (numbered entries in
-NOW, NEXT, LATER, HOLD and HOLD / EXTERNAL; DONE-marked entries excluded).*
+not enumerated line-by-line.*
 
 **KNOWN HISTORICAL EXCEPTIONS** (recorded, not remediated — do not back-fill):
 
