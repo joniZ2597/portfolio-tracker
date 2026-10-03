@@ -15478,6 +15478,10 @@ function init() {
   } catch (_) {
     window.PT_ENABLE_PORTFOLIO_RESEARCH = false;
   }
+  // Entry 22a (Owner ruling 2026-10-03): Technical Score v1 is exposed by default.
+  // Re-applied on every load; every gate check stays strict (=== true). Nothing is
+  // persisted. Session kill switch: window.PT_ENABLE_TECH_SCORE = false (console).
+  window.PT_ENABLE_TECH_SCORE = true;
   // Phase 1: load + normalize watchlist from localStorage on startup
   loadWatchlist();
   _reconcileWatchlistPositionsFromHoldings(); // EG-17: repair hasPosition for existing holdings

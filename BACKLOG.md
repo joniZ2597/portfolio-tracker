@@ -137,6 +137,7 @@ a user, and where that surface lives** — and then the surface itself. It does 
 individual capability's activation decision; those stay in the Activation Register.
 *Why one entry and not thirteen:* the audit is the register of hidden capabilities. One entry
 per dark surface would be inventory, not a plan.
+*Ruled 2026-10-03:* Tech Score v1 exposed by default; Deep Dive Labs-only; Research Evidence disabled; all other hidden cards stay hidden until their backend/data exists; Labs switches are session-only, never persisted. *22a landed (`work/tech-score-default/`):* Tech Score v1 shown by default. *Remains — 22b:* the session-only ⚙ Labs section (Deep Dive).
 *Deps:* Owner policy ruling before any implementation.
 *Evidence:* `.ai-reports/status/product-surface-audit-52c322b.PREP.local.md`.
 
