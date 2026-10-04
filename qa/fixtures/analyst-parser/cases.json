@@ -1,0 +1,921 @@
+[
+ {
+  "id": "1a",
+  "label": "Raised PT, maintained Buy",
+  "input": "Morgan Stanley raised PT to $545 and maintained Buy (Sep 2)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Morgan Stanley",
+     "action": "raised",
+     "target": 545,
+     "ratingAction": "maintained",
+     "rating": "Buy",
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "1b",
+  "label": "Raised PT, maintained Buy (rating first)",
+  "input": "Morgan Stanley maintained Buy and raised PT to $545 (Sep 2)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Morgan Stanley",
+     "action": "raised",
+     "target": 545,
+     "ratingAction": "maintained",
+     "rating": "Buy",
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "2a",
+  "label": "Cut PT, maintained Neutral",
+  "input": "Goldman Sachs cut PT to $485 and maintained Neutral (Sep 30)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Goldman Sachs",
+     "action": "cut",
+     "target": 485,
+     "ratingAction": "maintained",
+     "rating": "Neutral",
+     "ptAction": "cut",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "2b",
+  "label": "Cut PT, maintained Neutral (rating first)",
+  "input": "Goldman Sachs maintained Neutral, cut PT to $485 (Sep 30)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Goldman Sachs",
+     "action": "cut",
+     "target": 485,
+     "ratingAction": "maintained",
+     "rating": "Neutral",
+     "ptAction": "cut",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "3a",
+  "label": "Upgraded Hold->Buy, target $X",
+  "input": "JPMorgan upgraded to Buy from Hold with a $250 PT (Oct 1)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "JPMorgan",
+     "action": "upgraded",
+     "target": 250,
+     "ratingAction": "upgraded",
+     "rating": "Buy",
+     "ptAction": null,
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "3b",
+  "label": "Upgraded Hold->Buy, target $X (PT first)",
+  "input": "JPMorgan upgraded from Hold to Buy, PT $250 (Oct 1)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "JPMorgan",
+     "action": "upgraded",
+     "target": 250,
+     "ratingAction": "upgraded",
+     "rating": "Buy",
+     "ptAction": null,
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "4a",
+  "label": "Downgraded Buy->Neutral, target unchanged",
+  "input": "Bank of America downgraded to Neutral from Buy; PT unchanged at $120 (Oct 1)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Bank of America",
+     "action": "downgraded",
+     "target": 120,
+     "ratingAction": "downgraded",
+     "rating": "Neutral",
+     "ptAction": "maintained",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "4b",
+  "label": "Downgraded, no $ at all",
+  "input": "Bank of America downgraded to Neutral from Buy (Oct 1)",
+  "expected": {
+   "analystActions": [],
+   "ratingOnlyActions": [
+    {
+     "bank": "Bank of America",
+     "action": "downgraded",
+     "ratingAction": "downgraded",
+     "rating": "Neutral"
+    }
+   ]
+  }
+ },
+ {
+  "id": "5a",
+  "label": "Initiated Buy with $X",
+  "input": "Wells Fargo initiated coverage with Buy and a $426 PT (Sep 24)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Wells Fargo",
+     "action": "initiated",
+     "target": 426,
+     "ratingAction": "initiated",
+     "rating": "Buy",
+     "ptAction": "initiated",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "5b",
+  "label": "Initiated, rating word in middle",
+  "input": "Piper Sandler initiated Overweight at $300 (Oct 1)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Piper Sandler",
+     "action": "initiated",
+     "target": 300,
+     "ratingAction": "initiated",
+     "rating": "Overweight",
+     "ptAction": "initiated",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "6a",
+  "label": "Reiterated Buy, raised from $X to $Y",
+  "input": "Citi reiterated Buy and raised PT from $300 to $315 (Oct 1)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Citi",
+     "action": "raised",
+     "target": 315,
+     "ratingAction": "reiterated",
+     "rating": "Buy",
+     "ptAction": "raised",
+     "ptFrom": 300
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "6b",
+  "label": "Raised from $X to $Y, verb first",
+  "input": "Citi raised its PT from $300 to $315, reiterating Buy (Oct 1)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Citi",
+     "action": "raised",
+     "target": 315,
+     "ratingAction": "reiterated",
+     "rating": "Buy",
+     "ptAction": "raised",
+     "ptFrom": 300
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "7a",
+  "label": "Two firms, pipe separated",
+  "input": "Goldman Sachs cut PT to $485 (Sep 30) | Deutsche Bank raised PT to $500 (Sep 30)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Goldman Sachs",
+     "action": "cut",
+     "target": 485,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "cut",
+     "ptFrom": null
+    },
+    {
+     "bank": "Deutsche Bank",
+     "action": "raised",
+     "target": 500,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "7b",
+  "label": "Two firms, semicolon",
+  "input": "Goldman Sachs cut PT to $485 (Sep 30); Deutsche Bank raised PT to $500 (Sep 30)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Goldman Sachs",
+     "action": "cut",
+     "target": 485,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "cut",
+     "ptFrom": null
+    },
+    {
+     "bank": "Deutsche Bank",
+     "action": "raised",
+     "target": 500,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "7c",
+  "label": "Two firms, one sentence with 'while'",
+  "input": "Goldman Sachs cut PT to $485 while Deutsche Bank raised PT to $500 (Sep 30)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Goldman Sachs",
+     "action": "cut",
+     "target": 485,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "cut",
+     "ptFrom": null
+    },
+    {
+     "bank": "Deutsche Bank",
+     "action": "raised",
+     "target": 500,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "8a",
+  "label": "Real ROK line (reconstructed)",
+  "input": "Goldman Sachs cut PT to $485 and maintained Neutral (September 30) | Deutsche Bank raised PT to $500 and maintained Equal Weight (September 30); UBS initiated Hold with a $475 PT (September 28) | Wells Fargo initiated Equal Weight with a $426 PT (September 24)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Goldman Sachs",
+     "action": "cut",
+     "target": 485,
+     "ratingAction": "maintained",
+     "rating": "Neutral",
+     "ptAction": "cut",
+     "ptFrom": null
+    },
+    {
+     "bank": "Deutsche Bank",
+     "action": "raised",
+     "target": 500,
+     "ratingAction": "maintained",
+     "rating": "Equal Weight",
+     "ptAction": "raised",
+     "ptFrom": null
+    },
+    {
+     "bank": "UBS",
+     "action": "initiated",
+     "target": 475,
+     "ratingAction": "initiated",
+     "rating": "Hold",
+     "ptAction": "initiated",
+     "ptFrom": null
+    },
+    {
+     "bank": "Wells Fargo",
+     "action": "initiated",
+     "target": 426,
+     "ratingAction": "initiated",
+     "rating": "Equal Weight",
+     "ptAction": "initiated",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  },
+  "regression": "REGRESSION-ROK"
+ },
+ {
+  "id": "8b",
+  "label": "Real CBOE line (reconstructed)",
+  "input": "Goldman Sachs upgraded to Neutral from Sell and cut PT to $300 (October 2) | Wells Fargo initiated Equal-Weight with a $301 PT (October 2) | Piper Sandler maintained Overweight with a $320 PT (October 2)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Goldman Sachs",
+     "action": "cut",
+     "target": 300,
+     "ratingAction": "upgraded",
+     "rating": "Neutral",
+     "ptAction": "cut",
+     "ptFrom": null
+    },
+    {
+     "bank": "Wells Fargo",
+     "action": "initiated",
+     "target": 301,
+     "ratingAction": "initiated",
+     "rating": "Equal Weight",
+     "ptAction": "initiated",
+     "ptFrom": null
+    },
+    {
+     "bank": "Piper Sandler",
+     "action": "maintained",
+     "target": 320,
+     "ratingAction": "maintained",
+     "rating": "Overweight",
+     "ptAction": null,
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  },
+  "regression": "REGRESSION-CBOE"
+ },
+ {
+  "id": "8c",
+  "label": "Real MRNA line (reconstructed)",
+  "input": "Citigroup downgraded to Sell and raised PT to $80 (September 30)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Citigroup",
+     "action": "raised",
+     "target": 80,
+     "ratingAction": "downgraded",
+     "rating": "Sell",
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  },
+  "regression": "REGRESSION-MRNA"
+ },
+ {
+  "id": "8d",
+  "label": "Commas and parentheses",
+  "input": "Goldman Sachs (Neutral) cut PT to $485, from $520, on Sep 30",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Goldman Sachs",
+     "action": "cut",
+     "target": 485,
+     "ratingAction": null,
+     "rating": "Neutral",
+     "ptAction": "cut",
+     "ptFrom": 520
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "8e",
+  "label": "Lower-case firm",
+  "input": "jefferies raised PT to $90 (Oct 1)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "jefferies",
+     "action": "raised",
+     "target": 90,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "8f",
+  "label": "Firm with ampersand and 'and' in name",
+  "input": "Stifel, Nicolaus & Co. raised PT to $210; Keefe, Bruyette & Woods cut PT to $45",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Stifel, Nicolaus & Co.",
+     "action": "raised",
+     "target": 210,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    },
+    {
+     "bank": "Keefe, Bruyette & Woods",
+     "action": "cut",
+     "target": 45,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "cut",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "8g",
+  "label": "Firm abbreviation BofA / RBC",
+  "input": "BofA raised PT to $260 | RBC Capital Markets cut PT to $240",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "BofA",
+     "action": "raised",
+     "target": 260,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    },
+    {
+     "bank": "RBC Capital Markets",
+     "action": "cut",
+     "target": 240,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "cut",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "8h",
+  "label": "Bracket template echoed",
+  "input": "[Goldman Sachs] [cut] PT $485 ([Sep 30])",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Goldman Sachs",
+     "action": "cut",
+     "target": 485,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "cut",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "8i",
+  "label": "'to $X from $Y' order",
+  "input": "Barclays lowered its PT to $95 from $110 (Sep 29)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Barclays",
+     "action": "lowered",
+     "target": 95,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "lowered",
+     "ptFrom": 110
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "8j",
+  "label": "Same firm twice",
+  "input": "Goldman Sachs cut PT to $485 (Sep 30) | Goldman Sachs cut PT to $485 (Sep 30)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Goldman Sachs",
+     "action": "cut",
+     "target": 485,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "cut",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "8k",
+  "label": "Same firm two different targets",
+  "input": "UBS raised PT to $120 (Sep 1) | UBS cut PT to $100 (Sep 29)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "UBS",
+     "action": "raised",
+     "target": 120,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    },
+    {
+     "bank": "UBS",
+     "action": "cut",
+     "target": 100,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "cut",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "8l",
+  "label": "Consensus mention",
+  "input": "Consensus PT is $324; Daiwa cut PT to $245 (Sep 17)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Daiwa",
+     "action": "cut",
+     "target": 245,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "cut",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "9a",
+  "label": "PT change only, no rating",
+  "input": "Mizuho raised PT to $210 (Oct 2)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Mizuho",
+     "action": "raised",
+     "target": 210,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "9b",
+  "label": "PT change, rating word absent, 'boosted'",
+  "input": "Needham boosted its price target to $95",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Needham",
+     "action": "boosted",
+     "target": 95,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "boosted",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "10a",
+  "label": "Rating change only, no PT",
+  "input": "UBS upgraded to Buy from Neutral (Oct 2)",
+  "expected": {
+   "analystActions": [],
+   "ratingOnlyActions": [
+    {
+     "bank": "UBS",
+     "action": "upgraded",
+     "ratingAction": "upgraded",
+     "rating": "Buy"
+    }
+   ]
+  }
+ },
+ {
+  "id": "10b",
+  "label": "Rating change only, later unrelated $",
+  "input": "UBS upgraded to Buy from Neutral after Q3 revenue of $2.3B (Oct 2)",
+  "expected": {
+   "analystActions": [],
+   "ratingOnlyActions": [
+    {
+     "bank": "UBS",
+     "action": "upgraded",
+     "ratingAction": "upgraded",
+     "rating": "Buy"
+    }
+   ]
+  }
+ },
+ {
+  "id": "10c",
+  "label": "Rating change, PT in thousands",
+  "input": "Evercore downgraded to In Line; stock trades near $1,250 (Oct 2)",
+  "expected": {
+   "analystActions": [],
+   "ratingOnlyActions": [
+    {
+     "bank": "Evercore",
+     "action": "downgraded",
+     "ratingAction": "downgraded",
+     "rating": "In Line"
+    }
+   ]
+  }
+ },
+ {
+  "id": "11a",
+  "label": "PT above $5,000",
+  "input": "Bernstein raised PT to $5,600 (Oct 1)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Bernstein",
+     "action": "raised",
+     "target": 5600,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "11b",
+  "label": "'by $X to $Y'",
+  "input": "Truist raised PT by $10 to $300 (Oct 1)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Truist",
+     "action": "raised",
+     "target": 300,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "11c",
+  "label": "'set' verb",
+  "input": "Truist set a $50 PT with Buy (Oct 1)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Truist",
+     "action": "set",
+     "target": 50,
+     "ratingAction": null,
+     "rating": "Buy",
+     "ptAction": "set",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "11d",
+  "label": "Trailing rating clause, next item > 80 chars away",
+  "input": "Goldman Sachs cut PT to $485 and maintained Neutral citing slower order intake in discrete automation and margin pressure (Sep 30) | Deutsche Bank raised PT to $500 (Sep 30)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Goldman Sachs",
+     "action": "cut",
+     "target": 485,
+     "ratingAction": "maintained",
+     "rating": "Neutral",
+     "ptAction": "cut",
+     "ptFrom": null
+    },
+    {
+     "bank": "Deutsche Bank",
+     "action": "raised",
+     "target": 500,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "11e",
+  "label": "Rating clause first then PT from-to",
+  "input": "Morgan Stanley upgraded to Overweight from Equal Weight and raised PT from $480 to $545 (Sep 2)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Morgan Stanley",
+     "action": "raised",
+     "target": 545,
+     "ratingAction": "upgraded",
+     "rating": "Overweight",
+     "ptAction": "raised",
+     "ptFrom": 480
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "11f",
+  "label": "Multiple lines (model wraps)",
+  "input": "Goldman Sachs cut PT to $485 (Sep 30)\nDeutsche Bank raised PT to $500 (Sep 30)",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "Goldman Sachs",
+     "action": "cut",
+     "target": 485,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "cut",
+     "ptFrom": null
+    },
+    {
+     "bank": "Deutsche Bank",
+     "action": "raised",
+     "target": 500,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "11g",
+  "label": "Six firms (cap)",
+  "input": "A1 Bank raised PT to $10 | B2 Bank raised PT to $11 | C3 Bank raised PT to $12 | D4 Bank raised PT to $13 | E5 Bank raised PT to $14 | F6 Bank raised PT to $15",
+  "expected": {
+   "analystActions": [
+    {
+     "bank": "A1 Bank",
+     "action": "raised",
+     "target": 10,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    },
+    {
+     "bank": "B2 Bank",
+     "action": "raised",
+     "target": 11,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    },
+    {
+     "bank": "C3 Bank",
+     "action": "raised",
+     "target": 12,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    },
+    {
+     "bank": "D4 Bank",
+     "action": "raised",
+     "target": 13,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    },
+    {
+     "bank": "E5 Bank",
+     "action": "raised",
+     "target": 14,
+     "ratingAction": null,
+     "rating": null,
+     "ptAction": "raised",
+     "ptFrom": null
+    }
+   ],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "11h",
+  "label": "NONE",
+  "input": "NONE",
+  "expected": {
+   "analystActions": [],
+   "ratingOnlyActions": []
+  }
+ },
+ {
+  "id": "X1",
+  "label": "Rating move worded with a target verb",
+  "input": "JPMorgan cut to Neutral from Overweight (Oct 1)",
+  "expected": {
+   "analystActions": [],
+   "ratingOnlyActions": [
+    {
+     "bank": "JPMorgan",
+     "action": "downgraded",
+     "ratingAction": "downgraded",
+     "rating": "Neutral"
+    }
+   ]
+  }
+ },
+ {
+  "id": "X2",
+  "label": "Verb outside the vocabulary (documented residual)",
+  "input": "Citi lifted its PT to $300 (Oct 1)",
+  "expected": {
+   "analystActions": [],
+   "ratingOnlyActions": []
+  }
+ }
+]

@@ -5642,25 +5642,166 @@ function parsePerplexityContext(raw, sources = []) {
     }
     return true;
   }).slice(0, 4) : [];
-  // Extract analyst actions by action verb — captures bank phrase + verb + PT amount.
-  // Bank phrase is anything reasonable up to the action verb; no hardcoded list.
-  const ACTION_RE = /([A-Z][\w&.\- ]{1,40}?)\s+(raised|cut|lowered|trimmed|reduced|initiated|reiterated|maintained|started|launched|reinstated|resumed|upgraded|downgraded|boosted|hiked|set)\b[^\n$]{0,80}\$([0-9,]+(?:\.[0-9]+)?)/gi;
-  const _extractActions = (text) => {
+  // R-4a: item-by-item analyst-action parser. Rating changes and price-target changes are
+  // separated; rating-only events go to ratingOnlyActions. Verbs match in base, -s, -ing and
+  // past forms and are always reported in the past-tense form.
+  const _AA_GROUPS = {
+    target: {
+      raised: ['raised', 'raises', 'raise', 'raising'], cut: ['cut', 'cuts', 'cutting'],
+      lowered: ['lowered', 'lowers', 'lower', 'lowering'], trimmed: ['trimmed', 'trims', 'trim', 'trimming'],
+      reduced: ['reduced', 'reduces', 'reduce', 'reducing'], boosted: ['boosted', 'boosts', 'boost', 'boosting'],
+      hiked: ['hiked', 'hikes', 'hike', 'hiking'], set: ['set', 'sets', 'setting']
+    },
+    rating: {
+      upgraded: ['upgraded', 'upgrades', 'upgrade', 'upgrading'], downgraded: ['downgraded', 'downgrades', 'downgrade', 'downgrading'],
+      reiterated: ['reiterated', 'reiterates', 'reiterate', 'reiterating'], maintained: ['maintained', 'maintains', 'maintain', 'maintaining']
+    },
+    coverage: {
+      initiated: ['initiated', 'initiates', 'initiate', 'initiating'], started: ['started', 'starts', 'start', 'starting'],
+      launched: ['launched', 'launches', 'launch', 'launching'], reinstated: ['reinstated', 'reinstates', 'reinstate', 'reinstating'],
+      resumed: ['resumed', 'resumes', 'resume', 'resuming']
+    }
+  };
+  const _AA_FORM = {};
+  Object.keys(_AA_GROUPS).forEach(g => Object.keys(_AA_GROUPS[g]).forEach(past => _AA_GROUPS[g][past].forEach(f => { _AA_FORM[f] = { v: past, g }; })));
+  const _aaFormsOf = (...gs) => gs.reduce((a, g) => a.concat(...Object.keys(_AA_GROUPS[g]).map(k => _AA_GROUPS[g][k])), []).join('|');
+  const _AA_VERB_RE = new RegExp('\\b(' + Object.keys(_AA_FORM).sort((a, b) => b.length - a.length).join('|') + ')\\b', 'gi');
+  const _AA_RATINGS = ['Strong Buy', 'Strong Sell', 'Buy', 'Outperform', 'Overweight', 'Accumulate', 'Add', 'Positive', 'Hold', 'Neutral',
+    'Equal Weight', 'Market Perform', 'Sector Perform', 'Peer Perform', 'In Line', 'Market Weight', 'Sector Weight',
+    'Underperform', 'Underweight', 'Reduce', 'Sell', 'Negative'];
+  const _AA_RATING = '(?:' + _AA_RATINGS.slice().sort((a, b) => b.length - a.length).map(r => r.replace(/ /g, '[\\s-]+')).join('|') + ')';
+  const _aaRatingName = s => { const k = String(s || '').toLowerCase().replace(/[\s-]+/g, ' ').trim(); return _AA_RATINGS.find(r => r.toLowerCase() === k) || null; };
+  // A $ amount; never a target when followed by B / M / K / bn / mn / billion / million / thousand.
+  const _AA_AMT = '\\$\\s?((?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?)(?!\\d|[.,]\\d)(?!\\s?(?:billion|million|thousand|trillion)\\b)(?!(?:bn|mn|tn|[bmk])\\b)';
+  const _AA_TW = '\\b(?:PT|price[\\s-]+targets?|targets?)\\b';
+  const _AA_TW_RE = new RegExp(_AA_TW, 'i');
+  const _AA_TW_START_RE = new RegExp('^' + _AA_TW, 'i');
+  const _AA_RATING_TO = new RegExp('\\bto\\s+(' + _AA_RATING + ')\\b', 'i');
+  const _AA_RATING_VERB = new RegExp('\\b(?:' + _aaFormsOf('rating', 'coverage') + ')\\s+(?:coverage\\s+)?(?:(?:at|with|on)\\s+)?(?:a\\s+)?(' + _AA_RATING + ')\\b', 'i');
+  const _AA_RATING_PREP = new RegExp('\\b(?:with|rated|at)\\s+(?:a\\s+)?(' + _AA_RATING + ')\\b', 'i');
+  const _AA_TO_RATING_AT = new RegExp('^\\s+to\\s+' + _AA_RATING + '\\b', 'i');
+  const _AA_RULE_A = new RegExp('\\bfrom\\s+' + _AA_AMT + '\\s+to\\s+' + _AA_AMT, 'i');
+  const _AA_RULE_B = new RegExp('\\bto\\s+' + _AA_AMT + ',?\\s*from\\s+' + _AA_AMT, 'i');
+  const _AA_RULE_C = new RegExp(_AA_TW + '\\s*(?::|(unchanged\\s+at|of|at|to|is|was)\\b)?\\s*' + _AA_AMT, 'i');
+  const _AA_RULE_D = new RegExp(_AA_AMT + '\\s*-?\\s*' + _AA_TW, 'i');
+  const _AA_RULE_E = new RegExp('\\b(?:' + _aaFormsOf('coverage') + ')\\s+(?:coverage\\s+)?(?:(?:at|with|on)\\s+)?(?:a\\s+)?' + _AA_RATING + '\\s+(?:at|with(?:\\s+a)?)\\s+' + _AA_AMT, 'i');
+  const _AA_RULE_F = new RegExp('\\bto\\s+' + _AA_AMT, 'i');
+  const _AA_MOVE = { cut: 'downgraded', lowered: 'downgraded', trimmed: 'downgraded', reduced: 'downgraded', raised: 'upgraded', boosted: 'upgraded', hiked: 'upgraded' };
+  const _aaNum = s => parseFloat(String(s).replace(/,/g, ''));
+  // Vocabulary verbs in an item, in order. "Reduce" right after to / with / at / a rating verb is a rating, not a verb.
+  const _aaVerbs = (t) => {
     const out = [];
-    const seen = new Set();
     let m;
-    ACTION_RE.lastIndex = 0;
-    while ((m = ACTION_RE.exec(text)) !== null) {
-      const bank = m[1].replace(/^[-*•#>\s]+/, '').trim();
-      const verb = m[2].toLowerCase();
-      const target = parseFloat(m[3].replace(/,/g, ''));
-      if (!(target > 0 && target < 5000)) continue;
-      const key = bank.toLowerCase() + '|' + target;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ bank, action: verb, target, raw: m[0].slice(0, 100) });
+    _AA_VERB_RE.lastIndex = 0;
+    while ((m = _AA_VERB_RE.exec(t)) !== null) {
+      const form = m[1].toLowerCase();
+      if (form === 'reduce' && /\b(?:to|with|at|rated|from|on|coverage|upgrad\w*|downgrad\w*|reiterat\w*|maintain\w*|initiat\w*|start\w*|launch\w*|reinstat\w*|resum\w*)\s+$/i.test(t.slice(0, m.index))) continue;
+      out.push({ i: m.index, end: m.index + m[0].length, v: _AA_FORM[form].v, g: _AA_FORM[form].g });
     }
     return out;
+  };
+  const _aaItems = (text) => {
+    const base = String(text || '').replace(/[\[\]]/g, '').split(/[|;\n]/).map(s => s.trim()).filter(Boolean);
+    // Split before a connector only when a capitalised name and a vocabulary verb follow it.
+    const parts = [];
+    base.forEach(it => {
+      const re = /\s+(?:while|whereas|and|but|meanwhile)\s+/gi;
+      let start = 0;
+      let m;
+      while ((m = re.exec(it)) !== null) {
+        const rest = it.slice(m.index + m[0].length);
+        const vs = _aaVerbs(rest.slice(0, 80));
+        if (/^[A-Z]/.test(rest) && vs.length && vs[0].i > 0 && rest.slice(0, vs[0].i).indexOf('$') === -1 && vs[0].i <= 60) {
+          parts.push(it.slice(start, m.index).trim());
+          start = m.index;
+        }
+      }
+      parts.push(it.slice(start).trim());
+    });
+    // A fragment that starts with a target word and has no verb belongs to the previous item.
+    const items = [];
+    parts.filter(Boolean).forEach(it => {
+      if (items.length && _AA_TW_START_RE.test(it) && !_aaVerbs(it).length) items[items.length - 1] += '; ' + it;
+      else items.push(it);
+    });
+    return items;
+  };
+  const _aaParseItem = (item) => {
+    const verbs = _aaVerbs(item);
+    if (!verbs.length) return null;
+    let firm = item.slice(0, verbs[0].i).replace(/^[-*•#>\s]+/, '');
+    while (/^(?:and|while|whereas|but|also|meanwhile|plus|with)\b\s*/i.test(firm)) firm = firm.replace(/^(?:and|while|whereas|but|also|meanwhile|plus|with)\b\s*/i, '');
+    let hint = null;
+    const pm = firm.match(/\s*\(([^()]*)\)\s*$/);
+    if (pm) { hint = pm[1].trim(); firm = firm.slice(0, pm.index); }
+    let prev;
+    do { prev = firm; firm = firm.replace(/[\s,]+$/, '').replace(/\s+(?:has|have|also|now)$/i, ''); } while (firm !== prev);
+    firm = firm.trim();
+    if (!firm || firm.length > 60 || firm.indexOf('$') !== -1 || /^(?:and|while|whereas|but|also|meanwhile|plus|with|the|consensus|analysts?)$/i.test(firm)) return null;
+    const hasTW = _AA_TW_RE.test(item);
+    let target = null, ptFrom = null, unchanged = false, m;
+    if (hasTW && (m = _AA_RULE_A.exec(item))) { target = _aaNum(m[2]); ptFrom = _aaNum(m[1]); }
+    else if (hasTW && (m = _AA_RULE_B.exec(item))) { target = _aaNum(m[1]); ptFrom = _aaNum(m[2]); }
+    else if ((m = _AA_RULE_C.exec(item))) { target = _aaNum(m[2]); unchanged = /^unchanged/i.test(m[1] || ''); }
+    else if ((m = _AA_RULE_D.exec(item))) target = _aaNum(m[1]);
+    else if ((m = _AA_RULE_E.exec(item))) target = _aaNum(m[1]);
+    else if (hasTW && (m = _AA_RULE_F.exec(item))) target = _aaNum(m[1]);
+    if (!(target > 0)) target = null;
+    if (target === null || !(ptFrom > 0)) ptFrom = null;
+    const rm = _AA_RATING_TO.exec(item) || _AA_RATING_VERB.exec(item) || _AA_RATING_PREP.exec(item);
+    const rating = rm ? _aaRatingName(rm[1]) : _aaRatingName(hint);
+    const firstRC = verbs.find(x => x.g === 'rating' || x.g === 'coverage');
+    let ratingAction = firstRC ? firstRC.v : null;
+    const firstT = verbs.find(x => x.g === 'target');
+    const firstC = verbs.find(x => x.g === 'coverage');
+    let ptAction = null;
+    if (firstT && (target !== null || hasTW)) ptAction = firstT.v;
+    else if (firstC && target !== null) ptAction = firstC.v;
+    else if (unchanged) ptAction = 'maintained';
+    // A target verb that moves to a rating ("cut to Neutral") with no target is a rating action.
+    if (target === null) {
+      const mv = verbs.find(x => x.g === 'target' && _AA_MOVE[x.v] && _AA_TO_RATING_AT.test(item.slice(x.end)));
+      if (mv) { if (!ratingAction) ratingAction = _AA_MOVE[mv.v]; ptAction = null; }
+    }
+    if (!ratingAction && !ptAction) return null;
+    const action = ptAction && ptAction !== 'maintained' ? ptAction : (ratingAction || ptAction);
+    return { bank: firm, action, target, raw: item.slice(0, 100), ratingAction, rating, ptAction, ptFrom };
+  };
+  const _extractActions = (text) => {
+    const analystActions = [];
+    const ratingOnlyActions = [];
+    const seenA = new Set();
+    const seenR = new Set();
+    _aaItems(text).forEach(it => {
+      const r = _aaParseItem(it);
+      if (!r) return;
+      if (r.target !== null) {
+        const key = r.bank.toLowerCase() + '|' + r.target;
+        if (seenA.has(key)) return;
+        seenA.add(key);
+        analystActions.push({ bank: r.bank, action: r.action, target: r.target, raw: r.raw, ratingAction: r.ratingAction, rating: r.rating, ptAction: r.ptAction, ptFrom: r.ptFrom });
+      } else if (r.ratingAction) {
+        const key = r.bank.toLowerCase() + '|' + r.ratingAction + '|' + r.rating;
+        if (seenR.has(key)) return;
+        seenR.add(key);
+        ratingOnlyActions.push({ bank: r.bank, action: r.ratingAction, ratingAction: r.ratingAction, rating: r.rating, raw: r.raw });
+      }
+    });
+    return { analystActions: analystActions.slice(0, 5), ratingOnlyActions: ratingOnlyActions.slice(0, 5) };
+  };
+  // Read the whole ANALYST_ACTIONS field: the labelled line plus every following line up to the next template label.
+  const _readAnalystActions = (ls) => {
+    const strip = l => l.replace(/^[-*•#>\s]+/, '');
+    const i = ls.findIndex(l => strip(l).toUpperCase().startsWith('ANALYST_ACTIONS:'));
+    if (i === -1) return '';
+    const first = ls[i].slice(ls[i].indexOf(':') + 1).trim();
+    if (first && _isNoneVal(first)) return '';
+    const parts = first ? [first] : [];
+    for (let j = i + 1; j < ls.length; j++) {
+      if (/^[A-Z_]{3,}:/.test(strip(ls[j]))) break;
+      if (ls[j].trim()) parts.push(ls[j].trim());
+    }
+    return parts.join('\n');
   };
 
   const flushTicker = () => {
@@ -5673,8 +5814,10 @@ function parsePerplexityContext(raw, sources = []) {
     // 7B-1: structural extraction from the template lines themselves.
     // Scope action extraction to the ANALYST_ACTIONS line to avoid false positives
     // from prose that mentions "$N" outside the template (e.g. Fed rate prose).
-    const actionsRaw = _readField('ANALYST_ACTIONS', currentLines);
-    const analystActions = _extractActions(actionsRaw || '').slice(0, 5);
+    const actionsRaw = _readAnalystActions(currentLines);
+    const _aa = _extractActions(actionsRaw);
+    const analystActions = _aa.analystActions;
+    const ratingOnlyActions = _aa.ratingOnlyActions;
     const bullishCatalysts = _splitList(_readField('BULLISH', currentLines));
     const bearishCatalysts = _splitList(_readField('BEARISH', currentLines));
     const macroDrivers     = _splitList(_readField('MACRO',   currentLines));
@@ -5690,6 +5833,7 @@ function parsePerplexityContext(raw, sources = []) {
 
     result[currentTicker] = {
       analystActions,
+      ratingOnlyActions,
       bullishCatalysts,
       bearishCatalysts,
       macroDrivers,
@@ -5730,10 +5874,12 @@ function parsePerplexityContext(raw, sources = []) {
   if (Object.keys(result).length === 0 && raw.length > 50) {
     console.warn('[PT] No ticker headers found, using full text as context');
     // 7B-1: __raw__ fallback uses the same action-verb extractor (no bank whitelist)
-    const rawActions = _extractActions(raw).slice(0, 5);
+    const _rawAA = _extractActions(raw);
+    const rawActions = _rawAA.analystActions;
     result['__raw__'] = {
       rawText: raw,
       analystActions: rawActions,
+      ratingOnlyActions: _rawAA.ratingOnlyActions,
       bullishCatalysts: [],
       bearishCatalysts: [],
       macroDrivers: [],

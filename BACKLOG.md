@@ -154,6 +154,21 @@ price in use; the Technical Setup panel's Setup follows the snapshot it shows; s
 and Score are marked "from scan" when the displayed price differs from the scan price.
 *Deps:* none.
 
+### 33 · Fix analyst-action / price-target parsing — **DONE**
+**Research / Analysis** · data honesty · **bug, added 2026-10-03**
+
+The analyst-action parser read one regex over the whole `ANALYST_ACTIONS` line: connector words
+became firm names ("and"), one firm's clause took the next firm's target, the first verb and the
+first `$` won (rating and target changes mixed; "from $300 to $315" read as 300), unrelated
+amounts became targets, and rating-only changes and targets above $5,000 were dropped (found in
+the 2026-10-03 consistency pilot, ROK).
+*Done when:* all 42 parser cases pass; the ROK, CBOE and MRNA regressions pass; the 25
+currently-correct legacy bank/action/target outputs are unchanged; rating-only events are
+preserved internally but not displayed; no prompt, UI, consumer, retry-logic or live-API change.
+*Landed (`work/analyst-parser-r4a/`):* item-by-item parsing with separate rating and price-target
+fields. Rating-only display and the structured AI prompt (R-4b) remain separate work.
+*Deps:* none.
+
 ---
 
 ## LATER
@@ -239,6 +254,7 @@ chart/embed · `EG-10A` and `EG-15` design briefs · the ARC governance chain
 Risk / Reward column or chips in Scan Results) ·
 **11** Selected-for-scan visibility — `work/selected-only-watchlist/` ·
 **32** Technical snapshot reuses a stale price — `work/tech-snapshot-price-cache/` ·
+**33** Fix analyst-action / price-target parsing — `work/analyst-parser-r4a/` ·
 **S2 slices** S1.5 · S1.5.1 (H-A/H-B/H-C, `1eda72c`) · S1.5.2 (`d9395ea`) · A1 (`6e242fb`,
 `9327e47`) · A2 (`52c322b`) · A5 (`810586d`) · D-A2-2 / S2-M1 (`0526458`) ·
 A3a / S2-M2 (`28c2543`) ·
