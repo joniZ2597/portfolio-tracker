@@ -2527,6 +2527,11 @@ check('AH-23 control: a planted forbidden entry is detected',
 // R12 gains exactly three new alternatives: brief-request work/<id>/brief.md,
 // protected-request task/<id>, protected-commit task/<id>. The shared trigger/cwd/env/identity
 // branching (AH-20 above) is not re-specialized per verb, so only the form-shape rows differ.
+// AH-25 (work/second-finisher-resync/brief.md §3): the post-resync R12_FORM_RE line is the post-OAG line plus exactly one
+// trailing alternative, `resync task/<id>` (the existing task-id pattern). Defined before AH-24 because the AH-20 widened-regex
+// mutant anchor and the AH-24 differential below are pinned to the real on-disk line; RESYNC_PRE_LINE is the post-OAG line.
+const RESYNC_PRE_LINE = 'const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land|cleanup) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push|brief-request work\\/[a-z0-9][a-z0-9._-]*\\/brief\\.md|(?:protected-request|protected-commit) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*)$/;';
+const RESYNC_POST_LINE = 'const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land|cleanup) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push|brief-request work\\/[a-z0-9][a-z0-9._-]*\\/brief\\.md|(?:protected-request|protected-commit) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|resync task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*)$/;';
 const OAG_FORMS = [
   'node .claude/hooks/pt-land.js brief-request work/x/brief.md',
   'node .claude/hooks/pt-land.js protected-request task/x',
@@ -2565,10 +2570,13 @@ for (const [label, cmd] of OAG_DENY_FORMS) {
   const postOagLine = 'const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land|cleanup) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push|brief-request work\\/[a-z0-9][a-z0-9._-]*\\/brief\\.md|(?:protected-request|protected-commit) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*)$/;';
   const preOagLine = 'const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land|cleanup) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push)$/;';
   const normalizedSrc = fs.readFileSync(HOOK_PATH, 'utf8').replace(/\r\n/g, '\n');
-  const found = normalizedSrc.split(postOagLine).length - 1;
+  // AH-25: the real source now carries the post-RESYNC line. Map it back to the post-OAG line first, so this
+  // differential still isolates the OAG alternation (the resync alternative has its own differential in AH-25).
+  const normalizedBeforeResync = normalizedSrc.replace(RESYNC_POST_LINE, postOagLine);
+  const found = normalizedBeforeResync.split(postOagLine).length - 1;
   check('AH-24 differential sanity: the post-OAG R12_FORM_RE line was found exactly once', found === 1);
   if (found === 1) {
-    const srcBeforeOag = normalizedSrc.replace(postOagLine, preOagLine);
+    const srcBeforeOag = normalizedBeforeResync.replace(postOagLine, preOagLine);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ah-oag-diff-'));
     let modBeforeOag = null;
     try {
@@ -2617,8 +2625,8 @@ check('AH-20 unchanged: a Bash redirect into .git/pt-land-approval still denied 
 
 // AH-20 mutants (5, each caught): the R12-specific guard-side invariants.
 mutantCatches('R12 form regex widened (any pt-land invocation accepted)',
-  // owner-one-action-gates: the anchor is the post-OAG line (three new alternatives, brief §3).
-  "const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land|cleanup) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push|brief-request work\\/[a-z0-9][a-z0-9._-]*\\/brief\\.md|(?:protected-request|protected-commit) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*)$/;",
+  // second-finisher-resync: the anchor is the post-resync line (post-OAG plus the one `resync task/<id>` alternative, brief §3).
+  RESYNC_POST_LINE,
   'const R12_FORM_RE = /pt-land/;',
   (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js push extra-arg', { cwd: SLOT_A }).decision === 'deny');
 mutantCatches('R12 tool check dropped (PowerShell accepted)',
@@ -2645,6 +2653,128 @@ mutantCatches('R12 trigger dropped (the whole gate is skipped)',
   "if (R12_TRIGGER_RE.test(command) || R12_TRIGGER_RE.test(stripShellEscapes(command, tool))) {",
   'if (false) {',
   (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js push extra-arg', { cwd: SLOT_A }).decision === 'deny');
+
+// ── AH-25 (work/second-finisher-resync/brief.md §3 and §6 "Hook") ────────────────────────
+// R12 gains exactly one new alternative: `resync task/<id>`. The shared trigger/cwd/env/identity branching (AH-20) is not
+// re-specialized per verb, so only the form-shape rows differ. Raw git rebase/merge/pull stay denied in every session (R3m).
+const RESYNC_FORMS = [
+  'node .claude/hooks/pt-land.js resync task/x',
+  'node .claude/hooks/pt-land.js resync task/second-finisher-resync',
+  'node .claude/hooks/pt-land.js resync task/a/b'
+];
+for (const form of RESYNC_FORMS) {
+  check('AH-25 allow, slot cwd: ' + JSON.stringify(form), r12Decide(form, { cwd: SLOT_A }).decision === 'allow');
+  check('AH-25 allow, canonical cwd: ' + JSON.stringify(form), r12Decide(form, { cwd: R11_CANON, projectDir: R11_CANON }).decision === 'allow');
+}
+const RESYNC_DENY_FORMS = [
+  ['trailing space', 'node .claude/hooks/pt-land.js resync task/x '],
+  ['double space', 'node .claude/hooks/pt-land.js  resync task/x'],
+  ['no task', 'node .claude/hooks/pt-land.js resync'],
+  ['non-task/ ref', 'node .claude/hooks/pt-land.js resync branch-dev'],
+  ['empty task id', 'node .claude/hooks/pt-land.js resync task/'],
+  ['two tasks', 'node .claude/hooks/pt-land.js resync task/x task/y'],
+  ['extra flag', 'node .claude/hooks/pt-land.js resync task/x --force'],
+  ['quoted task', 'node .claude/hooks/pt-land.js resync "task/x"'],
+  ['misspelled verb (resyn)', 'node .claude/hooks/pt-land.js resyn task/x'],
+  ['misspelled verb (resynch)', 'node .claude/hooks/pt-land.js resynch task/x'],
+  ['prefixed verb (xresync)', 'node .claude/hooks/pt-land.js xresync task/x'],
+  ['uppercase verb (Resync)', 'node .claude/hooks/pt-land.js Resync task/x'],
+  ['leading ./', 'node ./.claude/hooks/pt-land.js resync task/x'],
+  ['absolute path', 'node C:/repo/.claude/hooks/pt-land.js resync task/x'],
+  ['env prefix', 'FOO=bar node .claude/hooks/pt-land.js resync task/x'],
+  ['bash -c wrapper', 'bash -c "node .claude/hooks/pt-land.js resync task/x"'],
+  ['npm exec wrapper', 'npm exec -- node .claude/hooks/pt-land.js resync task/x'],
+  ['compound &&', 'node .claude/hooks/pt-land.js resync task/x && echo done'],
+  ['compound ;', 'node .claude/hooks/pt-land.js resync task/x; echo done'],
+  ['pipe', 'node .claude/hooks/pt-land.js resync task/x | cat'],
+  ['escaped pt\\-land', 'node .claude/hooks/pt\\-land.js resync task/x']
+];
+for (const [label, cmd] of RESYNC_DENY_FORMS) {
+  check('AH-25 deny (' + label + ')', r12Decide(cmd, { cwd: SLOT_A }).decision === 'deny');
+}
+check('AH-25 deny: the PowerShell tool', r12Decide(RESYNC_FORMS[0], { cwd: SLOT_A, tool: 'PowerShell' }).decision === 'deny');
+check('AH-25 deny: a missing cwd', r12Decide(RESYNC_FORMS[0], { cwd: NO_CWD }).decision === 'deny');
+check('AH-25 deny: cwd outside the slots and canonical',
+  r12Decide(RESYNC_FORMS[0], { cwd: 'C:\\Users\\Owner\\Documents\\Project\\somewhere-else', projectDir: R11_CANON }).decision === 'deny');
+{
+  const saved = process.env.GIT_DIR;
+  process.env.GIT_DIR = 'x';
+  try {
+    check('AH-25 deny: session env GIT_DIR set', r12Decide(RESYNC_FORMS[0], { cwd: SLOT_A }).decision === 'deny');
+  } finally {
+    if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved;
+  }
+}
+// Raw rebase / merge / pull stay denied in every session, from a slot and from the canonical checkout.
+for (const cmd of ['git rebase branch-dev', 'git rebase --onto branch-dev task/x', 'git merge --ff-only branch-dev', 'git pull']) {
+  for (const cwd of [SLOT_A, MAIN]) {
+    const r = dec(guard, cmd, cwd);
+    check('AH-25 unchanged: ' + cmd + ' still denied (R3m) [' + (cwd === MAIN ? 'main' : 'slot') + ']', r.decision === 'deny' && /R3m/.test(r.reason));
+  }
+}
+check('AH-25 unchanged: git -C ../pt-wt-worker-b rebase branch-dev still denied',
+  dec(guard, 'git -C ../pt-wt-worker-b rebase branch-dev', MAIN).decision === 'deny');
+
+// Differential: swap the real, on-disk post-resync R12_FORM_RE line for the post-OAG line and reload - over every pre-existing
+// corpus form AND the new forms, the two modules disagree ONLY on the allow forms of the new verb (deny -> allow); every
+// resync deny form stays denied by both. Nothing else in the hook changes (brief §3). Red until the PROTECTED gate applies
+// the candidate, like every other "real on-disk hook" check in this suite.
+{
+  const normalizedSrc = fs.readFileSync(HOOK_PATH, 'utf8').replace(/\r\n/g, '\n');
+  const found = normalizedSrc.split(RESYNC_POST_LINE).length - 1;
+  check('AH-25 differential sanity: the post-resync R12_FORM_RE line was found exactly once', found === 1);
+  if (found === 1) {
+    const srcBeforeResync = normalizedSrc.replace(RESYNC_POST_LINE, RESYNC_PRE_LINE);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ah-resync-diff-'));
+    let modBeforeResync = null;
+    try {
+      const file = path.join(dir, 'pretooluse-guard.js');
+      fs.writeFileSync(file, srcBeforeResync);
+      modBeforeResync = require(file);
+    } catch (e) { /* handled by the null check below */ } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    check('AH-25 differential sanity: the pre-resync module loads', modBeforeResync !== null);
+    if (modBeforeResync) {
+      const corpus = [...ALLOWED, ...R12_FORMS, ...R12_DENY_FORMS.map((row) => row[1]), ...R13_RISKY_FORMS, ...R13_CONTROL_FORMS,
+        ...OAG_FORMS, ...OAG_DENY_FORMS.map((row) => row[1]), ...RESYNC_FORMS, ...RESYNC_DENY_FORMS.map((row) => row[1])];
+      const changed = [];
+      for (const cmd of corpus) {
+        const before = dec(modBeforeResync, cmd, SLOT_A).decision;
+        const after = dec(guard, cmd, SLOT_A).decision;
+        if (before !== after) changed.push(cmd + ' (' + before + ' -> ' + after + ')');
+      }
+      const expected = RESYNC_FORMS.map((cmd) => cmd + ' (deny -> allow)').sort();
+      check('AH-25 differential: R12_FORM_RE changes a decision only on the resync allow forms (' + changed.join('; ') + ')',
+        JSON.stringify(changed.slice().sort()) === JSON.stringify(expected));
+    }
+  }
+}
+
+// AH-25 CLI: a real hook-process spawn - allow from a slot cwd (exit 0, silent); wrapped / compound variants deny with R12.
+for (const form of RESYNC_FORMS) {
+  const r = spawnCliEnv(payload(form, SLOT_A), undefined);
+  check('AH-25 CLI allow [slot] ' + form + ' -> exit 0, empty stdout/stderr', r.status === 0 && r.stdout === '' && r.stderr === '');
+}
+for (const [label, cmd] of RESYNC_DENY_FORMS.filter((row) => /wrapper|compound|pipe/.test(row[0]))) {
+  const r = spawnCliEnv(payload(cmd, SLOT_A), undefined);
+  check('AH-25 CLI deny (' + label + ') -> exit 2, empty stdout, R12 on stderr', r.status === 2 && r.stdout === '' && /R12/.test(r.stderr));
+}
+
+// AH-25 settings (brief §3): settings.json is unchanged - the verb is not allowlisted, so it prompts in Manual.
+check('AH-25: the real allow list has no resync entry (the verb stays prompting)',
+  !AH23_REAL_ALLOW.some((rule) => /resync/.test(rule)));
+check('AH-25 control: a planted resync allow entry is detected',
+  [...AH23_REAL_ALLOW, 'Bash(node .claude/hooks/pt-land.js resync *)'].some((rule) => /resync/.test(rule)));
+
+// AH-25 mutants: the new alternative is the only thing that makes the verb pass, and it stays exactly as narrow as the others.
+mutantCatches('R12 resync alternative dropped (the verb is denied again)',
+  RESYNC_POST_LINE, RESYNC_PRE_LINE,
+  (m) => r12DecideOn(m, RESYNC_FORMS[0], { cwd: SLOT_A }).decision === 'allow');
+mutantCatches('R12 resync alternative widened (any argument accepted)',
+  '|resync task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*)$/;',
+  '|resync .*)$/;',
+  (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js resync task/x --force', { cwd: SLOT_A }).decision === 'deny');
 
 fs.rmSync(R11_CANON, { recursive: true, force: true });
 
