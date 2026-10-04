@@ -144,7 +144,7 @@ commit) or on a STOP condition below.
 14. **LAND — Owner-approved (R12).** If the committed brief has a `land-scope` block and the task diff touches no ASK- or DENY-tier or protected path except PROTECTED-approved files (step 13a; the tool verifies each one against the approved tree):
     - run `node .claude/hooks/pt-land.js land-request task/<id>`, show its report, print its approval line **exactly**, and **STOP until the Owner answers**;
     - the Owner approves by typing that exact line with `!` (see "The `!` rule" below), or declines — then nothing happens;
-    - after the Owner confirms, run `node .claude/hooks/pt-land.js land task/<id>`. Any refusal is **STOP-6**; "branch-dev moved" means Second LAND.
+    - after the Owner confirms, run `node .claude/hooks/pt-land.js land task/<id>`. Any refusal is **STOP-6**; "branch-dev moved" means Second LAND: STOP for the Bootstrap re-sync (see "Owner LAND / SHIP boundaries").
 
     Otherwise (no `land-scope` block, or a protected path that is not PROTECTED-approved — including after a Second-LAND rebase): **STOP** and request an Owner LAND.
 15. **Push — Owner-approved (R12).** Run `node .claude/hooks/pt-land.js push-request`, show its report — including the public Netlify DEV deploy notice and the commits to publish — print its approval line exactly, and **STOP until the Owner answers**. After the Owner enters it with `!`, run `node .claude/hooks/pt-land.js push`; it verifies `branch-dev == origin/branch-dev`. Any refusal is **STOP-6**. If the Owner declines, the task ends LANDed and unpushed. Then run step 16.
@@ -549,9 +549,11 @@ above.
       `.sample` git hooks) — run after the task commit and reported in the Worker's step-13
       report or by the Owner, never recorded in the committed `review.md`.
   - Claude Code may prepare and request LAND; the Owner confirms it by entering the LAND record.
-  - **Second LAND:** when another task landed first, the Owner rebases the task branch in a normal
-    terminal. The Worker then re-runs `npm run qa:offline`, the relevant targeted tests and the
-    integrity check (against the rebased commit) in its slot and reports, before LAND — the
+  - **Second LAND:** when another task landed first, Bootstrap runs
+    `node .claude/hooks/pt-land.js resync task/<id>` while the Worker is paused. If it refuses
+    (conflict, overlapping uncommitted work, or PROTECTED-approved commits), STOP: the Owner decides.
+    Otherwise the Worker re-runs `npm run qa:offline`, the relevant targeted tests and the
+    integrity check (with the `--base-dev` and `--since` values `resync` prints) in its slot and reports, before LAND — the
     post-rebase integrity result is LAND evidence only, never recorded in `review.md`.
 - **Push** runs only through `pt-land.js push` after the Owner's single-use PUSH record (step 15), or by the Owner in a normal terminal; a direct `git push` stays HOOK-DENY (R3g). A push publishes the public Netlify DEV deploy of `branch-dev`; the PUSH record is the explicit approval for that branch deploy. One consolidated push after a batch is preferred.
 - **SHIP** (`branch-dev` → `main`/production): always requires explicit, separate Owner
@@ -568,7 +570,7 @@ above.
 - Live external API canaries (SEC, Perplexity, or similar).
 - Commits outside the r9 and R11 gates — any other main-checkout commit, any commit staging a DENY-tier or protected path, any denied form — are made by the Owner in a normal terminal (RC2). An R11 brief-only commit requires the Owner's approval record (the line printed by `brief-request`). A PROTECTED commit requires the Owner's PROTECTED record and is made only by `pt-land.js protected-commit` (step 13a).
 - `git merge`, `rebase`, `pull`, and any ref move of `main`/`branch-dev` — the Owner, in a normal terminal.
-  Exception: a fast-forward LAND of `task/*` into `branch-dev` and a `branch-dev` push through `pt-land.js` under the Owner's single-use records (R12).
+  Exception: a fast-forward LAND of `task/*` into `branch-dev` and a `branch-dev` push through `pt-land.js` under the Owner's single-use records (R12); and a `task/*` re-sync through `pt-land.js resync`, which never moves `main` or `branch-dev`.
 - Environment/runtime mutations, and protected governance changes (the hook and settings, through the PROTECTED gate or the Owner copy/hash workflow).
 
 ## Worker slot model

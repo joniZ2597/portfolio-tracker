@@ -1343,7 +1343,7 @@ function resolveFileToolTargetFs(cwd, raw) {
 // ── R11: Owner-approved brief-only commit gate for the canonical checkout (work/brief-commit-gate/brief.md §2-3) ──
 // ── R12: Owner-approved LAND/push tool gate consts (work/worker-land-push/brief.md §4) ──
 const R12_TRIGGER_RE = /pt-land/i;
-const R12_FORM_RE = /^node \.claude\/hooks\/pt-land\.js (?:(?:land-request|land|cleanup) task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*|push-request|push|brief-request work\/[a-z0-9][a-z0-9._-]*\/brief\.md|(?:protected-request|protected-commit) task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)$/;
+const R12_FORM_RE = /^node \.claude\/hooks\/pt-land\.js (?:(?:land-request|land|cleanup) task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*|push-request|push|brief-request work\/[a-z0-9][a-z0-9._-]*\/brief\.md|(?:protected-request|protected-commit) task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*|resync task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)$/;
 const R11_BRIEF_MSG_RE = /^docs\(work\): \S[^\r\n]{0,150}$/;
 const R11_RECORD_PATH_RE = /^work\/[a-z0-9][a-z0-9._-]*\/brief\.md$/;
 function briefApprovalFs(root) {

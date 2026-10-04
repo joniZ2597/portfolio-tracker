@@ -6,11 +6,13 @@
  * DENY-tier (.claude/hooks/**) - changed only through the Owner copy/hash workflow.
  *
  * Verbs: brief-request work/<id>/brief.md | protected-request task/<id> | protected-commit task/<id> |
- *        land-request task/<id> | land task/<id> | push-request | push | cleanup task/<id>
+ *        land-request task/<id> | land task/<id> | push-request | push | cleanup task/<id> |
+ *        resync task/<id>
  * Exit 0 success, 1 refusal (fail closed), 3 usage error.
  *
  * Module API (for QA): runBriefRequest(opts), runProtectedRequest(opts), runProtectedCommit(opts),
  * runLandRequest(opts), runLand(opts), runPushRequest(opts), runPush(opts), runCleanup(opts),
+ * runResync(opts),
  * parseRecord(text, kind), parseLandScope(briefText), parseProtectedScope(briefText),
  * approvalLine(kind, payload, commonDir).
  * opts = { cwd, task?, path?, gitExec?, expectedOriginUrls?, now?, archiveRoot? }.
@@ -1236,6 +1238,307 @@ function runCleanupCore(opts) {
 }
 function runCleanup(opts) { return safeRun(() => runCleanupCore(opts)); }
 
+// ── RESYNC (work/second-finisher-resync/brief.md §2) ───────────────────────────────────────
+// Bootstrap brings a task/* branch up to date with branch-dev through this one verb. Mechanical
+// only (R-3): any conflict, overlap or content difference refuses with nothing changed. It changes
+// only the task branch and its slot: branch-dev, main and origin/* are never moved, nothing is
+// pushed, no approval record is written and no file is deleted in the slot. The LAND line that
+// follows (bound to the new tip, after fresh QA) stays the Owner's gate (R-2). Raw rebase / merge /
+// pull stay denied everywhere (R3m): every git call below runs inside this process, never through
+// the command hook.
+const RESYNC_BUSY_MARKERS = ['rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD'];
+
+function sha256OfBuffer(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
+function firstLine(s) { return String(s || '').trim().split('\n')[0].trim(); }
+
+// Hooks are suppressed on the slot-side mutating children through git's own `-c` carrier, the
+// GIT_CONFIG_* triple (as protected-commit does), so the argv still starts with the subcommand.
+function noHooksEnv(hooksDir) {
+  return { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: toForwardSlash(hooksDir) };
+}
+
+// F2 / R5: the slot only ever moves with `reset --keep`; git itself refuses when an uncommitted file
+// differs between the old and the new base, and nothing is changed in that case.
+function keepReset(slotGit, oid) { return slotGit(['reset', '--keep', oid]); }
+
+// F1 / F3: sha256 of `git diff HEAD --binary` plus the sha256 of every untracked, non-ignored file.
+function uncommittedSnapshot(gitExec, slotRoot) {
+  const run = (args, maxBuffer) => spawnSync(gitExec || 'git', args,
+    { cwd: slotRoot, env: stripGitEnv({ GIT_OPTIONAL_LOCKS: '0' }), encoding: 'buffer', windowsHide: true, maxBuffer });
+  const diffR = run(['diff', 'HEAD', '--binary'], 256 * 1024 * 1024);
+  if (diffR.status !== 0 || !Buffer.isBuffer(diffR.stdout)) return { ok: false, reason: 'git diff HEAD --binary failed in the slot' };
+  const lsR = run(['ls-files', '--others', '--exclude-standard', '-z'], 64 * 1024 * 1024);
+  if (lsR.status !== 0 || !Buffer.isBuffer(lsR.stdout)) return { ok: false, reason: 'git ls-files --others failed in the slot' };
+  const untracked = [];
+  for (const rel of lsR.stdout.toString('utf8').split('\0').filter(Boolean).sort()) {
+    try { untracked.push(rel + ' ' + sha256OfBuffer(fs.readFileSync(path.join(slotRoot, rel)))); }
+    catch (e) { return { ok: false, reason: 'could not hash the untracked file ' + rel }; }
+  }
+  return { ok: true, diffSha: sha256OfBuffer(diffR.stdout), untracked };
+}
+function stagedPaths(G, slotRoot) {
+  const r = G(['diff', '--cached', '--name-only', '-z'], slotRoot, { read: true });
+  return r.status === 0 ? String(r.stdout).split('\0').filter(Boolean).sort() : [];
+}
+
+// R4: the replay must be the same change set, commit for commit.
+function patchIdOfCommit(gitExec, cwd, oid) {
+  const dt = spawnSync(gitExec || 'git', ['diff-tree', '-p', '--no-commit-id', oid],
+    { cwd, env: stripGitEnv({ GIT_OPTIONAL_LOCKS: '0' }), encoding: 'buffer', windowsHide: true, maxBuffer: 256 * 1024 * 1024 });
+  if (dt.status !== 0 || !Buffer.isBuffer(dt.stdout)) return null;
+  const pid = spawnSync(gitExec || 'git', ['patch-id', '--stable'],
+    { cwd, env: stripGitEnv({ GIT_OPTIONAL_LOCKS: '0' }), input: dt.stdout, encoding: 'utf8', windowsHide: true, maxBuffer: 1024 * 1024 });
+  if (pid.status !== 0) return null;
+  return String(pid.stdout).trim().split(' ')[0];
+}
+function verifyReplay(gitExec, G, canonicalRoot, briefPath, mb, tip, dev, newTip) {
+  const commitsOf = (range) => {
+    const r = G(['rev-list', '--reverse', range], canonicalRoot, { read: true });
+    return r.status === 0 ? String(r.stdout).split('\n').map((s) => s.trim()).filter(Boolean) : null;
+  };
+  const oldCommits = commitsOf(mb + '..' + tip);
+  const newCommits = commitsOf(dev + '..' + newTip);
+  if (!oldCommits || !newCommits) return { ok: false, reason: 'could not list the commits to compare' };
+  if (oldCommits.length !== newCommits.length) {
+    return { ok: false, reason: 'the replay changed the commit count (' + oldCommits.length + ' -> ' + newCommits.length + ')' };
+  }
+  const anc = G(['merge-base', '--is-ancestor', dev, newTip], canonicalRoot, { read: true });
+  if (anc.status !== 0) return { ok: false, reason: 'the replayed tip does not descend from branch-dev' };
+  const merges = G(['rev-list', '--merges', dev + '..' + newTip], canonicalRoot, { read: true });
+  if (merges.status !== 0 || String(merges.stdout).trim()) return { ok: false, reason: 'the replay contains a merge commit' };
+  for (let i = 0; i < oldCommits.length; i += 1) {
+    const a = patchIdOfCommit(gitExec, canonicalRoot, oldCommits[i]);
+    const b = patchIdOfCommit(gitExec, canonicalRoot, newCommits[i]);
+    if (a === null || b === null || a !== b) return { ok: false, reason: 'the patch-id of commit ' + (i + 1) + ' of ' + oldCommits.length + ' changed in the replay' };
+  }
+  const devBrief = G(['rev-parse', '-q', '--verify', dev + ':' + briefPath], canonicalRoot, { read: true });
+  const newBrief = G(['rev-parse', '-q', '--verify', newTip + ':' + briefPath], canonicalRoot, { read: true });
+  if (devBrief.status !== 0 || newBrief.status !== 0 || String(devBrief.stdout).trim() !== String(newBrief.stdout).trim()) {
+    return { ok: false, reason: 'work/<id>/brief.md differs from branch-dev after the replay' };
+  }
+  const namesOf = (a, b) => {
+    const r = G(['diff', '--name-only', '--no-renames', '-z', a, b], canonicalRoot, { read: true });
+    return r.status === 0 ? String(r.stdout).split('\0').filter(Boolean).sort().join('\n') : null;
+  };
+  const before = namesOf(mb, tip);
+  const after = namesOf(dev, newTip);
+  if (before === null || after === null || before !== after) return { ok: false, reason: 'the set of changed files differs after the replay' };
+  return { ok: true };
+}
+
+function removeTempWorktree(G, canonicalRoot, tmpParent, wt) {
+  G(['worktree', 'remove', '--force', wt], canonicalRoot);
+  G(['worktree', 'prune'], canonicalRoot);
+  try { fs.rmSync(tmpParent, { recursive: true, force: true }); } catch (e) { /* verified by the caller */ }
+}
+
+function runResyncCore(opts) {
+  const task = opts.task;
+  if (typeof task !== 'string' || !TASK_RE.test(task)) {
+    return { ok: false, exitCode: 3, reason: 'usage: pt-land.js resync task/<id>' };
+  }
+  const G = makeGitRunner(opts.gitExec);
+  const caller = resolveCaller(G, opts.cwd, task);
+  if (!caller.ok) return { ok: false, exitCode: 1, reason: 'S1: ' + caller.reason };
+  const canonicalRoot = caller.canonicalRoot;
+  const commonDir = path.join(canonicalRoot, '.git');
+  const idPart = task.replace(/^task\//, '');
+  const briefPath = 'work/' + idPart + '/brief.md';
+  let mode = null;
+
+  function refuse(step, reason, from, to, base) {
+    bestEffortAudit(commonDir, { ts: nowIso(opts), verb: 'resync', task, mode, from: from || null, to: to || null, base: base || null, result: 'refuse', reason: step + ': ' + reason });
+    return { ok: false, exitCode: 1, reason: step + ': ' + reason };
+  }
+
+  // S1: self-integrity (as L2/K2), no GIT_* overrides, git config and hooks clean.
+  const si = selfIntegrity(G, canonicalRoot);
+  if (!si.ok) return refuse('S1', si.reason);
+  const envBad = Object.keys(process.env).find((k) => GIT_ENV_OVERRIDE_RE.test(k) || R10_GIT_CONFIG_ENV_RE.test(k));
+  if (envBad !== undefined) return refuse('S1', 'the session environment sets ' + envBad);
+  const cfg = configClean(G, canonicalRoot);
+  if (!cfg.ok) return refuse('S1', cfg.reason);
+  const hooks = hooksClean(commonDir);
+  if (!hooks.ok) return refuse('S1', hooks.reason);
+
+  // S2: the canonical checkout is on branch-dev and clean.
+  const s2 = canonicalClean(G, canonicalRoot);
+  if (!s2.ok) return refuse('S2', s2.reason, null, null, null);
+
+  // S3: the task branch exists and is checked out in exactly one Worker slot with no rebase, merge
+  // or cherry-pick in progress; the tool lock (the one `land` uses) is free.
+  const tipR = G(['rev-parse', '--verify', '-q', 'refs/heads/' + task], canonicalRoot, { read: true });
+  if (tipR.status !== 0) return refuse('S3', 'refs/heads/' + task + ' does not exist');
+  const tip = String(tipR.stdout).trim();
+  const devR = G(['rev-parse', '--verify', '-q', 'refs/heads/branch-dev'], canonicalRoot, { read: true });
+  if (devR.status !== 0) return refuse('S3', 'refs/heads/branch-dev does not exist', tip);
+  const dev = String(devR.stdout).trim();
+  const trees = worktreeList(G, canonicalRoot);
+  if (!trees) return refuse('S3', 'could not list worktrees', tip, null, dev);
+  const homes = trees.filter((t) => t.branch === task);
+  if (homes.length !== 1) return refuse('S3', 'the task branch is checked out in ' + homes.length + ' worktrees, not exactly one Worker slot', tip, null, dev);
+  const slotRoot = homes[0].path;
+  if (WORKER_SLOT_NAMES.indexOf(path.basename(toForwardSlash(slotRoot).replace(/\/+$/, ''))) === -1) {
+    return refuse('S3', 'the task branch is not checked out in a Worker slot', tip, null, dev);
+  }
+  for (const name of RESYNC_BUSY_MARKERS) {
+    const gp = G(['rev-parse', '--git-path', name], slotRoot, { read: true });
+    if (gp.status !== 0) return refuse('S3', 'could not locate the slot git directory', tip, null, dev);
+    if (fs.existsSync(path.resolve(slotRoot, String(gp.stdout).trim()))) {
+      return refuse('S3', 'a ' + name + ' is in progress in the slot', tip, null, dev);
+    }
+  }
+  const lock = acquireLock(commonDir);
+  if (!lock.ok) return refuse('S3', lock.reason, tip, null, dev);
+  const hooksDir = emptyHooksDir();
+  try {
+    const tipB = G(['rev-parse', '--verify', '-q', 'refs/heads/' + task], canonicalRoot, { read: true });
+    const devB = G(['rev-parse', '--verify', '-q', 'refs/heads/branch-dev'], canonicalRoot, { read: true });
+    if (tipB.status !== 0 || String(tipB.stdout).trim() !== tip || devB.status !== 0 || String(devB.stdout).trim() !== dev) {
+      return refuse('S3', 'the repository state changed since preflight (race)', tip, null, dev);
+    }
+
+    // S4: the task's brief exists at branch-dev.
+    const briefAtDev = G(['rev-parse', '-q', '--verify', dev + ':' + briefPath], canonicalRoot, { read: true });
+    if (briefAtDev.status !== 0) return refuse('S4', 'work/<id>/brief.md is missing at branch-dev', tip, null, dev);
+
+    // S5: nothing to do when branch-dev is already an ancestor of the task tip.
+    const upToDate = G(['merge-base', '--is-ancestor', dev, tip], canonicalRoot, { read: true });
+    if (upToDate.status !== 0 && upToDate.status !== 1) return refuse('S5', 'could not compare branch-dev with the task tip', tip, null, dev);
+    if (upToDate.status === 0) return { ok: true, exitCode: 0, verb: 'resync', mode: 'none', task, from: tip, to: tip, base: dev, message: 'already up to date: ' + task + ' contains branch-dev ' + dev };
+
+    const tipInDev = G(['merge-base', '--is-ancestor', tip, dev], canonicalRoot, { read: true });
+    if (tipInDev.status !== 0 && tipInDev.status !== 1) return refuse('S5', 'could not compare the task tip with branch-dev', tip, null, dev);
+    mode = tipInDev.status === 0 ? 'F' : 'R';
+
+    const slotGit = (args) => spawnSync(opts.gitExec || 'git', args,
+      { cwd: slotRoot, env: stripGitEnv(noHooksEnv(hooksDir)), encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+
+    // Both modes end here: audit line, then the Worker's next steps with the exact integrity parameters.
+    function finish(newTip, extra) {
+      const resyncTime = nowIso(opts);
+      let auditWarning = null;
+      try {
+        appendAudit(commonDir, { ts: resyncTime, verb: 'resync', task, mode, from: tip, to: newTip, base: dev, result: 'ok', reason: null });
+      } catch (e) {
+        auditWarning = 'audit log append failed: ' + (e && e.message ? e.message : String(e));
+      }
+      const res = {
+        ok: true, exitCode: 0, verb: 'resync', mode, task, from: tip, to: newTip, base: dev, resyncTime,
+        integrity: { baseMain: currentMainOid(G, canonicalRoot), baseDev: dev, task, since: resyncTime, root: canonicalRoot },
+        stagedLost: extra && extra.stagedLost ? extra.stagedLost : [],
+        message: 'RESYNCED ' + task + ' mode ' + mode + ' ' + tip + '..' + newTip + ' on branch-dev ' + dev
+      };
+      if (auditWarning) res.auditWarning = auditWarning;
+      return res;
+    }
+
+    if (mode === 'F') {
+      // F1: record the slot's uncommitted state.
+      const snap = uncommittedSnapshot(opts.gitExec, slotRoot);
+      if (!snap.ok) return refuse('F1', snap.reason, tip, null, dev);
+      const stagedBefore = stagedPaths(G, slotRoot);
+      // F2: git itself refuses when an uncommitted file differs between the old and the new base.
+      const mv = keepReset(slotGit, dev);
+      if (mv.status !== 0) return refuse('F2', 'uncommitted work overlaps the new base (' + firstLine(mv.stderr) + ')', tip, null, dev);
+      // F3: HEAD = branch-dev, still on the task branch, and the F1 hashes are identical.
+      const headF = G(['rev-parse', 'HEAD'], slotRoot, { read: true });
+      const symF = G(['symbolic-ref', 'HEAD'], slotRoot, { read: true });
+      const snapAfter = uncommittedSnapshot(opts.gitExec, slotRoot);
+      const okF = headF.status === 0 && String(headF.stdout).trim() === dev &&
+        symF.status === 0 && String(symF.stdout).trim() === 'refs/heads/' + task &&
+        snapAfter.ok && snapAfter.diffSha === snap.diffSha && JSON.stringify(snapAfter.untracked) === JSON.stringify(snap.untracked);
+      if (!okF) {
+        bestEffortAudit(commonDir, { ts: nowIso(opts), verb: 'resync', task, mode, from: tip, to: dev, base: dev, result: 'fail', reason: 'F3: verification failed' });
+        return { ok: false, exitCode: 1, reason: 'F3: verification failed - STOP (the tool never undoes a reset)' };
+      }
+      const stagedAfter = stagedPaths(G, slotRoot);
+      return finish(dev, { stagedLost: stagedBefore.filter((p) => stagedAfter.indexOf(p) === -1) });
+    }
+
+    // Mode R: the task has commits of its own.
+    // R1: the slot is clean (ignored files such as plan.md, codex.md, qa.log are allowed).
+    const stR1 = G(['status', '--porcelain=v2', '--untracked-files=all'], slotRoot, { read: true });
+    if (stR1.status !== 0) return refuse('R1', 'the slot status could not be read', tip, null, dev);
+    if (String(stR1.stdout).trim()) return refuse('R1', 'the slot is not clean', tip, null, dev);
+
+    // R2: refuse a task with a protected-path commit or a PROTECTED-approved commit (R-4).
+    const mbR = G(['merge-base', dev, tip], canonicalRoot, { read: true });
+    if (mbR.status !== 0) return refuse('R3', 'branch-dev and the task tip share no merge base', tip, null, dev);
+    const mb = String(mbR.stdout).trim();
+    const rangeR = G(['rev-list', '--reverse', mb + '..' + tip], canonicalRoot, { read: true });
+    if (rangeR.status !== 0) return refuse('R3', 'could not list the task commits', tip, null, dev);
+    const taskCommits = String(rangeR.stdout).split('\n').map((s) => s.trim()).filter(Boolean);
+    const mergesR = G(['rev-list', '--merges', mb + '..' + tip], canonicalRoot, { read: true });
+    if (mergesR.status !== 0 || String(mergesR.stdout).trim()) return refuse('R3', 'a merge commit is present in the task range (Owner re-sync)', tip, null, dev);
+    let protectedHit;
+    for (const c of taskCommits) {
+      const dt = G(['diff-tree', '--no-commit-id', '--name-only', '-r', '--no-renames', '-z', c], canonicalRoot, { read: true });
+      if (dt.status !== 0) return refuse('R2', 'could not list the files of commit ' + c, tip, null, dev);
+      protectedHit = String(dt.stdout).split('\0').filter(Boolean).find((f) => PROTECTED_PATH_RES.some((re) => re.test(f.toLowerCase())));
+      if (protectedHit !== undefined) break;
+    }
+    if (protectedHit !== undefined) return refuse('R2', 'a task commit touches a protected path (' + protectedHit + ')', tip, null, dev);
+    const hasProtectedCommit = readAuditEntries(commonDir).some((e) => e && e.verb === 'protected-commit' && e.task === task && e.result === 'ok');
+    if (hasProtectedCommit) return refuse('R2', 'the audit log has a protected-commit entry for this task', tip, null, dev);
+
+    // R3: replay in a temporary detached worktree; any non-zero exit aborts and refuses "conflict".
+    const tmpParent = fs.mkdtempSync(path.join(os.tmpdir(), 'pt-resync-'));
+    const wt = path.join(tmpParent, 'wt');
+    const hooksOverride = ['-c', 'core.hooksPath=' + toForwardSlash(hooksDir)];
+    const git = (args, cwd) => spawnSync(opts.gitExec || 'git', args,
+      { cwd, env: stripGitEnv(), encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+    const replayAndMove = () => {
+      const add = git(hooksOverride.concat(['worktree', 'add', '--detach', wt, tip]), canonicalRoot);
+      if (add.status !== 0) return refuse('R3', 'could not create the temporary worktree (' + firstLine(add.stderr) + ')', tip, null, dev);
+      const rb = git(hooksOverride.concat(['-c', 'rebase.autoSquash=false', '-c', 'rebase.updateRefs=false',
+        'rebase', '--onto', dev, mb, 'HEAD']), wt);
+      if (rb.status !== 0) {
+        git(hooksOverride.concat(['rebase', '--abort']), wt);
+        return refuse('R3', 'conflict while replaying the task commits onto branch-dev - nothing changed', tip, null, dev);
+      }
+      const ntR = G(['rev-parse', 'HEAD'], wt, { read: true });
+      if (ntR.status !== 0) return refuse('R3', 'could not read the replayed tip', tip, null, dev);
+      const newTip = String(ntR.stdout).trim();
+      // R4: same commit count, patch-ids equal in order, no merge commits, brief blob and changed-file set unchanged.
+      const r4 = verifyReplay(opts.gitExec, G, canonicalRoot, briefPath, mb, tip, dev, newTip);
+      if (!r4.ok) return refuse('R4', r4.reason, tip, null, dev);
+      // R5: move the slot (and the task ref with it); verify.
+      const mvR = keepReset(slotGit, newTip);
+      if (mvR.status !== 0) return refuse('R5', 'git reset --keep failed in the slot (' + firstLine(mvR.stderr) + ')', tip, null, dev);
+      const headR = G(['rev-parse', 'HEAD'], slotRoot, { read: true });
+      const symR = G(['symbolic-ref', 'HEAD'], slotRoot, { read: true });
+      const stAfter = G(['status', '--porcelain=v2', '--untracked-files=all'], slotRoot, { read: true });
+      const okR = headR.status === 0 && String(headR.stdout).trim() === newTip &&
+        symR.status === 0 && String(symR.stdout).trim() === 'refs/heads/' + task &&
+        stAfter.status === 0 && !String(stAfter.stdout).trim();
+      if (!okR) {
+        bestEffortAudit(commonDir, { ts: nowIso(opts), verb: 'resync', task, mode, from: tip, to: newTip, base: dev, result: 'fail', reason: 'R5: verification failed' });
+        return { ok: false, exitCode: 1, reason: 'R5: verification failed - STOP (the tool never undoes a reset)' };
+      }
+      return finish(newTip);
+    };
+    let outcome;
+    try {
+      outcome = replayAndMove();
+    } finally {
+      // R6: remove the temporary worktree, then prune.
+      removeTempWorktree(G, canonicalRoot, tmpParent, wt);
+    }
+    const stillListed = (worktreeList(G, canonicalRoot) || []).some((t) => normPath(t.path) === normPath(wt));
+    if (fs.existsSync(wt) || stillListed) {
+      // A failed removal is surfaced on a refusal too (never silently lost behind the original reason).
+      const leftover = 'the temporary worktree ' + wt + ' could not be removed';
+      if (outcome.ok) outcome.cleanupWarning = leftover; else outcome.reason += ' (WARNING: ' + leftover + ')';
+    }
+    return outcome;
+  } finally {
+    releaseLock(lock.path);
+    try { fs.rmSync(hooksDir, { recursive: true, force: true }); } catch (e) { /* best effort */ }
+  }
+}
+function runResync(opts) { return safeRun(() => runResyncCore(opts)); }
+
 // ── CLI ─────────────────────────────────────────────────────────────────────────────────
 function printLandRequest(res) {
   process.stdout.write('LAND REQUEST for ' + res.report.task + '\n');
@@ -1269,6 +1572,21 @@ function printProtectedRequest(res) {
   process.stdout.write('  files:\n' + res.files.map((f) => '    ' + f.target + '  ' + f.blobOid + '  sha256=' + f.sha256).join('\n') + '\n');
   process.stdout.write('\n' + res.approvalLine + '\n');
 }
+function printResync(res) {
+  if (res.mode === 'none') { process.stdout.write(res.message + '\n'); return; }
+  process.stdout.write('RESYNC ' + res.task + ': mode ' + res.mode + ' (' +
+    (res.mode === 'F' ? 'fast-forward; uncommitted work kept in place' : 'replay of the task commits') + ')\n');
+  process.stdout.write('  tip:  ' + res.from + ' -> ' + res.to + '\n');
+  process.stdout.write('  base: ' + res.base + ' (branch-dev, not moved)\n');
+  if (res.stagedLost && res.stagedLost.length) {
+    process.stdout.write('  note: ' + res.stagedLost.length + ' staged path(s) are now unstaged, content unchanged: ' + res.stagedLost.join(', ') + '\n');
+  }
+  const i = res.integrity;
+  process.stdout.write('  next (the Worker resumes): re-run npm run qa:offline and the relevant targeted tests, then\n');
+  process.stdout.write('    node qa/guard_integrity_check.js --base-main ' + i.baseMain + ' --base-dev ' + i.baseDev + ' --task ' + i.task + ' --since ' + i.since + ' --root ' + i.root + '\n');
+  process.stdout.write('  then request LAND again - the LAND line stays the Owner\'s gate.\n');
+  if (res.cleanupWarning) process.stderr.write('pt-land: WARNING - ' + res.cleanupWarning + '\n');
+}
 function output(res, verb) {
   if (!res.ok) {
     process.stderr.write('pt-land: ' + (res.exitCode === 3 ? 'usage error - ' : '') + res.reason + '\n');
@@ -1282,6 +1600,7 @@ function output(res, verb) {
   else if (verb === 'brief-request') printBriefRequest(res);
   else if (verb === 'protected-request') printProtectedRequest(res);
   else if (verb === 'protected-commit') process.stdout.write(res.message + '\n');
+  else if (verb === 'resync') printResync(res);
   // The Owner reads the mutation result from CLI output; a successful merge/push/cleanup whose
   // audit append failed must still surface that warning here, not only in the module-API result
   // (protected-commit has no such path: its audit entry is load-bearing and a failed append refuses).
@@ -1330,6 +1649,14 @@ function main(argv) {
     }
     opts.task = argv[1];
     output(verb === 'protected-commit' ? runProtectedCommit(opts) : runProtectedRequest(opts), verb);
+  } else if (verb === 'resync') {
+    if (argv.length !== 2 || typeof argv[1] !== 'string' || !argv[1]) {
+      process.stderr.write('pt-land: usage error - usage: pt-land.js resync task/<id>\n');
+      process.exit(3);
+      return;
+    }
+    opts.task = argv[1];
+    output(runResync(opts), verb);
   } else {
     process.stderr.write('pt-land: usage error - unknown verb ' + JSON.stringify(verb) + '\n');
     process.exit(3);
@@ -1337,7 +1664,7 @@ function main(argv) {
 }
 
 module.exports = {
-  runLandRequest, runLand, runPushRequest, runPush, runCleanup,
+  runLandRequest, runLand, runPushRequest, runPush, runCleanup, runResync,
   runBriefRequest, runProtectedRequest, runProtectedCommit,
   parseRecord, parseLandScope, parseProtectedScope, approvalLine
 };
