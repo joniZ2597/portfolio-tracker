@@ -10,7 +10,7 @@ Operational only when the Owner has approved these exact contents and the brief-
 | Mode | **Manual, attended** — AI prompt wording, a renamed persisted audit field, and re-pinned protected functions. The Worker still runs tests → implementation → QA → Codex on its own; it stops only on STOP-1..6 or an Owner gate |
 | qa:offline | baseline at Step 0 → **+1** (`qa/high1y_label_offline.js`). After a Second-LAND `resync`, the baseline is the re-synced `branch-dev` suite count (it includes the first finisher's new suite), measured fresh; the rule stays baseline + 1 |
 | Parallel with | Worker A `task/qa-isolation-meter`: no shared file (compatibility check 2026-10-05). Until Slice 0 lands, **no heavy QA while Worker A runs heavy QA**: full `qa:offline`, `qa/pt_land_offline.js` and `qa/pt_land_resync_offline.js` run one at a time on the laptop, and never during Worker A's measurement or collision-proof runs. Light land-tests may run any time. If Slice 0 lands first, this task re-syncs before LAND |
-| Status | FINAL. Owner rulings 2026-10-05 (§0); no decision open |
+| Status | FINAL, **amendment 1** (2026-10-05). Owner rulings §0; no decision open. Amendment 1 adds only the existing-suite pin edits found by Worker B's pre-edit scratch sweep (§2, §4, §6); product scope unchanged |
 
 ## 0. Owner rulings (2026-10-05; not reopened)
 
@@ -120,9 +120,14 @@ There is no DONE / HISTORY line, because the entry stays open.
 
 | File | Edit | Proof in `review.md` |
 |---|---|---|
-| `qa/tech_snapshot_cache_offline.js` | `SNAP_KEYS`: `'athDist', 'hasATH'` → `'high1yDist', 'hasHigh1y'` (same position). `ENGINE_FNS`: `'computeATHDistance'` → `'computeHigh1yDistance'`, add `'_setupDisplay'`. `BASE_PINS`: the `computeATHDistance` key → `computeHigh1yDistance`, plus new values for it, `classifyTechnicalSetup` and `buildTechSnapshotBlock`. TC-3 and the `:418–424` / `:527` identifier renames. The mutant at `:854`: the anchor text `athDist > -5 && pct20 > 10` → `high1yDist > -5 && pct20 > 10` (same mutation) | For each re-pinned function, the new source with only A1, A2 or A4 reverted hashes to the old pin |
-| `qa/vis_score_caliper_offline.js` | `PROTECTED_FN_HASHES.renderMainPanel` and `._srGroupResults` values only | `renderMainPanel` with A9 reverted and `_srGroupResults` with A8 reverted hash to their old pins |
+| `qa/tech_snapshot_cache_offline.js` | **(a) Identifier renames** — every occurrence of `athDist` → `high1yDist`, `hasATH` → `hasHigh1y` and `computeATHDistance` → `computeHigh1yDistance` (at `57afd9d`: `:50`, `:199`, `:202`, `:218`, `:379`, `:418`, `:424`, `:527`, `:594`, `:854`), and nothing else on those lines. `SNAP_KEYS` keeps the same position. `ENGINE_FNS` adds `'_setupDisplay'`. The `:854` mutant keeps the same mutation (`> 10` → `> 11`) on the renamed anchor.<br>**(b) `BASE_PINS`** — new values for `computeHigh1yDistance` (renamed key), `classifyTechnicalSetup` and `buildTechSnapshotBlock`.<br>**(c) `NEW_RM_LF` and `NEW_RM_CALIPER_PIN`** (`:65–66`) — new values: the LF and CRLF hashes of the task `renderMainPanel`.<br>**(d) `BASE_CALIPER_PINS._srGroupResults`** (`:79`) — new value.<br>**(e) TC-10 revert logic** (`:605–614`) — reverts **A9 first**, then I7: `reverted = revertI7(revertA9(rm))`, and the forward check becomes `applyA9(applyI7(reverted)) === rm`. `revertA9` / `applyA9` are a new four-entry old→new table equal to brief §1 A9 (whole-line text pairs). The A9 `:8480` entry is the I7h line in its I7-applied form, so the I7 tables are unchanged. The other TC-10 assertions are unchanged; "line count = base + 3" still holds because A9 adds no lines.<br>**(f) TC-11 / TC-13** — **no assertion logic change**. They read the updated constants (c) and (d) only; the TC-11 loop label "equals the base" is unchanged | **(a)** a token-level diff shows only the three renames on the listed lines, plus `'_setupDisplay'` in `ENGINE_FNS`.<br>**(b)** For each function, the new source with only its A1, A2 or A4 lines reverted hashes to the old `BASE_PINS` value.<br>**(c)** `revertI7(revertA9(rm))` hashes to `BASE_RM_LF` and, in CRLF form, to `OLD_RM_CALIPER_PIN` `d11b09a9…`. `revertA9(rm)` hashes to the old `NEW_RM_LF` `978f40e5…` (LF) and the old `NEW_RM_CALIPER_PIN` `a219c950…` (CRLF).<br>**(d)** `_srGroupResults` with A8 reverted hashes to `192d7dd3…`.<br>**(e)** TC-10 passes, and a planted extra `renderMainPanel` line change still fails it |
+| `qa/vis_score_caliper_offline.js` | `PROTECTED_FN_HASHES.renderMainPanel` and `._srGroupResults` values only | `renderMainPanel` with A9 reverted hashes to the old caliper pin `a219c950…`, and `_srGroupResults` with A8 reverted to `192d7dd3…`. The new values equal tech-snapshot (c) CRLF and (d) |
+| `qa/ts1_default_exposure_offline.js` | **TX-3** `renderMainPanel` hash value only (`:139`) | `renderMainPanel` with A9 reverted, LF-normalised, hashes to the old value `978f40e5…`. The new value equals tech-snapshot (c) LF. The other TX-3 pins and the TX-3 negative cases are unchanged |
+| `qa/analyst_parser_offline.js` | **`PIN_MASKED_FILE`** value only (`:69`) | The new `index.html` (LF-normalised), with `parsePerplexityContext` masked **and** A1–A10 reverted, hashes to the old value `de37b698…`. That proves the only non-parser change is A1–A10. `PIN_ALLNONE_EXPR`, `PIN_FETCH_PPLX` and `PIN_FIXTURE` are unchanged |
 | `qa/deep_dive_v0_offline.js` | `FNS` += `'_setupDisplay'` | no assertion changed |
+
+**Every re-pinned value has its revert proof in `review.md`:** the value it replaces, the new value, and the
+command or script output showing the revert hash. A re-pinned value without a passing revert proof is a STOP.
 
 No other existing test is edited. `qa/run-offline.js` (ASK-tier) is not touched; its `extended_near_ath` enum checks
 still pass, because the enums are unchanged.
@@ -157,6 +162,8 @@ qa/high1y_label_offline.js
 qa/tech_snapshot_cache_offline.js
 qa/vis_score_caliper_offline.js
 qa/deep_dive_v0_offline.js
+qa/ts1_default_exposure_offline.js
+qa/analyst_parser_offline.js
 BACKLOG.md
 <!-- land-scope:end -->
 <!-- land-tests:begin -->
@@ -166,16 +173,19 @@ node qa/vis_score_caliper_offline.js
 node qa/deep_dive_v0_offline.js
 node qa/scan_results_enrichment_offline.js
 node qa/ts1_default_exposure_offline.js
+node qa/analyst_parser_offline.js
 <!-- land-tests:end -->
 
-## 4. Files — exactly 7
+## 4. Files — exactly 9
 
 ```
 index.html                              A1–A10 only (CRLF preserved)
 qa/high1y_label_offline.js              NEW — §3
-qa/tech_snapshot_cache_offline.js       §2 edits only
+qa/tech_snapshot_cache_offline.js       §2 (a)–(f) only
 qa/vis_score_caliper_offline.js         two pin values only
 qa/deep_dive_v0_offline.js              FNS += '_setupDisplay' only
+qa/ts1_default_exposure_offline.js      TX-3 renderMainPanel hash value only
+qa/analyst_parser_offline.js            PIN_MASKED_FILE value only
 BACKLOG.md                              B1 only (step 10a, effect partial)
 work/r1a-high1y-relabel/review.md       NEW — RED/GREEN, pin revert proofs, ## Backlog reconciliation (partial, entry 34), LAND-EVIDENCE
 ```
@@ -218,3 +228,22 @@ work/r1a-high1y-relabel/review.md       NEW — RED/GREEN, pin revert proofs, ##
 - Codex with no unresolved Class I;
 - LANDed, pushed, cleaned.
 - After push, an Owner-approved DEV scan shows "1Y High Distance", and no AI narrative calls the 1Y high an ATH.
+
+## 6. Amendment 1 record (2026-10-05)
+
+- **Trigger:** Worker B hit a valid **STOP-1** during its pre-edit scratch sweep. Three existing suites pin values
+  that A9 / A8 / A1–A10 necessarily change, and the original §2 did not list them:
+  - `qa/ts1_default_exposure_offline.js` TX-3;
+  - `qa/analyst_parser_offline.js` `PIN_MASKED_FILE`;
+  - more `qa/tech_snapshot_cache_offline.js` pins and the TC-10 revert logic.
+- **Scope added:** only those existing-suite edits (§2) plus the land-scope, land-tests and §4 file count. Product
+  scope (§1), rulings (§0), the new suite (§3) and all STOP conditions are unchanged.
+- **State at amendment:**
+  - Worker B's slot is **clean** on `task/r1a-high1y-relabel` at the original brief commit `fe336b8`;
+  - **no implementation has started**;
+  - no repo edit was made by the sweep.
+- **Sequencing unchanged:**
+  - Worker A (`task/qa-isolation-meter`) **LANDs first**;
+  - Worker B re-syncs onto the new `branch-dev` with `pt-land.js resync` after Worker A lands, then runs a fresh full
+    `qa:offline` and the integrity check, then LANDs second;
+  - the heavy-QA restriction (§ Parallel with) still applies.
