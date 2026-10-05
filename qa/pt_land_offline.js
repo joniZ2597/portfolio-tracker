@@ -1,4 +1,7 @@
 'use strict';
+// Slice 0 (work/qa-isolation-meter): private temp root per run, then counting/timing only.
+require('./lib/run-tmp').isolate('ptqa-land-');
+const meter = require('./lib/spawn-meter').install();
 
 /*
  * qa/pt_land_offline.js
@@ -33,6 +36,7 @@ let failed = 0;
 const failures = [];
 
 function test(name, fn) {
+  meter.beginRow(name); try {
   try {
     fn();
     passed += 1;
@@ -40,6 +44,7 @@ function test(name, fn) {
     failed += 1;
     failures.push(name + ' -- ' + (e && e.message ? e.message : String(e)));
   }
+  } finally { meter.endRow(); }
 }
 
 // ── git plumbing ─────────────────────────────────────────────────────────────────────────
@@ -2291,6 +2296,7 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
 })();
 
 // ── summary ──────────────────────────────────────────────────────────────────────────────
+meter.report(process.stdout, 'pt-land');
 if (failed > 0) {
   for (const f of failures) process.stdout.write('  FAIL  ' + f + '\n');
   process.stdout.write('\nOFFLINE VALIDATION (pt-land): FAIL (' + failed + '/' + (passed + failed) + ')\n');

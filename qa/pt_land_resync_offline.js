@@ -1,4 +1,7 @@
 'use strict';
+// Slice 0 (work/qa-isolation-meter): private temp root per run, then counting/timing only.
+require('./lib/run-tmp').isolate('ptqa-resync-');
+const meter = require('./lib/spawn-meter').install();
 
 /*
  * qa/pt_land_resync_offline.js
@@ -35,6 +38,7 @@ const failures = [];
 const MUT_DIRS = [];
 
 function test(name, fn) {
+  meter.beginRow(name); try {
   try {
     fn();
     passed += 1;
@@ -42,6 +46,7 @@ function test(name, fn) {
     failed += 1;
     failures.push(name + ' -- ' + (e && e.message ? e.message : String(e)));
   }
+  } finally { meter.endRow(); }
 }
 
 // ── git / fs plumbing ────────────────────────────────────────────────────────────────────
@@ -895,6 +900,7 @@ mutantRow('MUT-RS-13: branch-dev moved by a successful resync (caught by RS-8)',
 
 // ── summary ──────────────────────────────────────────────────────────────────────────────
 for (const d of MUT_DIRS) rmrf(d);
+meter.report(process.stdout, 'pt-land-resync');
 if (failed > 0) {
   for (const f of failures) process.stdout.write('  FAIL  ' + f + '\n');
   process.stdout.write('\nOFFLINE VALIDATION (pt-land resync): FAIL (' + failed + '/' + (passed + failed) + ')\n');
