@@ -80,3 +80,6 @@ Final check: 1 round, 0 findings, PASS; the step-9 FIX is covered by this pass o
 - [rule] Two full `qa:offline` runs on one machine (two Worker slots) can stall each other in `qa/pt_land_offline.js` for hours; a Worker should check for any other `run-offline` process before starting the full run and must not start a second one — pending routing
 - [local] The baseline suite count was derived rather than measured because the pre-edit baseline run was interrupted by the overlap above.
 - [covered] Planted negatives must run the exact committed suite bytes against a mutated copy of the target (path resolved from `__dirname`), not a re-implementation of the assertions — covered by the AP planted-negative method used here.
+
+## LAND-EVIDENCE
+LAND-EVIDENCE: qa-offline=PASS 57; targeted=PASS; codex-classI-unresolved=0
