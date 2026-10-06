@@ -83,44 +83,68 @@ function buildFixture(opts) {
   const protectedScopeRelPaths = opts.protectedScopeRelPaths || null;
   const twoLandScopeBlocks = opts.twoLandScopeBlocks === true;
   const originUrl = opts.originUrl; // if set, used instead of the bare dir path (P4 fixtures)
+  // Slice 1 (work/qa-template-fixtures), internal options used only by the template builders: __root builds the fixture inside a
+  // given directory (a template); __adopt wraps an already-materialised copy of the landed template (no Git process).
+  const crypto = require('crypto');
+  const adopt = opts.__adopt || null;
 
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ptland-qa-'));
+  const tmp = adopt ? adopt.tmp : (opts.__root || fs.mkdtempSync(path.join(os.tmpdir(), 'ptland-qa-')));
   const bareDir = path.join(tmp, 'origin.git');
   const canon = path.join(tmp, 'portfolio-tracker');
   const slotA = path.join(tmp, 'pt-wt-worker-a');
   const slotB = path.join(tmp, 'pt-wt-worker-b');
 
-  fs.mkdirSync(bareDir, { recursive: true });
-  G(['init', '--bare', '-b', 'main', bareDir], tmp);
+  if (adopt) return finish(adopt.meta.base, adopt.meta.tip, adopt.meta.mainOid, slotA, slotB);
 
-  fs.mkdirSync(canon, { recursive: true });
-  G(['init', '-b', 'main', canon], tmp);
-  G(['config', 'user.email', 'test@test.local'], canon);
-  G(['config', 'user.name', 'Test'], canon);
-  G(['remote', 'add', 'origin', originUrl || bareDir], canon);
+  // Slice 1: the base below (bare origin .. tool commit [.. .gitignore]) is built ONCE per run for the real tool without a custom
+  // origin and copied per fixture; a mutant tool source or a custom origin builds it fresh, step for step as before.
+  const sameContent = (a, b) => a === b ||
+    crypto.createHash('sha256').update(fs.readFileSync(a)).digest('hex') === crypto.createHash('sha256').update(fs.readFileSync(b)).digest('hex');
+  const buildBase = (root) => {
+    const bareDir = path.join(root, 'origin.git');
+    const canon = path.join(root, 'portfolio-tracker');
 
-  W(path.join(canon, 'README.md'), 'hello\n');
-  G(['add', 'README.md'], canon);
-  G(['commit', '-m', 'init'], canon);
-  G(['branch', 'branch-dev'], canon);
-  if (!originUrl) { G(['push', 'origin', 'main'], canon); G(['push', 'origin', 'branch-dev'], canon); }
-  G(['checkout', 'branch-dev'], canon);
+    fs.mkdirSync(bareDir, { recursive: true });
+    G(['init', '--bare', '-b', 'main', bareDir], root);
 
-  fs.mkdirSync(path.join(canon, '.claude', 'hooks'), { recursive: true });
-  fs.copyFileSync(toolSource, path.join(canon, '.claude', 'hooks', 'pt-land.js'));
-  fs.mkdirSync(path.join(canon, 'qa'), { recursive: true });
-  fs.copyFileSync(REAL_INTEGRITY_PATH, path.join(canon, 'qa', 'guard_integrity_check.js'));
-  G(['add', '.claude/hooks/pt-land.js', 'qa/guard_integrity_check.js'], canon);
-  G(['commit', '-m', 'add tool'], canon);
-  if (!originUrl) G(['push', 'origin', 'branch-dev'], canon);
+    fs.mkdirSync(canon, { recursive: true });
+    G(['init', '-b', 'main', canon], root);
+    G(['config', 'user.email', 'test@test.local'], canon);
+    G(['config', 'user.name', 'Test'], canon);
+    G(['remote', 'add', 'origin', originUrl || bareDir], canon);
 
-  // PL-22..31 (cleanup): an optional .gitignore, committed before the slot worktree is created
-  // so ignored-evidence files (plan.md/codex.md/qa.log) are cleanly ignored, not merely untracked.
-  if (opts.gitignore) {
-    W(path.join(canon, '.gitignore'), opts.gitignore);
-    G(['add', '.gitignore'], canon);
-    G(['commit', '-m', 'add gitignore'], canon);
+    W(path.join(canon, 'README.md'), 'hello\n');
+    G(['add', 'README.md'], canon);
+    G(['commit', '-m', 'init'], canon);
+    G(['branch', 'branch-dev'], canon);
+    if (!originUrl) { G(['push', 'origin', 'main'], canon); G(['push', 'origin', 'branch-dev'], canon); }
+    G(['checkout', 'branch-dev'], canon);
+
+    fs.mkdirSync(path.join(canon, '.claude', 'hooks'), { recursive: true });
+    fs.copyFileSync(toolSource, path.join(canon, '.claude', 'hooks', 'pt-land.js'));
+    fs.mkdirSync(path.join(canon, 'qa'), { recursive: true });
+    fs.copyFileSync(REAL_INTEGRITY_PATH, path.join(canon, 'qa', 'guard_integrity_check.js'));
+    G(['add', '.claude/hooks/pt-land.js', 'qa/guard_integrity_check.js'], canon);
+    G(['commit', '-m', 'add tool'], canon);
     if (!originUrl) G(['push', 'origin', 'branch-dev'], canon);
+
+    // PL-22..31 (cleanup): an optional .gitignore, committed before the slot worktree is created
+    // so ignored-evidence files (plan.md/codex.md/qa.log) are cleanly ignored, not merely untracked.
+    if (opts.gitignore) {
+      W(path.join(canon, '.gitignore'), opts.gitignore);
+      G(['add', '.gitignore'], canon);
+      G(['commit', '-m', 'add gitignore'], canon);
+      if (!originUrl) G(['push', 'origin', 'branch-dev'], canon);
+    }
+  };
+  const useTemplate = originUrl === undefined && sameContent(toolSource, REAL_TOOL_PATH);
+  if (useTemplate) {
+    const FT = require('./lib/fixture-template');
+    const realHash = crypto.createHash('sha256').update(fs.readFileSync(REAL_TOOL_PATH)).digest('hex');
+    const t = FT.template('pt_land base:' + realHash + ':' + (opts.gitignore || ''), (dir) => { buildBase(dir); });
+    FT.materialize(t.dir, tmp, ['portfolio-tracker/.git/config']);
+  } else {
+    buildBase(tmp);
   }
 
   let briefBody = '# brief\n\n';
@@ -162,21 +186,25 @@ function buildFixture(opts) {
     slotBPath = slotB;
   }
 
-  const mainOid = G(['rev-parse', 'main'], canon).trim();
-  const commonDir = path.join(canon, '.git');
+  return finish(base, tip, G(['rev-parse', 'main'], canon).trim(), slotAPath, slotBPath);
 
-  function requireTool() {
-    delete require.cache[require.resolve(path.join(canon, '.claude', 'hooks', 'pt-land.js'))];
-    return require(path.join(canon, '.claude', 'hooks', 'pt-land.js'));
+  // The returned fixture object; also used (through __adopt) for an already-materialised copy of the landed template.
+  function finish(baseOid, tipOid, mainOid, slotAOut, slotBOut) {
+    const commonDir = path.join(canon, '.git');
+
+    function requireTool() {
+      delete require.cache[require.resolve(path.join(canon, '.claude', 'hooks', 'pt-land.js'))];
+      return require(path.join(canon, '.claude', 'hooks', 'pt-land.js'));
+    }
+    function writeLandRecord(text) { fs.writeFileSync(path.join(commonDir, 'pt-land-approval'), text); }
+    function writePushRecord(text) { fs.writeFileSync(path.join(commonDir, 'pt-push-approval'), text); }
+    function cleanup() { rmrf(tmp); }
+
+    return {
+      tmp, bareDir, canon, slotA: slotAOut, slotB: slotBOut, task, taskShort, base: baseOid, tip: tipOid, mainOid,
+      commonDir, requireTool, writeLandRecord, writePushRecord, cleanup, originUrl: originUrl || bareDir
+    };
   }
-  function writeLandRecord(text) { fs.writeFileSync(path.join(commonDir, 'pt-land-approval'), text); }
-  function writePushRecord(text) { fs.writeFileSync(path.join(commonDir, 'pt-push-approval'), text); }
-  function cleanup() { rmrf(tmp); }
-
-  return {
-    tmp, bareDir, canon, slotA: slotAPath, slotB: slotBPath, task, taskShort, base, tip, mainOid,
-    commonDir, requireTool, writeLandRecord, writePushRecord, cleanup, originUrl: originUrl || bareDir
-  };
 }
 
 // Clean, informative failure (rather than an uncaught ENOENT) when the R12 candidate has not
@@ -991,6 +1019,26 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
   // tool under test, not merely asserted. opts.land=false / opts.push=false skip those steps.
   function buildCleanupFixture(opts) {
     opts = opts || {};
+    if (opts.landed === true) {
+      // Slice 1 (work/qa-template-fixtures): the landed-and-pushed state is built ONCE per run, through the fresh path below with
+      // the fixed task id, and every call gets its own isolated copy of it. Only for the real tool, no custom origin, land and push
+      // not disabled; any other combination throws (fail closed).
+      const sameContent = (a, b) => a === b ||
+        crypto.createHash('sha256').update(fs.readFileSync(a)).digest('hex') === crypto.createHash('sha256').update(fs.readFileSync(b)).digest('hex');
+      const LANDED_TASK_SHORT = 'cltpl';
+      const landedAllowed = (opts.toolSource === undefined || sameContent(opts.toolSource, REAL_TOOL_PATH)) && opts.originUrl === undefined &&
+        opts.land !== false && opts.push !== false && (opts.taskShort === undefined || opts.taskShort === LANDED_TASK_SHORT);
+      if (!landedAllowed) throw new Error('buildCleanupFixture: landed:true is only for the real tool, without originUrl, with land and push not disabled and the fixed task id ' + LANDED_TASK_SHORT);
+      const FT = require('./lib/fixture-template');
+      const realHash = crypto.createHash('sha256').update(fs.readFileSync(REAL_TOOL_PATH)).digest('hex');
+      const t = FT.template('pt_land landed:' + realHash, (dir) => {
+        const built = buildCleanupFixture({ taskShort: LANDED_TASK_SHORT, __root: dir });
+        return { task: built.task, base: built.base, tip: built.tip, mainOid: built.mainOid };
+      });
+      const copy = fs.mkdtempSync(path.join(os.tmpdir(), 'ptland-qa-'));
+      FT.materialize(t.dir, copy, ['portfolio-tracker/.git/config', 'portfolio-tracker/.git/worktrees/*/gitdir', 'pt-wt-worker-a/.git', 'pt-wt-worker-b/.git']);
+      return buildFixture({ taskShort: LANDED_TASK_SHORT, gitignore: GITIGNORE_TEXT, __adopt: { tmp: copy, meta: t.meta } });
+    }
     const fx = buildFixture(Object.assign({}, opts, { gitignore: GITIGNORE_TEXT }));
     if (opts.land !== false && fx.slotA) {
       const TOOL = fx.requireTool();
@@ -1038,7 +1086,7 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
   }
 
   test('PL-22: valid cleanup archives+sha256-verifies plan.md/codex.md/qa.log, deletes originals, detaches the slot at branch-dev\'s OID, deletes the branch, writes one audit line (+ PL-30)', () => {
-    const fx = buildCleanupFixture({ taskShort: 'cl1' });
+    const fx = buildCleanupFixture({ landed: true });
     try {
       writeIgnoredEvidence(fx);
       const beforeHash = {};
@@ -1053,9 +1101,9 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
       assert.strictEqual(r.ok, true, JSON.stringify(r));
       assert.strictEqual(r.exitCode, 0);
       assert.strictEqual(r.verb, 'cleanup');
-      const archiveDir = path.join(archiveRoot, 'cl1', '20260101T000000Z');
+      const archiveDir = path.join(archiveRoot, fx.taskShort, '20260101T000000Z');
       for (const name of EVIDENCE_NAMES) {
-        const orig = path.join(fx.slotA, 'work', 'cl1', name);
+        const orig = path.join(fx.slotA, 'work', fx.taskShort, name);
         assert.ok(!fs.existsSync(orig), name + ' original deleted');
         const archived = path.join(archiveDir, name);
         assert.ok(fs.existsSync(archived), name + ' archived');
@@ -1103,10 +1151,10 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
   });
 
   test('PL-25: a tracked modification in the task worktree -> refuse (K4); no archive written (+ PL-30)', () => {
-    const fx = buildCleanupFixture({ taskShort: 'cl4' });
+    const fx = buildCleanupFixture({ landed: true });
     try {
       writeIgnoredEvidence(fx);
-      fs.appendFileSync(path.join(fx.slotA, 'work', 'cl4', 'foo.txt'), 'dirty\n');
+      fs.appendFileSync(path.join(fx.slotA, 'work', fx.taskShort, 'foo.txt'), 'dirty\n');
       const before = snapshotUntouched(fx);
       const TOOL = fx.requireTool();
       const archiveRoot = path.join(fx.tmp, 'pt-work-artifacts');
@@ -1118,7 +1166,7 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
     } finally { fx.cleanup(); }
   });
   test('PL-25: an untracked, non-ignored file in the task worktree -> refuse (K4); no archive written (+ PL-30)', () => {
-    const fx = buildCleanupFixture({ taskShort: 'cl5' });
+    const fx = buildCleanupFixture({ landed: true });
     try {
       writeIgnoredEvidence(fx);
       W(path.join(fx.slotA, 'stray.txt'), 'x\n');
@@ -1134,15 +1182,15 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
   });
 
   test('PL-26: archive destination already occupied by a non-directory -> refuse (K6); originals intact, nothing deleted (+ PL-30)', () => {
-    const fx = buildCleanupFixture({ taskShort: 'cl6' });
+    const fx = buildCleanupFixture({ landed: true });
     try {
       writeIgnoredEvidence(fx);
       const archiveRoot = path.join(fx.tmp, 'pt-work-artifacts');
-      const archiveDir = path.join(archiveRoot, 'cl6', '20260101T000000Z');
+      const archiveDir = path.join(archiveRoot, fx.taskShort, '20260101T000000Z');
       fs.mkdirSync(path.dirname(archiveDir), { recursive: true });
       W(archiveDir, 'occupied\n'); // the exact per-stamp archive directory path exists as a FILE
       const beforeContent = {};
-      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', 'cl6', name), 'utf8');
+      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name), 'utf8');
       const before = snapshotUntouched(fx);
       const TOOL = fx.requireTool();
       const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task, archiveRoot, now: '2026-01-01T00:00:00.000Z' });
@@ -1150,21 +1198,21 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
       assert.match(r.reason, /K6/);
       assert.match(r.reason, /nothing deleted/);
       for (const name of EVIDENCE_NAMES) {
-        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', 'cl6', name), 'utf8'), beforeContent[name], name + ' original intact');
+        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name), 'utf8'), beforeContent[name], name + ' original intact');
       }
       assertUntouched(fx, before);
     } finally { fx.cleanup(); }
   });
   test('PL-26: one exact destination file already exists (never overwritten) -> refuse (K6); all originals intact, nothing deleted, no partial copy left behind (+ PL-30)', () => {
-    const fx = buildCleanupFixture({ taskShort: 'cl6b' });
+    const fx = buildCleanupFixture({ landed: true });
     try {
       writeIgnoredEvidence(fx);
       const archiveRoot = path.join(fx.tmp, 'pt-work-artifacts');
-      const archiveDir = path.join(archiveRoot, 'cl6b', '20260101T000000Z');
+      const archiveDir = path.join(archiveRoot, fx.taskShort, '20260101T000000Z');
       fs.mkdirSync(archiveDir, { recursive: true });
       W(path.join(archiveDir, 'codex.md'), 'pre-existing, must not be overwritten\n'); // one exact destination FILE pre-occupied
       const beforeContent = {};
-      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', 'cl6b', name), 'utf8');
+      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name), 'utf8');
       const before = snapshotUntouched(fx);
       const TOOL = fx.requireTool();
       const r = TOOL.runCleanup({ cwd: fx.slotA, task: fx.task, archiveRoot, now: '2026-01-01T00:00:00.000Z' });
@@ -1172,7 +1220,7 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
       assert.match(r.reason, /K6/);
       assert.match(r.reason, /already exists/);
       for (const name of EVIDENCE_NAMES) {
-        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', 'cl6b', name), 'utf8'), beforeContent[name], name + ' original intact');
+        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name), 'utf8'), beforeContent[name], name + ' original intact');
       }
       assert.strictEqual(fs.readFileSync(path.join(archiveDir, 'codex.md'), 'utf8'), 'pre-existing, must not be overwritten\n', 'the pre-existing destination file was never overwritten');
       // plan.md sorts before codex.md alphabetically only by chance of the real ls-files order;
@@ -1184,7 +1232,7 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
   });
 
   test('PL-27: a second cleanup of an already-cleaned task -> refuse (branch absent) (+ PL-30)', () => {
-    const fx = buildCleanupFixture({ taskShort: 'cl7' });
+    const fx = buildCleanupFixture({ landed: true });
     try {
       writeIgnoredEvidence(fx);
       const TOOL = fx.requireTool();
@@ -1201,7 +1249,7 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
   });
 
   test('PL-28: the branch is checked out nowhere (branch-only cleanup) -> branch deleted, no slot step (+ PL-30)', () => {
-    const fx = buildCleanupFixture({ taskShort: 'cl8' });
+    const fx = buildCleanupFixture({ landed: true });
     try {
       G(['worktree', 'remove', '--force', fx.slotA], fx.canon);
       const before = snapshotUntouched(fx);
@@ -1216,7 +1264,7 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
   });
 
   test('PL-29: a planted non-sample git hook is never executed during K7/K8 (+ PL-30)', () => {
-    const fx = buildCleanupFixture({ taskShort: 'cl9' });
+    const fx = buildCleanupFixture({ landed: true });
     try {
       writeIgnoredEvidence(fx);
       const marker = path.join(fx.tmp, 'hook-ran-marker.txt');
@@ -1241,7 +1289,7 @@ test('MUT: LAND-EVIDENCE regex loosened -> a malformed evidence line is not caug
   });
 
   test('PL-31: CLI cleanup without a task -> exit 3; a refusal -> exit 1; a success -> exit 0', () => {
-    const fx = buildCleanupFixture({ taskShort: 'cl10' });
+    const fx = buildCleanupFixture({ landed: true });
     try {
       const toolPath = path.join(fx.canon, '.claude', 'hooks', 'pt-land.js');
       function run(args, cwd) { return spawnSync('node', [toolPath].concat(args), { cwd, encoding: 'utf8' }); }

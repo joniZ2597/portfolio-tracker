@@ -112,40 +112,59 @@ function buildFixture(o) {
   const canon = path.join(tmp, 'portfolio-tracker');
   const slotA = path.join(tmp, 'pt-wt-worker-a');
   const slotB = path.join(tmp, 'pt-wt-worker-b');
-  fs.mkdirSync(bareDir, { recursive: true });
-  G(['init', '--bare', '-b', 'main', bareDir], tmp);
-  fs.mkdirSync(canon, { recursive: true });
-  G(['init', '-b', 'main', canon], tmp);
-  G(['config', 'user.email', 'test@test.local'], canon);
-  G(['config', 'user.name', 'Test'], canon);
-  G(['remote', 'add', 'origin', bareDir], canon);
-  W(path.join(canon, 'README.md'), 'hello\n');
-  W(path.join(canon, 'shared.txt'), 'line1\nline2\nline3\n');
-  W(path.join(canon, 'a.txt'), 'a\n');
-  W(path.join(canon, 'b.txt'), 'b\n');
-  W(path.join(canon, '.gitignore'), 'work/*/plan.md\nwork/*/codex.md\nwork/*/qa.log\n');
-  G(['add', '.'], canon);
-  G(['commit', '-m', 'init'], canon);
-  G(['branch', 'branch-dev'], canon);
-  G(['push', 'origin', 'main'], canon);
-  G(['push', 'origin', 'branch-dev'], canon);
-  G(['checkout', 'branch-dev'], canon);
-  fs.mkdirSync(path.join(canon, '.claude', 'hooks'), { recursive: true });
-  fs.copyFileSync(toolSource, path.join(canon, '.claude', 'hooks', 'pt-land.js'));
-  fs.mkdirSync(path.join(canon, 'qa'), { recursive: true });
-  fs.copyFileSync(INTEGRITY_PATH, path.join(canon, 'qa', 'guard_integrity_check.js'));
-  G(['add', '.claude/hooks/pt-land.js', 'qa/guard_integrity_check.js'], canon);
-  G(['commit', '-m', 'add tool'], canon);
-  for (const s of (o.briefs || ['one', 'two'])) {
-    W(path.join(canon, 'work', s, 'brief.md'),
-      '# brief ' + s + '\n\n<!-- land-scope:begin -->\n- work/' + s + '/foo.txt\n- work/' + s + '/bar.txt\n<!-- land-scope:end -->\n');
-    G(['add', 'work/' + s + '/brief.md'], canon);
-    G(['commit', '-m', 'brief ' + s], canon);
+  // Slice 1 (work/qa-template-fixtures): the whole recipe below is built ONCE per run for the real tool and copied per fixture; a
+  // mutant tool source builds it fresh, step for step as before.
+  const sameContent = (a, b) => a === b ||
+    crypto.createHash('sha256').update(fs.readFileSync(a)).digest('hex') === crypto.createHash('sha256').update(fs.readFileSync(b)).digest('hex');
+  const buildRecipe = (root) => {
+    const bareDir = path.join(root, 'origin.git');
+    const canon = path.join(root, 'portfolio-tracker');
+    const slotA = path.join(root, 'pt-wt-worker-a');
+    const slotB = path.join(root, 'pt-wt-worker-b');
+    fs.mkdirSync(bareDir, { recursive: true });
+    G(['init', '--bare', '-b', 'main', bareDir], root);
+    fs.mkdirSync(canon, { recursive: true });
+    G(['init', '-b', 'main', canon], root);
+    G(['config', 'user.email', 'test@test.local'], canon);
+    G(['config', 'user.name', 'Test'], canon);
+    G(['remote', 'add', 'origin', bareDir], canon);
+    W(path.join(canon, 'README.md'), 'hello\n');
+    W(path.join(canon, 'shared.txt'), 'line1\nline2\nline3\n');
+    W(path.join(canon, 'a.txt'), 'a\n');
+    W(path.join(canon, 'b.txt'), 'b\n');
+    W(path.join(canon, '.gitignore'), 'work/*/plan.md\nwork/*/codex.md\nwork/*/qa.log\n');
+    G(['add', '.'], canon);
+    G(['commit', '-m', 'init'], canon);
+    G(['branch', 'branch-dev'], canon);
+    G(['push', 'origin', 'main'], canon);
+    G(['push', 'origin', 'branch-dev'], canon);
+    G(['checkout', 'branch-dev'], canon);
+    fs.mkdirSync(path.join(canon, '.claude', 'hooks'), { recursive: true });
+    fs.copyFileSync(toolSource, path.join(canon, '.claude', 'hooks', 'pt-land.js'));
+    fs.mkdirSync(path.join(canon, 'qa'), { recursive: true });
+    fs.copyFileSync(INTEGRITY_PATH, path.join(canon, 'qa', 'guard_integrity_check.js'));
+    G(['add', '.claude/hooks/pt-land.js', 'qa/guard_integrity_check.js'], canon);
+    G(['commit', '-m', 'add tool'], canon);
+    for (const s of (o.briefs || ['one', 'two'])) {
+      W(path.join(canon, 'work', s, 'brief.md'),
+        '# brief ' + s + '\n\n<!-- land-scope:begin -->\n- work/' + s + '/foo.txt\n- work/' + s + '/bar.txt\n<!-- land-scope:end -->\n');
+      G(['add', 'work/' + s + '/brief.md'], canon);
+      G(['commit', '-m', 'brief ' + s], canon);
+    }
+    G(['push', 'origin', 'branch-dev'], canon);
+    G(['worktree', 'add', '-b', 'task/one', slotA, 'branch-dev'], canon);
+    G(['worktree', 'add', '-b', 'task/two', slotB, 'branch-dev'], canon);
+  };
+  const useTemplate = sameContent(toolSource, TOOL_PATH);
+  if (useTemplate) {
+    const FT = require('./lib/fixture-template');
+    const realHash = crypto.createHash('sha256').update(fs.readFileSync(TOOL_PATH)).digest('hex');
+    const t = FT.template('resync:' + realHash + ':' + JSON.stringify(o.briefs || ['one', 'two']), (dir) => { buildRecipe(dir); });
+    FT.materialize(t.dir, tmp, ['portfolio-tracker/.git/config', 'portfolio-tracker/.git/worktrees/*/gitdir', 'pt-wt-worker-a/.git', 'pt-wt-worker-b/.git']);
+  } else {
+    buildRecipe(tmp);
   }
-  G(['push', 'origin', 'branch-dev'], canon);
   const base = rev(canon, 'branch-dev');
-  G(['worktree', 'add', '-b', 'task/one', slotA, 'branch-dev'], canon);
-  G(['worktree', 'add', '-b', 'task/two', slotB, 'branch-dev'], canon);
   const commonDir = path.join(canon, '.git');
 
   const fx = {

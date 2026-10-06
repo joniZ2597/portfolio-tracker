@@ -342,8 +342,75 @@ function expectedWithEdits(baseline, prefix, label) {
   t = t.replace(summary, () => "meter.report(process.stdout, '" + label + "');\n" + summary);
   return t;
 }
-function checkEdits(baseline, current, prefix, label) {
-  const cur = lf(current);
+// Slice 1 (work/qa-template-fixtures brief §1.4): the template builders replace the two land suites' fixture-builder bodies and 18 row-text
+// lines. RI-6 therefore masks those function bodies (positive control: an edit inside them is not reported) and applies the §1.2b table
+// to the expected text, so the 18 approved row lines are the only unmasked differences.
+function extractFunction(src, name) {
+  const m = new RegExp('(^|\\n)([ \\t]*)function ' + name + '\\(').exec(src);
+  assert.ok(m, 'function ' + name + ' not found');
+  const start = m.index + m[1].length;
+  let i = src.indexOf('{', start + m[2].length);
+  const open = i;
+  let depth = 0;
+  let prevSig = '';
+  for (; i < src.length; i += 1) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (c === '/' && n === '/') { while (i < src.length && src[i] !== '\n') i += 1; continue; }
+    if (c === '/' && n === '*') { i += 2; while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i += 1; i += 1; continue; }
+    if (c === '\'' || c === '"') { const q = c; i += 1; while (i < src.length && src[i] !== q) { if (src[i] === '\\') i += 1; i += 1; } prevSig = q; continue; }
+    if (c === '`') { i += 1; while (i < src.length && src[i] !== '`') { if (src[i] === '\\') i += 1; i += 1; } prevSig = c; continue; }
+    if (c === '/' && '(,=:[!&|?{};'.indexOf(prevSig) !== -1) {
+      i += 1; let inClass = false;
+      while (i < src.length && (src[i] !== '/' || inClass)) { if (src[i] === '\\') i += 1; else if (src[i] === '[') inClass = true; else if (src[i] === ']') inClass = false; i += 1; }
+      prevSig = '/'; continue;
+    }
+    if (c === '{') depth += 1;
+    else if (c === '}') { depth -= 1; if (depth === 0) return src.slice(start, i + 1); }
+    if (!/\s/.test(c)) prevSig = c;
+  }
+  throw new Error('unbalanced braces in function ' + name + ' (opened at ' + open + ')');
+}
+function maskFunctions(src, names) {
+  let s = src;
+  for (const n of names) { const body = extractFunction(s, n); s = s.replace(body, () => 'function ' + n + '(/*masked*/) {}'); }
+  return s;
+}
+const CL_NEW = '    const fx = buildCleanupFixture({ landed: true });';
+const ROW_LINES = [
+  ["    const fx = buildCleanupFixture({ taskShort: 'cl1' });", CL_NEW],
+  ["      const archiveDir = path.join(archiveRoot, 'cl1', '20260101T000000Z');", "      const archiveDir = path.join(archiveRoot, fx.taskShort, '20260101T000000Z');"],
+  ["        const orig = path.join(fx.slotA, 'work', 'cl1', name);", "        const orig = path.join(fx.slotA, 'work', fx.taskShort, name);"],
+  ["    const fx = buildCleanupFixture({ taskShort: 'cl4' });", CL_NEW],
+  ["      fs.appendFileSync(path.join(fx.slotA, 'work', 'cl4', 'foo.txt'), 'dirty\\n');", "      fs.appendFileSync(path.join(fx.slotA, 'work', fx.taskShort, 'foo.txt'), 'dirty\\n');"],
+  ["    const fx = buildCleanupFixture({ taskShort: 'cl5' });", CL_NEW],
+  ["    const fx = buildCleanupFixture({ taskShort: 'cl6' });", CL_NEW],
+  ["      const archiveDir = path.join(archiveRoot, 'cl6', '20260101T000000Z');", "      const archiveDir = path.join(archiveRoot, fx.taskShort, '20260101T000000Z');"],
+  ["      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', 'cl6', name), 'utf8');", "      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name), 'utf8');"],
+  ["        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', 'cl6', name), 'utf8'), beforeContent[name], name + ' original intact');", "        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name), 'utf8'), beforeContent[name], name + ' original intact');"],
+  ["    const fx = buildCleanupFixture({ taskShort: 'cl6b' });", CL_NEW],
+  ["      const archiveDir = path.join(archiveRoot, 'cl6b', '20260101T000000Z');", "      const archiveDir = path.join(archiveRoot, fx.taskShort, '20260101T000000Z');"],
+  ["      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', 'cl6b', name), 'utf8');", "      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name), 'utf8');"],
+  ["        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', 'cl6b', name), 'utf8'), beforeContent[name], name + ' original intact');", "        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name), 'utf8'), beforeContent[name], name + ' original intact');"],
+  ["    const fx = buildCleanupFixture({ taskShort: 'cl7' });", CL_NEW],
+  ["    const fx = buildCleanupFixture({ taskShort: 'cl8' });", CL_NEW],
+  ["    const fx = buildCleanupFixture({ taskShort: 'cl9' });", CL_NEW],
+  ["    const fx = buildCleanupFixture({ taskShort: 'cl10' });", CL_NEW]
+];
+function applyRowLines(src) {
+  const lines = src.split('\n');
+  for (const [oldLine, newLine] of ROW_LINES) {
+    const idx = [];
+    lines.forEach((l, i) => { if (l === oldLine) idx.push(i); });
+    assert.strictEqual(idx.length, 1, 'row line occurs ' + idx.length + ' time(s): ' + oldLine.trim().slice(0, 80));
+    lines[idx[0]] = newLine;
+  }
+  return lines.join('\n');
+}
+const MASKED = { 'qa/pt_land_offline.js': ['buildFixture', 'buildCleanupFixture'], 'qa/pt_land_resync_offline.js': ['buildFixture'] };
+function checkEdits(baseline, current, prefix, label, rel) {
+  const names = MASKED[rel] || [];
+  const cur = maskFunctions(lf(current), names);
   const iUse = cur.indexOf("'use strict';");
   const iE1 = cur.indexOf("require('./lib/run-tmp').isolate('" + prefix + "');");
   const iDestructure = cur.indexOf("const { spawnSync } = require('child_process');");
@@ -354,7 +421,8 @@ function checkEdits(baseline, current, prefix, label) {
   if (iTmpdir !== -1 && iE1 > iTmpdir) return 'E1 does not precede the first os.tmpdir(';
   if (cur.indexOf('meter.beginRow(name);') === -1 || cur.indexOf('meter.endRow();') === -1) return 'E2 is missing';
   if (cur.indexOf("meter.report(process.stdout, '" + label + "');") === -1) return 'E3 is missing';
-  const expected = expectedWithEdits(baseline, prefix, label);
+  const withRows = rel === 'qa/pt_land_offline.js';
+  const expected = maskFunctions(expectedWithEdits(withRows ? applyRowLines(lf(baseline)) : lf(baseline), prefix, label), names);
   if (cur !== expected) {
     const a = cur.split('\n');
     const b = expected.split('\n');
@@ -377,21 +445,41 @@ for (const [rel, prefix, label] of LAND_SUITES) {
   test('RI-6: ' + rel + ' = baseline ' + BASELINE_OID.slice(0, 7) + ' + E1-E3 exactly (E1 before the child_process destructuring and the first os.tmpdir(; E2 and E3 present; nothing else differs)', () => {
     const baseline = baselineOf(rel);
     const current = fs.readFileSync(path.join(ROOT, rel), 'utf8');
-    assert.strictEqual(checkEdits(baseline, current, prefix, label), true);
+    assert.strictEqual(checkEdits(baseline, current, prefix, label, rel), true);
   });
   test('RI-6 planted negatives (' + rel + '): E1 after the destructuring, an extra changed line, a missing E3, a missing E2 and a wrong prefix are each detected', () => {
     const baseline = baselineOf(rel);
-    const good = expectedWithEdits(baseline, prefix, label);
-    assert.strictEqual(checkEdits(baseline, good, prefix, label), true, 'the reconstruction passes its own checker');
+    const rows = rel === 'qa/pt_land_offline.js';
+    const good = expectedWithEdits(rows ? applyRowLines(lf(baseline)) : lf(baseline), prefix, label);
+    assert.strictEqual(checkEdits(baseline, good, prefix, label, rel), true, 'the reconstruction passes its own checker');
     const e1 = good.split('\n').slice(1, 4).join('\n') + '\n';
     const moved = good.replace(e1, '').replace("const { spawnSync } = require('child_process');\n", () => "const { spawnSync } = require('child_process');\n" + e1);
-    assert.notStrictEqual(checkEdits(baseline, moved, prefix, label), true, 'E1 moved after the destructuring');
+    assert.notStrictEqual(checkEdits(baseline, moved, prefix, label, rel), true, 'E1 moved after the destructuring');
     const extra = good.replace("'use strict';\n", () => "'use strict';\n// a stray edit\n");
-    assert.notStrictEqual(checkEdits(baseline, extra, prefix, label), true, 'an extra changed line');
-    assert.notStrictEqual(checkEdits(baseline, good.replace("meter.report(process.stdout, '" + label + "');\n", ''), prefix, label), true, 'no E3');
-    assert.notStrictEqual(checkEdits(baseline, good.replace('  } finally { meter.endRow(); }\n', ''), prefix, label), true, 'no E2 closing line');
-    assert.notStrictEqual(checkEdits(baseline, good.replace("isolate('" + prefix + "')", "isolate('ptqa-other-')"), prefix, label), true, 'a wrong prefix');
-    assert.notStrictEqual(checkEdits(baseline, baseline, prefix, label), true, 'the unedited baseline');
+    assert.notStrictEqual(checkEdits(baseline, extra, prefix, label, rel), true, 'an extra changed line');
+    assert.notStrictEqual(checkEdits(baseline, good.replace("meter.report(process.stdout, '" + label + "');\n", ''), prefix, label, rel), true, 'no E3');
+    assert.notStrictEqual(checkEdits(baseline, good.replace('  } finally { meter.endRow(); }\n', ''), prefix, label, rel), true, 'no E2 closing line');
+    assert.notStrictEqual(checkEdits(baseline, good.replace("isolate('" + prefix + "')", "isolate('ptqa-other-')"), prefix, label, rel), true, 'a wrong prefix');
+    assert.notStrictEqual(checkEdits(baseline, baseline, prefix, label, rel), true, 'the unedited baseline');
+  });
+  test('RI-6 masking planted cases (' + rel + '): an edit inside a masked builder is masked (positive control); an edit outside the masked builders is detected' + (rel === 'qa/pt_land_offline.js' ? '; an unapplied approved row line and a stray clN substitution are detected' : ''), () => {
+    const baseline = baselineOf(rel);
+    const rows = rel === 'qa/pt_land_offline.js';
+    const good = expectedWithEdits(rows ? applyRowLines(lf(baseline)) : lf(baseline), prefix, label);
+    const inside = good.replace('function buildFixture(', () => 'function buildFixture(/* an edit inside a masked builder */ ');
+    assert.notStrictEqual(inside, good, 'the inside edit applied');
+    assert.strictEqual(checkEdits(baseline, inside, prefix, label, rel), true, 'positive control: an edit inside a masked builder is masked');
+    const outside = good.replace("const assert = require('assert');", () => "// an edit outside the masked builders\nconst assert = require('assert');");
+    assert.notStrictEqual(outside, good, 'the outside edit applied');
+    assert.notStrictEqual(checkEdits(baseline, outside, prefix, label, rel), true, 'an edit outside the masked builders');
+    if (rows) {
+      const unapplied = good.replace(CL_NEW + '\n', () => "    const fx = buildCleanupFixture({ taskShort: 'cl1' });\n");
+      assert.notStrictEqual(unapplied, good, 'the unapplied-line edit applied');
+      assert.notStrictEqual(checkEdits(baseline, unapplied, prefix, label, rel), true, 'an approved row line left unapplied');
+      const stray = good.replace("buildCleanupFixture({ taskShort: 'cl2', land: false })", () => 'buildCleanupFixture({ taskShort: fx.taskShort, land: false })');
+      assert.notStrictEqual(stray, good, 'the stray substitution applied');
+      assert.notStrictEqual(checkEdits(baseline, stray, prefix, label, rel), true, 'an extra clN -> fx.taskShort substitution on an unlisted line');
+    }
   });
 }
 
