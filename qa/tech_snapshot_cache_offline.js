@@ -41,13 +41,13 @@ const sha256 = s => crypto.createHash('sha256').update(s).digest('hex');
 
 // ── Pins (sha256) of the 24fabf0 base, LF-normalised ────────────────────────────────────────
 const BASE_PINS = {
-  classifyTechnicalSetup: 'bb838ad298dca58362af6521bb0a288f613d89295f0d1e99cbc699cef1415c68',
-  buildTechSnapshotBlock: 'd4109a8e5aab963589d658d6e573ac0cb0c17860814eebcb448255e66ba908e7',
+  classifyTechnicalSetup: 'c143eb08d982cff036dd5678def08dc38e7dede6e2a0f4ae11a79d277e3ab3ad',
+  buildTechSnapshotBlock: '62addea0cf73ea3e349294a359893716cabc08cb3632860b620060eaa155be29',
   computeSMA: 'c477a33a601bccf0b2e61f12d246c480df4b003f118cd9a61fea6bdae5730230',
   computePctDiff: 'ec61724ddae439fb5858152c9f050c55f0178d7e3a86a50768847b148f01d2a5',
   computeRelativePerf: '84f3e7318a95ff8dac20fb485d66458c57cbde92a3f3c290b2c1513137fe2f29',
   computeVolumeMetrics: '5fc9378eded81ffa26f0f652c4ddb05680e9103620a8f2eddfa198abe1fd39ad',
-  computeATHDistance: '5f48f3d4d619dcc1be0353df0e67732ee7cc3b8c5ea14aa0656f9a0eab703138',
+  computeHigh1yDistance: 'e42268120acd9618ecc13a0a811c9cbdc6846d51e6a8448a1557a635bcc3b1e3',
   enforceScoreConsistency: 'e1406d9bfe8358212ada456882bea248cb761cc68734213aa5151b9c02966a00',
   _ts1FillRow: '306a720ed51792ef3294faba91dd4b5420d1264b9ace81402dc638559edf7b1e',
   _initTsCard: 'e31f1671b0907ca34686d5bda119327689345a270114eb70cf5a300ef49e311a',
@@ -62,8 +62,8 @@ const BASE_TS1_REGION = '9b267da4c06a7724ccbe13ba83bf376ba1dcd2dd7931d3b40fd7337
 const BASE_RM_LF = 'a8c13d283ad90e4c132e6d68a5570682b39d5c127d1dd5a4ce18795178ab838f';
 const OLD_RM_CALIPER_PIN = 'd11b09a989f19ee1fa09770ac135e8f00ce518558b25cc7bce3ee23cf1b174ac';
 // New pins (task renderMainPanel after I7a-I7i): LF-normalised (TS1 suite) and CRLF form (caliper).
-const NEW_RM_LF = '978f40e5325c229637b1ffb0ba6f2accbe69cb604f07728781e499e78791b9d4';
-const NEW_RM_CALIPER_PIN = 'a219c9508c69da079ac838d06aadeb97da44957c86a20ff03ca199f868e11aed';
+const NEW_RM_LF = 'ed2c8bdcac6070d442241c4138b5f3ed155794b378d34349ac20cf0dc25aae2a';
+const NEW_RM_CALIPER_PIN = 'aea925b1775bef6c1475ff00979dda4c12cdead55e49b45d8045175052654254';
 
 const BASE_PRICE_LINE = "  let price = item._verifiedPrice ? `$${item._verifiedPrice.toFixed(2)}` : '—';\n";
 const BASE_EXT_OVERRIDE = "  if (_showExt && _extC) {\n    if (typeof _extC.regularPrice    === 'number') price = `$${_extC.regularPrice.toFixed(2)}`;\n    if (typeof _extC.regularChangePct === 'number') chg  = _extC.regularChangePct;\n  }";
@@ -76,7 +76,7 @@ const BASE_CALIPER_PINS = {
   _ptScoreStates: '41968b418333e8a95f8fa6c15225351b9b7d73196bd808e7dd4ac6b7e3d83771',
   _ptScoreFillHtml: 'dfeb1959f3ca9f877d7158db68d5109c64bf36eb4f3f23eb300b735ae69f5a23',
   _ptScoreDial: '4092f243120f5c6bdf3269a02e599f3ad68afcd4a8afe8d766724879b0ef4bce',
-  _srGroupResults: '192d7dd36905c72cde459091569e0d9749a2d4b5a861c86d09c54c762078ddb1',
+  _srGroupResults: '56cf3149645d276df0fc66cdae605cfacf6f3a838e7b06c21b06f57ff0ed6741',
   _srRenderGrouped: '1301f2faa44a781f37c8b66a8826dd06a027af73f6c7a33f2a9c91c987a09ea1'
 };
 const BASE_CALIPER_CSS_HASH = 'b4c63e696fe93f7ab693b2d778c4426b58ae3f719bc95e92a97e0a117c4828d5';
@@ -108,6 +108,39 @@ const I7_REPLACE = [
   { id: 'I7i', oldS: "<div class=\"at-dial-lbl\">Score</div>",
     newS: "<div class=\"at-dial-lbl\">Score${_fromScan ? '<span style=\"margin-left:6px;text-transform:none;font-weight:400\">from scan</span>' : ''}</div>" }
 ];
+
+// ── A9 table (R-1 Slice A brief section 1 A9): the four renderMainPanel lines changed by the 1Y-high relabel ──────
+// Whole-line text pairs; old = the line as it stands after I7 (the 57afd9d form), new = the task line.
+const A9_REPLACE = [
+  { id: "A9a",
+    oldS: "    healthy_uptrend_near_ath: 'Healthy uptrend near all-time high — trend intact but extended',",
+    newS: "    healthy_uptrend_near_ath: 'Healthy uptrend near its 1-year high — trend intact but extended'," },
+  { id: "A9b",
+    oldS: "    extended_near_ath:        'Price extended above key moving averages and near all-time high',",
+    newS: "    extended_near_ath:        'Price extended above key moving averages and near its 1-year high'," },
+  { id: "A9c",
+    oldS: "          <div class=\"rr-row\"><span class=\"rr-lbl\">ATH Distance</span><span class=\"rr-val ${snap.hasATH ? (snap.athDist < -15 ? 'warn' : snap.athDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}\">${snap.hasATH ? fmtPct(snap.athDist) : '—'}</span></div>",
+    newS: "          <div class=\"rr-row\"><span class=\"rr-lbl\">1Y High Distance</span><span class=\"rr-val ${snap.hasHigh1y ? (snap.high1yDist < -15 ? 'warn' : snap.high1yDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}\">${snap.hasHigh1y ? fmtPct(snap.high1yDist) : '—'}</span></div>" },
+  { id: "A9d",
+    oldS: "            ${item.technical_setup ? `<div class=\"mp-act-row\"><span class=\"mp-act-lbl\">${_fromScan ? 'Scan setup' : 'Setup'}</span><span class=\"mp-act-val\">${_esc(item.technical_setup).replace(/_/g,' ')}</span></div>` : ''}",
+    newS: "            ${item.technical_setup ? `<div class=\"mp-act-row\"><span class=\"mp-act-lbl\">${_fromScan ? 'Scan setup' : 'Setup'}</span><span class=\"mp-act-val\">${_esc(_setupDisplay(item.technical_setup))}</span></div>` : ''}" }
+];
+function applyA9(rm) {
+  let out = rm;
+  for (const r of A9_REPLACE) {
+    if (countOf(out, r.oldS) !== 1) throw new Error('A9 old line not unique: ' + r.id);
+    out = out.replace(r.oldS, () => r.newS);
+  }
+  return out;
+}
+function revertA9(taskRm) {
+  let out = taskRm;
+  for (const r of A9_REPLACE) {
+    if (countOf(out, r.newS) !== 1) throw new Error('A9 new line not unique: ' + r.id);
+    out = out.replace(r.newS, () => r.oldS);
+  }
+  return out;
+}
 
 // ── Source extraction ────────────────────────────────────────────────────────────────────────
 function extractFn(content, name) {
@@ -196,10 +229,10 @@ function mkEnv(kind) {
 const quietConsole = { log() {}, warn() {}, error() {} };
 
 const SNAP_KEYS = ['sma20', 'sma50', 'sma150', 'sma200', 'pct20', 'pct50', 'pct150', 'pct200',
-  'hasMA20', 'hasMA50', 'hasMA150', 'hasMA200', 'volRatio', 'hasVolume', 'athDist', 'hasATH',
+  'hasMA20', 'hasMA50', 'hasMA150', 'hasMA200', 'volRatio', 'hasVolume', 'high1yDist', 'hasHigh1y',
   'rsSector', 'rsSPY', 'rsQQQ', 'sectorEtf', 'candleCount', 'spyChangePct', 'qqqChangePct'];
 
-const ENGINE_FNS = ['computeSMA', 'computePctDiff', 'computeRelativePerf', 'computeVolumeMetrics', 'computeATHDistance',
+const ENGINE_FNS = ['computeSMA', 'computePctDiff', 'computeRelativePerf', 'computeVolumeMetrics', 'computeHigh1yDistance', '_setupDisplay',
   'classifyTechnicalSetup', 'buildTechSnapshotBlock', 'hasVerifiedMarketData', '_techRefInput', '_techPanelPrice',
   '_techSnapFor', '_techFetchBase', '_techDeriveSnap', 'computeTechnicalSnapshot', 'refreshTechPanel'];
 
@@ -215,7 +248,7 @@ function buildEngine(src, env) {
     parts.join('\n'),
     'return { _techCache, _cockpitResults, setActive: function (v) { _activeTicker = v; }, CACHE_TTL_MS,',
     '  computeTechnicalSnapshot, refreshTechPanel, _techSnapFor, _techPanelPrice, _techRefInput, _techDeriveSnap,',
-    '  _techFetchBase, classifyTechnicalSetup, computeATHDistance, computePctDiff, computeSMA, computeRelativePerf,',
+    '  _techFetchBase, classifyTechnicalSetup, computeHigh1yDistance, computePctDiff, computeSMA, computeRelativePerf,',
     '  computeVolumeMetrics, buildTechSnapshotBlock, hasVerifiedMarketData };'
   ].join('\n');
   const fn = new Function('fetchHistoricalCandles', 'fetchStockData', 'Date', 'console', '_extendedMktCache', '__renders', body);
@@ -376,7 +409,7 @@ async function evaluate(S) {
     const exp = n => (FRESH_PRICE - f['sma' + n]) / f['sma' + n] * 100;
     chk('TC-3', 'pct20/50/150/200 recomputed from the fresh price',
       [20, 50, 150, 200].every(n => f['pct' + n] === exp(n)));
-    chk('TC-3', 'athDist recomputed from the fresh price', f.athDist === e.computeATHDistance(env.candles.TST, FRESH_PRICE));
+    chk('TC-3', 'high1yDist recomputed from the fresh price', f.high1yDist === e.computeHigh1yDistance(env.candles.TST, FRESH_PRICE));
     const cold = await buildEngine(src, mkEnv()).computeTechnicalSnapshot('TST', 'XLK', FRESH_PRICE);
     const cls = e.classifyTechnicalSetup(f);
     chk('TC-3', 'classification is not below_key_mas', cls !== 'below_key_mas');
@@ -415,13 +448,13 @@ async function evaluate(S) {
       const tc = env.candles.TST;
       const p = price || tc[tc.length - 1].close;
       const vm = e.computeVolumeMetrics(tc);
-      const ath = e.computeATHDistance(tc, p);
+      const ath = e.computeHigh1yDistance(tc, p);
       const sm = n => e.computeSMA(tc, n);
       const expect = {
         sma20: sm(20), sma50: sm(50), sma150: sm(150), sma200: sm(200),
         pct20: e.computePctDiff(p, sm(20)), pct50: e.computePctDiff(p, sm(50)), pct150: e.computePctDiff(p, sm(150)), pct200: e.computePctDiff(p, sm(200)),
         hasMA20: sm(20) !== null, hasMA50: sm(50) !== null, hasMA150: sm(150) !== null, hasMA200: sm(200) !== null,
-        volRatio: vm ? vm.ratio : null, hasVolume: vm !== null, athDist: ath, hasATH: ath !== null,
+        volRatio: vm ? vm.ratio : null, hasVolume: vm !== null, high1yDist: ath, hasHigh1y: ath !== null,
         rsSector: e.computeRelativePerf(tc, env.candles.XLK, 63), rsSPY: e.computeRelativePerf(tc, env.candles.SPY, 63), rsQQQ: e.computeRelativePerf(tc, env.candles.QQQ, 63),
         sectorEtf: 'XLK', candleCount: tc.length, spyChangePct: 0.5, qqqChangePct: -0.3
       };
@@ -524,7 +557,7 @@ async function evaluate(S) {
     chk('TC-4', 'audit trail technical fields come from the scan snapshot',
       dc.ma20 === fresh.sma20 && dc.ma50 === fresh.sma50 && dc.ma150 === fresh.sma150 &&
       dc.pctAboveMA20 === fresh.pct20 && dc.pctAboveMA50 === fresh.pct50 && dc.pctAboveMA150 === fresh.pct150 &&
-      dc.athDist === fresh.athDist && dc.rsSPY === fresh.rsSPY && dc.rsQQQ === fresh.rsQQQ &&
+      dc.high1yDist === fresh.high1yDist && dc.rsSPY === fresh.rsSPY && dc.rsQQQ === fresh.rsQQQ &&
       dc.rsSector === fresh.rsSector && dc.volRatio === fresh.volRatio);
     chk('TC-4', 'audit interpretation.technicalSetup matches', out._auditTrail.interpretation.technicalSetup === freshSetup);
     const noSnap = orchestrate([mk()], {}, stockData)[0];
@@ -548,7 +581,7 @@ async function evaluate(S) {
     const e = buildEngine(src, env);
     env.clock.t = 0;
     const stale = await e.computeTechnicalSnapshot('TST', 'XLK', OLD_PRICE);
-    const names = ['_dd0RunCard', 'buildTechSnapshotBlock', '_techRefInput', '_techSnapFor'];
+    const names = ['_dd0RunCard', 'buildTechSnapshotBlock', '_techRefInput', '_techSnapFor', '_setupDisplay'];
     const parts = names.map(n => extractFn(src, n));
     if (parts.some(p => !p)) throw new Error('Deep Dive pieces missing');
     const run = async (cacheEntry, price) => {
@@ -591,7 +624,7 @@ async function evaluate(S) {
     const newSrc = newFns.map(n => extractFn(src, n) || '').join('\n') + '\n' + I7_INSERT.join('\n');
     chk('TC-9', 'all new helpers exist', newFns.every(n => !!extractFn(src, n)));
     chk('TC-9', 'no localStorage / sessionStorage / indexedDB / pt_ in new code', !/localStorage|sessionStorage|indexedDB|\bpt_/.test(newSrc));
-    for (const n of ['classifyTechnicalSetup', 'buildTechSnapshotBlock', 'computeSMA', 'computePctDiff', 'computeRelativePerf', 'computeVolumeMetrics', 'computeATHDistance', 'enforceScoreConsistency']) {
+    for (const n of ['classifyTechnicalSetup', 'buildTechSnapshotBlock', 'computeSMA', 'computePctDiff', 'computeRelativePerf', 'computeVolumeMetrics', 'computeHigh1yDistance', 'enforceScoreConsistency']) {
       const s = extractFn(src, n);
       chk('TC-9', n + ' byte-equal to the base', !!s && sha256(s) === BASE_PINS[n]);
     }
@@ -603,10 +636,10 @@ async function evaluate(S) {
   // ── TC-10 only main-panel change ────────────────────────────────────────────────────────
   const rm = extractFn(src, 'renderMainPanel') || '';
   await guard('TC-10', async () => {
-    const reverted = revertI7(rm);
+    const reverted = revertI7(revertA9(rm));
     chk('TC-10', 'reverting I7a-I7i restores the base (LF-normalised pin)', sha256(reverted) === BASE_RM_LF);
     chk('TC-10', 'reverting I7a-I7i restores the OLD caliper pin d11b09a9', sha256(crlf(reverted)) === OLD_RM_CALIPER_PIN);
-    const forward = applyI7(reverted);
+    const forward = applyA9(applyI7(reverted));
     chk('TC-10', 'line diff is exactly I7a-I7c added and I7d-I7i replaced', forward === rm);
     chk('TC-10', 'line count = base + 3', rm.split('\n').length === reverted.split('\n').length + 3);
     chk('TC-10', 'task renderMainPanel hashes to the new LF pin', sha256(rm) === NEW_RM_LF);
@@ -851,7 +884,7 @@ const NEGATIVES = [
   { id: 'TC-9', label: 'localStorage in a new helper', target: 'index',
     f: s => mut(s, 'function _techRefInput(p) {', "function _techRefInput(p) { localStorage.getItem('pt_x');") },
   { id: 'TC-9', label: 'classification threshold changed', target: 'index',
-    f: s => mut(s, 'athDist > -5 && pct20 > 10', 'athDist > -5 && pct20 > 11') },
+    f: s => mut(s, 'high1yDist > -5 && pct20 > 10', 'high1yDist > -5 && pct20 > 11') },
   { id: 'TC-9', label: '_techCache used outside the allowed helpers', target: 'index',
     f: s => mut(s, 'function _dd0RenderResultHtml(result) {', 'function _dd0RenderResultHtml(result) { void _techCache;') }
 ];

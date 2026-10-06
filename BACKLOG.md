@@ -169,6 +169,18 @@ preserved internally but not displayed; no prompt, UI, consumer, retry-logic or 
 fields. Rating-only display and the structured AI prompt (R-4b) remain separate work.
 *Deps:* none.
 
+### 34 · 1Y High vs true all-time high
+**Scores / Signals** · data honesty · **added 2026-10-05**
+
+The value shown and sent to the AI as "ATH" was the 1-year high (the highest high of the 1Y daily
+candles). Owner ruling 2026-10-05: keep 1Y High as its own metric, add the true historical
+all-time high as a separate metric, never label the 1Y high as ATH; the setup names `*_near_ath`
+stay unchanged and are shown as "near 1Y high".
+*Slice A landed (`work/r1a-high1y-relabel/`):* 1Y High relabelled in the UI and in AI text; no
+all-time-high metric yet. *Remains — Slice B:* the true all-time high from a validated
+long-history source.
+*Deps:* none.
+
 ---
 
 ## LATER

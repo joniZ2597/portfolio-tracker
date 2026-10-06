@@ -94,7 +94,7 @@ if (!markupExpr) {
 }
 
 // ── Extract the three DDV0 functions + their two dependencies, verbatim ───────
-const FNS = ['_dd0RunCard', '_dd0RenderResultHtml', '_dd0FetchAnalysis', '_crEsc', 'buildTechSnapshotBlock', '_techSnapFor', '_techRefInput'];
+const FNS = ['_dd0RunCard', '_dd0RenderResultHtml', '_dd0FetchAnalysis', '_crEsc', 'buildTechSnapshotBlock', '_techSnapFor', '_techRefInput', '_setupDisplay'];
 const src = {};
 let missingExtract = [];
 for (const n of FNS) { src[n] = extractFunctionSource(content, n); if (!src[n]) missingExtract.push(n); }

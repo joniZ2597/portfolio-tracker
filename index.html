@@ -1066,12 +1066,13 @@ function computeVolumeMetrics(candles) {
   return { ratio: recent.volume / avg20, avg20, current: recent.volume };
 }
 
-/** Compute ATH distance from available candles. Returns pct below ATH or null. */
-function computeATHDistance(candles, currentPrice) {
+/** Distance of price from the highest high in the supplied candles (the 1-year high when given 1Y
+ * candles). Returns pct below that high, or null. */
+function computeHigh1yDistance(candles, currentPrice) {
   if (!candles || candles.length === 0 || !currentPrice) return null;
-  const ath = Math.max(...candles.map(c => c.high || c.close));
-  if (ath === 0) return null;
-  return computePctDiff(currentPrice, ath); // negative = below ATH
+  const high1y = Math.max(...candles.map(c => c.high || c.close));
+  if (high1y === 0) return null;
+  return computePctDiff(currentPrice, high1y); // negative = below the 1-year high
 }
 
 // ── Phase 6A-1: Deterministic technical setup classification ──────────────────
@@ -1081,14 +1082,14 @@ function computeATHDistance(candles, currentPrice) {
  * Rules are ordered most-specific → least-specific.
  */
 function classifyTechnicalSetup(snap) {
-  const { pct20, pct50, pct150, athDist } = snap || {};
+  const { pct20, pct50, pct150, high1yDist } = snap || {};
   // Require at least pct20 + pct50 for any non-unknown classification
   if (pct20 == null || pct50 == null) return 'unknown';
   // extended_near_ath: price >10% above MA20 AND within 5% of 1Y high
-  if (athDist != null && athDist > -5 && pct20 > 10)
+  if (high1yDist != null && high1yDist > -5 && pct20 > 10)
     return 'extended_near_ath';
-  // healthy_uptrend_near_ath: above MA20+MA50, within 8% of ATH
-  if (athDist != null && athDist > -8 && pct20 > 2 && pct50 > 0)
+  // healthy_uptrend_near_ath: above MA20+MA50, within 8% of the 1Y high
+  if (high1yDist != null && high1yDist > -8 && pct20 > 2 && pct50 > 0)
     return 'healthy_uptrend_near_ath';
   // healthy_uptrend: above all three key MAs
   if (pct150 != null && pct20 > 0 && pct50 > 0 && pct150 > 0)
@@ -1109,6 +1110,13 @@ function classifyTechnicalSetup(snap) {
   return 'unknown';
 }
 
+/** Display wording for a setup key: the near-ath setups are shown as near the 1-year high. */
+function _setupDisplay(key) {
+  if (key === 'extended_near_ath') return 'extended near 1Y high';
+  if (key === 'healthy_uptrend_near_ath') return 'healthy uptrend near 1Y high';
+  return String(key || '').replace(/_/g, ' ');
+}
+
 /**
  * Build a compact plain-text snapshot block for injection into the Anthropic prompt.
  * Returns empty string if snap has no data.
@@ -1120,11 +1128,11 @@ function buildTechSnapshotBlock(sym, snap, setupState) {
   const fmtV = v => v != null ? v.toFixed(2) + 'x' : '—';
   const etfLabel = s.sectorEtf ? ' vs ' + s.sectorEtf + ': ' + fmt(s.rsSector) : '';
   return (
-    `${sym} [setup: ${setupState}]\n` +
+    `${sym} [setup: ${setupState} = ${_setupDisplay(setupState)}]\n` +
     `  MA20: ${s.sma20 != null ? '$' + s.sma20.toFixed(2) : '—'} (${fmt(s.pct20)})` +
       `   MA50: ${s.sma50 != null ? '$' + s.sma50.toFixed(2) : '—'} (${fmt(s.pct50)})\n` +
     `  MA150: ${s.sma150 != null ? '$' + s.sma150.toFixed(2) : '—'} (${fmt(s.pct150)})\n` +
-    `  ATH Dist: ${fmt(s.athDist)}   Volume vs 20D avg: ${fmtV(s.volRatio)}\n` +
+    `  1Y High Dist: ${fmt(s.high1yDist)}   Volume vs 20D avg: ${fmtV(s.volRatio)}\n` +
     `  RS vs SPY (3M): ${fmt(s.rsSPY)}   RS vs QQQ (3M): ${fmt(s.rsQQQ)}${etfLabel}\n`
   );
 }
@@ -1221,8 +1229,8 @@ function _techDeriveSnap(base, refInput) {
     const pct150 = computePctDiff(price, sma150);
     const pct200 = computePctDiff(price, sma200);
 
-    // ATH distance
-    const athDist = computeATHDistance(tc, price);
+    // 1-year-high distance
+    const high1yDist = computeHigh1yDistance(tc, price);
 
     return {
       // MA levels
@@ -1235,8 +1243,8 @@ function _techDeriveSnap(base, refInput) {
       // Volume
       volRatio:   volMetrics ? volMetrics.ratio       : null,
       hasVolume:  volMetrics !== null,
-      // ATH
-      athDist, hasATH: athDist !== null,
+      // 1Y high
+      high1yDist, hasHigh1y: high1yDist !== null,
       // RS
       rsSector, rsSPY, rsQQQ,
       sectorEtf: base.sectorEtf,
@@ -6048,8 +6056,9 @@ State phase explicitly in ROOT CAUSE section.
 TECHNICAL SETUP GATING (mandatory when TECHNICAL SNAPSHOT is provided):
 The snapshot contains a deterministic setup classification from 1Y candle data.
 This gates the final action regardless of news bias:
-  extended_near_ath        → action: "hold_wait". Never Buy or Add. Price is too extended.
-  healthy_uptrend_near_ath → action: "hold_wait" or "add_on_pullback" only. Near ATH = no chase.
+  ("ath" in these setup names means the 1-year high from 1Y candles — never call it an all-time high.)
+  extended_near_ath        → action: "hold_wait". Never Buy or Add. Price is too extended near its 1-year high.
+  healthy_uptrend_near_ath → action: "hold_wait" or "add_on_pullback" only. Near the 1-year high = no chase.
   healthy_uptrend          → "hold", "add_on_pullback", or "add_on_breakout" acceptable.
   pullback_in_uptrend      → "add_on_reclaim" or "add_on_pullback". State confirmation required.
   support_test             → "add_on_pullback". Wait for bounce confirmation near support.
@@ -6324,7 +6333,7 @@ function orchestrate(claudeResults, pplxData, stockData, techSnaps) {
         pctAboveMA20:  _snap6a.pct20       ?? null,
         pctAboveMA50:  _snap6a.pct50       ?? null,
         pctAboveMA150: _snap6a.pct150      ?? null,
-        athDist:       _snap6a.athDist     ?? null,
+        high1yDist:    _snap6a.high1yDist  ?? null,
         rsSPY:         _snap6a.rsSPY       ?? null,
         rsQQQ:         _snap6a.rsQQQ       ?? null,
         rsSector:      _snap6a.rsSector    ?? null,
@@ -6952,11 +6961,11 @@ function _srGroupResults(source) {
     const d = _ptScoreCmp(a, b);
     return d !== 0 ? d : rRank(a) - rRank(b);
   });
-  // display order: Strong Setup → Watch → Extended / ATH → Caution
+  // display order: Strong Setup → Watch → Extended / near 1Y high → Caution
   const groups = [
     { name: 'Strong Setup',   items: [] },
     { name: 'Watch',          items: [] },
-    { name: 'Extended / ATH', items: [] },
+    { name: 'Extended / near 1Y high', items: [] },
     { name: 'Caution',        items: [] },
   ];
   items.forEach(r => {
@@ -8278,8 +8287,8 @@ function renderMainPanel(item) {
   const _tsAssessMap = {
     healthy_uptrend:          '20 > 50 > 150 — Healthy uptrend, price above key moving averages',
     bullish_stack:            '20 > 50 > 150 — Healthy uptrend, price above key moving averages',
-    healthy_uptrend_near_ath: 'Healthy uptrend near all-time high — trend intact but extended',
-    extended_near_ath:        'Price extended above key moving averages and near all-time high',
+    healthy_uptrend_near_ath: 'Healthy uptrend near its 1-year high — trend intact but extended',
+    extended_near_ath:        'Price extended above key moving averages and near its 1-year high',
     pullback_in_uptrend:      'Pullback within an uptrend — watch for support to hold',
     pullback_to_ma50:         'Pulling back toward the 50-day — watch for support hold',
     pullback_to_ma20:         'Pulling back toward the 20-day — watching for bounce',
@@ -8425,7 +8434,7 @@ function renderMainPanel(item) {
           ).join('')}
         </div>
         <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
-          <div class="rr-row"><span class="rr-lbl">ATH Distance</span><span class="rr-val ${snap.hasATH ? (snap.athDist < -15 ? 'warn' : snap.athDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">${snap.hasATH ? fmtPct(snap.athDist) : '—'}</span></div>
+          <div class="rr-row"><span class="rr-lbl">1Y High Distance</span><span class="rr-val ${snap.hasHigh1y ? (snap.high1yDist < -15 ? 'warn' : snap.high1yDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">${snap.hasHigh1y ? fmtPct(snap.high1yDist) : '—'}</span></div>
           <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase}</span></div>
           <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score>=65?'pos':score>=40?'warn':'neg'}">${score} / 100${_fromScan ? '<span style="color:var(--text3);font-size:10px;margin-left:6px">from scan</span>' : ''}</span></div>
         </div>
@@ -8477,7 +8486,7 @@ function renderMainPanel(item) {
         ${item.action ? `
           <div>
             ${item.news_bias       ? `<div class="mp-act-row"><span class="mp-act-lbl">Bias</span><span class="mp-act-val">${_esc(item.news_bias)}</span></div>` : ''}
-            ${item.technical_setup ? `<div class="mp-act-row"><span class="mp-act-lbl">${_fromScan ? 'Scan setup' : 'Setup'}</span><span class="mp-act-val">${_esc(item.technical_setup).replace(/_/g,' ')}</span></div>` : ''}
+            ${item.technical_setup ? `<div class="mp-act-row"><span class="mp-act-lbl">${_fromScan ? 'Scan setup' : 'Setup'}</span><span class="mp-act-val">${_esc(_setupDisplay(item.technical_setup))}</span></div>` : ''}
             ${item.action          ? `<div class="mp-act-row"><span class="mp-act-lbl">Action</span><span class="mp-act-val">${_esc(item.action).replace(/_/g,' ')}</span></div>` : ''}
             ${item.conflict        ? `<div class="mp-act-row mp-act-conflict"><span class="mp-act-lbl">⚠ Conflict</span><span class="mp-act-val" style="color:var(--yellow2)">${_esc(item.conflict)}</span></div>` : ''}
             ${item.entry_zone      ? `<div class="mp-act-row"><span class="mp-act-lbl">Entry Zone</span><span class="mp-act-val">${_esc(item.entry_zone)}</span></div>` : ''}
@@ -13345,7 +13354,7 @@ async function _dd0FetchAnalysis(item, techSnapshotText) {
   if (item.sentiment)       parts.push('SENTIMENT: ' + item.sentiment);
   if (typeof item.sentiment_score === 'number') parts.push('SENTIMENT SCORE: ' + item.sentiment_score);
   if (item.summary)         parts.push('EXISTING SUMMARY: ' + item.summary);
-  if (item.technical_setup) parts.push('TECHNICAL SETUP: ' + item.technical_setup);
+  if (item.technical_setup) parts.push('TECHNICAL SETUP: ' + item.technical_setup + ' (' + _setupDisplay(item.technical_setup) + ')');
   if (item.news_bias)       parts.push('NEWS BIAS: ' + item.news_bias);
   if (Array.isArray(item.news) && item.news.length) parts.push('NEWS:\n' + item.news.join('\n'));
   if (Array.isArray(item.alerts) && item.alerts.length) parts.push('ALERTS:\n' + item.alerts.map(function (a) { return (a.type || '') + ': ' + (a.text || ''); }).join('\n'));

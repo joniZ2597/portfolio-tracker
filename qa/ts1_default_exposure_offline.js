@@ -136,7 +136,7 @@ const BASE_HASHES = {
   runTechScoreV1: 'f36bc4eb5cba98708d126414f9cad74c61faa0e8a66f80d7a6940a894fec504d',
   _ts1FillRow: '17c8863a09b38ed15b9126906185cfd35bf2107ad30e95523d19a62a6630ac5f',
   _ts1RowText: '6df1e8355698b11e89f5f01193184a17f536a57f047cac6eec322159f4f69a06',
-  renderMainPanel: '978f40e5325c229637b1ffb0ba6f2accbe69cb604f07728781e499e78791b9d4'
+  renderMainPanel: 'ed2c8bdcac6070d442241c4138b5f3ed155794b378d34349ac20cf0dc25aae2a'
 };
 function checkTx3(src) {
   const r = { ok: false, reason: null };
