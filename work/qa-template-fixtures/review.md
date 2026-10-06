@@ -82,6 +82,23 @@ No findings, so nothing to classify. No FIX, DEFER or REJECT entries.
 
 Brief Backlog row: **none**. The finished work's effect is `none`; no `BACKLOG.md` edit.
 
+## Post-resync delta validation (explicit Owner exception, one time)
+
+The task was replayed onto `origin/branch-dev` `138a681` (R-1 Slice A) by the governed replay: no conflicts, task commit `7e75c97` became `6c644c2`, and the task patch-id is identical before and after (`50d4ab3f1007bcd4ec14c8d6ec0042d3639c03a2`). The inherited delta is exactly R-1 Slice A and shares no file with this task.
+
+**Owner ruling:** do not rerun full `qa:offline` after this clean replay (about 70+ minutes, the bottleneck this task is meant to improve), and do not rerun the two heavy land suites. Only the delta checks below were run. This is a one-time exception, not a precedent; the full-run evidence above (PASS 59, 0 failures) was taken before the replay on identical task content.
+
+| Check | Result |
+|---|---|
+| `qa/fixture_template_offline.js` | PASS 20 |
+| `qa/run_isolation_offline.js` | PASS 28 |
+| `qa/high1y_label_offline.js` (the inherited delta's own suite) | PASS 101 asserts |
+| Syntax check of the five JS task paths | OK (the sixth path is this file) |
+| Task patch-id unchanged by the replay | identical |
+| `node qa/guard_integrity_check.js --base-main fbec2c1… --base-dev 138a681d180102f9e1b77c48057f67e238667967 --since 2026-10-06T18:30:17.224Z` | PASS (report-only git-lfs filter lines) |
+
+The Owner's integrity command named only `--base-dev` and `--since`; the tool requires `--base-main` as well, so the current `origin/main` commit (`fbec2c193346d7afd1dab6fd11a46b5efe55238b`) was supplied. Nothing else was changed.
+
 ## Final check
 
 Final lightweight Codex check (step 12) run on the complete task diff: the implementation diff against `f3c0728` with the two new files verbatim, plus this file verbatim before this section was filled in. Raw response in `work/qa-template-fixtures/codex-final.md` (untracked). Verdict: **No findings.** QA counts, Git-start totals, runtime figures, per-start averages, backlog effect and scope all match the supplied facts and the brief. No Class I or Class II finding; no implementation edit followed.
