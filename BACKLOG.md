@@ -177,8 +177,15 @@ candles). Owner ruling 2026-10-05: keep 1Y High as its own metric, add the true 
 all-time high as a separate metric, never label the 1Y high as ATH; the setup names `*_near_ath`
 stay unchanged and are shown as "near 1Y high".
 *Slice A landed (`work/r1a-high1y-relabel/`):* 1Y High relabelled in the UI and in AI text; no
-all-time-high metric yet. *Remains — Slice B:* the true all-time high from a validated
-long-history source.
+all-time-high metric yet. *Slice B1+B3 landed (`work/r1b-ath-store-seed/`):* the true all-time
+high now has a gated server-side store (`ath:v1` records, Blob store `ath-record-store`, routes
+`ath-read` / `ath-write`, DEV only, dormant until armed) and an operator verification CLI that
+seeds it from one explicit snapshot: the writer derives the matched bar, every higher bar and the
+covered / uncovered split from the submitted full Yahoo daily series against the operator's
+TradingView `All` reading, with independent evidence required for any uncovered higher bar; no
+plausibility rejection, no override; nothing in the UI or AI reads it yet. *Remains — B2:* refresh
+triggers, `pending` handling and the split-driven `stale-suspect` rule. *Remains — B4:* UI and AI
+prompt wiring of the verified ATH and the `*_near_ath` setup-name decision.
 *Deps:* none.
 
 ---
