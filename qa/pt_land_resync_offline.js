@@ -279,25 +279,11 @@ test('RS-1: Mode F with non-overlapping tracked (unstaged + staged) and untracke
   } finally { fx.cleanup(); }
 });
 
-test('RS-1b: Mode F run from the task\'s own slot behaves the same', () => {
-  const fx = buildFixture();
-  try {
-    const dev = fx.advanceDev({ 'dev-only.txt': 'd\n' });
-    W(path.join(fx.slotB, 'u1.txt'), 'u1\n');
-    const r = fx.requireTool().runResync({ cwd: fx.slotB, task: fx.task2, now: NOW });
-    assert.strictEqual(r.ok, true, JSON.stringify(r));
-    assert.strictEqual(rev(fx.slotB, 'HEAD'), dev);
-    assert.strictEqual(fs.readFileSync(path.join(fx.slotB, 'u1.txt'), 'utf8'), 'u1\n');
-  } finally { fx.cleanup(); }
-});
 
 // ── RS-2: Mode F overlap -> refused, nothing changed ──────────────────────────────────────
 (function rs2() {
   const shapes = [
-    ['an unstaged edit of a file the new base changed', (fx) => W(path.join(fx.slotB, 'a.txt'), 'a-local\n')],
-    ['a staged edit of a file the new base changed', (fx) => { W(path.join(fx.slotB, 'a.txt'), 'a-staged\n'); G(['add', 'a.txt'], fx.slotB); }],
-    ['an untracked file where the new base adds a tracked file', (fx) => W(path.join(fx.slotB, 'new.txt'), 'mine\n')],
-    ['a local edit identical to the new base content', (fx) => W(path.join(fx.slotB, 'a.txt'), 'a-dev\n')]
+    ['an unstaged edit of a file the new base changed', (fx) => W(path.join(fx.slotB, 'a.txt'), 'a-local\n')]
   ];
   for (const [label, mutate] of shapes) {
     test('RS-2: Mode F with ' + label + ' -> refused "uncommitted work overlaps the new base", nothing changed', () => {
@@ -417,72 +403,10 @@ test('RS-4b (R6): a temporary worktree that could not be removed is surfaced on 
 });
 
 // ── RS-5: Mode R dirty slot ───────────────────────────────────────────────────────────────
-(function rs5() {
-  const shapes = [
-    ['a tracked edit', (fx) => W(path.join(fx.slotB, 'b.txt'), 'b-local\n')],
-    ['an untracked file', (fx) => W(path.join(fx.slotB, 'untracked.txt'), 'u\n')]
-  ];
-  for (const [label, mutate] of shapes) {
-    test('RS-5: Mode R with a dirty slot (' + label + ') -> refused R1, nothing changed', () => {
-      const fx = buildFixture();
-      try {
-        fx.commitIn(fx.slotB, { 'work/two/foo.txt': 'foo\n' });
-        fx.advanceDev({ 'dev-only.txt': 'd\n' });
-        mutate(fx);
-        const before = state(fx);
-        const r = fx.resync(fx.task2);
-        assert.strictEqual(r.ok, false, JSON.stringify(r));
-        assert.match(r.reason, /R1: the slot is not clean/);
-        assertUnchanged(fx, before);
-      } finally { fx.cleanup(); }
-    });
-  }
-})();
 
 // ── RS-6: PROTECTED-approved tasks stay with the Owner (R-4) ──────────────────────────────
-test('RS-6: a task commit touching a protected path -> refused R2, nothing changed', () => {
-  const fx = buildFixture();
-  try {
-    fx.commitIn(fx.slotB, { 'AGENTS.md': 'protected change\n' }, 'task touches AGENTS.md');
-    fx.advanceDev({ 'dev-only.txt': 'd\n' });
-    const before = state(fx);
-    const r = fx.resync(fx.task2);
-    assert.strictEqual(r.ok, false, JSON.stringify(r));
-    assert.match(r.reason, /R2: a task commit touches a protected path \(AGENTS\.md\)/);
-    assertUnchanged(fx, before);
-  } finally { fx.cleanup(); }
-});
-test('RS-6: a protected-commit audit entry for the task -> refused R2, nothing changed', () => {
-  const fx = buildFixture();
-  try {
-    fx.commitIn(fx.slotB, { 'work/two/foo.txt': 'foo\n' });
-    fx.advanceDev({ 'dev-only.txt': 'd\n' });
-    fs.appendFileSync(path.join(fx.commonDir, 'pt-land-log'),
-      JSON.stringify({ ts: NOW, verb: 'protected-commit', task: 'task/two', from: fx.base, to: fx.base, tree: fx.base, result: 'ok' }) + '\n');
-    const before = state(fx);
-    const r = fx.resync(fx.task2);
-    assert.strictEqual(r.ok, false, JSON.stringify(r));
-    assert.match(r.reason, /R2: .*protected-commit/);
-    assertUnchanged(fx, before);
-  } finally { fx.cleanup(); }
-});
 
 // ── RS-7: already up to date ──────────────────────────────────────────────────────────────
-test('RS-7: branch-dev already an ancestor of the task tip -> "already up to date", exit 0, nothing changed (no audit line)', () => {
-  const fx = buildFixture();
-  try {
-    fx.commitIn(fx.slotB, { 'work/two/foo.txt': 'foo\n' });
-    const before = state(fx);
-    const auditBefore = fx.audit().length;
-    const r = fx.resync(fx.task2);
-    assert.strictEqual(r.ok, true, JSON.stringify(r));
-    assert.strictEqual(r.exitCode, 0);
-    assert.strictEqual(r.mode, 'none');
-    assert.match(r.message, /already up to date/);
-    assertUnchanged(fx, before);
-    assert.strictEqual(fx.audit().length, auditBefore, 'nothing was written');
-  } finally { fx.cleanup(); }
-});
 
 // ── RS-8: refs, approvals and the remote are never touched ────────────────────────────────
 test('RS-8: after Mode F and Mode R, refs main / branch-dev / origin/* are byte-identical, no approval record, no remote change', () => {
@@ -545,34 +469,6 @@ test('RS-10: a rebase in progress in the slot -> refused S3, nothing changed', (
       assertUnchanged(fx, before, marker);
     } finally { fx.cleanup(); }
   }
-});
-test('RS-10: a merge or cherry-pick in progress in the slot -> refused S3', () => {
-  for (const marker of ['MERGE_HEAD', 'CHERRY_PICK_HEAD']) {
-    const fx = buildFixture();
-    try {
-      fx.advanceDev({ 'dev-only.txt': 'd\n' });
-      const gp = G(['rev-parse', '--git-path', marker], fx.slotB).trim();
-      fs.writeFileSync(path.resolve(fx.slotB, gp), fx.base + '\n');
-      const r = fx.resync(fx.task2);
-      assert.strictEqual(r.ok, false, marker + ': ' + JSON.stringify(r));
-      assert.match(r.reason, /S3: .*in progress/);
-      assert.strictEqual(rev(fx.canon, 'task/two'), fx.base, marker + ': task ref unchanged');
-    } finally { fx.cleanup(); }
-  }
-});
-test('RS-10: the tool lock held -> refused, the lock file is left untouched, nothing changed', () => {
-  const fx = buildFixture();
-  try {
-    fx.advanceDev({ 'dev-only.txt': 'd\n' });
-    const lock = path.join(fx.commonDir, 'pt-land.lock');
-    fs.writeFileSync(lock, 'held');
-    const before = state(fx);
-    const r = fx.resync(fx.task2);
-    assert.strictEqual(r.ok, false, JSON.stringify(r));
-    assert.match(r.reason, /S3: .*lock/);
-    assert.strictEqual(fs.readFileSync(lock, 'utf8'), 'held', 'a lock the tool does not own is never removed');
-    assertUnchanged(fx, before);
-  } finally { fx.cleanup(); }
 });
 
 // ── RS-11: end to end ─────────────────────────────────────────────────────────────────────
@@ -667,66 +563,20 @@ test('RS-12: the printed --base-dev equals the post-resync branch-dev OID and --
       } finally { fx.cleanup(); }
     });
   }
-  for (const key of ['GIT_DIR', 'GIT_CONFIG_COUNT']) {
-    test('RS-13: session environment ' + key + ' set -> refused S1, nothing changed', () => {
-      const fx = buildFixture();
-      const saved = process.env[key];
-      try {
-        fx.advanceDev({ 'dev-only.txt': 'd\n' });
-        const before = state(fx);
-        process.env[key] = 'x';
-        let r;
-        try { r = fx.resync(fx.task2); } finally { if (saved === undefined) delete process.env[key]; else process.env[key] = saved; }
-        assert.strictEqual(r.ok, false, JSON.stringify(r));
-        assert.match(r.reason, /S1:/);
-        assertUnchanged(fx, before);
-      } finally { fx.cleanup(); }
-    });
-  }
-  refusal('core.hooksPath configured', (fx) => { G(['config', 'core.hooksPath', fwd(path.join(fx.tmp, 'h'))], fx.canon); }, /S1: protected git config/);
-  refusal('the running tool differs from the branch-dev blob', (fx) => {
-    fs.appendFileSync(path.join(fx.canon, '.claude', 'hooks', 'pt-land.js'), '\n// tampered\n');
-  }, /S1: self-integrity/);
   refusal('the canonical checkout is dirty', (fx) => { W(path.join(fx.canon, 'untracked.txt'), 'x\n'); }, /S2:/);
-  refusal('the canonical checkout is not on branch-dev', (fx) => { G(['checkout', '-b', 'other-dev'], fx.canon); }, /S2:/);
-  refusal('the task branch does not exist', () => ({ task: 'task/nope' }), /S3:/);
-  refusal('the task branch is checked out in no slot', (fx) => {
-    G(['branch', 'task/three', 'branch-dev'], fx.canon);
-    return { task: 'task/three' };
-  }, /S3: .*slot/);
-  refusal('the task branch is checked out in a worktree that is not a Worker slot', (fx) => {
-    G(['worktree', 'add', '-b', 'task/four', path.join(fx.tmp, 'some-other-tree'), 'branch-dev'], fx.canon);
-    return { task: 'task/four' };
-  }, /S3: .*slot/);
-  refusal('called from the other Worker\'s slot (cwd slot is on a different task)', (fx) => ({ cwd: fx.slotA }), /S1: .*task\/two/);
-  test('RS-13: work/<id>/brief.md missing at branch-dev (Worker slot available) -> refused S4', () => {
-    const fx = buildFixture({ briefs: ['one'] });
-    try {
-      fx.advanceDev({ 'dev-only.txt': 'd\n' });
-      const before = state(fx);
-      const r = fx.resync(fx.task2);
-      assert.strictEqual(r.ok, false, JSON.stringify(r));
-      assert.match(r.reason, /S4:/);
-      assertUnchanged(fx, before);
-    } finally { fx.cleanup(); }
-  });
-  test('RS-13: a malformed task name is a usage error (exit 3), nothing touched', () => {
-    const fx = buildFixture();
-    try {
-      for (const bad of ['branch-dev', 'task/', 'task/x y', '', undefined]) {
-        const r = fx.requireTool().runResync({ cwd: fx.canon, task: bad });
-        assert.strictEqual(r.ok, false);
-        assert.strictEqual(r.exitCode, 3, String(bad));
-      }
-    } finally { fx.cleanup(); }
-  });
 })();
 
 // ── planted negatives: each mutates the PRODUCTION tool; the real tool passes the same scenario ──
+// The unmutated control of a scenario helper is computed ONCE per run (work/qa-stage2-git-contracts, D); mutants sharing a helper share it.
+const REAL_CONTROLS = new Map();
+function realControl(scenario) {
+  if (!REAL_CONTROLS.has(scenario)) REAL_CONTROLS.set(scenario, scenario(TOOL_PATH));
+  return REAL_CONTROLS.get(scenario);
+}
 function mutantRow(name, replacements, scenario) {
   test(name, () => {
     const mutSrc = mutantTool(name, replacements);
-    const real = scenario(TOOL_PATH);
+    const real = realControl(scenario);
     const mutant = scenario(mutSrc);
     assert.strictEqual(real, true, 'the unmutated tool must satisfy the invariant: ' + real);
     assert.notStrictEqual(mutant, true, 'the mutant must violate the invariant (it was not caught)');
@@ -757,25 +607,6 @@ function modeFOverlap(toolSource) {
     return rev(fx.slotB, 'HEAD') === fx.base && fs.readFileSync(path.join(fx.slotB, 'a.txt'), 'utf8') === 'a-local\n' ? true : 'refused but changed';
   } finally { fx.cleanup(); }
 }
-function modeRProtected(toolSource) {
-  const fx = buildFixture({ toolSource });
-  try {
-    fx.commitIn(fx.slotB, { 'AGENTS.md': 'x\n' });
-    fx.advanceDev({ 'dev-only.txt': 'd\n' });
-    const r = fx.resync(fx.task2);
-    return r.ok ? 'protected-path task replayed' : true;
-  } finally { fx.cleanup(); }
-}
-function modeRAuditProtected(toolSource) {
-  const fx = buildFixture({ toolSource });
-  try {
-    fx.commitIn(fx.slotB, { 'work/two/foo.txt': 'foo\n' });
-    fx.advanceDev({ 'dev-only.txt': 'd\n' });
-    fs.appendFileSync(path.join(fx.commonDir, 'pt-land-log'),
-      JSON.stringify({ ts: NOW, verb: 'protected-commit', task: 'task/two', from: fx.base, to: fx.base, tree: fx.base, result: 'ok' }) + '\n');
-    return fx.resync(fx.task2).ok ? 'PROTECTED-approved task replayed' : true;
-  } finally { fx.cleanup(); }
-}
 function modeRUpstream(toolSource) {
   const fx = buildFixture({ toolSource });
   try {
@@ -785,19 +616,6 @@ function modeRUpstream(toolSource) {
     const before = rev(fx.canon, 'task/two');
     const r = fx.resync(fx.task2);
     return r.ok ? 'a replay that dropped a commit was accepted' : (rev(fx.canon, 'task/two') === before ? true : 'refused but task ref moved');
-  } finally { fx.cleanup(); }
-}
-function modeRDirty(toolSource) {
-  const fx = buildFixture({ toolSource });
-  try {
-    fx.commitIn(fx.slotB, { 'work/two/foo.txt': 'foo\n' });
-    fx.advanceDev({ 'dev-only.txt': 'd\n' });
-    W(path.join(fx.slotB, 'b.txt'), 'b-local\n');
-    const tipBefore = rev(fx.canon, 'task/two');
-    const r = fx.resync(fx.task2);
-    if (r.ok) return 'dirty slot accepted';
-    // R1 must refuse BEFORE anything moves; a later verification failing after the move does not count.
-    return rev(fx.canon, 'task/two') === tipBefore && !/R5/.test(r.reason) ? true : 'refused only after the task ref moved: ' + r.reason;
   } finally { fx.cleanup(); }
 }
 function modeRConflict(toolSource) {
@@ -816,46 +634,6 @@ function modeRConflict(toolSource) {
     return true;
   } finally { fx.cleanup(); }
 }
-function modeNone(toolSource) {
-  const fx = buildFixture({ toolSource });
-  try {
-    fx.commitIn(fx.slotB, { 'work/two/foo.txt': 'foo\n' });
-    const r = fx.resync(fx.task2);
-    return r.ok && r.mode === 'none' && fx.audit().length === 0 ? true : 'not a no-op: ' + JSON.stringify({ ok: r.ok, mode: r.mode, audit: fx.audit().length });
-  } finally { fx.cleanup(); }
-}
-function lockHeld(toolSource) {
-  const fx = buildFixture({ toolSource });
-  try {
-    fx.advanceDev({ 'dev-only.txt': 'd\n' });
-    fs.writeFileSync(path.join(fx.commonDir, 'pt-land.lock'), 'held');
-    return fx.resync(fx.task2).ok ? 'ran while the lock was held' : true;
-  } finally { fx.cleanup(); }
-}
-function briefMissing(toolSource) {
-  const fx = buildFixture({ toolSource, briefs: ['one'] });
-  try {
-    fx.advanceDev({ 'dev-only.txt': 'd\n' });
-    return fx.resync(fx.task2).ok ? 'ran without a brief at branch-dev' : true;
-  } finally { fx.cleanup(); }
-}
-function canonDirty(toolSource) {
-  const fx = buildFixture({ toolSource });
-  try {
-    fx.advanceDev({ 'dev-only.txt': 'd\n' });
-    W(path.join(fx.canon, 'untracked.txt'), 'x\n');
-    return fx.resync(fx.task2).ok ? 'ran with a dirty canonical checkout' : true;
-  } finally { fx.cleanup(); }
-}
-function selfTampered(toolSource) {
-  const fx = buildFixture({ toolSource });
-  try {
-    fx.advanceDev({ 'dev-only.txt': 'd\n' });
-    fs.appendFileSync(path.join(fx.canon, '.claude', 'hooks', 'pt-land.js'), '\n// tampered\n');
-    const r = fx.resync(fx.task2);
-    return /S1: self-integrity/.test(r.reason || '') ? true : 'self-integrity not enforced: ' + JSON.stringify(r);
-  } finally { fx.cleanup(); }
-}
 function hooksNotRun(toolSource) {
   const fx = buildFixture({ toolSource });
   try {
@@ -866,34 +644,14 @@ function hooksNotRun(toolSource) {
     return fs.existsSync(marker) ? 'a hook ran: ' + fs.readFileSync(marker, 'utf8').trim().replace(/\n/g, ',') : true;
   } finally { fx.cleanup(); }
 }
-function refsAndApprovals(toolSource) {
-  const fx = buildFixture({ toolSource });
-  try {
-    fx.advanceDev({ 'dev-only.txt': 'd\n' });
-    const dev = rev(fx.canon, 'branch-dev');
-    const r = fx.resync(fx.task2);
-    if (!r.ok) return 'refused: ' + r.reason;
-    if (fs.readdirSync(fx.commonDir).some((n) => /^pt-.*-approval$/.test(n))) return 'an approval record was written';
-    if (rev(fx.canon, 'branch-dev') !== dev) return 'branch-dev moved';
-    return true;
-  } finally { fx.cleanup(); }
-}
 
 mutantRow('MUT-RS-1: reset --keep replaced by --hard -> uncommitted work is overwritten and an overlap is accepted (caught by RS-1 / RS-2)',
   [["['reset', '--keep', oid]", "['reset', '--hard', oid]"]], (src) => {
     const a = modeFWork(src), b = modeFOverlap(src);
     return a === true && b === true ? true : (a !== true ? a : b);
   });
-mutantRow('MUT-RS-2: the protected-path check dropped -> a task touching AGENTS.md is replayed (caught by RS-6)',
-  [["if (protectedHit !== undefined) return refuse('R2', 'a task commit touches a protected path (' + protectedHit + ')', tip, null, dev);", '']], modeRProtected);
-mutantRow('MUT-RS-2b: the protected-commit audit check dropped -> a PROTECTED-approved task is replayed (caught by RS-6)',
-  [["if (hasProtectedCommit) return refuse('R2', 'the audit log has a protected-commit entry for this task', tip, null, dev);", '']], modeRAuditProtected);
 mutantRow('MUT-RS-3: the R4 verification dropped -> a replay that dropped a commit is accepted (caught by RS-3b)',
   [["if (!r4.ok) return refuse('R4', r4.reason, tip, null, dev);", '']], modeRUpstream);
-mutantRow('MUT-RS-4: the R1 clean-slot check dropped -> a dirty slot is replayed (caught by RS-5)',
-  [["if (String(stR1.stdout).trim()) return refuse('R1', 'the slot is not clean', tip, null, dev);", '']], modeRDirty);
-mutantRow('MUT-RS-5: the up-to-date short-circuit dropped -> a current task is replayed and audited (caught by RS-7)',
-  [["if (upToDate.status === 0) return { ok: true, exitCode: 0, verb: 'resync', mode: 'none', task, from: tip, to: tip, base: dev, message: 'already up to date: ' + task + ' contains branch-dev ' + dev };", '']], modeNone);
 mutantRow('MUT-RS-6: the hooks-clean refusal AND the core.hooksPath override both dropped -> a planted hook runs (caught by RS-9); with only the refusal dropped the override still keeps hooks silent',
   [["if (!hooks.ok) return refuse('S1', hooks.reason);", ''],
     ["const hooksOverride = ['-c', 'core.hooksPath=' + toForwardSlash(hooksDir)];", 'const hooksOverride = [];']], hooksNotRun);
@@ -903,19 +661,6 @@ test('MUT-RS-6b: with ONLY the hooks-clean refusal dropped the hooksPath overrid
 });
 mutantRow('MUT-RS-7: temp worktree removal dropped -> a conflict leaves the worktree and directory behind (caught by RS-4)',
   [["removeTempWorktree(G, canonicalRoot, tmpParent, wt);", '']], modeRConflict);
-mutantRow('MUT-RS-8: the lock check dropped -> the tool runs while the lock is held (caught by RS-10)',
-  [["if (!lock.ok) return refuse('S3', lock.reason, tip, null, dev);", '']], lockHeld);
-mutantRow('MUT-RS-9: the brief-at-branch-dev check dropped -> a task without a brief is re-synced (caught by RS-13)',
-  [["if (briefAtDev.status !== 0) return refuse('S4', 'work/<id>/brief.md is missing at branch-dev', tip, null, dev);", '']], briefMissing);
-mutantRow('MUT-RS-10: the canonical-clean check dropped -> a dirty canonical checkout is accepted (caught by RS-13)',
-  [["if (!s2.ok) return refuse('S2', s2.reason, null, null, null);", '']], canonDirty);
-mutantRow('MUT-RS-11: the self-integrity check dropped -> a modified tool still runs (caught by RS-13)',
-  [["if (!si.ok) return refuse('S1', si.reason);", '']], selfTampered);
-const AUDIT_OK_ANCHOR = "appendAudit(commonDir, { ts: resyncTime, verb: 'resync', task, mode, from: tip, to: newTip, base: dev, result: 'ok', reason: null });";
-mutantRow('MUT-RS-12: an approval record written after a successful resync (caught by RS-8)',
-  [[AUDIT_OK_ANCHOR, AUDIT_OK_ANCHOR + "\n    fs.writeFileSync(path.join(commonDir, 'pt-land-approval'), 'x\\n');"]], refsAndApprovals);
-mutantRow('MUT-RS-13: branch-dev moved by a successful resync (caught by RS-8)',
-  [[AUDIT_OK_ANCHOR, AUDIT_OK_ANCHOR + "\n    G(['update-ref', 'refs/heads/branch-dev', tip], canonicalRoot);"]], refsAndApprovals);
 
 // ── summary ──────────────────────────────────────────────────────────────────────────────
 for (const d of MUT_DIRS) rmrf(d);

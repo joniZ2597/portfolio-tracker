@@ -216,6 +216,56 @@ function mutantToolFile() {
   return f;
 }
 
+// ═══════════════ FT-0: the template-contract digest gate (work/qa-stage2-git-contracts/brief.md §4) ═══════════════
+// The real-Git equivalence proofs - every row below that builds a fixture, marked heavy() - re-run whenever ANY input changed or this
+// environment is not a proven one. They are skipped only when the source digest equals TEMPLATE_CONTRACT_PIN.source AND this
+// environment digest (qa/lib/exec-env-fingerprint.js, brief §3.6) is in TEMPLATE_CONTRACT_PIN.environments. Rows that start no Git
+// process (the FT-3 negatives, the FT-5 fail-closed throws, the FT-0 rows) always run. Evidence is never reused across environments:
+// an unproven environment runs everything and passes with a notice; a changed source runs everything and then FAILS "re-pin required".
+const FPLIB = require('./lib/exec-env-fingerprint');
+const TEMPLATE_CONTRACT_PIN = {
+  // set from the passing real run of this task (2026-10-07, Worker A laptop, Windows 11, Git for Windows 2.53.0, Node 24); further environments
+  // are added only by a later task with evidence
+  source: '16159dc55d595761a60fa566db08b1bfe7066934e62ec5fcdfd8ad4ebed41126',
+  environments: ['ef28452b4eb84527b7208fc76792410d4948cc9d0fa91173a94c79edefa90858']
+};
+function ftSourceParts() {
+  const parts = [];
+  for (const rel of ['.claude/hooks/pt-land.js', 'qa/guard_integrity_check.js', 'qa/lib/fixture-template.js']) parts.push({ name: rel, bytes: Buffer.from(readWork(rel), 'utf8') });
+  for (const [label, src] of [['land-now', LAND_SRC_NOW()], ['land-base', LAND_SRC_BASE()]]) {
+    for (const fn of ['buildFixture', 'buildCleanupFixture']) parts.push({ name: label + ':' + fn, bytes: Buffer.from(extractFunction(src, fn), 'utf8') });
+  }
+  for (const [label, src] of [['resync-now', RS_SRC_NOW()], ['resync-base', RS_SRC_BASE()]]) parts.push({ name: label + ':buildFixture', bytes: Buffer.from(extractFunction(src, 'buildFixture'), 'utf8') });
+  // this suite's own source with the pin statement neutralised (a pin cannot be part of its own digest)
+  const own = fs.readFileSync(__filename, 'utf8').replace(/\r\n/g, '\n').replace(/const TEMPLATE_CONTRACT_PIN = \{[\s\S]*?\n\};/, 'const TEMPLATE_CONTRACT_PIN = PIN;');
+  parts.push({ name: 'qa/fixture_template_offline.js', bytes: Buffer.from(own, 'utf8') });
+  return parts;
+}
+const FT_PARTS = ftSourceParts();
+const FT_SOURCE_DIGEST = FPLIB.digestParts(FT_PARTS);
+const FT_ENV = FPLIB.collect();
+const FT_GATE = FPLIB.gateDecision(FT_SOURCE_DIGEST, FT_ENV.digest, TEMPLATE_CONTRACT_PIN);
+let skippedHeavy = 0;
+function heavy(name, fn) { if (FT_GATE === 'skip') { skippedHeavy += 1; return; } test(name, fn); }
+test('FT-0: the decision table - both digests pinned -> skip; unpinned environment -> replay, pass with a notice; changed source -> replay, then fail "re-pin required"', () => {
+  const pin = { source: 'S', environments: ['E1', 'E2'] };
+  assert.strictEqual(FPLIB.gateDecision('S', 'E1', pin), 'skip');
+  assert.strictEqual(FPLIB.gateDecision('S', 'E3', pin), 'replay-notice', 'evidence is never reused across a different environment');
+  assert.strictEqual(FPLIB.gateDecision('S2', 'E1', pin), 'replay-fail', 'a changed source never skips');
+  assert.strictEqual(FPLIB.gateDecision('S', 'E1', { source: null, environments: [] }), 'replay-fail', 'an empty pin never skips');
+  assert.strictEqual(FPLIB.gateDecision('S', 'E1', { source: 'S', environments: [] }), 'replay-notice', 'a source pin without a proven environment never skips');
+});
+test('FT-0 negative: a one-byte change to ANY source input (each is part of the digest) changes the source digest, and so does a removed input', () => {
+  const names = FT_PARTS.map((p) => p.name);
+  for (const needed of ['.claude/hooks/pt-land.js', 'qa/guard_integrity_check.js', 'qa/lib/fixture-template.js', 'land-now:buildFixture', 'land-now:buildCleanupFixture', 'land-base:buildFixture',
+    'resync-now:buildFixture', 'resync-base:buildFixture', 'qa/fixture_template_offline.js']) assert.ok(names.indexOf(needed) !== -1, needed + ' is part of the digest');
+  for (let i = 0; i < FT_PARTS.length; i += 1) {
+    const changed = FT_PARTS.map((p, j) => (j === i ? { name: p.name, bytes: Buffer.concat([p.bytes, Buffer.from(' ')]) } : p));
+    assert.notStrictEqual(FPLIB.digestParts(changed), FT_SOURCE_DIGEST, 'one byte appended to ' + FT_PARTS[i].name);
+  }
+  assert.notStrictEqual(FPLIB.digestParts(FT_PARTS.slice(1)), FT_SOURCE_DIGEST, 'a removed input');
+});
+
 // ═══════════════ FT-1: equivalence of the pt_land base (plain and .gitignore keys) ═════════════
 const copies = {}; // shared evidence between rows (computed once, asserted against)
 function landPair(opts) {
@@ -226,7 +276,7 @@ function landPair(opts) {
   return { fresh, copied, spy };
 }
 for (const [label, opts] of [['plain', { taskShort: 'ft1' }], ['.gitignore', { taskShort: 'ft1g', gitignore: GITIGNORE_TEXT }]]) {
-  test('FT-1 (' + label + ' key): a copied pt_land fixture equals a fresh-built one - ref names, tree OIDs, commit messages, parent shape, HEADs, config, own remote URL, clean status, fsck, worktrees', () => {
+  heavy('FT-1 (' + label + ' key): a copied pt_land fixture equals a fresh-built one - ref names, tree OIDs, commit messages, parent shape, HEADs, config, own remote URL, clean status, fsck, worktrees', () => {
     const { fresh, copied, spy } = landPair(opts);
     try {
       assert.ok(spy.calls.length >= 1, 'the working-tree builder used a template for the real tool');
@@ -239,7 +289,7 @@ for (const [label, opts] of [['plain', { taskShort: 'ft1' }], ['.gitignore', { t
       copies[label] = { spy, dir: spy.calls[0].dir, fx: copied };
     } finally { fresh.cleanup(); if (!copies[label]) copied.cleanup(); }
   });
-  test('FT-1 planted negative (' + label + '): a template with one push left out is NOT equivalent', () => {
+  heavy('FT-1 planted negative (' + label + '): a template with one push left out is NOT equivalent', () => {
     const fresh = landBuilders(LAND_SRC_BASE()).buildFixture(opts);
     const mutSrc = mutate(LAND_SRC_NOW(), [["G(['push', 'origin', 'main'], canon);", '/* push left out */']], 'FT-1 negative');
     const copied = landBuilders(mutSrc, makeSpy().mod).buildFixture(Object.assign({}, opts, { taskShort: opts.taskShort + 'x' }));
@@ -252,7 +302,7 @@ for (const [label, opts] of [['plain', { taskShort: 'ft1' }], ['.gitignore', { t
 }
 
 // ═══════════════ FT-1c: the landed-and-pushed cleanup template ═════════════════════════════
-test('FT-1c: a copied landed fixture equals a fresh landed fixture (same task id cltpl) - branch-dev / origin/branch-dev / bare-origin trees, slot HEADs and status, exactly one land ok + one push ok audit line, no approval record, no lock', () => {
+heavy('FT-1c: a copied landed fixture equals a fresh landed fixture (same task id cltpl) - branch-dev / origin/branch-dev / bare-origin trees, slot HEADs and status, exactly one land ok + one push ok audit line, no approval record, no lock', () => {
   const fresh = landBuilders(LAND_SRC_BASE()).buildCleanupFixture({ taskShort: 'cltpl' });
   const spy = makeSpy();
   const copied = landBuilders(LAND_SRC_NOW(), spy.mod).buildCleanupFixture({ landed: true });
@@ -271,7 +321,7 @@ test('FT-1c: a copied landed fixture equals a fresh landed fixture (same task id
     copies.landed = { dir: spy.calls.find((c) => /landed/.test(c.key)).dir, fx: copied, spy };
   } finally { fresh.cleanup(); if (!copies.landed) copied.cleanup(); }
 });
-test('FT-1c planted negatives: a landed template missing the push, and one with an approval record left behind, are NOT equivalent', () => {
+heavy('FT-1c planted negatives: a landed template missing the push, and one with an approval record left behind, are NOT equivalent', () => {
   const fresh = landBuilders(LAND_SRC_BASE()).buildCleanupFixture({ taskShort: 'cltpl' });
   try {
     const a = describeFixture(fresh);
@@ -286,7 +336,7 @@ test('FT-1c planted negatives: a landed template missing the push, and one with 
 });
 
 // ═══════════════ FT-2: the resync recipe ═══════════════════════════════════════════════════
-test('FT-2: a copied resync fixture equals a fresh one, incl. git worktree list (same worktrees, branches and HEADs, paths under the new directory) and both slots clean', () => {
+heavy('FT-2: a copied resync fixture equals a fresh one, incl. git worktree list (same worktrees, branches and HEADs, paths under the new directory) and both slots clean', () => {
   const fresh = resyncBuilder(RS_SRC_BASE())();
   const spy = makeSpy();
   const copied = resyncBuilder(RS_SRC_NOW(), spy.mod)();
@@ -303,7 +353,7 @@ test('FT-2: a copied resync fixture equals a fresh one, incl. git worktree list 
     copies.resync = { dir: spy.calls[0].dir, fx: copied, spy };
   } finally { fresh.cleanup(); if (!copies.resync) copied.cleanup(); }
 });
-test('FT-2 planted negative: a missing worktree rewrite is caught (the copy throws, or is not equivalent)', () => {
+heavy('FT-2 planted negative: a missing worktree rewrite is caught (the copy throws, or is not equivalent)', () => {
   const mutSrc = mutate(RS_SRC_NOW(), [["'portfolio-tracker/.git/worktrees/*/gitdir', ", '']], 'FT-2 negative');
   let threw = false;
   try { const fx = resyncBuilder(mutSrc, makeSpy().mod)(); fx.cleanup(); } catch (e) { threw = /template path survives|rewrite/.test(String(e && e.message)); }
@@ -311,7 +361,7 @@ test('FT-2 planted negative: a missing worktree rewrite is caught (the copy thro
 });
 
 // ═══════════════ FT-3: no path leak ════════════════════════════════════════════════════════
-test('FT-3: after materialisation no file outside objects/ contains the template path in any spelling (copied pt_land, landed and resync fixtures)', () => {
+heavy('FT-3: after materialisation no file outside objects/ contains the template path in any spelling (copied pt_land, landed and resync fixtures)', () => {
   assert.ok(copies.plain && copies.landed && copies.resync, 'FT-1 / FT-1c / FT-2 produced copies');
   for (const key of ['plain', 'landed', 'resync']) {
     const c = copies[key];
@@ -357,7 +407,7 @@ function independence(fxA, fxB, tplDir) {
   const aChanged = G(['for-each-ref'], fxA.canon) !== beforeB.refs;
   return sameB && sameT && aChanged;
 }
-test('FT-4: two fixtures from one template are independent - a commit, a branch and a worktree in one change neither the other nor the template (ref lists and file-tree hashes)', () => {
+heavy('FT-4: two fixtures from one template are independent - a commit, a branch and a worktree in one change neither the other nor the template (ref lists and file-tree hashes)', () => {
   const spy = makeSpy();
   const cur = landBuilders(LAND_SRC_NOW(), spy.mod);
   const a = cur.buildFixture({ taskShort: 'ft4a' });
@@ -369,7 +419,7 @@ test('FT-4: two fixtures from one template are independent - a commit, a branch 
     assert.strictEqual(independence(a, b, spy.calls[0].dir), true);
   } finally { a.cleanup(); b.cleanup(); }
 });
-test('FT-4 planted negative: a checker fed two fixtures that SHARE one directory reports them dependent', () => {
+heavy('FT-4 planted negative: a checker fed two fixtures that SHARE one directory reports them dependent', () => {
   const cur = landBuilders(LAND_SRC_NOW(), makeSpy().mod);
   const a = cur.buildFixture({ taskShort: 'ft4s' });
   try {
@@ -380,7 +430,7 @@ test('FT-4 planted negative: a checker fed two fixtures that SHARE one directory
 });
 
 // ═══════════════ FT-5: the fresh paths ═════════════════════════════════════════════════════
-test('FT-5: a mutant source, an explicit non-real toolSource and an originUrl fixture never call template(); the real source passed explicitly does', () => {
+heavy('FT-5: a mutant source, an explicit non-real toolSource and an originUrl fixture never call template(); the real source passed explicitly does', () => {
   const spy = makeSpy();
   const cur = landBuilders(LAND_SRC_NOW(), spy.mod);
   const mut = mutantToolFile();
@@ -410,17 +460,22 @@ test('FT-5: buildCleanupFixture with landed:true plus a mutant source, originUrl
   assert.strictEqual(spy.calls.length, 0, 'the throws happen before anything is built or templated');
   // the rows that must stay fresh pass no `landed` option: their option sets are statically absent from the land suite
   const src = LAND_SRC_NOW();
-  for (const needle of ["buildCleanupFixture({ taskShort: 'cl2', land: false })", "buildCleanupFixture({ taskShort: 'cl3', push: false })",
-    "buildCleanupFixture({ taskShort: 'mu4', push: false, toolSource: mutSrc })", "buildCleanupFixture({ taskShort: 'mu5', toolSource: mutSrc })",
-    "buildCleanupFixture({ taskShort: 'mu6', toolSource: mutSrc })", "buildCleanupFixture({ taskShort: 'mu7', toolSource: mutSrc })"]) onceIn(src, needle, 'FT-5 fresh-path row');
+  for (const needle of ["buildCleanupFixture({ taskShort: 'mu6', toolSource: mutSrc })", "buildCleanupFixture({ taskShort: 'mu7', toolSource: mutSrc })"]) onceIn(src, needle, 'FT-5 fresh-path row');
+  // cl2, cl3, mu4 and mu5 moved to the zero-process logic suite (work/qa-stage2-git-contracts, G-MAP): their scenarios in the recorder's
+  // table must still build fresh, i.e. pass no `landed` option.
+  const REC = require('./tools/record-git-transcripts');
+  for (const id of ['pl23-not-landed', 'pl24-not-pushed', 'mut-cleanup-k3', 'mut-cleanup-k4']) {
+    const scn = REC.SCENARIOS.find((s) => s.id === id);
+    assert.ok(scn && scn.build.fn === 'buildCleanupFixture' && scn.build.opts.landed === undefined, id + ' takes the fresh path');
+  }
 });
-test('FT-5: the fresh path of the working-tree builder equals the baseline builder (a mutant-source fixture)', () => {
+heavy('FT-5: the fresh path of the working-tree builder equals the baseline builder (a mutant-source fixture)', () => {
   const mut = mutantToolFile();
   const a = landBuilders(LAND_SRC_BASE()).buildFixture({ taskShort: 'ft5e', toolSource: mut });
   const b = landBuilders(LAND_SRC_NOW(), makeSpy().mod).buildFixture({ taskShort: 'ft5e', toolSource: mut });
   try { assert.deepStrictEqual(describeFixture(b), describeFixture(a)); } finally { a.cleanup(); b.cleanup(); }
 });
-test('FT-5 planted negatives: a mutant routed through a template is caught by the spy; landed with a mutant not throwing is caught', () => {
+heavy('FT-5 planted negatives: a mutant routed through a template is caught by the spy; landed with a mutant not throwing is caught', () => {
   const mut = mutantToolFile();
   const route = mutate(LAND_SRC_NOW(), [['const useTemplate = originUrl === undefined && sameContent(toolSource, REAL_TOOL_PATH);', 'const useTemplate = true;']], 'FT-5 route');
   const spy = makeSpy();
@@ -430,76 +485,6 @@ test('FT-5 planted negatives: a mutant routed through a template is caught by th
   let threw = true;
   try { const f = landBuilders(noThrow, makeSpy().mod).buildCleanupFixture({ landed: true, toolSource: mut }); f.cleanup(); threw = false; } catch (e) { threw = true; }
   assert.strictEqual(threw, false, 'with the guard removed, landed + mutant no longer throws');
-});
-
-// ═══════════════ FT-6: scope ═══════════════════════════════════════════════════════════════
-// The 18 approved row-text lines (brief §1.2b): exact old line -> new line, each old line exactly once in the baseline.
-const ROW_LINES = [
-  ["    const fx = buildCleanupFixture({ taskShort: 'cl1' });", '    const fx = buildCleanupFixture({ landed: true });'],
-  ["      const archiveDir = path.join(archiveRoot, 'cl1', '20260101T000000Z');", "      const archiveDir = path.join(archiveRoot, fx.taskShort, '20260101T000000Z');"],
-  ["        const orig = path.join(fx.slotA, 'work', 'cl1', name);", "        const orig = path.join(fx.slotA, 'work', fx.taskShort, name);"],
-  ["    const fx = buildCleanupFixture({ taskShort: 'cl4' });", '    const fx = buildCleanupFixture({ landed: true });'],
-  ["      fs.appendFileSync(path.join(fx.slotA, 'work', 'cl4', 'foo.txt'), 'dirty\\n');", "      fs.appendFileSync(path.join(fx.slotA, 'work', fx.taskShort, 'foo.txt'), 'dirty\\n');"],
-  ["    const fx = buildCleanupFixture({ taskShort: 'cl5' });", '    const fx = buildCleanupFixture({ landed: true });'],
-  ["    const fx = buildCleanupFixture({ taskShort: 'cl6' });", '    const fx = buildCleanupFixture({ landed: true });'],
-  ["      const archiveDir = path.join(archiveRoot, 'cl6', '20260101T000000Z');", "      const archiveDir = path.join(archiveRoot, fx.taskShort, '20260101T000000Z');"],
-  ["      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', 'cl6', name), 'utf8');", "      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name), 'utf8');"],
-  ["        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', 'cl6', name), 'utf8'), beforeContent[name], name + ' original intact');", "        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name), 'utf8'), beforeContent[name], name + ' original intact');"],
-  ["    const fx = buildCleanupFixture({ taskShort: 'cl6b' });", '    const fx = buildCleanupFixture({ landed: true });'],
-  ["      const archiveDir = path.join(archiveRoot, 'cl6b', '20260101T000000Z');", "      const archiveDir = path.join(archiveRoot, fx.taskShort, '20260101T000000Z');"],
-  ["      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', 'cl6b', name), 'utf8');", "      for (const name of EVIDENCE_NAMES) beforeContent[name] = fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name), 'utf8');"],
-  ["        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', 'cl6b', name), 'utf8'), beforeContent[name], name + ' original intact');", "        assert.strictEqual(fs.readFileSync(path.join(fx.slotA, 'work', fx.taskShort, name), 'utf8'), beforeContent[name], name + ' original intact');"],
-  ["    const fx = buildCleanupFixture({ taskShort: 'cl7' });", '    const fx = buildCleanupFixture({ landed: true });'],
-  ["    const fx = buildCleanupFixture({ taskShort: 'cl8' });", '    const fx = buildCleanupFixture({ landed: true });'],
-  ["    const fx = buildCleanupFixture({ taskShort: 'cl9' });", '    const fx = buildCleanupFixture({ landed: true });'],
-  ["    const fx = buildCleanupFixture({ taskShort: 'cl10' });", '    const fx = buildCleanupFixture({ landed: true });']
-];
-function maskFunctions(src, names) {
-  let s = src;
-  for (const n of names) { const body = extractFunction(s, n); s = s.replace(body, 'function ' + n + '(/*masked*/) {}'); }
-  return s;
-}
-function applyRowLines(src) {
-  const lines = src.split('\n');
-  for (const [oldLine, newLine] of ROW_LINES) {
-    const idx = [];
-    lines.forEach((l, i) => { if (l === oldLine) idx.push(i); });
-    assert.strictEqual(idx.length, 1, 'row line occurs ' + idx.length + ' time(s): ' + oldLine.trim().slice(0, 80));
-    lines[idx[0]] = newLine;
-  }
-  return lines.join('\n');
-}
-// compares a land suite to the baseline: identical outside the masked functions (and, for the main suite, after the 18 row lines)
-function scopeCheck(baseSrc, curSrc, names, withRows) {
-  const base = maskFunctions(baseSrc, names);
-  const cur = maskFunctions(curSrc, names);
-  const expected = withRows ? applyRowLines(base) : base;
-  if (cur === expected) return true;
-  const a = cur.split('\n'); const b = expected.split('\n');
-  let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i += 1;
-  return 'differs at line ' + (i + 1) + ': ' + JSON.stringify(a[i]) + ' vs expected ' + JSON.stringify(b[i]);
-}
-test('FT-6: both land suites equal the baseline outside the masked builder functions, plus - for qa/pt_land_offline.js - exactly the 18 approved row lines (and only the lazy requires add lines inside the masked functions)', () => {
-  assert.strictEqual(scopeCheck(LAND_SRC_BASE(), LAND_SRC_NOW(), ['buildFixture', 'buildCleanupFixture'], true), true);
-  assert.strictEqual(scopeCheck(RS_SRC_BASE(), RS_SRC_NOW(), ['buildFixture'], false), true);
-  const now = LAND_SRC_NOW();
-  assert.strictEqual(ROW_LINES.length, 18);
-  assert.ok(now.indexOf("require('./lib/fixture-template')") !== -1, 'the helper is required');
-  const fnSrc = extractFunction(now, 'buildFixture') + extractFunction(now, 'buildCleanupFixture');
-  assert.ok(now.split("require('./lib/fixture-template')").length === fnSrc.split("require('./lib/fixture-template')").length, 'every require of the helper is inside the two functions (lazy)');
-});
-test('FT-6 planted negatives: an unlisted row edit, an edit outside the masked functions, a row line left unapplied and a stray substitution are each detected; an edit inside a masked function is not', () => {
-  const base = LAND_SRC_BASE();
-  const good = applyRowLines(base);
-  assert.strictEqual(scopeCheck(base, good, ['buildFixture', 'buildCleanupFixture'], true), true, 'the reconstruction passes its own checker');
-  assert.notStrictEqual(scopeCheck(base, good.replace("assert.strictEqual(r.exitCode, 0);", "assert.strictEqual(r.exitCode, 0); // edit"), ['buildFixture', 'buildCleanupFixture'], true), true, 'an unlisted row edit');
-  assert.notStrictEqual(scopeCheck(base, '// stray\n' + good, ['buildFixture', 'buildCleanupFixture'], true), true, 'an edit outside the masked functions');
-  assert.notStrictEqual(scopeCheck(base, base, ['buildFixture', 'buildCleanupFixture'], true), true, 'the 18 lines left unapplied');
-  const stray = good.replace("buildCleanupFixture({ taskShort: 'cl2', land: false })", 'buildCleanupFixture({ taskShort: fx.taskShort, land: false })');
-  assert.notStrictEqual(stray, good, 'the stray substitution applied');
-  assert.notStrictEqual(scopeCheck(base, stray, ['buildFixture', 'buildCleanupFixture'], true), true, 'an extra clN -> fx.taskShort substitution on an unlisted line');
-  const inside = good.replace('function buildFixture(opts) {', 'function buildFixture(opts) { /* an edit inside a masked function */');
-  assert.strictEqual(scopeCheck(base, inside, ['buildFixture', 'buildCleanupFixture'], true), true, 'positive control: an edit inside a masked function is masked');
 });
 
 // ═══════════════ FT-7: no vacuous path checks ══════════════════════════════════════════════
@@ -514,17 +499,26 @@ function landedPathsOk(fx) {
   ];
   return ok.every(Boolean);
 }
-test('FT-7: for a materialised landed fixture every path the nine cleanup rows inspect exists before cleanup - under work/<fx.taskShort>/ in slot A and as task/<fx.taskShort> in the canonical refs; the ignored evidence files can be written there', () => {
+heavy('FT-7: for a materialised landed fixture every path the nine cleanup rows inspect exists before cleanup - under work/<fx.taskShort>/ in slot A and as task/<fx.taskShort> in the canonical refs; the ignored evidence files can be written there', () => {
   assert.ok(copies.landed, 'FT-1c produced a landed copy');
   const fx = copies.landed.fx;
   assert.strictEqual(landedPathsOk(fx), true);
   for (const name of ['plan.md', 'codex.md', 'qa.log']) W(path.join(fx.slotA, 'work', fx.taskShort, name), name + '\n');
   assert.strictEqual(G(['status', '--porcelain'], fx.slotA).trim(), '', 'ignored evidence is cleanly ignored (the .gitignore came with the template)');
 });
-test('FT-7 planted negative: a copy whose claimed task id differs from its committed content fails the path check', () => {
+heavy('FT-7 planted negative: a copy whose claimed task id differs from its committed content fails the path check', () => {
   assert.ok(copies.landed, 'FT-1c produced a landed copy');
   const fx = copies.landed.fx;
   assert.strictEqual(landedPathsOk(Object.assign({}, fx, { taskShort: 'cl1', task: 'task/cl1' })), false);
+});
+
+// FT-0 verdict: runs LAST, after every heavy proof above has run (or was skipped under a matching pin)
+test('FT-0: the gate - skipped only under a matching pin; an unproven environment passes with a notice; a changed or unpinned source fails "re-pin required"', () => {
+  if (FT_GATE === 'skip') { process.stdout.write('  SKIP  (contract pinned: ' + FT_SOURCE_DIGEST.slice(0, 12) + '/' + FT_ENV.digest.slice(0, 12) + ') ' + skippedHeavy + ' heavy real-Git row(s) not run\n'); return; }
+  if (FT_GATE === 'replay-fail') {
+    throw new Error('re-pin required: source ' + FT_SOURCE_DIGEST + ' environment ' + FT_ENV.digest + ' (every heavy proof above passed against real Git; set TEMPLATE_CONTRACT_PIN to this source digest and add this environment digest)');
+  }
+  process.stdout.write('  NOTE  environment not pinned: ' + FT_ENV.digest + '; record it in a task to enable the fast path\n');
 });
 
 // ── run, then clean ─────────────────────────────────────────────────────────────────────
