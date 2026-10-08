@@ -13,7 +13,7 @@
  *   TC-5         Technical Setup panel: _techSnapFor / refreshTechPanel
  *   TC-6         Deep Dive: no mismatched technical block
  *   TC-9         isolation (static)
- *   TC-10        renderMainPanel: exactly I7a-I7i changed (textual revert proves the old pin)
+ *   TC-10        renderMainPanel: exactly I7a-I7i, A9a-A9d and the R-2 table changed (textual revert proves the old pin)
  *   TC-11        caliper pins: only the renderMainPanel value moved
  *   TC-12/14/15  render harness: displayed price == snapshot price; Setup from the same
  *                snapshot; scan-time values marked "from scan" when the prices differ
@@ -61,9 +61,9 @@ const BASE_TS1_REGION = '9b267da4c06a7724ccbe13ba83bf376ba1dcd2dd7931d3b40fd7337
 // renderMainPanel: base (LF-normalised, = TS1 suite TX-3 pin) and base (CRLF form = caliper pin).
 const BASE_RM_LF = 'a8c13d283ad90e4c132e6d68a5570682b39d5c127d1dd5a4ce18795178ab838f';
 const OLD_RM_CALIPER_PIN = 'd11b09a989f19ee1fa09770ac135e8f00ce518558b25cc7bce3ee23cf1b174ac';
-// New pins (task renderMainPanel after I7a-I7i): LF-normalised (TS1 suite) and CRLF form (caliper).
-const NEW_RM_LF = 'ed2c8bdcac6070d442241c4138b5f3ed155794b378d34349ac20cf0dc25aae2a';
-const NEW_RM_CALIPER_PIN = 'aea925b1775bef6c1475ff00979dda4c12cdead55e49b45d8045175052654254';
+// New pins (task renderMainPanel after I7a-I7i, A9a-A9d and the R-2 table): LF-normalised (TS1 suite) and CRLF form (caliper).
+const NEW_RM_LF = 'e84c5e61abcb1179add1c5db28d5d5b1e958daa10b0363fdb339d83363fed869';
+const NEW_RM_CALIPER_PIN = 'f5df295f45f8b8b7978b57962379ada5395c6a62c7c175e219a355c8e3f8aa30';
 
 const BASE_PRICE_LINE = "  let price = item._verifiedPrice ? `$${item._verifiedPrice.toFixed(2)}` : '—';\n";
 const BASE_EXT_OVERRIDE = "  if (_showExt && _extC) {\n    if (typeof _extC.regularPrice    === 'number') price = `$${_extC.regularPrice.toFixed(2)}`;\n    if (typeof _extC.regularChangePct === 'number') chg  = _extC.regularChangePct;\n  }";
@@ -140,6 +140,33 @@ function revertA9(taskRm) {
     out = out.replace(r.newS, () => r.oldS);
   }
   return out;
+}
+
+// ── R-2 table (work/r2-ma-stack/brief.md section 2.3, Entry 35): the one renderMainPanel line replaced by four ──
+// old = the I7f line as it stands after A9 (the e7bbbbb form), new = the four task lines (whole lines, exact bytes).
+const R2_OLD = I7_REPLACE[2].newS;
+const R2_NEW = [
+  "  const _maStackKey = _panelSetup === 'healthy_uptrend' || _panelSetup === 'bullish_stack'; // R-2 (Entry 35): the two setups whose text claims a stack",
+  "  const _maStackAll = [_panelSnap.sma20, _panelSnap.sma50, _panelSnap.sma150].every(Number.isFinite);",
+  "  const _maStacked  = _maStackAll && _panelSnap.sma20 > _panelSnap.sma50 && _panelSnap.sma50 > _panelSnap.sma150;",
+  "  const _tsAssess = _panelSetup === 'unknown' ? '' : !_maStackKey ? (_tsAssessMap[_panelSetup] || '') : _maStacked ? (_tsAssessMap[_panelSetup] || '') : _maStackAll ? 'Price above all key moving averages — healthy uptrend; averages not fully stacked' : 'Healthy uptrend — price above key moving averages';"
+];
+const R2_BLOCK = R2_NEW.join('\n');
+function applyR2(rm) {
+  if (countOf(rm, '  ' + R2_OLD) !== 1) throw new Error('R2 old line not unique');
+  return rm.replace('  ' + R2_OLD, () => R2_BLOCK);
+}
+function revertR2(taskRm) {
+  if (countOf(taskRm, R2_BLOCK) !== 1) throw new Error('R2 block not present exactly once');
+  return taskRm.replace(R2_BLOCK, () => '  ' + R2_OLD);
+}
+// Brief section 2.2: the assessment text for a setup, given the snapshot the card shows.
+function r2Assess(assessMap, setup, snap) {
+  if (setup === 'unknown') return null;
+  if (setup !== 'healthy_uptrend' && setup !== 'bullish_stack') return assessMap[setup] || null;
+  const all = snap && [snap.sma20, snap.sma50, snap.sma150].every(Number.isFinite);
+  if (all && snap.sma20 > snap.sma50 && snap.sma50 > snap.sma150) return assessMap[setup] || null;
+  return all ? 'Price above all key moving averages — healthy uptrend; averages not fully stacked' : 'Healthy uptrend — price above key moving averages';
 }
 
 // ── Source extraction ────────────────────────────────────────────────────────────────────────
@@ -636,12 +663,12 @@ async function evaluate(S) {
   // ── TC-10 only main-panel change ────────────────────────────────────────────────────────
   const rm = extractFn(src, 'renderMainPanel') || '';
   await guard('TC-10', async () => {
-    const reverted = revertI7(revertA9(rm));
-    chk('TC-10', 'reverting I7a-I7i restores the base (LF-normalised pin)', sha256(reverted) === BASE_RM_LF);
-    chk('TC-10', 'reverting I7a-I7i restores the OLD caliper pin d11b09a9', sha256(crlf(reverted)) === OLD_RM_CALIPER_PIN);
-    const forward = applyA9(applyI7(reverted));
-    chk('TC-10', 'line diff is exactly I7a-I7c added and I7d-I7i replaced', forward === rm);
-    chk('TC-10', 'line count = base + 3', rm.split('\n').length === reverted.split('\n').length + 3);
+    const reverted = revertI7(revertA9(revertR2(rm)));
+    chk('TC-10', 'reverting R-2, A9 and I7a-I7i restores the base (LF-normalised pin)', sha256(reverted) === BASE_RM_LF);
+    chk('TC-10', 'reverting R-2, A9 and I7a-I7i restores the OLD caliper pin d11b09a9', sha256(crlf(reverted)) === OLD_RM_CALIPER_PIN);
+    const forward = applyR2(applyA9(applyI7(reverted)));
+    chk('TC-10', 'line diff is exactly I7a-I7c added, I7d-I7i and A9 replaced, and the R-2 line replaced by four', forward === rm);
+    chk('TC-10', 'line count = base + 3 (I7) + 3 (R-2)', rm.split('\n').length === reverted.split('\n').length + 6);
     chk('TC-10', 'task renderMainPanel hashes to the new LF pin', sha256(rm) === NEW_RM_LF);
     chk('TC-10', 'task renderMainPanel hashes to the new caliper (CRLF) pin', sha256(crlf(rm)) === NEW_RM_CALIPER_PIN);
   });
@@ -746,7 +773,7 @@ async function evaluate(S) {
       'return { d: _ptScoreDial(70, "var(--green2)"), t: _ptScoreText(70) };'].join('\n'))();
     const expectedDial = '<div class="at-dial-row"><div class="' + dialParts.d.cls + '" style="' + dialParts.d.style + '"><span class="at-dial-num" style="color:' +
       dialParts.d.numColor + '">' + dialParts.t + '</span></div><div><div class="at-dial-lbl">Score</div><div class="at-dial-val pos">Buy</div></div></div>';
-    const baseRm = (() => { try { return revertI7(rm); } catch (e1) { return null; } })();
+    const baseRm = (() => { try { return revertI7(revertR2(rm)); } catch (e1) { return null; } })();
     const renderBase = baseRm ? buildRenderer(baseRm, src) : null;
     for (const st of states) {
       const ext = JSON.parse(JSON.stringify(st.ext));
@@ -768,7 +795,7 @@ async function evaluate(S) {
       if (hasData && st.S) {
         const real = e.classifyTechnicalSetup(st.S);
         expPhase = real === 'unknown' ? '—' : (tfMap[real] || ['NEUTRAL'])[0];
-        expAssess = real === 'unknown' ? null : (assessMap[real] || null);
+        expAssess = r2Assess(assessMap, real, st.S); // R-2: the stack is claimed only when the snapshot's averages are stacked
       }
       chk('TC-14', st.id + ': Timeframe Alignment from the displayed snapshot', p.phase === expPhase);
       chk('TC-14', st.id + ': assessment line from the displayed snapshot', (p.assess || null) === expAssess);
@@ -854,7 +881,7 @@ const NEGATIVES = [
   { id: 'TC-14', label: 'Setup taken from item.technical_setup', target: 'index',
     f: s => mut(s, "const [phase,phCls]=_panelSetup==='unknown'?['—','neutral-v']:(_tfMap[_panelSetup]||['NEUTRAL','neutral-v']);", "const [phase,phCls]=_tfMap[item.technical_setup]||['NEUTRAL','neutral-v'];") },
   { id: 'TC-14', label: 'assessment taken from item.technical_setup', target: 'index',
-    f: s => mut(s, "const _tsAssess = _panelSetup !== 'unknown' ? (_tsAssessMap[_panelSetup] || '') : '';", "const _tsAssess = hasData && item.technical_setup ? (_tsAssessMap[item.technical_setup] || '') : '';") },
+    f: s => mut(s, R2_NEW[3], "  const _tsAssess = hasData && item.technical_setup ? (_tsAssessMap[item.technical_setup] || '') : '';") },
   { id: 'TC-14', label: 'Setup classified from a second, different snapshot (the scan-price one)', target: 'index',
     f: s => mut(s, "const _panelSetup = hasData ? classifyTechnicalSetup(_panelSnap) : 'unknown';", "const _panelSetup = hasData ? classifyTechnicalSetup(_techSnapFor(item.ticker, item._verifiedPrice)) : 'unknown';") },
   { id: 'TC-15', label: 'Score row mark missing', target: 'index',

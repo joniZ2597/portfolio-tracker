@@ -8295,7 +8295,10 @@ function renderMainPanel(item) {
     below_key_mas:            'Below key moving averages — structure is bearish',
     mixed:                    'Mixed MA alignment — no clear directional stack',
   };
-  const _tsAssess = _panelSetup !== 'unknown' ? (_tsAssessMap[_panelSetup] || '') : '';
+  const _maStackKey = _panelSetup === 'healthy_uptrend' || _panelSetup === 'bullish_stack'; // R-2 (Entry 35): the two setups whose text claims a stack
+  const _maStackAll = [_panelSnap.sma20, _panelSnap.sma50, _panelSnap.sma150].every(Number.isFinite);
+  const _maStacked  = _maStackAll && _panelSnap.sma20 > _panelSnap.sma50 && _panelSnap.sma50 > _panelSnap.sma150;
+  const _tsAssess = _panelSetup === 'unknown' ? '' : !_maStackKey ? (_tsAssessMap[_panelSetup] || '') : _maStacked ? (_tsAssessMap[_panelSetup] || '') : _maStackAll ? 'Price above all key moving averages — healthy uptrend; averages not fully stacked' : 'Healthy uptrend — price above key moving averages';
   const _tsAssessHtml = _tsAssess ? `<div class="ts-assess">${_tsAssess}</div>` : '';
 
   // Backlog task 6 — gated row, filled post-render by _ts1FillRow. Gate OFF yields '' so the

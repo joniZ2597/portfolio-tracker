@@ -188,6 +188,18 @@ triggers, `pending` handling and the split-driven `stale-suspect` rule. *Remains
 prompt wiring of the verified ATH and the `*_near_ath` setup-name decision.
 *Deps:* none.
 
+### 35 · Claim the MA stack only when the averages are stacked (R-2) — **DONE**
+**Scores / Signals** · data honesty · **bug, added 2026-10-08**
+
+The Technical Setup card's assessment line said "20 > 50 > 150" for every `healthy_uptrend`, even when the
+averages were not stacked (consistency pilot 2026-10-03, ROK: MA20 $428.11 < MA150 $429.35 < MA50 $437.80). The
+classification is unchanged — `healthy_uptrend` still means price above MA20, MA50 and MA150; only the text that
+claims a stack changes.
+*Landed (`work/r2-ma-stack/`):* the stack is claimed only when the snapshot the card shows has MA20 > MA50 > MA150;
+otherwise the line reads "averages not fully stacked", or names no stack when an average is missing. Wording only:
+no scoring, ranking, persistence or prompt change.
+*Deps:* none.
+
 ---
 
 ## LATER
@@ -274,6 +286,7 @@ Risk / Reward column or chips in Scan Results) ·
 **11** Selected-for-scan visibility — `work/selected-only-watchlist/` ·
 **32** Technical snapshot reuses a stale price — `work/tech-snapshot-price-cache/` ·
 **33** Fix analyst-action / price-target parsing — `work/analyst-parser-r4a/` ·
+**35** Claim the MA stack only when the averages are stacked (R-2) — `work/r2-ma-stack/` ·
 **S2 slices** S1.5 · S1.5.1 (H-A/H-B/H-C, `1eda72c`) · S1.5.2 (`d9395ea`) · A1 (`6e242fb`,
 `9327e47`) · A2 (`52c322b`) · A5 (`810586d`) · D-A2-2 / S2-M1 (`0526458`) ·
 A3a / S2-M2 (`28c2543`) ·

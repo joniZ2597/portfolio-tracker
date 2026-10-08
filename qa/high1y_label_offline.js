@@ -73,7 +73,7 @@ const PINS = {
     "fetchAnthropicAnalysis": "fad40ac1ea98d95d05c5efbe288b98732a6ddaa02da8b6eb15b33ade1754db29",
     "orchestrate": "459af22a391331a196587b339c0460cbaf23d55d24469b5d09cabebe380d4a6f",
     "_srGroupResults": "048d6e03894de63b3e52da1766e64f8c51625f7624e3f4281f2f92aef79989ad",
-    "renderMainPanel": "4ca5c2a0ad3d0813e1a7f0342bc0a840506903da77e62ac0d37057d42bf18f91",
+    "renderMainPanel": "11b3c2fe852a217fe19176ed9e59d83148f65c7526390fb19757509a5a62a20b",
     "_dd0FetchAnalysis": "50b6d52bc1ec645afc239432878b816529cebf592a0a60fae8440581c03f6c38"
   }
 };
