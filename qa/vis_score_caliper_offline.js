@@ -91,9 +91,9 @@ const PROTECTED_FN_HASHES = {
   _ptScoreStates: '41968b418333e8a95f8fa6c15225351b9b7d73196bd808e7dd4ac6b7e3d83771',
   _ptScoreFillHtml: 'dfeb1959f3ca9f877d7158db68d5109c64bf36eb4f3f23eb300b735ae69f5a23',
   _ptScoreDial: '4092f243120f5c6bdf3269a02e599f3ad68afcd4a8afe8d766724879b0ef4bce',
-  _srGroupResults: '71055cd1d74cc51564c400b0a0c306caae816c5f4f22096324eb3eb8bb3bf0fc',
-  _srRenderGrouped: '1301f2faa44a781f37c8b66a8826dd06a027af73f6c7a33f2a9c91c987a09ea1',
-  renderMainPanel: 'd1f693b557b37ba0afaa27573ff4c9d8984377b867d467383e1d0482d0c8e6f4'
+  _srGroupResults: 'f4ebde1c851d2d2e38ee8a5b8b96812f802612f5faddd17972620138dbdfdc9d', // R-5 (Entry 37) re-pin: Pulse-only ordering
+  _srRenderGrouped: 'b14b4ee040faae7f0d3e5e2168ff0489b026d550545950c38328a0d824c4c914', // R-5 (Entry 37) re-pin: neutral Analyst cell
+  renderMainPanel: '757decd7724c70e4875d88f82cd950e6cc3ebb43186b10fac927bfefc2cdd95c' // R-5 (Entry 37) re-pin: Pulse dial / chip, analyst line
 };
 for (const fnName of Object.keys(PROTECTED_FN_HASHES)) {
   const src = extractFunctionSource(content, fnName);

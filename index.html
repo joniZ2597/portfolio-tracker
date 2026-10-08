@@ -6952,15 +6952,7 @@ function _ptScoreDial(v, color) {
 }
 
 function _srGroupResults(source) {
-  const rRank = r => {
-    const m = (r.summary || '').match(RATING_SUMMARY_RE);
-    const v = r.rating || (m ? m[1] : 'Neutral');
-    return v.toLowerCase() === 'buy' ? 0 : v.toLowerCase() === 'sell' ? 2 : 1;
-  };
-  const items = source.slice().sort((a, b) => {
-    const d = _ptScoreCmp(a, b);
-    return d !== 0 ? d : rRank(a) - rRank(b);
-  });
+  const items = source.slice().sort(_ptScoreCmp); // R-5 (Entry 37, ruling B1): Pulse-only ordering; equal scores keep source order
   // display order: Strong Setup → Watch → Extended / near 1Y high → Caution → Analysis failed — rescan (R-3, Entry 36)
   const groups = [
     { name: 'Strong Setup',   items: [] },
@@ -7017,8 +7009,8 @@ function _srRenderGrouped(source, tbody) {
       const chgStr = chg !== null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
       const chgCls = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
       const rM     = (r.summary || '').match(RATING_SUMMARY_RE);
-      const rating = r.rating || (rM ? rM[1] : 'Neutral');
-      const rCls   = rating.toLowerCase() === 'buy' ? 'pos' : rating.toLowerCase() === 'sell' ? 'neg' : 'neutral-v';
+      const rating = r.rating || (rM ? rM[1] : null); // R-5 (Entry 37): no "Neutral" fallback
+      const rCls   = 'neutral-v'; // R-5 (Entry 37): the analyst rating never colours the review cell
       const [setupLbl, setupCls] = tfMap[r.technical_setup] || ['—', 'neutral-v'];
       const sym  = _crEsc(r.ticker || '');
       const name = _crEsc((r.company_name || '').slice(0, 30));
@@ -7026,7 +7018,7 @@ function _srRenderGrouped(source, tbody) {
         <td class="sr-sym">${sym}${_srHeldHtml(held, r.ticker)}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
         <td class="r sr-score"><span>${_ptScoreText(score)}</span><div class="sr-score-track">${_ptScoreFillHtml(score)}</div></td>
-        <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>
+        <td class="sr-rating ${rCls}">${rating ? rating.toUpperCase() : '—'}</td>
         <td class="sr-setup ${setupCls}">${setupLbl}</td>
         <td class="r sr-chg ${chgCls}">${chgStr}</td>
       </tr>`);
@@ -7214,10 +7206,10 @@ function openScanResultsOverlay() {
       const chg    = typeof r._verifiedChangePct === 'number' ? r._verifiedChangePct : null;
       const chgStr = chg !== null ? (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%' : '—';
       const chgCls = chg === null ? 'neu' : chg > 0 ? 'pos' : chg < 0 ? 'neg' : 'neu';
-      // Use explicit r.rating field if present; fallback to summary regex (same method as renderMainPanel)
+      // Use explicit r.rating field if present; fallback to summary regex (same method as renderMainPanel); R-5 (Entry 37): no "Neutral" fallback
       const rM     = (r.summary || '').match(RATING_SUMMARY_RE);
-      const rating = r.rating || (rM ? rM[1] : 'Neutral');
-      const rCls   = rating.toLowerCase() === 'buy' ? 'pos' : rating.toLowerCase() === 'sell' ? 'neg' : 'neutral-v';
+      const rating = r.rating || (rM ? rM[1] : null);
+      const rCls   = 'neutral-v'; // R-5 (Entry 37): the analyst rating never colours the ranked cell
       const [setupLbl, setupCls] = tfMap[r.technical_setup] || ['—', 'neutral-v'];
       const sym  = _crEsc(r.ticker || '');
       const name = _crEsc((r.company_name || '').slice(0, 30));
@@ -7226,7 +7218,7 @@ function openScanResultsOverlay() {
         <td class="sr-sym">${sym}${_srHeldHtml(held, r.ticker)}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
         <td class="r sr-score">${_vscCellHtml(score)}</td>
-        <td class="sr-rating ${rCls}">${rating.toUpperCase()}</td>
+        <td class="sr-rating ${rCls}">${rating ? rating.toUpperCase() : '—'}</td>
         <td class="sr-setup ${setupCls}">${setupLbl}</td>
         <td class="r sr-chg ${chgCls}">${chgStr}</td>
       </tr>`;
@@ -7973,9 +7965,9 @@ function renderMainPanel(item) {
 
   const rM = sum.match(RATING_SUMMARY_RE);
   const pM = sum.match(/PT:\s*\$?([\d,.]+|consensus unavailable)/i);
-  const rating = rM?rM[1]:'Neutral';
+  const rating = rM ? rM[1] : null; // R-5 (Entry 37): no silent "Neutral" fallback
   const pt     = pM&&pM[1]!=='consensus unavailable'?'$'+pM[1]:'—';
-  const rCls   = rating.toLowerCase()==='buy'?'pos':rating.toLowerCase()==='sell'?'neg':'neutral-v';
+  const _pulseBand = score === null ? 'neutral-v' : score >= 65 ? 'pos' : score <= 40 ? 'neg' : 'neutral-v'; // R-5 (Entry 37, ruling A1): the Pulse score band colours the dial and the chip
 
   // Data-quality flag — gates all derived technical/RS/volume metrics
   const hasData    = hasVerifiedMarketData(item);
@@ -8309,10 +8301,10 @@ function renderMainPanel(item) {
     ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px"><div class="rr-row"><span class="rr-lbl">Tech Score v1</span><span class="rr-val" id="ts1-val-${item.ticker}">…</span></div></div>`
     : '';
 
-  const _dialColor = rCls === 'pos' ? 'var(--green2)' : rCls === 'neg' ? 'var(--red2)' : 'var(--blue2)';
+  const _dialColor = _pulseBand === 'pos' ? 'var(--green2)' : _pulseBand === 'neg' ? 'var(--red2)' : 'var(--blue2)';
   const _dial      = _ptScoreDial(score, _dialColor); // missing -> dashed no-score dial, no numeric fill
   const _dialHtml  = (item.action || actionable)
-    ? `<div class="at-dial-row"><div class="${_dial.cls}" style="${_dial.style}"><span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span></div><div><div class="at-dial-lbl">Score${_fromScan ? '<span style="margin-left:6px;text-transform:none;font-weight:400">from scan</span>' : ''}</div><div class="at-dial-val ${rCls}">${rating}</div></div></div>`
+    ? `<div class="at-dial-row"><div class="${_dial.cls}" style="${_dial.style}"><span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span></div><div><div class="at-dial-lbl">Score${_fromScan ? '<span style="margin-left:6px;text-transform:none;font-weight:400">from scan</span>' : ''}</div><div class="at-dial-val ${_pulseBand}">${item.action ? _esc(item.action).replace(/_/g,' ') : ''}</div></div></div>`
     : '';
 
   const _crn = item._crNudge;
@@ -8376,7 +8368,7 @@ function renderMainPanel(item) {
         ${lastUpdated ? `<span class="ph-updated${_scanAgeCls}">updated ${lastUpdated}</span>` : ''}
         <div class="ph-spacer"></div>
         ${item.action && hasData && !_mktFailed
-          ? `<span class="ph-rating-chip ${rCls}">RATING · ${rating.toUpperCase()}</span>`
+          ? `<span class="ph-rating-chip ${_pulseBand}">PULSE · ${_esc(item.action).replace(/_/g,' ')}</span>`
           : item.action && _mktFailed && hasData
             ? `<span class="ph-rating-chip warn">NEEDS REVIEW</span>`
             : item.action && !hasData
@@ -8487,6 +8479,7 @@ function renderMainPanel(item) {
         ${(item.action || actionable) ? '<div class="pc-card-sub">AI-generated analysis · Verify independently</div>' : ''}
         ${_dcHtml}
         ${_dialHtml}
+        ${rating ? `<div class="at-analyst-line" style="margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--text3)">Analyst view · ${rating.toUpperCase()} · PT ${pt}</div>` : ''}
         ${_crNudgeHtml}
         ${item.action ? `
           <div>
@@ -8530,9 +8523,7 @@ function renderMainPanel(item) {
               : `<div class="rs-row"><span class="rs-lbl">${lbl}</span><span class="rs-val neutral-v" style="color:var(--text3)">RS unavailable</span></div>`;
           }).join('')}
         </div>`}
-        <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
-          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>
-        </div>
+        ${rating ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px"><div class="rr-row"><span class="rr-lbl">Analyst view</span><span class="rr-val neutral-v">${rating.toUpperCase()} · PT ${pt}</span></div></div>` : ''}
       </div>
 
       <!-- KEY LEVELS (Entry / Invalidation / Risk) — span 6 -->
@@ -10597,10 +10588,9 @@ function _renderPortfolioPanel() {
           resRow.appendChild(scEl);
           var rM = (res.summary || '').match(RATING_SUMMARY_RE);
           if (rM) {
-            var rCls = rM[1].toLowerCase() === 'buy' ? 'pos' : rM[1].toLowerCase() === 'sell' ? 'neg' : 'neutral-v';
             var rEl = document.createElement('span');
-            rEl.className = 'pf-res-rating ' + rCls;
-            rEl.textContent = rM[1].toUpperCase();
+            rEl.className = 'pf-res-rating neutral-v'; // R-5 (Entry 37): the analyst view is shown neutral; the Pulse view is the score
+            rEl.textContent = 'Analyst ' + rM[1].toUpperCase();
             resRow.appendChild(rEl);
           }
           var _setupMap = {healthy_uptrend:['BULLISH','pos'],healthy_uptrend_near_ath:['BULLISH','pos'],pullback_in_uptrend:['MIXED','warn'],support_test:['MIXED','warn'],extended_near_ath:['EXTENDED','warn'],breakdown_risk:['BEARISH','neg'],below_key_mas:['BEARISH','neg']};
@@ -16027,7 +16017,7 @@ async function checkAllApis() {
           <th>Ticker</th>
           <th class="sr-th-name">Company</th>
           <th class="r">Score</th>
-          <th>Rating</th>
+          <th>Analyst</th>
           <th>Setup</th>
           <th class="r">Chg %</th>
         </tr></thead>

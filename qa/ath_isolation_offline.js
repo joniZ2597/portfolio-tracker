@@ -195,7 +195,7 @@ test('AR-7h the 1Y High cannot reach the comparison: compareToVerifiedAth takes 
 // Take flows, the 1Y High code and every pt_* storage key. The two preflight modules are the ones
 // brief section 2 says are not edited; market-data.js is the existing price / history path.
 const BASELINE_PINS = {
-  'index.html': '9d8f7dc6762c58afc3b5813c4d7d0bf27e6cc0ee5d8ae0a3b4826fe3d6edf403',
+  'index.html': '41149af0b2381cfe2567423acd27a13fcc2978ac1d89836ee65eea35b1ca6f6b',
   'netlify/functions/lib/fund-facts-preflight.js': '2a9a4d3682d68904745b9ec14cbc6fa19fb18e81ad3cd29fa7848eb5455101c2',
   'netlify/functions/lib/fund-facts-read-preflight.js': '1ce8c4c5bead5ddd0f0b52e24f012266f1ff06e44daf77721e9a34131c431990',
   'netlify/functions/market-data.js': 'f9b70977eade3a9ec967b87111a54a5a85d634f0824e448ab2ed746989c61125'

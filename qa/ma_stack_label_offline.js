@@ -15,7 +15,7 @@
  *   MS-5 every other setup       -> _tsAssessMap text (or nothing); unknown -> nothing
  *   MS-6 the stack test reads _panelSnap, never item.* / stored fields
  *   MS-7 renderMainPanel diff confined to the _tsAssess region; the R-2 revert table reproduces the pre-task source
- *        (after R-3, Entry 36, the later Score-row line is reverted first: revertR2(revertR3(rm)))
+ *        (after R-3, Entry 36, and S1 / R-5, Entry 37, the later lines are reverted first: revertR2(revertR3(revertS1(rm))))
  *   MS-8 no new top-level function; classifyTechnicalSetup and the _tsAssessMap literal byte-identical
  *
  * Planted negatives mutate an in-memory copy of the production source (never the test) and the
@@ -43,7 +43,7 @@ const PIN_CLASSIFY_LF = 'c143eb08d982cff036dd5678def08dc38e7dede6e2a0f4ae11a79d2
 const PIN_TSASSESSMAP_LF = '79b78d1ed91f3d6f8c2b867378a1a228f83399c8931ddd150eea31143bb3a31e';
 // index.html with renderMainPanel masked out: nothing outside the function changes in this task
 // (hence no new top-level function anywhere).
-const PIN_MASKED_MINUS_RM_LF = '96dfb952d9b9aa9ea1df3e9ea626fcfb0a3a27b3bfe26a2dbd4c07c5a7583189'; // re-pinned at R-3 (Entry 36)
+const PIN_MASKED_MINUS_RM_LF = 'd41efca59ccb6d953ae0b9cabc32da8485bf129e8cc650a90c21a6f9ee60c5f2'; // re-pinned at R-3 (Entry 36)
 
 // ── R-2 table: the one pre-task line and the four task lines (whole lines, exact bytes) ──────
 const R2_OLD = "  const _tsAssess = _panelSetup !== 'unknown' ? (_tsAssessMap[_panelSetup] || '') : '';";
@@ -77,6 +77,37 @@ function applyR3(rm) {
 function revertR3(taskRm) {
   if (countOf(taskRm, R3_NEW) !== 1) throw new Error('R-3 line not present exactly once');
   return taskRm.replace(R3_NEW, () => R3_OLD);
+}
+// ── S1 table (work/nlm-consistency-1/brief.md §S1, Entry 37, R-5): the seven renderMainPanel lines changed after R-3 ──
+// The S1 lines are disjoint from the R-2 / R-3 lines: reverted first, applied last.
+const S1_ACTION = "_esc(item.action).replace(/_/g,' ')";
+const S1_DIAL_LBL = "<div class=\"at-dial-lbl\">Score${_fromScan ? '<span style=\"margin-left:6px;text-transform:none;font-weight:400\">from scan</span>' : ''}</div>";
+const S1_TABLE = [
+  { id: 'RM-1', oldS: "  const rating = rM?rM[1]:'Neutral';", newS: "  const rating = rM ? rM[1] : null; // R-5 (Entry 37): no silent \"Neutral\" fallback" },
+  { id: 'RM-2', oldS: "  const rCls   = rating.toLowerCase()==='buy'?'pos':rating.toLowerCase()==='sell'?'neg':'neutral-v';",
+    newS: "  const _pulseBand = score === null ? 'neutral-v' : score >= 65 ? 'pos' : score <= 40 ? 'neg' : 'neutral-v'; // R-5 (Entry 37, ruling A1): the Pulse score band colours the dial and the chip" },
+  { id: 'RM-3', oldS: "  const _dialColor = rCls === 'pos' ? 'var(--green2)' : rCls === 'neg' ? 'var(--red2)' : 'var(--blue2)';",
+    newS: "  const _dialColor = _pulseBand === 'pos' ? 'var(--green2)' : _pulseBand === 'neg' ? 'var(--red2)' : 'var(--blue2)';" },
+  { id: 'RM-4',
+    oldS: '    ? `<div class="at-dial-row"><div class="${_dial.cls}" style="${_dial.style}"><span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span></div><div>' + S1_DIAL_LBL + '<div class="at-dial-val ${rCls}">${rating}</div></div></div>`',
+    newS: '    ? `<div class="at-dial-row"><div class="${_dial.cls}" style="${_dial.style}"><span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span></div><div>' + S1_DIAL_LBL + '<div class="at-dial-val ${_pulseBand}">${item.action ? ' + S1_ACTION + " : ''}</div></div></div>`" },
+  { id: 'RM-5', oldS: '          ? `<span class="ph-rating-chip ${rCls}">RATING · ${rating.toUpperCase()}</span>`',
+    newS: '          ? `<span class="ph-rating-chip ${_pulseBand}">PULSE · ${' + S1_ACTION + '}</span>`' },
+  { id: 'RM-6', oldS: '        ${_dialHtml}',
+    newS: '        ${_dialHtml}\n        ${rating ? `<div class="at-analyst-line" style="margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--text3)">Analyst view · ${rating.toUpperCase()} · PT ${pt}</div>` : \'\'}' },
+  { id: 'RM-7',
+    oldS: '        <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">\n          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>\n        </div>',
+    newS: '        ${rating ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px"><div class="rr-row"><span class="rr-lbl">Analyst view</span><span class="rr-val neutral-v">${rating.toUpperCase()} · PT ${pt}</span></div></div>` : \'\'}' }
+];
+function applyS1(rm) {
+  let out = rm;
+  for (const r of S1_TABLE) { if (countOf(out, r.oldS) !== 1) throw new Error('S1 old line not unique: ' + r.id); out = out.replace(r.oldS, () => r.newS); }
+  return out;
+}
+function revertS1(taskRm) {
+  let out = taskRm;
+  for (const r of S1_TABLE.slice().reverse()) { if (countOf(out, r.newS) !== 1) throw new Error('S1 new line not present exactly once: ' + r.id); out = out.replace(r.newS, () => r.oldS); }
+  return out;
 }
 
 // ── Source extraction (same rule as qa/tech_snapshot_cache_offline.js) ──────────────────────
@@ -303,11 +334,11 @@ function evaluate(src) {
   // MS-7 diff confined to the _tsAssess region; the R-2 revert table reproduces the pre-task source
   guard('MS-7', () => {
     chk('MS-7', 'the four R-2 lines are present exactly once, as one block', countOf(rm, R2_BLOCK) === 1);
-    const reverted = revertR2(revertR3(rm));
-    chk('MS-7', 'reverting only the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (LF pin)', sha256(reverted) === PRE_RM_LF);
-    chk('MS-7', 'reverting only the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (CRLF pin)', sha256(crlf(reverted)) === PRE_RM_CRLF);
-    chk('MS-7', 'applying the R-2 then the R-3 table to the reverted source reproduces the task source byte-for-byte', applyR3(applyR2(reverted)) === rm);
-    chk('MS-7', 'line count = pre-task + 3 (at most four lines in the region)', rm.split('\n').length === reverted.split('\n').length + 3);
+    const reverted = revertR2(revertR3(revertS1(rm)));
+    chk('MS-7', 'reverting only the S1 lines, the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (LF pin)', sha256(reverted) === PRE_RM_LF);
+    chk('MS-7', 'reverting only the S1 lines, the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (CRLF pin)', sha256(crlf(reverted)) === PRE_RM_CRLF);
+    chk('MS-7', 'applying the R-2, then the R-3, then the S1 table to the reverted source reproduces the task source byte-for-byte', applyS1(applyR3(applyR2(reverted))) === rm);
+    chk('MS-7', 'line count = pre-task + 3 (R-2, at most four lines in the region) - 1 (S1: RM-6 +1, RM-7 -2)', rm.split('\n').length === reverted.split('\n').length + 2);
     chk('MS-7', 'the _tsAssessHtml line and the template interpolation are untouched',
       countOf(rm, "const _tsAssessHtml = _tsAssess ? `<div class=\"ts-assess\">${_tsAssess}</div>` : '';") === 1 && countOf(rm, '${_tsAssessHtml}`}${_ts1RowHtml}') === 1);
   });

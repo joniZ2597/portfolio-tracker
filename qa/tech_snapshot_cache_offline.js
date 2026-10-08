@@ -13,7 +13,7 @@
  *   TC-5         Technical Setup panel: _techSnapFor / refreshTechPanel
  *   TC-6         Deep Dive: no mismatched technical block
  *   TC-9         isolation (static)
- *   TC-10        renderMainPanel: exactly I7a-I7i, A9a-A9d, the R-2 table and the R-3 Score-row line changed (textual revert proves the old pin)
+ *   TC-10        renderMainPanel: exactly I7a-I7i, A9a-A9d, the R-2 table, the R-3 Score-row line and the S1 (R-5) table changed (textual revert proves the old pin)
  *   TC-11        caliper pins: only the renderMainPanel value moved
  *   TC-12/14/15  render harness: displayed price == snapshot price; Setup from the same
  *                snapshot; scan-time values marked "from scan" when the prices differ
@@ -61,9 +61,9 @@ const BASE_TS1_REGION = '9b267da4c06a7724ccbe13ba83bf376ba1dcd2dd7931d3b40fd7337
 // renderMainPanel: base (LF-normalised, = TS1 suite TX-3 pin) and base (CRLF form = caliper pin).
 const BASE_RM_LF = 'a8c13d283ad90e4c132e6d68a5570682b39d5c127d1dd5a4ce18795178ab838f';
 const OLD_RM_CALIPER_PIN = 'd11b09a989f19ee1fa09770ac135e8f00ce518558b25cc7bce3ee23cf1b174ac';
-// New pins (task renderMainPanel after I7a-I7i, A9a-A9d, the R-2 table and the R-3 Score-row line): LF-normalised (TS1 suite) and CRLF form (caliper).
-const NEW_RM_LF = '12789bcb207faf5df5dd9b10215442fb2da54b3c8521fd419f873c0cd35a6616';
-const NEW_RM_CALIPER_PIN = 'd1f693b557b37ba0afaa27573ff4c9d8984377b867d467383e1d0482d0c8e6f4';
+// New pins (task renderMainPanel after I7a-I7i, A9a-A9d, the R-2 table, the R-3 Score-row line and the S1 table): LF-normalised (TS1 suite) and CRLF form (caliper).
+const NEW_RM_LF = '63ac78f76a4b5265d8c16a3f0812c592f345cca36ac3f0f546b19e73bd3bb9ef';
+const NEW_RM_CALIPER_PIN = '757decd7724c70e4875d88f82cd950e6cc3ebb43186b10fac927bfefc2cdd95c';
 
 const BASE_PRICE_LINE = "  let price = item._verifiedPrice ? `$${item._verifiedPrice.toFixed(2)}` : '—';\n";
 const BASE_EXT_OVERRIDE = "  if (_showExt && _extC) {\n    if (typeof _extC.regularPrice    === 'number') price = `$${_extC.regularPrice.toFixed(2)}`;\n    if (typeof _extC.regularChangePct === 'number') chg  = _extC.regularChangePct;\n  }";
@@ -76,8 +76,8 @@ const BASE_CALIPER_PINS = {
   _ptScoreStates: '41968b418333e8a95f8fa6c15225351b9b7d73196bd808e7dd4ac6b7e3d83771',
   _ptScoreFillHtml: 'dfeb1959f3ca9f877d7158db68d5109c64bf36eb4f3f23eb300b735ae69f5a23',
   _ptScoreDial: '4092f243120f5c6bdf3269a02e599f3ad68afcd4a8afe8d766724879b0ef4bce',
-  _srGroupResults: '71055cd1d74cc51564c400b0a0c306caae816c5f4f22096324eb3eb8bb3bf0fc', // R-3 (Entry 36) re-pin: the fifth Daily Review group
-  _srRenderGrouped: '1301f2faa44a781f37c8b66a8826dd06a027af73f6c7a33f2a9c91c987a09ea1'
+  _srGroupResults: 'f4ebde1c851d2d2e38ee8a5b8b96812f802612f5faddd17972620138dbdfdc9d', // R-5 (Entry 37) re-pin: Pulse-only ordering (R-3 pin was 71055cd1…)
+  _srRenderGrouped: 'b14b4ee040faae7f0d3e5e2168ff0489b026d550545950c38328a0d824c4c914' // R-5 (Entry 37) re-pin: neutral Analyst cell (base was 1301f2fa…)
 };
 const BASE_CALIPER_CSS_HASH = 'b4c63e696fe93f7ab693b2d778c4426b58ae3f719bc95e92a97e0a117c4828d5';
 // The TS1 default-exposure suite's other TX-3 pins (CRLF-normalised, no async prefix) at the base.
@@ -181,6 +181,39 @@ function applyR3(rm) {
 function revertR3(taskRm) {
   if (countOf(taskRm, R3_NEW) !== 1) throw new Error('R3 new line not present exactly once');
   return taskRm.replace(R3_NEW, () => R3_OLD);
+}
+
+// ── S1 table (work/nlm-consistency-1/brief.md §S1, Entry 37, R-5): the seven renderMainPanel lines of the Pulse / Analyst split ──
+// old = the lines as they stand after R-3 (the e8a4bab form), new = the task lines (whole lines, exact bytes). The S1
+// lines are disjoint from the I7 / A9 / R-2 / R-3 lines, so the S1 table is reverted first and applied last.
+const S1_ACTION = "_esc(item.action).replace(/_/g,' ')";
+const S1_DIAL_LBL = "<div class=\"at-dial-lbl\">Score${_fromScan ? '<span style=\"margin-left:6px;text-transform:none;font-weight:400\">from scan</span>' : ''}</div>";
+const S1_TABLE = [
+  { id: 'RM-1', oldS: "  const rating = rM?rM[1]:'Neutral';", newS: "  const rating = rM ? rM[1] : null; // R-5 (Entry 37): no silent \"Neutral\" fallback" },
+  { id: 'RM-2', oldS: "  const rCls   = rating.toLowerCase()==='buy'?'pos':rating.toLowerCase()==='sell'?'neg':'neutral-v';",
+    newS: "  const _pulseBand = score === null ? 'neutral-v' : score >= 65 ? 'pos' : score <= 40 ? 'neg' : 'neutral-v'; // R-5 (Entry 37, ruling A1): the Pulse score band colours the dial and the chip" },
+  { id: 'RM-3', oldS: "  const _dialColor = rCls === 'pos' ? 'var(--green2)' : rCls === 'neg' ? 'var(--red2)' : 'var(--blue2)';",
+    newS: "  const _dialColor = _pulseBand === 'pos' ? 'var(--green2)' : _pulseBand === 'neg' ? 'var(--red2)' : 'var(--blue2)';" },
+  { id: 'RM-4',
+    oldS: '    ? `<div class="at-dial-row"><div class="${_dial.cls}" style="${_dial.style}"><span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span></div><div>' + S1_DIAL_LBL + '<div class="at-dial-val ${rCls}">${rating}</div></div></div>`',
+    newS: '    ? `<div class="at-dial-row"><div class="${_dial.cls}" style="${_dial.style}"><span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span></div><div>' + S1_DIAL_LBL + '<div class="at-dial-val ${_pulseBand}">${item.action ? ' + S1_ACTION + " : ''}</div></div></div>`" },
+  { id: 'RM-5', oldS: '          ? `<span class="ph-rating-chip ${rCls}">RATING · ${rating.toUpperCase()}</span>`',
+    newS: '          ? `<span class="ph-rating-chip ${_pulseBand}">PULSE · ${' + S1_ACTION + '}</span>`' },
+  { id: 'RM-6', oldS: '        ${_dialHtml}',
+    newS: '        ${_dialHtml}\n        ${rating ? `<div class="at-analyst-line" style="margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--text3)">Analyst view · ${rating.toUpperCase()} · PT ${pt}</div>` : \'\'}' },
+  { id: 'RM-7',
+    oldS: '        <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">\n          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>\n        </div>',
+    newS: '        ${rating ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px"><div class="rr-row"><span class="rr-lbl">Analyst view</span><span class="rr-val neutral-v">${rating.toUpperCase()} · PT ${pt}</span></div></div>` : \'\'}' }
+];
+function applyS1(rm) {
+  let out = rm;
+  for (const r of S1_TABLE) { if (countOf(out, r.oldS) !== 1) throw new Error('S1 old line not unique: ' + r.id); out = out.replace(r.oldS, () => r.newS); }
+  return out;
+}
+function revertS1(taskRm) {
+  let out = taskRm;
+  for (const r of S1_TABLE.slice().reverse()) { if (countOf(out, r.newS) !== 1) throw new Error('S1 new line not present exactly once: ' + r.id); out = out.replace(r.newS, () => r.oldS); }
+  return out;
 }
 
 // ── Source extraction ────────────────────────────────────────────────────────────────────────
@@ -677,12 +710,12 @@ async function evaluate(S) {
   // ── TC-10 only main-panel change ────────────────────────────────────────────────────────
   const rm = extractFn(src, 'renderMainPanel') || '';
   await guard('TC-10', async () => {
-    const reverted = revertI7(revertA9(revertR2(revertR3(rm))));
-    chk('TC-10', 'reverting R-3, R-2, A9 and I7a-I7i restores the base (LF-normalised pin)', sha256(reverted) === BASE_RM_LF);
-    chk('TC-10', 'reverting R-3, R-2, A9 and I7a-I7i restores the OLD caliper pin d11b09a9', sha256(crlf(reverted)) === OLD_RM_CALIPER_PIN);
-    const forward = applyR3(applyR2(applyA9(applyI7(reverted))));
-    chk('TC-10', 'line diff is exactly I7a-I7c added, I7d-I7i and A9 replaced, the R-2 line replaced by four, and the R-3 Score-row line replaced', forward === rm);
-    chk('TC-10', 'line count = base + 3 (I7) + 3 (R-2) + 0 (R-3)', rm.split('\n').length === reverted.split('\n').length + 6);
+    const reverted = revertI7(revertA9(revertR2(revertR3(revertS1(rm)))));
+    chk('TC-10', 'reverting S1, R-3, R-2, A9 and I7a-I7i restores the base (LF-normalised pin)', sha256(reverted) === BASE_RM_LF);
+    chk('TC-10', 'reverting S1, R-3, R-2, A9 and I7a-I7i restores the OLD caliper pin d11b09a9', sha256(crlf(reverted)) === OLD_RM_CALIPER_PIN);
+    const forward = applyS1(applyR3(applyR2(applyA9(applyI7(reverted)))));
+    chk('TC-10', 'line diff is exactly I7a-I7c added, I7d-I7i and A9 replaced, the R-2 line replaced by four, the R-3 Score-row line replaced, and the seven S1 lines (RM-1..RM-7)', forward === rm);
+    chk('TC-10', 'line count = base + 3 (I7) + 3 (R-2) + 0 (R-3) - 1 (S1: RM-6 +1, RM-7 -2)', rm.split('\n').length === reverted.split('\n').length + 5);
     chk('TC-10', 'task renderMainPanel hashes to the new LF pin', sha256(rm) === NEW_RM_LF);
     chk('TC-10', 'task renderMainPanel hashes to the new caliper (CRLF) pin', sha256(crlf(rm)) === NEW_RM_CALIPER_PIN);
   });
@@ -782,11 +815,12 @@ async function evaluate(S) {
     if (!tfSrc || !asSrc) throw new Error('maps not extractable');
     const tfMap = new Function('return ' + tfSrc[1])();
     const assessMap = new Function('return ' + asSrc[1])();
-    // Independent expectation for the action-block dial of mkItem() (score 70, "Rating: Buy" -> pos / green).
+    // Independent expectation for the action-block dial of mkItem() (score 70 -> Pulse band pos / green; word = the Action-row rendering of
+    // action 'buy'; the analyst "Rating: Buy" no longer colours or labels the dial — R-5, Entry 37).
     const dialParts = new Function([extractFn(src, '_ptScoreNorm'), extractFn(src, '_ptScoreText'), extractFn(src, '_ptScoreDial'),
       'return { d: _ptScoreDial(70, "var(--green2)"), t: _ptScoreText(70) };'].join('\n'))();
     const expectedDial = '<div class="at-dial-row"><div class="' + dialParts.d.cls + '" style="' + dialParts.d.style + '"><span class="at-dial-num" style="color:' +
-      dialParts.d.numColor + '">' + dialParts.t + '</span></div><div><div class="at-dial-lbl">Score</div><div class="at-dial-val pos">Buy</div></div></div>';
+      dialParts.d.numColor + '">' + dialParts.t + '</span></div><div><div class="at-dial-lbl">Score</div><div class="at-dial-val pos">buy</div></div></div>';
     const baseRm = (() => { try { return revertI7(revertR2(revertR3(rm))); } catch (e1) { return null; } })();
     const renderBase = baseRm ? buildRenderer(baseRm, src) : null;
     for (const st of states) {
@@ -909,7 +943,7 @@ const NEGATIVES = [
   { id: 'TC-15', label: 'dial number altered', target: 'index',
     f: s => mut(s, '<span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span>', '<span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}!</span>') },
   { id: 'TC-15', label: 'dial rating altered', target: 'index',
-    f: s => mut(s, '<div class="at-dial-val ${rCls}">${rating}</div>', '<div class="at-dial-val ${rCls}">${rating.toUpperCase()}</div>') },
+    f: s => mut(s, '<div class="at-dial-val ${_pulseBand}">${item.action ? ' + S1_ACTION + " : ''}</div>", '<div class="at-dial-val ${_pulseBand}">${item.action ? ' + S1_ACTION + ".toUpperCase() : ''}</div>") },
   { id: 'TC-15', label: 'Score label literal replaced', target: 'index',
     f: s => mut(s, '<span class="rr-lbl">Score</span>', '<span class="rr-lbl">Scan score</span>') },
   { id: 'TC-11', label: 'another caliper pin changed', target: 'caliper',

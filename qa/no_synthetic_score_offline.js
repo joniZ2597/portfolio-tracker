@@ -47,8 +47,9 @@ const PRE = {
   renderMainPanel: 'e84c5e61abcb1179add1c5db28d5d5b1e958daa10b0363fdb339d83363fed869'
 };
 // index.html with the five changed functions masked: nothing else in the file changes in this task
-// (hence no new top-level function anywhere).
-const PRE_MASKED_FIVE = '529fdce6b1bf1dec2ac1a59f346b72fe0177df1d3ff304018d078e98c8e80d58';
+// (hence no new top-level function anywhere). Re-pinned by R-5 (Entry 37, nlm-consistency-1 S1), whose edits to
+// openScanResultsOverlay, _srRenderGrouped, _renderPortfolioPanel and the static overlay header sit outside the mask.
+const PRE_MASKED_FIVE = '0559edce2de564d07984b563ed88dd188f8d26ecf6c12e08cd3718636b1972c9';
 // Surfaces the brief says are untouched (section 2.8 / NS-11).
 const ISOLATION_PINS = {
   enforceScoreConsistency: 'e1406d9bfe8358212ada456882bea248cb761cc68734213aa5151b9c02966a00',
@@ -60,7 +61,7 @@ const ISOLATION_PINS = {
   _ptScoreFillHtml: '389f2ba8e3993bd835cb9e13bb596124b32df225920b7615f87adc3eec770292',
   _ptScoreDial: '22a2c59e47fcda24b61c08221a5e02f66ecd2de57bdf995510fbb52e7906666e',
   applyCapitalReturnsNudge: 'eef0d08a4d9e32053df3241960f6bcbd21f136590da316688549bf16c0216a16',
-  _renderPortfolioPanel: '79cc59e7f362b103b34d031b5e24efecc0c33b1a185b640ddeaa5568480f7d5d',
+  _renderPortfolioPanel: '08286eba02162c12523e0984c6e9bae6639bb6bfe6b737f44ccc6e5816bf78cf', // R-5 (Entry 37) re-pin: neutral "Analyst <RATING>" chip
   _dd0FetchAnalysis: 'bcec3745e3511b354337220208531e9a04143cd82df626f8348da57f39894a6c',
   classifyTechnicalSetup: 'c143eb08d982cff036dd5678def08dc38e7dede6e2a0f4ae11a79d277e3ab3ad'
 };
@@ -120,6 +121,44 @@ function revertR3(fnSrc, name) {
   let out = fnSrc;
   for (const r of R3[name].slice().reverse()) {
     if (countOf(out, r.newS) !== 1) throw new Error('R-3 new text not unique: ' + r.id);
+    out = out.replace(r.newS, () => r.oldS);
+  }
+  return out;
+}
+// ── S1 table (work/nlm-consistency-1/brief.md §S1, Entry 37, R-5): the later lines of _srGroupResults and renderMainPanel ──
+// Disjoint from the R-3 lines, so the pre-task (pre-R-3) pin is reached by reverting S1 after R-3: revertS1(revertR3(task)).
+// The behavioural "pre" variants below keep S1 (revertR3 alone), so R-3's own comparisons stay meaningful after S1.
+const S1_ACTION = "_esc(item.action).replace(/_/g,' ')";
+const S1_DIAL_LBL = "<div class=\"at-dial-lbl\">Score${_fromScan ? '<span style=\"margin-left:6px;text-transform:none;font-weight:400\">from scan</span>' : ''}</div>";
+const S1 = {
+  analyzeChunk: [], orchestrate: [], _isValidScanResult: [],
+  _srGroupResults: [
+    { id: 'SG-1',
+      oldS: "  const rRank = r => {\n    const m = (r.summary || '').match(RATING_SUMMARY_RE);\n    const v = r.rating || (m ? m[1] : 'Neutral');\n    return v.toLowerCase() === 'buy' ? 0 : v.toLowerCase() === 'sell' ? 2 : 1;\n  };\n  const items = source.slice().sort((a, b) => {\n    const d = _ptScoreCmp(a, b);\n    return d !== 0 ? d : rRank(a) - rRank(b);\n  });",
+      newS: '  const items = source.slice().sort(_ptScoreCmp); // R-5 (Entry 37, ruling B1): Pulse-only ordering; equal scores keep source order' }
+  ],
+  renderMainPanel: [
+    { id: 'RM-1', oldS: "  const rating = rM?rM[1]:'Neutral';", newS: "  const rating = rM ? rM[1] : null; // R-5 (Entry 37): no silent \"Neutral\" fallback" },
+    { id: 'RM-2', oldS: "  const rCls   = rating.toLowerCase()==='buy'?'pos':rating.toLowerCase()==='sell'?'neg':'neutral-v';",
+      newS: "  const _pulseBand = score === null ? 'neutral-v' : score >= 65 ? 'pos' : score <= 40 ? 'neg' : 'neutral-v'; // R-5 (Entry 37, ruling A1): the Pulse score band colours the dial and the chip" },
+    { id: 'RM-3', oldS: "  const _dialColor = rCls === 'pos' ? 'var(--green2)' : rCls === 'neg' ? 'var(--red2)' : 'var(--blue2)';",
+      newS: "  const _dialColor = _pulseBand === 'pos' ? 'var(--green2)' : _pulseBand === 'neg' ? 'var(--red2)' : 'var(--blue2)';" },
+    { id: 'RM-4',
+      oldS: '    ? `<div class="at-dial-row"><div class="${_dial.cls}" style="${_dial.style}"><span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span></div><div>' + S1_DIAL_LBL + '<div class="at-dial-val ${rCls}">${rating}</div></div></div>`',
+      newS: '    ? `<div class="at-dial-row"><div class="${_dial.cls}" style="${_dial.style}"><span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span></div><div>' + S1_DIAL_LBL + '<div class="at-dial-val ${_pulseBand}">${item.action ? ' + S1_ACTION + " : ''}</div></div></div>`" },
+    { id: 'RM-5', oldS: '          ? `<span class="ph-rating-chip ${rCls}">RATING · ${rating.toUpperCase()}</span>`',
+      newS: '          ? `<span class="ph-rating-chip ${_pulseBand}">PULSE · ${' + S1_ACTION + '}</span>`' },
+    { id: 'RM-6', oldS: '        ${_dialHtml}',
+      newS: '        ${_dialHtml}\n        ${rating ? `<div class="at-analyst-line" style="margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--text3)">Analyst view · ${rating.toUpperCase()} · PT ${pt}</div>` : \'\'}' },
+    { id: 'RM-7',
+      oldS: '        <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">\n          <div class="rr-row"><span class="rr-lbl">Rating</span><span class="rr-val ${rCls}">${rating.toUpperCase()} · PT ${pt}</span></div>\n        </div>',
+      newS: '        ${rating ? `<div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px"><div class="rr-row"><span class="rr-lbl">Analyst view</span><span class="rr-val neutral-v">${rating.toUpperCase()} · PT ${pt}</span></div></div>` : \'\'}' }
+  ]
+};
+function revertS1(fnSrc, name) {
+  let out = fnSrc;
+  for (const r of S1[name].slice().reverse()) {
+    if (countOf(out, r.newS) !== 1) throw new Error('S1 new text not unique: ' + r.id);
     out = out.replace(r.newS, () => r.oldS);
   }
   return out;
@@ -344,7 +383,7 @@ async function evaluate(src) {
   await guard('NS-12', () => {
     for (const n of CHANGED) {
       chk('NS-12', n + ': the R-3 table reverts cleanly (every task line present exactly once)', pre[n] !== null);
-      chk('NS-12', n + ': reverting only the R-3 lines restores the pre-task source (LF pin)', pre[n] !== null && sha256(pre[n]) === PRE[n]);
+      chk('NS-12', n + ': reverting only the R-3 lines (and, after them, the S1 lines of R-5) restores the pre-task source (LF pin)', pre[n] !== null && sha256(revertS1(pre[n], n)) === PRE[n]);
       chk('NS-12', n + ': applying the R-3 table to the reverted source reproduces the task source byte-for-byte', pre[n] !== null && applyR3(pre[n], n) === task[n]);
     }
     chk('NS-12', 'line counts: analyzeChunk +0, orchestrate +0, _isValidScanResult +0, _srGroupResults +2, renderMainPanel +0',
