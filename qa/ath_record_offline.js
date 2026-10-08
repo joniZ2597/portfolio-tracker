@@ -41,7 +41,7 @@ function ok(cond, msg) {
 }
 
 function loadMutated(file, mutations) {
-  let src = fs.readFileSync(file, 'utf8');
+  let src = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
   mutations.forEach(function (m) {
     if (src.indexOf(m[0]) === -1) { throw new Error('MUTANT_ANCHOR_MISSING: ' + m[0]); }
     src = src.replace(m[0], m[1]);
