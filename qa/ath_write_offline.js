@@ -372,10 +372,12 @@ async function main() {
       ok(store.log[0].opts && store.log[0].opts.consistency === 'strong', 'strong pre-read');
       ok(store.log[1].opts === undefined, 'plain overwrite (no onlyIfNew)');
       const rec = stored(store, 'AAPL');
-      ok(ath.validateRecord(rec).ok === true, 'the stored record validates');
+      ok(ath.validateRecordV2(rec).ok === true, 'the stored record validates as ath:v2');
+      ok(rec.schema === 'ath:v2' && rec.method === 'operator' && rec.splitCheckedThrough === null, 'v2 operator record');
+      ok(Object.keys(rec).sort().join() === ath.RECORD_KEYS_V2.slice().sort().join(), 'exact v2 key set (no verifiedBy / pending / tradingViewSymbol)');
       ok(rec.status === 'verified' && rec.athValue === 345.34 && rec.athDate === '2026-09-22', 'value and date derived from the matched bar of the series');
-      ok(rec.verifiedAt === NOW_ISO && rec.lastCheckedAt === NOW_ISO && rec.verifiedBy === 'operator', 'server clock');
-      ok(rec.refresh.status === 'none' && rec.pending === null, 'refresh none, pending null');
+      ok(rec.verifiedAt === NOW_ISO && rec.lastCheckedAt === NOW_ISO, 'server clock');
+      ok(rec.refresh.status === 'none', 'refresh none');
       ok(rec.evidence.toleranceUsed === 0.005 && rec.evidence.matchedBar.high === 345.34 && rec.evidence.higherBars.length === 0, 'evidence');
       ok(rec.evidence.yahooBarCount === 4 && rec.evidence.yahooFirstBarDate === '1980-12-12', 'bar count and first bar are derived from the series, not supplied');
       ok(JSON.stringify(r.body).indexOf(WRITE_TOKEN) === -1, 'token not echoed');
@@ -442,6 +444,28 @@ async function main() {
       ok(parsed(g).reason === 'STORE_UNAVAILABLE', 'get throws');
       const s = await write(core, 'AAPL', attempt(), makeSpyStore({ setThrows: true }));
       ok(parsed(s).status === 'DEGRADED' && parsed(s).reason === 'STORE_UNAVAILABLE', 'set throws');
+    });
+
+    await test('AR-4k B2-auto: the protected path writes v2 operator records; a failed attempt never discards an auto-derived value; a v1 record is written back as v2', async function () {
+      const autoRec = {
+        schema: 'ath:v2', ticker: 'AAPL', providerSymbol: 'AAPL', currency: 'USD', unit: 'USD', basis: 'split-adjusted-no-dividend-adjust',
+        status: 'verified', method: 'auto', athValue: 300, athDate: '2026-01-02', verifiedAt: '2026-09-01T00:00:00.000Z',
+        evidence: { source: 'yahoo-daily', firstTradeDate: '1980-12-12', firstBarDate: '1980-12-12', barCount: 11000,
+          matchedBar: { date: '2026-01-02', high: 300, open: 295, close: 299 }, rejectedBars: [], splitsSeen: [], reason: null },
+        refresh: { status: 'none', lastAttemptAt: null, reason: null }, lastCheckedAt: '2026-09-01T00:00:00.000Z', splitCheckedThrough: '2026-09-01'
+      };
+      ok(ath.validateRecordV2(autoRec).ok === true, 'fixture is a valid v2 auto record');
+      const sAuto = makeSpyStore({ seed: seed(autoRec) });
+      const failed = await write(core, 'AAPL', attempt({ tradingViewHigh: 100 }), sAuto);
+      ok(parsed(failed).status === 'REFRESH_RECORDED' && stored(sAuto, 'AAPL').method === 'auto' && stored(sAuto, 'AAPL').athValue === 300 && stored(sAuto, 'AAPL').refresh.status === 'unresolved', 'a failed operator attempt keeps the auto value');
+      const sOk = makeSpyStore({ seed: seed(autoRec) });
+      await write(core, 'AAPL', attempt(), sOk);
+      ok(stored(sOk, 'AAPL').method === 'operator' && stored(sOk, 'AAPL').athValue === 345.34, 'a verified operator attempt replaces it as an operator record (recovery path)');
+      const sV1 = makeSpyStore({ seed: seed(record()) });
+      await write(core, 'AAPL', attempt({ tradingViewHigh: 100 }), sV1);
+      const back = stored(sV1, 'AAPL');
+      ok(back.schema === 'ath:v2' && back.method === 'operator' && ath.validateRecordV2(back).ok === true, 'a v1 record is written back as a valid v2 operator record');
+      ok(ath.buildOperatorRecord.length === 1, 'builder arity');
     });
 
     await test('AR-4j DELETE removes only the allowlisted key (teardown path)', async function () {
@@ -665,6 +689,12 @@ async function main() {
       });
     }
 
+    await killed('the operator record is written as method auto (AR-4k)', RECORD_PATH,
+      [['function buildOperatorRecord(input) { return upgradeV1(buildRecord(input)); }', 'function buildOperatorRecord(input) { const r = upgradeV1(buildRecord(input)); r.method = \'auto\'; return r; }']],
+      async function (mod) {
+        const out = mod.buildOperatorRecord({ ticker: 'AAPL', attempt: attempt(), classification: mod.classifyVerification(attempt(), NOW_ISO), nowIso: NOW_ISO });
+        return out.method === 'operator' && mod.validateRecordV2(out).ok === true;
+      });
     await killed('tolerance changed (AR-4)', RECORD_PATH, [['const TOLERANCE = 0.005;', 'const TOLERANCE = 0.02;']], boundary);
     await killed('client status trusted (AR-4)', RECORD_PATH, [['status: classification.status,', 'status: attempt.status !== undefined ? attempt.status : classification.status,']], statusRecomputed);
     await killed('selection edge uses tv * (1 +/- TOLERANCE) instead of the shared predicate (AR-5i)', RECORD_PATH,

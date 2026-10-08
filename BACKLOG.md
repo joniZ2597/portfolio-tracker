@@ -183,9 +183,13 @@ high now has a gated server-side store (`ath:v1` records, Blob store `ath-record
 seeds it from one explicit snapshot: the writer derives the matched bar, every higher bar and the
 covered / uncovered split from the submitted full Yahoo daily series against the operator's
 TradingView `All` reading, with independent evidence required for any uncovered higher bar; no
-plausibility rejection, no override; nothing in the UI or AI reads it yet. *Remains — B2:* refresh
-triggers, `pending` handling and the split-driven `stale-suspect` rule. *Remains — B4:* UI and AI
-prompt wiring of the verified ATH and the `*_near_ath` setup-name decision.
+plausibility rejection, no override; nothing in the UI or AI reads it yet. *Slice B2-auto landed
+(`work/r1b2-ath-auto/`):* automatic maintenance — a public ticker-only `ath-ensure` route derives
+and refreshes the ATH server-side from Yahoo daily candles (`ath:v2`, suspect-spike rule,
+incremental update, split-driven `stale-suspect` re-derive; operator records keep precedence),
+and `ath-read` is a public read-only `ath-read-v2` projection; DEV only, dormant until armed.
+*Remains — B4:* UI and AI prompt wiring of the verified ATH (display + AI only) and the
+`*_near_ath` setup-name decision.
 *Deps:* none.
 
 ### 35 · Claim the MA stack only when the averages are stacked (R-2) — **DONE**

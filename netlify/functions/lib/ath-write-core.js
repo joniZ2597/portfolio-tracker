@@ -36,9 +36,10 @@ const { evaluateAthPreflight } = require('./ath-preflight');
 const {
   STORE_NAME,
   recordKey,
-  validateRecord,
+  parseStoredRecord,
+  validateRecordV2,
   classifyVerification,
-  buildRecord,
+  buildOperatorRecord,
   withRefreshFailure
 } = require('./ath-record');
 
@@ -194,13 +195,15 @@ exports.handler = async function (event) {
   // WRITE: read and validate any existing record first. A corrupt record is never overwritten.
   let existing = null;
   if (existingRaw !== null && existingRaw !== undefined) {
-    try { existing = JSON.parse(existingRaw); } catch (_) { return degraded('STORE_RECORD_INVALID', ticker); }
-    if (!validateRecord(existing).ok || existing.ticker !== ticker) {
+    // A stored v1 record is read as an `operator` v2 record; it is written back as v2 below.
+    const stored = parseStoredRecord(existingRaw);
+    if (!stored.ok || stored.record.ticker !== ticker) {
       return degraded('STORE_RECORD_INVALID', ticker);
     }
+    existing = stored.record;
   }
 
-  const candidate = buildRecord({ ticker: ticker, attempt: parsed.value.attempt, classification: classification, nowIso: nowIso });
+  const candidate = buildOperatorRecord({ ticker: ticker, attempt: parsed.value.attempt, classification: classification, nowIso: nowIso });
 
   let toWrite = candidate;
   let outcome = 'WRITE';
@@ -212,7 +215,7 @@ exports.handler = async function (event) {
     }
   }
 
-  if (!validateRecord(toWrite).ok) {
+  if (!validateRecordV2(toWrite).ok) {
     return res(500, { status: 'ERROR', reason: 'RECORD_BUILD_INVALID' });
   }
 

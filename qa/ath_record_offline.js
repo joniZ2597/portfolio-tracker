@@ -363,6 +363,91 @@ test('AR-2e does not mutate its inputs', function () {
   ok(JSON.stringify(rec) === before, 'record unchanged');
 });
 
+// ── AR-1 (B2-auto): the ath:v2 schema ─────────────────────────────────────────
+function autoRecordV2(over) {
+  return Object.assign({
+    schema: 'ath:v2', ticker: 'AAPL', providerSymbol: 'AAPL', currency: 'USD', unit: 'USD', basis: 'split-adjusted-no-dividend-adjust',
+    status: 'verified', method: 'auto', athValue: 100, athDate: '2026-09-22', verifiedAt: NOW,
+    evidence: {
+      source: 'yahoo-daily', firstTradeDate: '1980-12-12', firstBarDate: '1980-12-12', barCount: 11000,
+      matchedBar: { date: '2026-09-22', high: 100, open: 98, close: 99 },
+      rejectedBars: [{ date: '2007-07-30', high: 5000, open: 10, close: 11, reason: 'SUSPECT_SPIKE' }],
+      splitsSeen: [{ date: '2020-08-31', ratio: 4 }], reason: null
+    },
+    refresh: { status: 'none', lastAttemptAt: null, reason: null }, lastCheckedAt: NOW, splitCheckedThrough: '2026-10-07'
+  }, over || {});
+}
+
+test('AR-1v2a a valid auto record validates; the exact 15-key set is enforced', function () {
+  ok(ath.validateRecordV2(autoRecordV2()).ok === true, 'valid');
+  ok(ath.RECORD_KEYS_V2.length === 15 && ath.SCHEMA_V2 === 'ath:v2', 'key set size / schema');
+  const extra = autoRecordV2(); extra.override = true;
+  ok(ath.validateRecordV2(extra).ok === false, 'an extra field is refused');
+  const missing = autoRecordV2(); delete missing.splitCheckedThrough;
+  ok(ath.validateRecordV2(missing).ok === false, 'a missing key is refused');
+  ['verifiedBy', 'pending', 'tradingViewSymbol'].forEach(function (k) {
+    const r = autoRecordV2(); r[k] = null;
+    ok(ath.validateRecordV2(r).ok === false, k + ' is not a v2 key');
+  });
+});
+
+test('AR-1v2b vocabularies: method, status, reason codes, rejected-bar reasons; unresolved carries no value', function () {
+  ok(ath.validateRecordV2(autoRecordV2({ method: 'manual' })).ok === false, 'method vocabulary');
+  ok(ath.validateRecordV2(autoRecordV2({ status: 'pending' })).ok === false, 'status vocabulary');
+  ath.REASONS.forEach(function (c) { ok(typeof c === 'string', 'reason ' + c); });
+  ['FETCH_FAILED', 'BODY_INVALID', 'COVERAGE', 'SUSPECT_MATERIAL', 'NO_RELIABLE_ATH', 'SPLIT_INCONSISTENT', 'UNSUPPORTED'].forEach(function (c) {
+    ok(ath.REASONS.indexOf(c) !== -1, 'vocabulary has ' + c);
+  });
+  const badReason = autoRecordV2(); badReason.evidence.rejectedBars[0].reason = 'LOOKS_ODD';
+  ok(ath.validateRecordV2(badReason).ok === false, 'rejected-bar reason vocabulary');
+  const unresolved = autoRecordV2({ status: 'unresolved', athValue: null, athDate: null, verifiedAt: null });
+  unresolved.evidence.matchedBar = null; unresolved.evidence.reason = 'COVERAGE';
+  ok(ath.validateRecordV2(unresolved).ok === true, 'unresolved auto record');
+  ok(ath.validateRecordV2(Object.assign({}, unresolved, { athValue: 5 })).ok === false, 'unresolved carries no value');
+  const mismatch = autoRecordV2({ athValue: 101 });
+  ok(ath.validateRecordV2(mismatch).ok === false, 'ATH must equal the matched bar');
+  const tooMany = autoRecordV2();
+  tooMany.evidence.rejectedBars = Array.from({ length: 501 }, function () { return { date: '2007-07-30', high: 5, open: null, close: null, reason: 'UNASSESSABLE' }; });
+  ok(ath.validateRecordV2(tooMany).ok === false, 'rejectedBars capped at 500');
+});
+
+test('AR-1v2c a v1 record is refused as a stored v2 but accepted through upgradeV1 (as operator, evidence unchanged)', function () {
+  const v1 = validRecord();
+  ok(ath.validateRecordV2(v1).ok === false, 'v1 is not a valid v2');
+  const up = ath.upgradeV1(v1);
+  ok(up !== null && up.schema === 'ath:v2' && up.method === 'operator' && up.splitCheckedThrough === null, 'upgraded as operator');
+  ok(JSON.stringify(up.evidence) === JSON.stringify(v1.evidence), 'evidence unchanged');
+  ok(ath.validateRecordV2(up).ok === true, 'the upgrade round-trips as a valid v2');
+  ok(Object.keys(up).sort().join() === ath.RECORD_KEYS_V2.slice().sort().join(), 'exact v2 keys');
+  ok(ath.upgradeV1(Object.assign({}, v1, { override: 1 })) === null, 'an invalid v1 is not upgraded');
+  ['unresolved', 'stale-suspect'].forEach(function (st) {
+    const r = validRecord({ status: st, athValue: st === 'unresolved' ? null : 100, athDate: st === 'unresolved' ? null : '2026-09-22', verifiedAt: st === 'unresolved' ? null : NOW, verifiedBy: st === 'unresolved' ? null : 'operator' });
+    if (st === 'unresolved') { r.evidence = Object.assign({}, r.evidence, { matchedBar: null }); }
+    const u = ath.upgradeV1(r);
+    ok(u !== null && u.method === 'operator' && u.status === st && ath.validateRecordV2(u).ok === true, st + ' upgrades as operator');
+  });
+  const stored = ath.parseStoredRecord(JSON.stringify(v1));
+  ok(stored.ok === true && stored.record.method === 'operator', 'parseStoredRecord reads v1 as operator');
+  ok(ath.parseStoredRecord(JSON.stringify(autoRecordV2())).record.method === 'auto', 'parseStoredRecord keeps v2 as it is');
+  ok(ath.parseStoredRecord('{nope').ok === false && ath.parseStoredRecord(JSON.stringify({ schema: 'ath:v9' })).ok === false, 'unknown / corrupt refused');
+});
+
+test('AR-1v2d an operator record raised automatically carries autoRaise and stays valid; a stale autoRaise does not', function () {
+  const up = ath.upgradeV1(validRecord());
+  up.athValue = 103; up.athDate = '2026-10-02';
+  up.evidence.autoRaise = [{ date: '2026-10-02', high: 103, open: 101, close: 102 }];
+  ok(ath.validateRecordV2(up).ok === true, 'raised operator record');
+  up.evidence.autoRaise[0].high = 104;
+  ok(ath.validateRecordV2(up).ok === false, 'the last autoRaise must match the stored ATH');
+});
+
+test('AR-1v2e the public projection has exactly the ath-read-v2 keys and hides non-verified values', function () {
+  const p = ath.projectPublic('AAPL', autoRecordV2());
+  ok(Object.keys(p).sort().join() === ath.PUBLIC_KEYS.slice().sort().join() && p.readContractVersion === 'ath-read-v2' && p.athValue === 100, 'verified');
+  const s = ath.projectPublic('AAPL', autoRecordV2({ status: 'stale-suspect' }));
+  ok(s.athValue === null && s.athDate === null && s.recordStatus === 'stale-suspect', 'stale-suspect');
+});
+
 // ── planted negatives (mutation on production source) ─────────────────────────
 function killed(name, mutations, predicate) {
   test('PN ' + name + ' is killed', function () {
@@ -384,6 +469,26 @@ killed('compare accepts a stale record (AR-2)',
   [['record.status !== \'verified\') { // compare-requires-verified', 'record.status === \'unresolved\') { // compare-requires-verified']], ar2No1yHigh);
 killed('override field tolerated by the schema (AR-1)',
   [['if (!exactKeys(rec, RECORD_KEYS)) { return bad(\'RECORD_KEYS\'); }', 'if (false) { return bad(\'RECORD_KEYS\'); }']], ar1NoOverride);
+
+killed('upgradeV1 labels a v1 record as auto (AR-1v2)',
+  [['    method: \'operator\',\n    athValue: rec.athValue,', '    method: \'auto\',\n    athValue: rec.athValue,']],
+  function (m) { const u = m.upgradeV1(validRecord()); return u !== null && u.method === 'operator'; });
+killed('the v2 validator accepts a v1 record (AR-1v2)',
+  [['if (rec.schema !== SCHEMA_V2 || rec.basis !== BASIS) { return bad(\'RECORD_CONSTANTS\'); }', 'if (rec.basis !== BASIS) { return bad(\'RECORD_CONSTANTS\'); }']],
+  function (m) { return m.validateRecordV2(validRecord()).ok === false && m.validateRecordV2(autoRecordV2({ schema: 'ath:v1' })).ok === false; });
+killed('the v2 validator tolerates an extra field (AR-1v2)',
+  [['if (!exactKeys(rec, RECORD_KEYS_V2)) { return bad(\'RECORD_KEYS\'); }', 'if (false) { return bad(\'RECORD_KEYS\'); }']],
+  function (m) { const r = autoRecordV2(); r.override = true; return m.validateRecordV2(r).ok === false; });
+killed('the rejected-bar list is uncapped in the schema (AR-1v2)',
+  [['ev.rejectedBars.length > MAX_REJECTED_BARS ||', 'false ||']],
+  function (m) {
+    const r = autoRecordV2();
+    r.evidence.rejectedBars = Array.from({ length: 501 }, function () { return { date: '2007-07-30', high: 5, open: null, close: null, reason: 'UNASSESSABLE' }; });
+    return m.validateRecordV2(r).ok === false;
+  });
+killed('the ATH may differ from the matched bar (AR-1v2)',
+  [['rec.evidence.matchedBar.high !== rec.athValue || rec.evidence.matchedBar.date !== rec.athDate) { return bad(\'ATH_MATCH_MISMATCH\'); }\n    } else if (Array', 'false) { return bad(\'ATH_MATCH_MISMATCH\'); }\n    } else if (Array']],
+  function (m) { return m.validateRecordV2(autoRecordV2({ athValue: 101 })).ok === false; });
 
 const result = failed === 0 ? 'ALL PASS' : 'FAILURES: ' + failed;
 process.stdout.write('\n  ' + result + ' (' + passed + ' passed, ' + failed + ' failed)\n\n');

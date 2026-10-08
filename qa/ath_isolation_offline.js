@@ -45,6 +45,9 @@ function ok(cond, msg) {
 const SERVER_FILES = {
   'netlify/functions/lib/ath-record.js': { requires: [], imports: [] },
   'netlify/functions/lib/ath-preflight.js': { requires: ['./ath-record'], imports: [] },
+  'netlify/functions/lib/ath-yahoo.js': { requires: ['./ath-record'], imports: [] },
+  'netlify/functions/lib/ath-ensure-core.js': { requires: ['./ath-preflight', './ath-record', './ath-yahoo', '@netlify/blobs'], imports: [] },
+  'netlify/functions/ath-ensure.mjs': { requires: [], imports: ['@netlify/blobs', '@netlify/aws-lambda-compat', './lib/ath-ensure-core.js'] },
   'netlify/functions/lib/ath-read-core.js': { requires: ['./ath-preflight', './ath-record', '@netlify/blobs'], imports: [] },
   'netlify/functions/lib/ath-write-core.js': { requires: ['./ath-preflight', './ath-record', '@netlify/blobs'], imports: [] },
   'netlify/functions/ath-read.mjs': { requires: [], imports: ['@netlify/blobs', '@netlify/aws-lambda-compat', './lib/ath-read-core.js'] },
@@ -53,7 +56,7 @@ const SERVER_FILES = {
 const TOOL_FILE = 'tools/ath-verify-owner.js';
 
 const ALLOWED_ENV_KEYS = [
-  'PT_ENABLE_ATH_READ_SERVER', 'PT_ENABLE_ATH_WRITE_SERVER', 'PT_ATH_READ_TOKEN', 'PT_ATH_WRITE_TOKEN', 'PT_ATH_ALLOWED_TICKERS',
+  'PT_ENABLE_ATH_READ_SERVER', 'PT_ENABLE_ATH_WRITE_SERVER', 'PT_ENABLE_ATH_ENSURE_SERVER', 'PT_ATH_READ_TOKEN', 'PT_ATH_WRITE_TOKEN', 'PT_ATH_ALLOWED_TICKERS',
   'PT_FUND_FACTS_TOKEN', 'PT_SEC_EVIDENCE_PULL_TOKEN', 'PT_SEC_EVIDENCE_STORE_WRITE_TOKEN', 'PT_OWNER_TOKEN'
 ];
 
@@ -124,13 +127,21 @@ test('AR-7b server files: no storage, DOM, scoring, 1Y High, index.html or exist
   ok(toolHits.length === 0, TOOL_FILE + ' references ' + toolHits.join(', '));
 });
 
-test('AR-7c server files read only the ATH and collision environment keys, and make no network calls', function () {
+// B2-auto: ath-yahoo.js is the ONLY ATH module allowed to reach the network (injectable fetch).
+const NETWORK_MODULE = 'netlify/functions/lib/ath-yahoo.js';
+
+test('AR-7c server files read only the ATH and collision environment keys; the network is reachable only from ath-yahoo.js', function () {
   Object.keys(SERVER_FILES).forEach(function (rel) {
     const code = stripComments(read(rel));
     const bad = envHits(code);
     ok(bad.length === 0, rel + ' touches env ' + bad.join(', '));
-    ok(fetchHits(code).length === 0, rel + ' makes a network call');
+    if (rel !== NETWORK_MODULE) { ok(fetchHits(code).length === 0, rel + ' makes a network call'); }
   });
+  const yahoo = stripComments(read(NETWORK_MODULE));
+  ok(/globalThis\.fetch/.test(yahoo), 'the network module reaches the network through globalThis.fetch (injectable)');
+  ok(!/\brequire\(['"](https?|node:https?|net|node-fetch|axios)['"]\)/.test(yahoo), 'no http client module');
+  ok((yahoo.match(/https?:\/\/[^'"`\s]+/g) || []).every(function (u) { return u.indexOf('https://query1.finance.yahoo.com/') === 0; }), 'only the Yahoo chart host');
+  ok(!/polygon|alphavantage|finnhub|tradingview/i.test(yahoo), 'no other provider');
 });
 
 test('AR-7d the owner tool reads only PT_ATH_WRITE_TOKEN (injected) and writes no file', function () {
@@ -238,6 +249,23 @@ test('PN an extra require added to the writer is flagged (AR-7)', function () {
 });
 test('PN a network call added to the reader is flagged (AR-7)', function () {
   ok(mutantFlagged('netlify/functions/lib/ath-read-core.js', 'fetch("https://x");', fetchHits), 'flagged');
+});
+test('PN a network call added to the ensure core, the record module or the write core is flagged (AR-7)', function () {
+  ['netlify/functions/lib/ath-ensure-core.js', 'netlify/functions/lib/ath-record.js', 'netlify/functions/lib/ath-write-core.js'].forEach(function (rel) {
+    ok(mutantFlagged(rel, 'fetch("https://x");', fetchHits), rel + ' flagged');
+  });
+});
+test('PN a second provider host added to the network module is flagged (AR-7c)', function () {
+  const mutant = stripComments(read(NETWORK_MODULE)) + "\nconst u = 'https://api.polygon.io/v2/aggs';\n";
+  ok(!(mutant.match(/https?:\/\/[^'"`\s]+/g) || []).every(function (u) { return u.indexOf('https://query1.finance.yahoo.com/') === 0; }), 'flagged');
+});
+test('PN the ensure route and its wrapper are scanned: a DOM reference added to either is flagged (AR-7b)', function () {
+  ok(mutantFlagged('netlify/functions/lib/ath-ensure-core.js', 'document.getElementById("x");', scanForbidden), 'core flagged');
+  ok(mutantFlagged('netlify/functions/ath-ensure.mjs', 'localStorage.getItem("pt_results");', scanForbidden), 'wrapper flagged');
+});
+test('PN the ensure gate key is the only new environment key; an ensure token key would be flagged (AR-7c)', function () {
+  ok(ALLOWED_ENV_KEYS.indexOf('PT_ENABLE_ATH_ENSURE_SERVER') !== -1 && ALLOWED_ENV_KEYS.indexOf('PT_ATH_ENSURE_TOKEN') === -1, 'key set');
+  ok(mutantFlagged('netlify/functions/lib/ath-ensure-core.js', 'const t = process.env.PT_ATH_ENSURE_TOKEN;', envHits), 'flagged');
 });
 
 const result = failed === 0 ? 'ALL PASS' : 'FAILURES: ' + failed;

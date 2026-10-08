@@ -70,6 +70,7 @@ const ALLOWED_IMPORTS = ['@netlify/blobs', '@netlify/aws-lambda-compat', './lib/
 // the pin is a deliberate, reviewed act, never an incidental edit.
 const EXPECTED_FUNCTIONS = [
   'anthropic-proxy.js',
+  'ath-ensure.mjs',
   'ath-read.mjs',
   'ath-write.mjs',
   'av-proxy.js',

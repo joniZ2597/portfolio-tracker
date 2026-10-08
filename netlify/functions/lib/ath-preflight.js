@@ -9,8 +9,9 @@
  * Fail-closed order (same as fund-facts): gate -> auth -> collision -> allowlist -> ticker
  * format -> membership -> success. Read and write have independent gates and tokens.
  *
- *   read : PT_ENABLE_ATH_READ_SERVER  / PT_ATH_READ_TOKEN
- *   write: PT_ENABLE_ATH_WRITE_SERVER / PT_ATH_WRITE_TOKEN
+ *   read  : PT_ENABLE_ATH_READ_SERVER   (public, gate + ticker only; B2-auto)
+ *   ensure: PT_ENABLE_ATH_ENSURE_SERVER (public, gate + ticker only; B2-auto)
+ *   write : PT_ENABLE_ATH_WRITE_SERVER / PT_ATH_WRITE_TOKEN (protected recovery path)
  *   shared allowlist: PT_ATH_ALLOWED_TICKERS  (the server-side enforcement of "tracked universe only")
  *
  * Ticker rule: the app's own symbol shape (1-10 letters, optional literal .TA), strict and
@@ -19,12 +20,19 @@
 
 const { TICKER_RE } = require('./ath-record');
 
+// `public` sides (read, ensure): gate + ticker format only. No token, no allowlist: a read is
+// read-only and an ensure derives server-side from trusted market data for any valid supported
+// ticker (D-A1 / D-A2). Only the write side keeps token, collision and allowlist checks.
 const SIDES = {
   read: {
+    public: true,
     gate: 'PT_ENABLE_ATH_READ_SERVER',
-    token: 'PT_ATH_READ_TOKEN',
-    other: 'PT_ATH_WRITE_TOKEN',
     disabled: 'READ_SERVER_DISABLED'
+  },
+  ensure: {
+    public: true,
+    gate: 'PT_ENABLE_ATH_ENSURE_SERVER',
+    disabled: 'ENSURE_SERVER_DISABLED'
   },
   write: {
     gate: 'PT_ENABLE_ATH_WRITE_SERVER',
@@ -62,6 +70,11 @@ function evaluateAthPreflight(input) {
   // 1) Gate (strict string 'true').
   if (env[side.gate] !== 'true') {
     return fail(side.disabled);
+  }
+
+  if (side.public === true) {
+    if (typeof ticker !== 'string' || !TICKER_RE.test(ticker)) { return fail('TICKER_INVALID'); }
+    return { ok: true, ticker: ticker };
   }
 
   // 2) Inbound token: exact, untrimmed Bearer match. Missing and mismatch collapse to one reason.

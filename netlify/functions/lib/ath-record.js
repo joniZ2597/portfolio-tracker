@@ -405,7 +405,420 @@ function withRefreshFailure(existing, reason, nowIso) {
   return copy;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ath:v2 — automatic, server-derived ATH (work/r1b2-ath-auto/brief.md). All PURE.
+// The browser never supplies a value: every automatic value comes from a Yahoo daily series that
+// the server fetched (ath-yahoo.js) and passed to the functions below. The v1 operator path above
+// is unchanged; its records are read as method 'operator' through upgradeV1 and are never replaced
+// by a full automatic derive.
+// ═══════════════════════════════════════════════════════════════════════════════
+const SCHEMA_V2 = 'ath:v2';
+const METHODS = Object.freeze(['auto', 'operator']);
+const AUTO_SOURCE = 'yahoo-daily';
+const REASONS = Object.freeze(['FETCH_FAILED', 'BODY_INVALID', 'COVERAGE', 'SUSPECT_MATERIAL', 'NO_RELIABLE_ATH',
+  'SPLIT_INCONSISTENT', 'UNSUPPORTED', 'SPLIT_NEEDS_RECOVERY']);
+const COVERAGE_DAYS = 62;
+const SUSPECT_FACTOR = 2;
+const MAX_REJECTED_BARS = 500;
+const MAX_AUTO_RAISES = 50;
+const SPLIT_TOLERANCE = 0.005;
+
+const RECORD_KEYS_V2 = Object.freeze(['schema', 'ticker', 'providerSymbol', 'currency', 'unit', 'basis', 'status', 'method',
+  'athValue', 'athDate', 'verifiedAt', 'evidence', 'refresh', 'lastCheckedAt', 'splitCheckedThrough']);
+const AUTO_EVIDENCE_KEYS = Object.freeze(['source', 'firstTradeDate', 'firstBarDate', 'barCount', 'matchedBar',
+  'rejectedBars', 'splitsSeen', 'reason']);
+const AUTO_BAR_KEYS = Object.freeze(['date', 'high', 'open', 'close']);
+const REJECTED_BAR_KEYS = Object.freeze(['date', 'high', 'open', 'close', 'reason']);
+const REJECT_REASONS = Object.freeze(['SUSPECT_SPIKE', 'UNASSESSABLE']);
+const SPLIT_KEYS = Object.freeze(['date', 'ratio']);
+const PUBLIC_KEYS = Object.freeze(['readContractVersion', 'status', 'ticker', 'recordStatus', 'athValue', 'athDate', 'unit',
+  'currency', 'basis', 'method', 'verifiedAt']);
+const READ_CONTRACT_VERSION = 'ath-read-v2';
+
+function clone(v) { return JSON.parse(JSON.stringify(v)); }
+function posOrNull(v) { return isPositive(v) ? v : null; }
+function isoDayOf(nowIso) { return nowIso.slice(0, 10); }
+// splitCheckedThrough is the day BEFORE the check, so a split dated the same day as a check (which
+// Yahoo may only publish later that day) is still seen by the next one. A split already listed in an
+// auto record's evidence.splitsSeen never re-triggers.
+function checkedThrough(nowIso) { return new Date(Date.parse(isoDayOf(nowIso) + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10); }
+function dayDiff(a, b) { return (Date.parse(a + 'T00:00:00Z') - Date.parse(b + 'T00:00:00Z')) / 86400000; }
+
+// §2.4 — classify one bar. Returns null for a bar without a finite positive high (skipped).
+function classifyBar(bar) {
+  if (!isObject(bar) || !isPositive(bar.high)) { return null; }
+  const open = posOrNull(bar.open);
+  const close = posOrNull(bar.close);
+  const out = { date: bar.date, high: bar.high, open: open, close: close };
+  if (open === null && close === null) { out.cls = 'unassessable'; out.body = null; return out; }
+  out.body = Math.max(open === null ? 0 : open, close === null ? 0 : close);
+  out.cls = bar.high > SUSPECT_FACTOR * out.body ? 'suspect' : 'accepted';
+  return out;
+}
+
+// Classify a list of bars (ascending). The best accepted bar is the highest high, ties -> earliest.
+function classifyBars(bars) {
+  const accepted = [];
+  const rejected = [];
+  let best = null;
+  (Array.isArray(bars) ? bars : []).forEach(function (b) {
+    const c = classifyBar(b);
+    if (c === null) { return; }
+    if (c.cls === 'accepted') {
+      accepted.push(c);
+      if (best === null || c.high > best.high) { best = c; }
+    } else {
+      rejected.push(c);
+    }
+  });
+  return { accepted: accepted, rejected: rejected, best: best };
+}
+
+// Material (§2.4): a suspect bar whose possible genuine high (up to 2 x body) exceeds the ATH
+// candidate, or an unassessable bar whose high exceeds it. Strict comparisons.
+function isMaterial(rejectedBar, athCandidate) {
+  if (rejectedBar.cls === 'unassessable') { return rejectedBar.high > athCandidate; }
+  return SUSPECT_FACTOR * rejectedBar.body > athCandidate;
+}
+
+function toRejectedBar(c) {
+  return { date: c.date, high: c.high, open: c.open, close: c.close, reason: c.cls === 'suspect' ? 'SUSPECT_SPIKE' : 'UNASSESSABLE' };
+}
+
+// Keep the evidence array bounded without ever affecting the decision: the highest rejected highs
+// survive (ties -> earliest), stored in date order.
+function capRejected(list) {
+  if (list.length <= MAX_REJECTED_BARS) { return list; }
+  return list.slice().sort(function (a, b) { return b.high - a.high || (a.date < b.date ? -1 : 1); })
+    .slice(0, MAX_REJECTED_BARS)
+    .sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+}
+
+function normSplits(splits) {
+  return (Array.isArray(splits) ? splits : []).filter(function (s) {
+    return isObject(s) && isIsoDay(s.date) && isPositive(s.ratio);
+  }).map(function (s) { return { date: s.date, ratio: s.ratio }; })
+    .sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+}
+
+function autoEvidence(o) {
+  return {
+    source: AUTO_SOURCE,
+    firstTradeDate: o.firstTradeDate === undefined ? null : o.firstTradeDate,
+    firstBarDate: o.firstBarDate === undefined ? null : o.firstBarDate,
+    barCount: o.barCount || 0,
+    matchedBar: o.matchedBar || null,
+    rejectedBars: o.rejectedBars || [],
+    splitsSeen: o.splitsSeen || [],
+    reason: o.reason || null
+  };
+}
+
+// §2.3 — full derive. series = { firstTradeDate, bars: [{ date, open, high, close }] ascending, splits }.
+// Returns { status: 'verified'|'unresolved', reason, athValue, athDate, evidence }.
+function deriveAuto(series, nowIso) {
+  const s = isObject(series) ? series : {};
+  const bars = Array.isArray(s.bars) ? s.bars : [];
+  const base = {
+    firstTradeDate: s.firstTradeDate === undefined ? null : s.firstTradeDate,
+    firstBarDate: bars.length > 0 ? bars[0].date : null,
+    barCount: bars.length,
+    splitsSeen: normSplits(s.splits)
+  };
+  function unresolved(reason, extra) {
+    return {
+      status: 'unresolved', reason: reason, athValue: null, athDate: null,
+      evidence: autoEvidence(Object.assign({}, base, extra || {}, { reason: reason }))
+    };
+  }
+  if (!isIsoTimestamp(nowIso) || bars.length === 0 || !isIsoDay(base.firstTradeDate)) { return unresolved('BODY_INVALID'); }
+  if (dayDiff(base.firstBarDate, base.firstTradeDate) > COVERAGE_DAYS) { return unresolved('COVERAGE'); }
+
+  const cls = classifyBars(bars);
+  const rejectedBars = capRejected(cls.rejected.map(toRejectedBar));
+  if (cls.best === null) { return unresolved('NO_RELIABLE_ATH', { rejectedBars: rejectedBars }); }
+  const A = cls.best.high;
+  if (cls.rejected.some(function (r) { return isMaterial(r, A); })) { return unresolved('SUSPECT_MATERIAL', { rejectedBars: rejectedBars }); }
+  return {
+    status: 'verified', reason: null, athValue: A, athDate: cls.best.date,
+    evidence: autoEvidence(Object.assign({}, base, {
+      matchedBar: { date: cls.best.date, high: A, open: cls.best.open, close: cls.best.close },
+      rejectedBars: rejectedBars
+    }))
+  };
+}
+
+// Build a stored v2 `auto` record from a derive result. `meta` = { ticker, currency, unit }.
+function buildAutoRecord(meta, derived, nowIso) {
+  const verified = derived.status === 'verified';
+  return {
+    schema: SCHEMA_V2,
+    ticker: meta.ticker,
+    providerSymbol: meta.ticker,
+    currency: meta.currency,
+    unit: meta.unit,
+    basis: BASIS,
+    status: derived.status,
+    method: 'auto',
+    athValue: verified ? derived.athValue : null,
+    athDate: verified ? derived.athDate : null,
+    verifiedAt: verified ? nowIso : null,
+    evidence: derived.evidence,
+    refresh: verified ? { status: 'none', lastAttemptAt: null, reason: null } : { status: 'unresolved', lastAttemptAt: nowIso, reason: derived.reason },
+    lastCheckedAt: nowIso,
+    splitCheckedThrough: checkedThrough(nowIso)
+  };
+}
+
+// A failed fetch / parse. Existing record: value and status are untouched, only refresh and
+// lastCheckedAt move. No record: an unresolved `auto` record carrying the reason, so the 24 h
+// cooldown applies instead of a refetch on every request.
+function recordFetchFailure(existing, meta, reason, nowIso) {
+  if (existing) {
+    const next = clone(existing);
+    next.refresh = { status: 'unresolved', lastAttemptAt: nowIso, reason: reason };
+    next.lastCheckedAt = nowIso;
+    return next;
+  }
+  return buildAutoRecord(meta, { status: 'unresolved', reason: reason, athValue: null, athDate: null, evidence: autoEvidence({ reason: reason }) }, nowIso);
+}
+
+// §2.5 — incremental update from the recent bars. Only bars dated after the stored athDate count.
+// Returns { record, action: 'raised' | 'checked' }.
+function applyRecentBars(record, recent, nowIso) {
+  const next = clone(record);
+  const bars = (recent && Array.isArray(recent.bars) ? recent.bars : []).filter(function (b) { return b && b.date > record.athDate; });
+  const cls = classifyBars(bars);
+  const B = cls.best;
+  const candidate = B !== null && B.high > record.athValue ? B.high : record.athValue;
+  next.lastCheckedAt = nowIso;
+  next.splitCheckedThrough = checkedThrough(nowIso);
+
+  if (next.method === 'auto' && cls.rejected.length > 0) {
+    const have = new Set(next.evidence.rejectedBars.map(function (r) { return r.date; }));
+    const merged = next.evidence.rejectedBars.concat(cls.rejected.filter(function (r) { return !have.has(r.date); }).map(toRejectedBar));
+    next.evidence.rejectedBars = capRejected(merged);
+  }
+
+  if (cls.rejected.some(function (r) { return isMaterial(r, candidate); })) {
+    // The stored value stays shown (a failed refresh never discards a verified ATH); flagged for recovery.
+    next.refresh = { status: 'unresolved', lastAttemptAt: nowIso, reason: 'SUSPECT_MATERIAL' };
+    return { record: next, action: 'checked' };
+  }
+  next.refresh = { status: 'none', lastAttemptAt: null, reason: null };
+  if (B !== null && B.high > record.athValue) {
+    next.athValue = B.high;
+    next.athDate = B.date;
+    const bar = { date: B.date, high: B.high, open: B.open, close: B.close };
+    if (next.method === 'auto') {
+      next.evidence.matchedBar = bar;
+    } else {
+      const prior = Array.isArray(next.evidence.autoRaise) ? next.evidence.autoRaise : [];
+      next.evidence.autoRaise = prior.concat([bar]).slice(-MAX_AUTO_RAISES);
+    }
+    return { record: next, action: 'raised' };
+  }
+  return { record: next, action: 'checked' };
+}
+
+// §2.6 — a split dated after splitCheckedThrough (or after verifiedAt when that is null) makes the
+// record stale-suspect (value kept, suppressed by the reader). `rederive` is true only for `auto`.
+function applySplits(record, splits, nowIso) {
+  const threshold = record.splitCheckedThrough || (record.verifiedAt ? isoDayOf(record.verifiedAt) : null);
+  const seen = new Set(record.method === 'auto' && record.evidence && Array.isArray(record.evidence.splitsSeen)
+    ? record.evidence.splitsSeen.map(function (s) { return s.date; }) : []);
+  const fresh = normSplits(splits).filter(function (s) { return (threshold === null || s.date > threshold) && !seen.has(s.date); });
+  if (fresh.length === 0) { return { triggered: false, record: record, splits: [], rederive: false }; }
+  const next = clone(record);
+  next.status = 'stale-suspect';
+  next.lastCheckedAt = nowIso;
+  next.splitCheckedThrough = checkedThrough(nowIso);
+  if (next.method === 'operator') {
+    next.refresh = { status: 'unresolved', lastAttemptAt: nowIso, reason: 'SPLIT_NEEDS_RECOVERY' };
+  }
+  return { triggered: true, record: next, splits: fresh, rederive: next.method === 'auto' };
+}
+
+// New ATH accepted after a split iff its date is after the split, or it matches the old value
+// rescaled by the split ratio within 0.5%.
+function checkSplitConsistency(oldValue, newValue, newDate, splits) {
+  const list = normSplits(splits);
+  if (list.length === 0 || !isPositive(oldValue) || !isPositive(newValue)) { return false; }
+  const lastDate = list[list.length - 1].date;
+  if (isIsoDay(newDate) && newDate > lastDate) { return true; }
+  const ratio = list.reduce(function (p, s) { return p * s.ratio; }, 1);
+  return Math.abs(newValue / (oldValue / ratio) - 1) <= SPLIT_TOLERANCE;
+}
+
+// Finish a split re-derive on a stale-suspect `auto` record. `derived` is a deriveAuto result.
+function completeSplitRederive(stale, derived, splits, nowIso) {
+  if (derived.status !== 'verified') {
+    const next = clone(stale);
+    next.refresh = { status: 'unresolved', lastAttemptAt: nowIso, reason: derived.reason };
+    next.lastCheckedAt = nowIso;
+    return next;
+  }
+  if (!checkSplitConsistency(stale.athValue, derived.athValue, derived.athDate, splits)) {
+    const next = clone(stale);
+    next.refresh = { status: 'unresolved', lastAttemptAt: nowIso, reason: 'SPLIT_INCONSISTENT' };
+    next.lastCheckedAt = nowIso;
+    return next;
+  }
+  return buildAutoRecord({ ticker: stale.ticker, currency: stale.currency, unit: stale.unit }, derived, nowIso);
+}
+
+// ── v2 validation ─────────────────────────────────────────────────────────────
+function autoBarOk(b) {
+  return exactKeys(b, AUTO_BAR_KEYS) && isIsoDay(b.date) && isPositive(b.high) &&
+    (b.open === null || isPositive(b.open)) && (b.close === null || isPositive(b.close));
+}
+
+function validateAutoEvidence(ev, status) {
+  if (!exactKeys(ev, AUTO_EVIDENCE_KEYS) || ev.source !== AUTO_SOURCE) { return bad('EVIDENCE_KEYS'); }
+  if ((ev.firstTradeDate !== null && !isIsoDay(ev.firstTradeDate)) || (ev.firstBarDate !== null && !isIsoDay(ev.firstBarDate))) { return bad('EVIDENCE_DATES'); }
+  if (!Number.isInteger(ev.barCount) || ev.barCount < 0) { return bad('EVIDENCE_BAR_COUNT'); }
+  if (ev.matchedBar !== null && !autoBarOk(ev.matchedBar)) { return bad('EVIDENCE_MATCHED_BAR'); }
+  if (!Array.isArray(ev.rejectedBars) || ev.rejectedBars.length > MAX_REJECTED_BARS || !ev.rejectedBars.every(function (r) {
+    return exactKeys(r, REJECTED_BAR_KEYS) && isIsoDay(r.date) && isPositive(r.high) && (r.open === null || isPositive(r.open)) &&
+      (r.close === null || isPositive(r.close)) && REJECT_REASONS.indexOf(r.reason) !== -1;
+  })) { return bad('EVIDENCE_REJECTED_BARS'); }
+  if (!Array.isArray(ev.splitsSeen) || !ev.splitsSeen.every(function (s) { return exactKeys(s, SPLIT_KEYS) && isIsoDay(s.date) && isPositive(s.ratio); })) {
+    return bad('EVIDENCE_SPLITS');
+  }
+  if (ev.reason !== null && REASONS.indexOf(ev.reason) === -1) { return bad('EVIDENCE_REASON'); }
+  if (status === 'verified' && ev.matchedBar === null) { return bad('VERIFIED_NEEDS_MATCHED_BAR'); }
+  return { ok: true };
+}
+
+function validateOperatorEvidence(ev, status) {
+  if (!isObject(ev)) { return bad('EVIDENCE_KEYS'); }
+  if (!Object.prototype.hasOwnProperty.call(ev, 'autoRaise')) { return validateEvidence(ev, status); }
+  const copy = Object.assign({}, ev);
+  const raises = copy.autoRaise;
+  delete copy.autoRaise;
+  const base = validateEvidence(copy, status);
+  if (!base.ok) { return base; }
+  if (!Array.isArray(raises) || raises.length < 1 || raises.length > MAX_AUTO_RAISES || !raises.every(autoBarOk)) { return bad('EVIDENCE_AUTO_RAISE'); }
+  return { ok: true };
+}
+
+function validateRecordV2(rec) {
+  if (!isObject(rec)) { return bad('NOT_OBJECT'); }
+  if (!exactKeys(rec, RECORD_KEYS_V2)) { return bad('RECORD_KEYS'); }
+  if (rec.schema !== SCHEMA_V2 || rec.basis !== BASIS) { return bad('RECORD_CONSTANTS'); }
+  if (typeof rec.ticker !== 'string' || !TICKER_RE.test(rec.ticker) || rec.providerSymbol !== rec.ticker) { return bad('RECORD_TICKER'); }
+  if (!currencyUnitOk(rec.currency, rec.unit)) { return bad('RECORD_UNIT'); }
+  if (STATUSES.indexOf(rec.status) === -1) { return bad('RECORD_STATUS'); }
+  if (METHODS.indexOf(rec.method) === -1) { return bad('RECORD_METHOD'); }
+  if (!isIsoTimestamp(rec.lastCheckedAt)) { return bad('RECORD_TIMESTAMP'); }
+  if (rec.splitCheckedThrough !== null && !isIsoDay(rec.splitCheckedThrough)) { return bad('RECORD_SPLIT_CHECKED'); }
+
+  const hasValue = rec.athValue !== null || rec.athDate !== null;
+  const valued = rec.status === 'verified' || (rec.status === 'stale-suspect' && hasValue);
+  if (!valued) {
+    if (hasValue || rec.verifiedAt !== null) { return bad('UNRESOLVED_CARRIES_VALUE'); }
+  } else {
+    if (!isPositive(rec.athValue) || !isIsoDay(rec.athDate) || !isIsoTimestamp(rec.verifiedAt)) { return bad('RECORD_VALUE'); }
+  }
+
+  const ev = rec.method === 'auto' ? validateAutoEvidence(rec.evidence, rec.status) : validateOperatorEvidence(rec.evidence, rec.status);
+  if (!ev.ok) { return ev; }
+  if (valued) {
+    if (rec.method === 'auto') {
+      if (rec.evidence.matchedBar === null || rec.evidence.matchedBar.high !== rec.athValue || rec.evidence.matchedBar.date !== rec.athDate) { return bad('ATH_MATCH_MISMATCH'); }
+    } else if (Array.isArray(rec.evidence.autoRaise)) {
+      const last = rec.evidence.autoRaise[rec.evidence.autoRaise.length - 1];
+      if (last.high !== rec.athValue || last.date !== rec.athDate) { return bad('ATH_MATCH_MISMATCH'); }
+    } else if (rec.status === 'verified' && (rec.evidence.matchedBar.high !== rec.athValue || rec.evidence.matchedBar.date !== rec.athDate)) {
+      return bad('ATH_MATCH_MISMATCH');
+    }
+  }
+  const r = rec.refresh;
+  if (!exactKeys(r, REFRESH_KEYS) || REFRESH_STATUSES.indexOf(r.status) === -1) { return bad('RECORD_REFRESH'); }
+  if (r.lastAttemptAt !== null && !isIsoTimestamp(r.lastAttemptAt)) { return bad('RECORD_REFRESH'); }
+  if (r.reason !== null && !isNonEmptyString(r.reason, 80)) { return bad('RECORD_REFRESH'); }
+  return { ok: true };
+}
+
+// A valid v1 record read as an `operator` v2 record. Returns null when the input is not a valid v1.
+// Never `auto`: an operator-verified value is never silently replaced by a full automatic derive.
+function upgradeV1(rec) {
+  if (!validateRecord(rec).ok) { return null; }
+  return {
+    schema: SCHEMA_V2,
+    ticker: rec.ticker,
+    providerSymbol: rec.providerSymbol,
+    currency: rec.currency,
+    unit: rec.unit,
+    basis: rec.basis,
+    status: rec.status,
+    method: 'operator',
+    athValue: rec.athValue,
+    athDate: rec.athDate,
+    verifiedAt: rec.verifiedAt,
+    evidence: clone(rec.evidence),
+    refresh: clone(rec.refresh),
+    lastCheckedAt: rec.lastCheckedAt,
+    splitCheckedThrough: null
+  };
+}
+
+// Operator-written v2 record (the protected write path): the v1 build, read as v2 `operator`.
+function buildOperatorRecord(input) { return upgradeV1(buildRecord(input)); }
+
+// Parse a stored value: v2 as it is, v1 upgraded in memory. { ok, record } or { ok: false, reason }.
+function parseStoredRecord(raw) {
+  let rec;
+  try { rec = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch (_) { return bad('STORE_RECORD_INVALID'); }
+  if (!isObject(rec)) { return bad('STORE_RECORD_INVALID'); }
+  if (rec.schema === SCHEMA_V2) {
+    const v = validateRecordV2(rec);
+    return v.ok ? { ok: true, record: rec } : v;
+  }
+  const up = upgradeV1(rec);
+  return up === null ? bad('STORE_RECORD_INVALID') : { ok: true, record: up };
+}
+
+// Public projection (ath-read-v2): the ATH only for `verified`; never evidence / refresh / timestamps.
+function projectPublic(ticker, record) {
+  const verified = record.status === 'verified';
+  return {
+    readContractVersion: READ_CONTRACT_VERSION,
+    status: 'OK',
+    ticker: ticker,
+    recordStatus: record.status,
+    athValue: verified ? record.athValue : null,
+    athDate: verified ? record.athDate : null,
+    unit: record.unit,
+    currency: record.currency,
+    basis: record.basis,
+    method: record.method,
+    verifiedAt: record.verifiedAt
+  };
+}
+
 module.exports = {
+  SCHEMA_V2,
+  METHODS,
+  REASONS,
+  RECORD_KEYS_V2,
+  PUBLIC_KEYS,
+  READ_CONTRACT_VERSION,
+  COVERAGE_DAYS,
+  MAX_REJECTED_BARS,
+  classifyBar,
+  deriveAuto,
+  buildAutoRecord,
+  recordFetchFailure,
+  applyRecentBars,
+  applySplits,
+  checkSplitConsistency,
+  completeSplitRederive,
+  validateRecordV2,
+  upgradeV1,
+  buildOperatorRecord,
+  parseStoredRecord,
+  projectPublic,
   SCHEMA,
   STORE_NAME,
   KEY_NAMESPACE,
