@@ -58,3 +58,5 @@ Step 8 (implementation diff, before QA): PASS, no Class I or II findings (`codex
 ## 9. Final check
 
 Final check: 1 round, 1 class-II finding fixed (per-suite counts added to qa.log), self-checked; no implementation change, no QA re-run. Codex also noted the untracked .claude/settings.local.json: a pre-existing (dated 2026-10-06) file that `git check-ignore` confirms is gitignored, outside the task diff and never staged (REJECT; not part of the 15 files + review.md).
+
+LAND-EVIDENCE: qa-offline=PASS 71; targeted=PASS; codex-classI-unresolved=0
