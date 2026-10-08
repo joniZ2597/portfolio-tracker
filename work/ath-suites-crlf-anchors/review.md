@@ -47,3 +47,5 @@ Final check: 1 round, 0 class-I findings, 0 class-II findings - PASS; no impleme
 - [rule] Mutant-source loaders normalise EOL before anchor matching: `fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n')`, because multi-line `\n` anchors cannot match a CRLF working tree and EOL differs per checkout/file here (`git ls-files --eol`). Destination: `.claude/rules/qa-suites.md` (planted-negative bullet) - waits for the task that owns that file.
 - [backlog] `ath_write_offline.js` and `ath_owner_tool_offline.js` use the same bare-read loader (`indexOf` anchors, all single-line today); a future multi-line anchor there would hit this defect — pending routing
 - [local] A defect that depends on the checkout's working-tree EOL cannot be shown RED in an LF checkout; reproduce in a scratch copy with the product files converted, with the suite files byte-identical.
+
+LAND-EVIDENCE: qa-offline=PASS 71; targeted=PASS; codex-classI-unresolved=0
