@@ -13,7 +13,7 @@
  *   TC-5         Technical Setup panel: _techSnapFor / refreshTechPanel
  *   TC-6         Deep Dive: no mismatched technical block
  *   TC-9         isolation (static)
- *   TC-10        renderMainPanel: exactly I7a-I7i, A9a-A9d and the R-2 table changed (textual revert proves the old pin)
+ *   TC-10        renderMainPanel: exactly I7a-I7i, A9a-A9d, the R-2 table and the R-3 Score-row line changed (textual revert proves the old pin)
  *   TC-11        caliper pins: only the renderMainPanel value moved
  *   TC-12/14/15  render harness: displayed price == snapshot price; Setup from the same
  *                snapshot; scan-time values marked "from scan" when the prices differ
@@ -61,9 +61,9 @@ const BASE_TS1_REGION = '9b267da4c06a7724ccbe13ba83bf376ba1dcd2dd7931d3b40fd7337
 // renderMainPanel: base (LF-normalised, = TS1 suite TX-3 pin) and base (CRLF form = caliper pin).
 const BASE_RM_LF = 'a8c13d283ad90e4c132e6d68a5570682b39d5c127d1dd5a4ce18795178ab838f';
 const OLD_RM_CALIPER_PIN = 'd11b09a989f19ee1fa09770ac135e8f00ce518558b25cc7bce3ee23cf1b174ac';
-// New pins (task renderMainPanel after I7a-I7i, A9a-A9d and the R-2 table): LF-normalised (TS1 suite) and CRLF form (caliper).
-const NEW_RM_LF = 'e84c5e61abcb1179add1c5db28d5d5b1e958daa10b0363fdb339d83363fed869';
-const NEW_RM_CALIPER_PIN = 'f5df295f45f8b8b7978b57962379ada5395c6a62c7c175e219a355c8e3f8aa30';
+// New pins (task renderMainPanel after I7a-I7i, A9a-A9d, the R-2 table and the R-3 Score-row line): LF-normalised (TS1 suite) and CRLF form (caliper).
+const NEW_RM_LF = '12789bcb207faf5df5dd9b10215442fb2da54b3c8521fd419f873c0cd35a6616';
+const NEW_RM_CALIPER_PIN = 'd1f693b557b37ba0afaa27573ff4c9d8984377b867d467383e1d0482d0c8e6f4';
 
 const BASE_PRICE_LINE = "  let price = item._verifiedPrice ? `$${item._verifiedPrice.toFixed(2)}` : '—';\n";
 const BASE_EXT_OVERRIDE = "  if (_showExt && _extC) {\n    if (typeof _extC.regularPrice    === 'number') price = `$${_extC.regularPrice.toFixed(2)}`;\n    if (typeof _extC.regularChangePct === 'number') chg  = _extC.regularChangePct;\n  }";
@@ -76,7 +76,7 @@ const BASE_CALIPER_PINS = {
   _ptScoreStates: '41968b418333e8a95f8fa6c15225351b9b7d73196bd808e7dd4ac6b7e3d83771',
   _ptScoreFillHtml: 'dfeb1959f3ca9f877d7158db68d5109c64bf36eb4f3f23eb300b735ae69f5a23',
   _ptScoreDial: '4092f243120f5c6bdf3269a02e599f3ad68afcd4a8afe8d766724879b0ef4bce',
-  _srGroupResults: '56cf3149645d276df0fc66cdae605cfacf6f3a838e7b06c21b06f57ff0ed6741',
+  _srGroupResults: '71055cd1d74cc51564c400b0a0c306caae816c5f4f22096324eb3eb8bb3bf0fc', // R-3 (Entry 36) re-pin: the fifth Daily Review group
   _srRenderGrouped: '1301f2faa44a781f37c8b66a8826dd06a027af73f6c7a33f2a9c91c987a09ea1'
 };
 const BASE_CALIPER_CSS_HASH = 'b4c63e696fe93f7ab693b2d778c4426b58ae3f719bc95e92a97e0a117c4828d5';
@@ -167,6 +167,20 @@ function r2Assess(assessMap, setup, snap) {
   const all = snap && [snap.sma20, snap.sma50, snap.sma150].every(Number.isFinite);
   if (all && snap.sma20 > snap.sma50 && snap.sma50 > snap.sma150) return assessMap[setup] || null;
   return all ? 'Price above all key moving averages — healthy uptrend; averages not fully stacked' : 'Healthy uptrend — price above key moving averages';
+}
+
+// ── R-3 table (work/r3-no-synthetic-50/brief.md section 2.6, Entry 36): the one renderMainPanel Score-row line ──
+// old = the I7g line as it stands after R-2 (the a183db8 form), new = the task line (whole line, exact bytes).
+const R3_FROM_SCAN = "${_fromScan ? '<span style=\"color:var(--text3);font-size:10px;margin-left:6px\">from scan</span>' : ''}";
+const R3_OLD = '          <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score>=65?\'pos\':score>=40?\'warn\':\'neg\'}">${score} / 100' + R3_FROM_SCAN + '</span></div>';
+const R3_NEW = '          <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score===null?\'neutral-v\':score>=65?\'pos\':score>=40?\'warn\':\'neg\'}">${score===null?\'—\':`${score} / 100' + R3_FROM_SCAN + '`}</span></div>';
+function applyR3(rm) {
+  if (countOf(rm, R3_OLD) !== 1) throw new Error('R3 old line not unique');
+  return rm.replace(R3_OLD, () => R3_NEW);
+}
+function revertR3(taskRm) {
+  if (countOf(taskRm, R3_NEW) !== 1) throw new Error('R3 new line not present exactly once');
+  return taskRm.replace(R3_NEW, () => R3_OLD);
 }
 
 // ── Source extraction ────────────────────────────────────────────────────────────────────────
@@ -663,12 +677,12 @@ async function evaluate(S) {
   // ── TC-10 only main-panel change ────────────────────────────────────────────────────────
   const rm = extractFn(src, 'renderMainPanel') || '';
   await guard('TC-10', async () => {
-    const reverted = revertI7(revertA9(revertR2(rm)));
-    chk('TC-10', 'reverting R-2, A9 and I7a-I7i restores the base (LF-normalised pin)', sha256(reverted) === BASE_RM_LF);
-    chk('TC-10', 'reverting R-2, A9 and I7a-I7i restores the OLD caliper pin d11b09a9', sha256(crlf(reverted)) === OLD_RM_CALIPER_PIN);
-    const forward = applyR2(applyA9(applyI7(reverted)));
-    chk('TC-10', 'line diff is exactly I7a-I7c added, I7d-I7i and A9 replaced, and the R-2 line replaced by four', forward === rm);
-    chk('TC-10', 'line count = base + 3 (I7) + 3 (R-2)', rm.split('\n').length === reverted.split('\n').length + 6);
+    const reverted = revertI7(revertA9(revertR2(revertR3(rm))));
+    chk('TC-10', 'reverting R-3, R-2, A9 and I7a-I7i restores the base (LF-normalised pin)', sha256(reverted) === BASE_RM_LF);
+    chk('TC-10', 'reverting R-3, R-2, A9 and I7a-I7i restores the OLD caliper pin d11b09a9', sha256(crlf(reverted)) === OLD_RM_CALIPER_PIN);
+    const forward = applyR3(applyR2(applyA9(applyI7(reverted))));
+    chk('TC-10', 'line diff is exactly I7a-I7c added, I7d-I7i and A9 replaced, the R-2 line replaced by four, and the R-3 Score-row line replaced', forward === rm);
+    chk('TC-10', 'line count = base + 3 (I7) + 3 (R-2) + 0 (R-3)', rm.split('\n').length === reverted.split('\n').length + 6);
     chk('TC-10', 'task renderMainPanel hashes to the new LF pin', sha256(rm) === NEW_RM_LF);
     chk('TC-10', 'task renderMainPanel hashes to the new caliper (CRLF) pin', sha256(crlf(rm)) === NEW_RM_CALIPER_PIN);
   });
@@ -773,7 +787,7 @@ async function evaluate(S) {
       'return { d: _ptScoreDial(70, "var(--green2)"), t: _ptScoreText(70) };'].join('\n'))();
     const expectedDial = '<div class="at-dial-row"><div class="' + dialParts.d.cls + '" style="' + dialParts.d.style + '"><span class="at-dial-num" style="color:' +
       dialParts.d.numColor + '">' + dialParts.t + '</span></div><div><div class="at-dial-lbl">Score</div><div class="at-dial-val pos">Buy</div></div></div>';
-    const baseRm = (() => { try { return revertI7(revertR2(rm)); } catch (e1) { return null; } })();
+    const baseRm = (() => { try { return revertI7(revertR2(revertR3(rm))); } catch (e1) { return null; } })();
     const renderBase = baseRm ? buildRenderer(baseRm, src) : null;
     for (const st of states) {
       const ext = JSON.parse(JSON.stringify(st.ext));

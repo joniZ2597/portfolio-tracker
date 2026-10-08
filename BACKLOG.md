@@ -204,6 +204,26 @@ otherwise the line reads "averages not fully stacked", or names no stack when an
 no scoring, ranking, persistence or prompt change.
 *Deps:* none.
 
+### 36 · Failed AI analysis shows no score, never a synthetic 50 (R-3) — **DONE**
+**Scores / Signals** · data honesty · **bug, added 2026-10-08**
+
+When the AI analysis failed (proxy error, or a response that could not be parsed after the retry), the fallback result
+carried a synthetic `sentiment_score: 50`: it was persisted, ranked and shown as a real 50 (consistency pilot 2026-10-03,
+NVDA). Owner ruling D4 (2026-10-07, confirmed 2026-10-08): a failed analysis never becomes a score; it stays null / failed;
+Scan Results places it last; Daily Review shows it under "Analysis failed — rescan"; an old score is never shown as the
+current result.
+*Landed (`work/r3-no-synthetic-50/`):* the fallback carries `sentiment_score: null`; `orchestrate` applies no score, action,
+sentiment, conflict or key-risk override to a failed item (the day-change overrides require a numeric score); the
+persistence validator accepts `null` only together with the existing `_aiUnavailable` marker, so a failed rescan replaces
+the stored result; Daily Review gains the last group "Analysis failed — rescan"; the Technical Setup card's Score row shows
+"—" for a missing score. No change to `enforceScoreConsistency`, the `_ptScore*` helpers, Tech Score, prompts, retry logic
+or storage keys.
+*Residual (stated, not in scope):* results stored before this change with the synthetic 50 keep showing 50 until that
+ticker is rescanned; they do appear in the "Analysis failed — rescan" group because `_aiUnavailable` is set. Normalising
+legacy stored values would change the `_ptScoreCmp` semantics pinned by `qa/run-offline.js` Phase 13 — remedy: rescan the
+affected tickers, or a later task.
+*Deps:* none.
+
 ---
 
 ## LATER
@@ -291,6 +311,7 @@ Risk / Reward column or chips in Scan Results) ·
 **32** Technical snapshot reuses a stale price — `work/tech-snapshot-price-cache/` ·
 **33** Fix analyst-action / price-target parsing — `work/analyst-parser-r4a/` ·
 **35** Claim the MA stack only when the averages are stacked (R-2) — `work/r2-ma-stack/` ·
+**36** Failed AI analysis shows no score, never a synthetic 50 (R-3) — `work/r3-no-synthetic-50/` ·
 **S2 slices** S1.5 · S1.5.1 (H-A/H-B/H-C, `1eda72c`) · S1.5.2 (`d9395ea`) · A1 (`6e242fb`,
 `9327e47`) · A2 (`52c322b`) · A5 (`810586d`) · D-A2-2 / S2-M1 (`0526458`) ·
 A3a / S2-M2 (`28c2543`) ·

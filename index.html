@@ -6211,8 +6211,8 @@ function orchestrate(claudeResults, pplxData, stockData, techSnaps) {
     }
 
     const chg = mkt?.change_percent ?? 0;
-    if (chg < -5 && item.sentiment_score > 60) { console.warn(`[PT] Orchestrate: score override ${sym} down ${chg}%`); item.sentiment_score = Math.min(item.sentiment_score, 45); item.sentiment = 'negative'; }
-    if (chg > 5  && item.sentiment_score < 40) { console.warn(`[PT] Orchestrate: score override ${sym} up ${chg}%`);   item.sentiment_score = Math.max(item.sentiment_score, 55); item.sentiment = 'positive'; }
+    if (typeof item.sentiment_score === 'number' && chg < -5 && item.sentiment_score > 60) { console.warn(`[PT] Orchestrate: score override ${sym} down ${chg}%`); item.sentiment_score = Math.min(item.sentiment_score, 45); item.sentiment = 'negative'; }
+    if (typeof item.sentiment_score === 'number' && chg > 5  && item.sentiment_score < 40) { console.warn(`[PT] Orchestrate: score override ${sym} up ${chg}%`);   item.sentiment_score = Math.max(item.sentiment_score, 55); item.sentiment = 'positive'; }
 
     // Phase 6A-1: Technical setup clamp + audit trail
     const _snap6a    = (techSnaps && techSnaps[sym]) ? techSnaps[sym] : {};
@@ -6226,12 +6226,12 @@ function orchestrate(claudeResults, pplxData, stockData, techSnaps) {
     if (_setup6a && _setup6a !== 'unknown') item.technical_setup = _setup6a;
     else item.technical_setup = item.technical_setup || 'unknown';
     // Score clamp: extended_near_ath — use item.technical_setup (already overridden above) as reliable source
-    if (item.technical_setup === 'extended_near_ath' && item.sentiment_score > 62) {
+    if (item._aiUnavailable !== true && item.technical_setup === 'extended_near_ath' && item.sentiment_score > 62) {
       console.warn(`[PT] Orchestrate: setup clamp ${sym} extended_near_ath → score ${item.sentiment_score} → 62`);
       item.sentiment_score = 62;
     }
     // Issue 2a: extended_near_ath — gate action, conflict, key_risk
-    if (_setup6a === 'extended_near_ath') {
+    if (item._aiUnavailable !== true && _setup6a === 'extended_near_ath') {
       if (!item.action || item.action.startsWith('add_') || item.action === 'buy') {
         console.warn(`[PT] Orchestrate: action override ${sym} extended_near_ath → hold_wait (was: ${item.action})`);
         item.action = 'hold_wait';
@@ -6242,13 +6242,13 @@ function orchestrate(claudeResults, pplxData, stockData, techSnaps) {
       }
     }
     // Score clamp: below_key_mas
-    if (_setup6a === 'below_key_mas' && item.sentiment_score > 45) {
+    if (item._aiUnavailable !== true && _setup6a === 'below_key_mas' && item.sentiment_score > 45) {
       console.warn(`[PT] Orchestrate: setup clamp ${sym} below_key_mas → score ${item.sentiment_score} → 45`);
       item.sentiment_score = 45;
       item.sentiment = 'negative';
     }
     // Issue 2b: below_key_mas — gate action, sentiment, key_risk, conflict
-    if (_setup6a === 'below_key_mas') {
+    if (item._aiUnavailable !== true && _setup6a === 'below_key_mas') {
       if (item.action !== 'avoid') {
         console.warn(`[PT] Orchestrate: action override ${sym} below_key_mas → avoid (was: ${item.action})`);
         item.action = 'avoid';
@@ -6776,7 +6776,7 @@ async function analyzeChunk(batch, today) {
         ticker: sym,
         company_name: (wlEntry && wlEntry.name) || sym,
         sentiment: 'neutral',
-        sentiment_score: 50,
+        sentiment_score: null,
         summary: _anthropicError ? summaryNet : (_retryAttempted ? summaryParse : summaryNet),
         alerts: pplxAlerts,
         news: [],
@@ -6961,17 +6961,19 @@ function _srGroupResults(source) {
     const d = _ptScoreCmp(a, b);
     return d !== 0 ? d : rRank(a) - rRank(b);
   });
-  // display order: Strong Setup → Watch → Extended / near 1Y high → Caution
+  // display order: Strong Setup → Watch → Extended / near 1Y high → Caution → Analysis failed — rescan (R-3, Entry 36)
   const groups = [
     { name: 'Strong Setup',   items: [] },
     { name: 'Watch',          items: [] },
     { name: 'Extended / near 1Y high', items: [] },
     { name: 'Caution',        items: [] },
+    { name: 'Analysis failed — rescan', items: [] },
   ];
   items.forEach(r => {
     const sc = _ptScoreNorm(r.sentiment_score);
     const ts = r.technical_setup || '';
-    if (_SR_BULLISH_TIER.has(ts) && sc !== null && sc >= 55)  groups[0].items.push(r);
+    if (r._aiUnavailable === true)                groups[4].items.push(r); // R-3 (Entry 36): a failed AI analysis is never ranked by setup
+    else if (_SR_BULLISH_TIER.has(ts) && sc !== null && sc >= 55)  groups[0].items.push(r);
     else if (ts === 'extended_near_ath')         groups[2].items.push(r);
     else if (_SR_BEARISH_TIER.has(ts))           groups[3].items.push(r);
     else                                          groups[1].items.push(r);
@@ -8439,7 +8441,7 @@ function renderMainPanel(item) {
         <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
           <div class="rr-row"><span class="rr-lbl">1Y High Distance</span><span class="rr-val ${snap.hasHigh1y ? (snap.high1yDist < -15 ? 'warn' : snap.high1yDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">${snap.hasHigh1y ? fmtPct(snap.high1yDist) : '—'}</span></div>
           <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase}</span></div>
-          <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score>=65?'pos':score>=40?'warn':'neg'}">${score} / 100${_fromScan ? '<span style="color:var(--text3);font-size:10px;margin-left:6px">from scan</span>' : ''}</span></div>
+          <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score===null?'neutral-v':score>=65?'pos':score>=40?'warn':'neg'}">${score===null?'—':`${score} / 100${_fromScan ? '<span style="color:var(--text3);font-size:10px;margin-left:6px">from scan</span>' : ''}`}</span></div>
         </div>
         ${_tsAssessHtml}`}${_ts1RowHtml}
       </div>
@@ -15442,7 +15444,7 @@ function mergeResultsByTicker(previousResults, newResults) {
 function _isValidScanResult(r) {
   const ok = r &&
     typeof r.ticker === 'string' && r.ticker.length > 0 &&
-    typeof r.sentiment_score === 'number' && r.sentiment_score >= 0 && r.sentiment_score <= 100 &&
+    ((typeof r.sentiment_score === 'number' && r.sentiment_score >= 0 && r.sentiment_score <= 100) || (r.sentiment_score === null && r._aiUnavailable === true)) && // R-3 (Entry 36): a failed AI analysis persists as null
     typeof r.summary === 'string' && r.summary.length > 50 &&
     ['positive','negative','neutral'].includes(r.sentiment) &&
     !r.summary.includes('=== PERPLEXITY') &&

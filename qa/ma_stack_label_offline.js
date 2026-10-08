@@ -15,6 +15,7 @@
  *   MS-5 every other setup       -> _tsAssessMap text (or nothing); unknown -> nothing
  *   MS-6 the stack test reads _panelSnap, never item.* / stored fields
  *   MS-7 renderMainPanel diff confined to the _tsAssess region; the R-2 revert table reproduces the pre-task source
+ *        (after R-3, Entry 36, the later Score-row line is reverted first: revertR2(revertR3(rm)))
  *   MS-8 no new top-level function; classifyTechnicalSetup and the _tsAssessMap literal byte-identical
  *
  * Planted negatives mutate an in-memory copy of the production source (never the test) and the
@@ -42,7 +43,7 @@ const PIN_CLASSIFY_LF = 'c143eb08d982cff036dd5678def08dc38e7dede6e2a0f4ae11a79d2
 const PIN_TSASSESSMAP_LF = '79b78d1ed91f3d6f8c2b867378a1a228f83399c8931ddd150eea31143bb3a31e';
 // index.html with renderMainPanel masked out: nothing outside the function changes in this task
 // (hence no new top-level function anywhere).
-const PIN_MASKED_MINUS_RM_LF = '3510e41eac89051f48c893b130cad435da62b607440c129573e1714d7a49da21';
+const PIN_MASKED_MINUS_RM_LF = '96dfb952d9b9aa9ea1df3e9ea626fcfb0a3a27b3bfe26a2dbd4c07c5a7583189'; // re-pinned at R-3 (Entry 36)
 
 // ── R-2 table: the one pre-task line and the four task lines (whole lines, exact bytes) ──────
 const R2_OLD = "  const _tsAssess = _panelSetup !== 'unknown' ? (_tsAssessMap[_panelSetup] || '') : '';";
@@ -64,6 +65,18 @@ function applyR2(preRm) {
 function revertR2(taskRm) {
   if (countOf(taskRm, R2_BLOCK) !== 1) throw new Error('R-2 block not present exactly once');
   return taskRm.replace(R2_BLOCK, () => R2_OLD);
+}
+// ── R-3 table (work/r3-no-synthetic-50/brief.md section 2.6, Entry 36): the one Score-row line changed after R-2 ──
+const R3_FROM_SCAN = "${_fromScan ? '<span style=\"color:var(--text3);font-size:10px;margin-left:6px\">from scan</span>' : ''}";
+const R3_OLD = '          <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score>=65?\'pos\':score>=40?\'warn\':\'neg\'}">${score} / 100' + R3_FROM_SCAN + '</span></div>';
+const R3_NEW = '          <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score===null?\'neutral-v\':score>=65?\'pos\':score>=40?\'warn\':\'neg\'}">${score===null?\'—\':`${score} / 100' + R3_FROM_SCAN + '`}</span></div>';
+function applyR3(rm) {
+  if (countOf(rm, R3_OLD) !== 1) throw new Error('R-3 old line not unique');
+  return rm.replace(R3_OLD, () => R3_NEW);
+}
+function revertR3(taskRm) {
+  if (countOf(taskRm, R3_NEW) !== 1) throw new Error('R-3 line not present exactly once');
+  return taskRm.replace(R3_NEW, () => R3_OLD);
 }
 
 // ── Source extraction (same rule as qa/tech_snapshot_cache_offline.js) ──────────────────────
@@ -290,10 +303,10 @@ function evaluate(src) {
   // MS-7 diff confined to the _tsAssess region; the R-2 revert table reproduces the pre-task source
   guard('MS-7', () => {
     chk('MS-7', 'the four R-2 lines are present exactly once, as one block', countOf(rm, R2_BLOCK) === 1);
-    const reverted = revertR2(rm);
-    chk('MS-7', 'reverting only the R-2 lines restores the pre-task renderMainPanel (LF pin)', sha256(reverted) === PRE_RM_LF);
-    chk('MS-7', 'reverting only the R-2 lines restores the pre-task renderMainPanel (CRLF pin)', sha256(crlf(reverted)) === PRE_RM_CRLF);
-    chk('MS-7', 'applying the R-2 table to the reverted source reproduces the task source byte-for-byte', applyR2(reverted) === rm);
+    const reverted = revertR2(revertR3(rm));
+    chk('MS-7', 'reverting only the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (LF pin)', sha256(reverted) === PRE_RM_LF);
+    chk('MS-7', 'reverting only the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (CRLF pin)', sha256(crlf(reverted)) === PRE_RM_CRLF);
+    chk('MS-7', 'applying the R-2 then the R-3 table to the reverted source reproduces the task source byte-for-byte', applyR3(applyR2(reverted)) === rm);
     chk('MS-7', 'line count = pre-task + 3 (at most four lines in the region)', rm.split('\n').length === reverted.split('\n').length + 3);
     chk('MS-7', 'the _tsAssessHtml line and the template interpolation are untouched',
       countOf(rm, "const _tsAssessHtml = _tsAssess ? `<div class=\"ts-assess\">${_tsAssess}</div>` : '';") === 1 && countOf(rm, '${_tsAssessHtml}`}${_ts1RowHtml}') === 1);

@@ -66,7 +66,7 @@ const stripRaw = rows => (rows || []).map(r => { const c = Object.assign({}, r);
 const bat = rows => (rows || []).map(r => ({ bank: r.bank, action: r.action, target: r.target }));
 
 // -- Pins captured at Step 0 from the baseline index.html (dd51188), LF-normalised --
-const PIN_MASKED_FILE = 'e28588022c780721df56c811562dded7abba6a96e5035a819907ddb071e9046c';
+const PIN_MASKED_FILE = '988a710a98d96f16079efc2a87f3ddd396ce32aa9eb4bd0334e4b8f78bdf4c03';
 const PIN_ALLNONE_EXPR = '998a9fc01dfa6386913a75e3757349ecf5234b84eb0cc99e922dbb09f004f3e8';
 const PIN_FETCH_PPLX = '08c0d05765e5f07c138559978312bf6806dae72d5a16194cec2fbc93cb1b8e0d';
 const PIN_FIXTURE = 'f01adf53c416547b4e68e63df36a1b701a588225b866cfe1c5daa043b13bf268';

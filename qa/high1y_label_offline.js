@@ -64,16 +64,16 @@ const fnSrc = n => extractFn(content, n);
 // ---- Baseline literals / pins (captured at Step 0 from the 57afd9d index.html) ----
 const BASE_CLASSIFY_SRC = "function classifyTechnicalSetup(snap) {\n  const { pct20, pct50, pct150, athDist } = snap || {};\n  // Require at least pct20 + pct50 for any non-unknown classification\n  if (pct20 == null || pct50 == null) return 'unknown';\n  // extended_near_ath: price >10% above MA20 AND within 5% of 1Y high\n  if (athDist != null && athDist > -5 && pct20 > 10)\n    return 'extended_near_ath';\n  // healthy_uptrend_near_ath: above MA20+MA50, within 8% of ATH\n  if (athDist != null && athDist > -8 && pct20 > 2 && pct50 > 0)\n    return 'healthy_uptrend_near_ath';\n  // healthy_uptrend: above all three key MAs\n  if (pct150 != null && pct20 > 0 && pct50 > 0 && pct150 > 0)\n    return 'healthy_uptrend';\n  // support_test: below MA20, MA50 within ±3% (testing support), above MA150\n  // More specific than pullback_in_uptrend — must be evaluated first\n  if (pct150 != null && pct20 < 0 && pct50 >= -3 && pct50 <= 2 && pct150 > 0)\n    return 'support_test';\n  // pullback_in_uptrend: below MA20 but clearly above MA50 and MA150\n  if (pct150 != null && pct20 < 0 && pct50 > 0 && pct150 > 0)\n    return 'pullback_in_uptrend';\n  // breakdown_risk: below MA50 by >3% but MA150 still nearby\n  if (pct150 != null && pct50 < -3 && pct150 >= -5 && pct150 <= 2)\n    return 'breakdown_risk';\n  // below_key_mas: below MA20, MA50, and MA150 all\n  if (pct150 != null && pct20 < 0 && pct50 < 0 && pct150 < 0)\n    return 'below_key_mas';\n  return 'unknown';\n}";
 const PINS = {
-  "layer1": "2c0f449029ae1d679f074cd10d510dc8735bc74f8e54f3d20ccb3562be86c441",
+  "layer1": "bc552dfc4b3c88b6083e14606d4cf56202566131acff4b6d17fba2c593ce6f50",
   "layer2": {
     "computeATHDistance|computeHigh1yDistance": "39b8ce7ec6d2f8e2fad10b050b16f87ab79119867e6f53d7e412f164b865a451",
     "classifyTechnicalSetup": "579f5bfea08fe9b499c8d59016f22116cdf4ac12cafdaa1e0caa3928417e044e",
     "buildTechSnapshotBlock": "a6c8fd53866f727e7985e6c10e7d1e750b4e67cc8363d85fd6a75a8b365d7bfa",
     "_techDeriveSnap": "39b93ac18718355e9768bdb6dc76e68b5fc25c1de446b730fcc03e273e4181f4",
     "fetchAnthropicAnalysis": "fad40ac1ea98d95d05c5efbe288b98732a6ddaa02da8b6eb15b33ade1754db29",
-    "orchestrate": "459af22a391331a196587b339c0460cbaf23d55d24469b5d09cabebe380d4a6f",
-    "_srGroupResults": "048d6e03894de63b3e52da1766e64f8c51625f7624e3f4281f2f92aef79989ad",
-    "renderMainPanel": "11b3c2fe852a217fe19176ed9e59d83148f65c7526390fb19757509a5a62a20b",
+    "orchestrate": "d772badfdfa6c434c59b8fdce68d635544bf7ac173cc0460e4518267be238f67",
+    "_srGroupResults": "f16b2f1d48b2bc37f0320e3317273a399bdfc3fd80830f47243f34db3719e5c2",
+    "renderMainPanel": "22a2ffe8a1c462f858cace60594167e3786bbfbfdbb8a6128c1d1b9fa6d05907",
     "_dd0FetchAnalysis": "50b6d52bc1ec645afc239432878b816529cebf592a0a60fae8440581c03f6c38"
   }
 };
@@ -247,7 +247,7 @@ guard('HL-3', () => {
   const EXPL = '  ("ath" in these setup names means the 1-year high from 1Y candles — never call it an all-time high.)';
   check('HL-3 the A6 explanation line is present exactly once in index.html', content.split(EXPL).length - 1 === 1);
   const groups = (fnSrc('_srGroupResults') || '').match(/\{ name: '[^']+',\s*items: \[\] \}/g) || [];
-  check('HL-3 _srGroupResults has its 4 group names', groups.length === 4);
+  check('HL-3 _srGroupResults has its 5 group names (R-3, Entry 36 added "Analysis failed — rescan"; Owner ruling 2026-10-08)', groups.length === 5);
   check('HL-3 _srGroupResults group names carry no ATH wording', groups.every(g => !ATH_WORD.test(g)), groups.join(' '));
   const rm = fnSrc('renderMainPanel') || '';
   const am = /const _tsAssessMap = (\{[\s\S]*?\n {2}\});/.exec(rm);
