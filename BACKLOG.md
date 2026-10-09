@@ -169,7 +169,7 @@ preserved internally but not displayed; no prompt, UI, consumer, retry-logic or 
 fields. Rating-only display and the structured AI prompt (R-4b) remain separate work.
 *Deps:* none.
 
-### 34 · 1Y High vs true all-time high
+### 34 · 1Y High vs true all-time high — **DONE**
 **Scores / Signals** · data honesty · **added 2026-10-05**
 
 The value shown and sent to the AI as "ATH" was the 1-year high (the highest high of the 1Y daily
@@ -188,8 +188,15 @@ plausibility rejection, no override; nothing in the UI or AI reads it yet. *Slic
 and refreshes the ATH server-side from Yahoo daily candles (`ath:v2`, suspect-spike rule,
 incremental update, split-driven `stale-suspect` re-derive; operator records keep precedence),
 and `ath-read` is a public read-only `ath-read-v2` projection; DEV only, dormant until armed.
-*Remains — B4:* UI and AI prompt wiring of the verified ATH (display + AI only) and the
-`*_near_ath` setup-name decision.
+*Slice B4 landed (`work/nlm-consistency-1/`, slice 2):* the Technical Setup card shows the verified
+all-time high (value · date · distance at the displayed price), "ATH under review" for a `stale-suspect`
+record, and "—" otherwise — never the 1Y High — and `buildTechSnapshotBlock` appends one
+`All-time high (verified)` line to the AI context for a verified record only. The client reads
+`ath-ensure` (scan prefetch, ≤ 4 concurrent, 12 s timeout, no retry) and `ath-read` into a memory-only
+cache behind the strict default gate `window.PT_ENABLE_ATH_CLIENT === true`; one acceptance rule
+(`ath-read-v2`, `verified`, finite value, `YYYY-MM-DD` date, unit and currency match). Display + AI text
+only: no scoring, action, grouping, ranking or persistence change. The `*_near_ath` setup names stay
+1Y-High-based ("near 1Y high"). With the server ath gates off the client shows "—".
 *Deps:* none.
 
 ### 35 · Claim the MA stack only when the averages are stacked (R-2) — **DONE**
@@ -224,6 +231,20 @@ legacy stored values would change the `_ptScoreCmp` semantics pinned by `qa/run-
 affected tickers, or a later task.
 *Deps:* none.
 
+### 37 · Separate Pulse's view from the analyst consensus (R-5) — **DONE**
+**Scores / Signals** · data honesty · **added and closed 2026-10-09**
+
+The dial, header chip and Scan Results / Daily Review / portfolio cells coloured and ordered the product's score by the
+analyst `Rating:` (consistency pilot 2026-10-03), so the analyst consensus read as Pulse's own view. Owner rulings
+(brief `work/nlm-consistency-1/`): Pulse's colour and word come from the Pulse score band and the existing action; the
+analyst rating is shown separately, neutral, as "Analyst view" with its price target, and omitted when none is parsed.
+*Landed (`work/nlm-consistency-1/`, slice 1):* dial, header chip and action block follow the Pulse score band; the
+comparison-card row, the Scan Results / Daily Review cells and the portfolio panel show the analyst rating neutrally;
+`_srGroupResults` sorts by `_ptScoreCmp` only (stable; group membership, including R-3's "Analysis failed — rescan",
+unchanged) — `qa/run-offline.js` Phase 13 tie-break expectations flipped to source order. No scoring, action,
+prompt, parsing or persistence change.
+*Deps:* none.
+
 ---
 
 ## LATER
@@ -231,7 +252,7 @@ affected tickers, or a later task.
 | # | Task | Domain | What remains | Legacy refs |
 |---|---|---|---|---|
 | 13 | Deep Dive v1 | Research / Analysis | v0 landed `529c721`. **No v1 scope defined** — this is a placeholder, not a ready task | `WP-P8`, Step 6 |
-| 14 | AI narrative validation | Research / Analysis | **Do not start before entry 8b's parser-contract question is settled** — both concern narrative/parser trust. See also the P-5 call-2 activation row in HOLD / EXTERNAL | `WP-P1 Slice B` |
+| 14 | AI narrative validation | Research / Analysis | **Slice 1 landed (`work/nlm-consistency-1/`, 2026-10-09; the 8b gate lifted for this slice only):** `_nlmConsistencyChecks` — deterministic, warn-only checks K1–K6 (stale "today", level vs displayed price, stated % vs computed, entry floor vs invalidation, holder language on a non-holding, stated score vs product score); a `Consistency:` line under the Actionable Take and `⚠ n` in Ranked / Daily Review; AI text never hidden, rewritten or re-prompted. **Remains: everything beyond K1–K6 — still do not start before entry 8b's parser-contract question is settled** — both concern narrative/parser trust. See also the P-5 call-2 activation row in HOLD / EXTERNAL | `WP-P1 Slice B` |
 | 15 | Visual Control Center / live dashboard | Workflow / Dev Infra | The surviving visual-work item. Deferred until the workflow is proven in the pilot | — |
 | 24 | Sidecar harness post-summary / exit-code noise | Workflow / Dev Infra | **Tooling task, not product; added 2026-09-25, non-blocking.** Post-summary output and exit-code noise reported at Worker 2 closure. The harness is Worker-local — not in this repository — so the first step is to locate it. Fix pattern already proven in the MCP harness: derive PASS/FAIL/SKIP from individual result rows, never from the first summary-like line, and count each failure exactly once. Does not reopen the closed Worker 2 task | Worker 2 closure follow-up |
 | 25 | Entry / Position Planner — Risk / Reward | Portfolio Analysis | **Discovery-first; added 2026-09-26; separate from Score — no Score, ranking or runtime change.** Decision-time tool for entering, adding or building a position, in three separate layers: **(A) setup R/R** from market/technical structure — numeric Entry / Invalidation / Target, downside %, upside %, R:R; **(B) position risk** — current size, planned final size, staged adds, concentration, portfolio-aware exposure; **(C) the user's position-building method** — a separate discovery input, not an assumed strategy; may need configurable or rule-based behaviour. *Data today:* ATR and swing levels are derivable from the daily bars already fetched, but **no approved rules yet turn them into Entry / Invalidation / Target**; Entry Zone / Invalidation exist only as AI free text and `PT:` is an AI-text analyst consensus, not a setup target. Current position value and implied P/L are **not yet fully calculable** — holdings are manually recorded values without share count, per-share average cost or a reliable decision-time price. *Sequence:* method interview → read-only coverage measurement → Capability Breakdown with `DR-n` rulings → child Slices. No implementation brief before the Breakdown. *Soft deps:* 20 (live price), DH-M0b (state wording), 12 (ETF treatment). *Shared schema (2026-09-26):* share quantity and per-share average cost are **shared with entry 27**'s quantity comparison — one holdings-schema slice serves both; neither entry defines its own | — |
@@ -310,8 +331,10 @@ Risk / Reward column or chips in Scan Results) ·
 **11** Selected-for-scan visibility — `work/selected-only-watchlist/` ·
 **32** Technical snapshot reuses a stale price — `work/tech-snapshot-price-cache/` ·
 **33** Fix analyst-action / price-target parsing — `work/analyst-parser-r4a/` ·
+**34** 1Y High vs true all-time high (slices A, B1+B3, B2-auto, B4) — `work/r1a-high1y-relabel/` … `work/nlm-consistency-1/` ·
 **35** Claim the MA stack only when the averages are stacked (R-2) — `work/r2-ma-stack/` ·
 **36** Failed AI analysis shows no score, never a synthetic 50 (R-3) — `work/r3-no-synthetic-50/` ·
+**37** Separate Pulse's view from the analyst consensus (R-5) — `work/nlm-consistency-1/` ·
 **S2 slices** S1.5 · S1.5.1 (H-A/H-B/H-C, `1eda72c`) · S1.5.2 (`d9395ea`) · A1 (`6e242fb`,
 `9327e47`) · A2 (`52c322b`) · A5 (`810586d`) · D-A2-2 / S2-M1 (`0526458`) ·
 A3a / S2-M2 (`28c2543`) ·

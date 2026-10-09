@@ -152,7 +152,7 @@ async function main() {
   });
 
   await test('U09: Comparison field set - Rating + price target row', function () {
-    ok(cmpBlock.indexOf('>Rating<') !== -1, 'Rating label present');
+    ok(cmpBlock.indexOf('>Analyst view<') !== -1, 'Analyst view label present (R-5: the row was relabelled from Rating)');
     ok(cmpBlock.indexOf('PT ${pt}') !== -1, 'price target expression present');
   });
 
@@ -214,7 +214,7 @@ async function main() {
     const RATING_DEF = 'var RATING_SUMMARY_RE = ' + RATING_LITERAL + ';';
     // The shared definition is the one legitimate carrier of the literal; excise it, then no inline copy may remain.
     ok(html.split(RATING_DEF).join('').split(RATING_LITERAL).length - 1 === 0, 'no inline Rating parser regex literal remains outside the shared definition (expected 0)');
-    ok(html.split('RATING_SUMMARY_RE').length - 1 === 6, 'RATING_SUMMARY_RE appears exactly 6 times (1 definition + 5 uses)');
+    ok(html.split('RATING_SUMMARY_RE').length - 1 === 5, 'RATING_SUMMARY_RE appears exactly 5 times (1 definition + 4 uses; R-5 dropped the portfolio-panel colour use)');
     ok(html.split(RATING_DEF).length - 1 === 1, 'shared definition present exactly once');
     ok(html.indexOf('/Rating:.*$/s') !== -1, 'tail-strip /Rating:.*$/s still present (the sweep did not over-reach)');
   });
