@@ -160,11 +160,25 @@ test('AR-7e every require / import is from the allowed set', function () {
   });
 });
 
-test('AR-7f index.html carries no ATH wiring (B1+B3 do not touch the client)', function () {
+// B4 client (nlm-consistency-1 S2, Entry 34, Owner rulings D6 / D-B4-1 = A): index.html may now call the public
+// ath-ensure / ath-read routes (the ath-read-v2 projection) behind window.PT_ENABLE_ATH_CLIENT. Everything else about
+// the ATH store stays out of the client: the write route, the operator token / tool, the store name, the record
+// schema key and the server gate names.
+const AR7F_FORBIDDEN = ['ath-write', 'PT_ATH', 'PT_ENABLE_ATH_READ_SERVER', 'PT_ENABLE_ATH_ENSURE_SERVER', 'PT_ENABLE_ATH_WRITE_SERVER', 'ath-record-store', 'ath:v1', 'ath-verify-owner'];
+const AR7F_ALLOWED = ['ath-ensure', 'ath-read', 'PT_ENABLE_ATH_CLIENT'];
+function athWiringHits(html) { return AR7F_FORBIDDEN.filter(function (needle) { return html.indexOf(needle) !== -1; }); }
+test('AR-7f index.html carries only the public ATH client wiring (ath-ensure / ath-read / PT_ENABLE_ATH_CLIENT), never the write route, token, store or server gates', function () {
   const html = read('index.html');
-  ['ath-read', 'ath-write', 'PT_ATH', 'PT_ENABLE_ATH', 'ath-record-store', 'ath:v1', 'ath-verify-owner'].forEach(function (needle) {
-    ok(html.indexOf(needle) === -1, 'index.html mentions ' + needle);
+  const hits = athWiringHits(html);
+  ok(hits.length === 0, 'index.html mentions ' + hits.join(', '));
+  AR7F_ALLOWED.forEach(function (needle) { ok(html.indexOf(needle) !== -1, 'index.html lacks the client wiring token ' + needle); });
+});
+test('PN each forbidden ATH needle added to index.html is flagged (AR-7f)', function () {
+  const html = read('index.html');
+  AR7F_FORBIDDEN.forEach(function (needle) {
+    ok(athWiringHits(html + '\n// ' + needle + '\n').indexOf(needle) !== -1, needle + ' not flagged');
   });
+  ok(athWiringHits(html + "\nfetch('/.netlify/functions/ath-write', { headers: { Authorization: 'Bearer ' + PT_ATH_WRITE_TOKEN } });\n").length >= 2, 'a write call with the token is flagged twice');
 });
 
 test('AR-7g no existing server function or lib references the ATH modules', function () {
@@ -195,7 +209,7 @@ test('AR-7h the 1Y High cannot reach the comparison: compareToVerifiedAth takes 
 // Take flows, the 1Y High code and every pt_* storage key. The two preflight modules are the ones
 // brief section 2 says are not edited; market-data.js is the existing price / history path.
 const BASELINE_PINS = {
-  'index.html': '41149af0b2381cfe2567423acd27a13fcc2978ac1d89836ee65eea35b1ca6f6b',
+  'index.html': '9ae1a5bb8cc9f5968dee56f4a02d207e6c0406f6ed6a5cccfdbadba7db65ce8f',
   'netlify/functions/lib/fund-facts-preflight.js': '2a9a4d3682d68904745b9ec14cbc6fa19fb18e81ad3cd29fa7848eb5455101c2',
   'netlify/functions/lib/fund-facts-read-preflight.js': '1ce8c4c5bead5ddd0f0b52e24f012266f1ff06e44daf77721e9a34131c431990',
   'netlify/functions/market-data.js': 'f9b70977eade3a9ec967b87111a54a5a85d634f0824e448ab2ed746989c61125'

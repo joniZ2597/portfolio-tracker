@@ -1017,6 +1017,8 @@ const _techCache = {};
 
 // ── Extended-hours display cache — session-only, never serialized ────────────
 const _extendedMktCache = {};
+const _athCache = {};    // B4 (Entry 34): All-time-high records from ath-ensure / ath-read — memory-only, display + AI context only
+const _athInflight = {}; // B4 (Entry 34): one ath-read per ticker per page load (promise memo)
 
 // ── Portfolio runtime — session-only, never serialized, never merged into pt_holdings ──
 const _portfolioRuntime = {};
@@ -1127,13 +1129,15 @@ function buildTechSnapshotBlock(sym, snap, setupState) {
   const fmt  = v => v != null ? (v >= 0 ? '+' : '') + v.toFixed(2) + '%' : '—';
   const fmtV = v => v != null ? v.toFixed(2) + 'x' : '—';
   const etfLabel = s.sectorEtf ? ' vs ' + s.sectorEtf + ': ' + fmt(s.rsSector) : '';
+  const _ath = (typeof _athCache === 'object' && _athCache) ? _athCache[sym] : null; // B4 (Entry 34): memory cache; absent in harnesses
+  const _athLine = (_ath && _ath.state === 'verified') ? `  All-time high (verified): ${_ath.athValue.toFixed(2)} ${_ath.currency} (${_ath.athDate})\n` : ''; // D-B4-2 = A: verified only, never the 1Y High, no distance
   return (
     `${sym} [setup: ${setupState} = ${_setupDisplay(setupState)}]\n` +
     `  MA20: ${s.sma20 != null ? '$' + s.sma20.toFixed(2) : '—'} (${fmt(s.pct20)})` +
       `   MA50: ${s.sma50 != null ? '$' + s.sma50.toFixed(2) : '—'} (${fmt(s.pct50)})\n` +
     `  MA150: ${s.sma150 != null ? '$' + s.sma150.toFixed(2) : '—'} (${fmt(s.pct150)})\n` +
     `  1Y High Dist: ${fmt(s.high1yDist)}   Volume vs 20D avg: ${fmtV(s.volRatio)}\n` +
-    `  RS vs SPY (3M): ${fmt(s.rsSPY)}   RS vs QQQ (3M): ${fmt(s.rsQQQ)}${etfLabel}\n`
+    `  RS vs SPY (3M): ${fmt(s.rsSPY)}   RS vs QQQ (3M): ${fmt(s.rsQQQ)}${etfLabel}\n` + _athLine
   );
 }
 
@@ -6476,6 +6480,61 @@ async function _crFetchForScan(sym) {
   }
 }
 
+// ── B4 (Entry 34): All-time-high client — display + AI context only, never setup or score ──
+// Public ath-ensure / ath-read reads with the ticker only (no token, no cookie); memory-only cache; 12 s timeout;
+// no retry. The acceptance rule lives in _athAccept alone. Nothing here touches _techCache, scoring or storage.
+function _athAccept(body) {
+  const b = body && typeof body === 'object' ? body : null;
+  if (b && b.status === 'OK' && b.readContractVersion === 'ath-read-v2' && b.recordStatus === 'verified') {
+    const v = (b.unit === 'ILA' && Number.isFinite(b.athValue)) ? b.athValue / 100 : b.athValue; // agorot -> ILS (P-2A)
+    const cur = b.unit === 'ILA' ? 'ILS' : b.currency;
+    if (Number.isFinite(v) && v > 0 && /^\d{4}-\d{2}-\d{2}$/.test(String(b.athDate || '')) && (cur === 'USD' || cur === 'ILS')) {
+      return { state: 'verified', athValue: v, athDate: b.athDate, currency: cur };
+    }
+  }
+  if (b && b.recordStatus === 'stale-suspect') return { state: 'review', athValue: null, athDate: null, currency: null }; // S2.1: under review = recordStatus stale-suspect, whatever the envelope
+  return { state: 'unavailable', athValue: null, athDate: null, currency: null }; // DISABLED, NOT_AVAILABLE, DEGRADED, errors, timeouts, unresolved
+}
+async function _athFetch(route, sym) {
+  if (window.PT_ENABLE_ATH_CLIENT !== true) return null;
+  const t = String(sym || '').trim().toUpperCase();
+  if (!t) return null;
+  let body = null;
+  try {
+    const r = await fetch('/.netlify/functions/' + route, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: t }), signal: AbortSignal.timeout(12000)
+    });
+    try { body = await r.json(); } catch (_) { body = null; }
+  } catch (_) { body = null; }
+  _athCache[t] = _athAccept(body);
+  return _athCache[t];
+}
+function _athPrefetchScan(symbols) {
+  const out = {};
+  if (window.PT_ENABLE_ATH_CLIENT !== true || !Array.isArray(symbols)) return out;
+  let active = 0;
+  const waiters = [];
+  const acquire = () => new Promise(res => { if (active < 4) { active += 1; res(); } else waiters.push(res); });
+  const release = () => { const w = waiters.shift(); if (w) w(); else active -= 1; };
+  symbols.forEach(sym => {
+    if (out[sym]) return;
+    out[sym] = acquire().then(() => _athFetch('ath-ensure', sym)).catch(() => null).then(r => { release(); return r; });
+  });
+  return out;
+}
+function _athReadForView(sym) {
+  if (window.PT_ENABLE_ATH_CLIENT !== true) return;
+  const t = String(sym || '').trim().toUpperCase();
+  if (!t || _athInflight[t]) return;
+  _athInflight[t] = _athFetch('ath-read', t).catch(() => null).then(() => {
+    if (_activeTicker === t) {
+      const item = _cockpitResults.find(r => r.ticker === t);
+      if (item) renderMainPanel(item);
+    }
+  });
+}
+
 // ── analyzeChunk ─────────────────────────────────────────────────────────────
 async function analyzeChunk(batch, today) {
   // Enforce single-ticker mode — split multi-ticker into sequential single runs
@@ -7800,6 +7859,7 @@ function selectTicker(ticker) {
   const item = _cockpitResults.find(r => r.ticker === ticker);
   if (item) {
     renderMainPanel(item);
+    _athReadForView(ticker); // B4 (Entry 34): ath-read once per ticker per page load; re-renders if still active
   } else {
     renderTickerPlaceholder(ticker);
   }
@@ -8295,6 +8355,25 @@ function renderMainPanel(item) {
   const _tsAssess = _panelSetup === 'unknown' ? '' : !_maStackKey ? (_tsAssessMap[_panelSetup] || '') : _maStacked ? (_tsAssessMap[_panelSetup] || '') : _maStackAll ? 'Price above all key moving averages — healthy uptrend; averages not fully stacked' : 'Healthy uptrend — price above key moving averages';
   const _tsAssessHtml = _tsAssess ? `<div class="ts-assess">${_tsAssess}</div>` : '';
 
+  // B4 (Entry 34): All-time-high row — display only (never setup or score); verified records only; the distance is taken
+  // at the displayed price (P-2A: TASE prices in ILS = agorot ÷ 100). Gate OFF yields '' so the card bytes are unchanged.
+  const _athRowHtml = (() => {
+    if (window.PT_ENABLE_ATH_CLIENT !== true) return '';
+    const _a = _athCache[item.ticker] || null;
+    let _v = '—';
+    if (_a && _a.state === 'review') _v = 'ATH under review';
+    else if (_a && _a.state === 'verified') {
+      const _isTA = /\.TA$/.test(item.ticker || '');
+      const _dispCur = _isTA ? 'ILS' : 'USD';
+      const _dispRaw = hasData ? _techPanelPrice(item) : null;
+      const _dispP = (typeof _dispRaw === 'number' && isFinite(_dispRaw) && _dispRaw > 0) ? (_isTA ? _dispRaw / 100 : _dispRaw) : null;
+      if (_a.currency === _dispCur) {
+        const _d = _dispP === null ? null : (_dispP - _a.athValue) / _a.athValue * 100;
+        _v = `${_a.athValue.toFixed(2)} ${_a.currency} · ${_a.athDate}` + (_d === null ? '' : ` · ${fmtPct(_d)}${_d >= 0 ? ' · at / above' : _d >= -2 ? ' · near' : ''}`);
+      }
+    }
+    return `<div class="rr-row"><span class="rr-lbl">All-time high</span><span class="rr-val neutral-v">${_v}</span></div>\n          `;
+  })();
   // Backlog task 6 — gated row, filled post-render by _ts1FillRow. Gate OFF yields '' so the
   // card bytes are unchanged; the value span carries no state class by Owner ruling.
   const _ts1RowHtml = window.PT_ENABLE_TECH_SCORE === true
@@ -8431,7 +8510,7 @@ function renderMainPanel(item) {
           ).join('')}
         </div>
         <div class="rr-table" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">
-          <div class="rr-row"><span class="rr-lbl">1Y High Distance</span><span class="rr-val ${snap.hasHigh1y ? (snap.high1yDist < -15 ? 'warn' : snap.high1yDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">${snap.hasHigh1y ? fmtPct(snap.high1yDist) : '—'}</span></div>
+          ${_athRowHtml}<div class="rr-row"><span class="rr-lbl">1Y High Distance</span><span class="rr-val ${snap.hasHigh1y ? (snap.high1yDist < -15 ? 'warn' : snap.high1yDist < -5 ? 'neutral-v' : 'pos') : 'neutral-v'}">${snap.hasHigh1y ? fmtPct(snap.high1yDist) : '—'}</span></div>
           <div class="rr-row"><span class="rr-lbl">Timeframe Alignment</span><span class="rr-val ${phCls}">${phase}</span></div>
           <div class="rr-row"><span class="rr-lbl">Score</span><span class="rr-val ${score===null?'neutral-v':score>=65?'pos':score>=40?'warn':'neg'}">${score===null?'—':`${score} / 100${_fromScan ? '<span style="color:var(--text3);font-size:10px;margin-left:6px">from scan</span>' : ''}`}</span></div>
         </div>
@@ -15497,6 +15576,7 @@ async function runAnalysis() {
   const BATCH_SIZE = 1; // 1 ticker per batch — ensures _cancelRequested is checked before each ticker
   const newResults = []; // accumulates results for this scan run only
   const _scanStartedAt = Date.now(); // 7B-4b: scan-level telemetry timing baseline (memory-only)
+  const _athScan = _athPrefetchScan(scanSymbols); // B4 (Entry 34): ath-ensure prefetch, ≤ 4 in flight, 12 s timeout, no retry; never throws
 
   try {
     setProgress(5, 'Initializing...');
@@ -15509,6 +15589,7 @@ async function runAnalysis() {
       _currentScanTicker = batch[0]; // track first ticker of current batch
       const pct = Math.round(10 + (i / scanSymbols.length) * 80);
       setProgress(pct, `Analyzing ${batch.join(', ')}...`);
+      await (_athScan[batch[0]] || null); // B4 (Entry 34): settle this ticker's ensure so the prompt block sees the cache
       const batchResults = await analyzeChunk(batch, today);
       _currentScanTicker = null;
       // Terminal-chain integrity: validate this batch's current-scan results
@@ -15692,6 +15773,9 @@ function init() {
   // Re-applied on every load; every gate check stays strict (=== true). Nothing is
   // persisted. Session kill switch: window.PT_ENABLE_TECH_SCORE = false (console).
   window.PT_ENABLE_TECH_SCORE = true;
+  // B4 (Entry 34, D-B4-1 = A): the All-time-high client is exposed by default; every check stays strict (=== true);
+  // the server gates (PT_ENABLE_ATH_*_SERVER) are the kill switch. Nothing is persisted.
+  window.PT_ENABLE_ATH_CLIENT = true;
   // Phase 1: load + normalize watchlist from localStorage on startup
   loadWatchlist();
   _reconcileWatchlistPositionsFromHoldings(); // EG-17: repair hasPosition for existing holdings
@@ -15725,6 +15809,7 @@ function init() {
     const item = _cockpitResults.find(r => r.ticker === savedActive);
     if (item) {
       renderMainPanel(item);
+      _athReadForView(savedActive); // B4 (Entry 34)
     } else {
       renderTickerPlaceholder(savedActive);
     }

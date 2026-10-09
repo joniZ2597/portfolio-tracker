@@ -42,7 +42,7 @@ const sha256 = s => crypto.createHash('sha256').update(s).digest('hex');
 // ── Pins (sha256) of the 24fabf0 base, LF-normalised ────────────────────────────────────────
 const BASE_PINS = {
   classifyTechnicalSetup: 'c143eb08d982cff036dd5678def08dc38e7dede6e2a0f4ae11a79d277e3ab3ad',
-  buildTechSnapshotBlock: '62addea0cf73ea3e349294a359893716cabc08cb3632860b620060eaa155be29',
+  buildTechSnapshotBlock: '2428a64e204b3aced6a31db781ab1b854bc26c41f401718106dcf9dd15210972', // B4 (Entry 34, D-B4-2 = A) re-pin: the verified-only All-time-high line
   computeSMA: 'c477a33a601bccf0b2e61f12d246c480df4b003f118cd9a61fea6bdae5730230',
   computePctDiff: 'ec61724ddae439fb5858152c9f050c55f0178d7e3a86a50768847b148f01d2a5',
   computeRelativePerf: '84f3e7318a95ff8dac20fb485d66458c57cbde92a3f3c290b2c1513137fe2f29',
@@ -62,8 +62,8 @@ const BASE_TS1_REGION = '9b267da4c06a7724ccbe13ba83bf376ba1dcd2dd7931d3b40fd7337
 const BASE_RM_LF = 'a8c13d283ad90e4c132e6d68a5570682b39d5c127d1dd5a4ce18795178ab838f';
 const OLD_RM_CALIPER_PIN = 'd11b09a989f19ee1fa09770ac135e8f00ce518558b25cc7bce3ee23cf1b174ac';
 // New pins (task renderMainPanel after I7a-I7i, A9a-A9d, the R-2 table, the R-3 Score-row line and the S1 table): LF-normalised (TS1 suite) and CRLF form (caliper).
-const NEW_RM_LF = '63ac78f76a4b5265d8c16a3f0812c592f345cca36ac3f0f546b19e73bd3bb9ef';
-const NEW_RM_CALIPER_PIN = '757decd7724c70e4875d88f82cd950e6cc3ebb43186b10fac927bfefc2cdd95c';
+const NEW_RM_LF = '7f7d0cf5442df1f687e296b14ff7144774a25dea7cb079eca4e00c24b30840a2';
+const NEW_RM_CALIPER_PIN = '1c1505df3b8af5ac2230e8b255cceb55325aaf4ab5f173577fbe66a4a57e8327';
 
 const BASE_PRICE_LINE = "  let price = item._verifiedPrice ? `$${item._verifiedPrice.toFixed(2)}` : '—';\n";
 const BASE_EXT_OVERRIDE = "  if (_showExt && _extC) {\n    if (typeof _extC.regularPrice    === 'number') price = `$${_extC.regularPrice.toFixed(2)}`;\n    if (typeof _extC.regularChangePct === 'number') chg  = _extC.regularChangePct;\n  }";
@@ -213,6 +213,47 @@ function applyS1(rm) {
 function revertS1(taskRm) {
   let out = taskRm;
   for (const r of S1_TABLE.slice().reverse()) { if (countOf(out, r.newS) !== 1) throw new Error('S1 new line not present exactly once: ' + r.id); out = out.replace(r.newS, () => r.oldS); }
+  return out;
+}
+
+// ── S2 table (work/nlm-consistency-1/brief.md §S2, Entry 34, B4 client): the All-time-high row of renderMainPanel ──
+// Disjoint from every earlier table: reverted first, applied last. RM-A inserts the row block, RM-B prefixes the 1Y line.
+const S2_ONE_Y_LINE = '          <div class="rr-row"><span class="rr-lbl">1Y High Distance</span><span class="rr-val ${snap.hasHigh1y ? (snap.high1yDist < -15 ? \'warn\' : snap.high1yDist < -5 ? \'neutral-v\' : \'pos\') : \'neutral-v\'}">${snap.hasHigh1y ? fmtPct(snap.high1yDist) : \'—\'}</span></div>';
+const S2_ROW_BLOCK = [
+  "  // B4 (Entry 34): All-time-high row — display only (never setup or score); verified records only; the distance is taken",
+  "  // at the displayed price (P-2A: TASE prices in ILS = agorot ÷ 100). Gate OFF yields '' so the card bytes are unchanged.",
+  "  const _athRowHtml = (() => {",
+  "    if (window.PT_ENABLE_ATH_CLIENT !== true) return '';",
+  "    const _a = _athCache[item.ticker] || null;",
+  "    let _v = '—';",
+  "    if (_a && _a.state === 'review') _v = 'ATH under review';",
+  "    else if (_a && _a.state === 'verified') {",
+  "      const _isTA = /\\.TA$/.test(item.ticker || '');",
+  "      const _dispCur = _isTA ? 'ILS' : 'USD';",
+  "      const _dispRaw = hasData ? _techPanelPrice(item) : null;",
+  "      const _dispP = (typeof _dispRaw === 'number' && isFinite(_dispRaw) && _dispRaw > 0) ? (_isTA ? _dispRaw / 100 : _dispRaw) : null;",
+  "      if (_a.currency === _dispCur) {",
+  "        const _d = _dispP === null ? null : (_dispP - _a.athValue) / _a.athValue * 100;",
+  "        _v = `${_a.athValue.toFixed(2)} ${_a.currency} · ${_a.athDate}` + (_d === null ? '' : ` · ${fmtPct(_d)}${_d >= 0 ? ' · at / above' : _d >= -2 ? ' · near' : ''}`);",
+  "      }",
+  "    }",
+  "    return `<div class=\"rr-row\"><span class=\"rr-lbl\">All-time high</span><span class=\"rr-val neutral-v\">${_v}</span></div>\\n          `;",
+  "  })();",
+  ""
+].join('\n');
+const S2_TABLE = [
+  { id: 'RM-A', oldS: "  // Backlog task 6 — gated row, filled post-render by _ts1FillRow. Gate OFF yields '' so the",
+    newS: S2_ROW_BLOCK + "  // Backlog task 6 — gated row, filled post-render by _ts1FillRow. Gate OFF yields '' so the" },
+  { id: 'RM-B', oldS: S2_ONE_Y_LINE, newS: '          ${_athRowHtml}' + S2_ONE_Y_LINE.slice(10) }
+];
+function applyS2(rm) {
+  let out = rm;
+  for (const r of S2_TABLE) { if (countOf(out, r.oldS) !== 1) throw new Error('S2 old line not unique: ' + r.id); out = out.replace(r.oldS, () => r.newS); }
+  return out;
+}
+function revertS2(taskRm) {
+  let out = taskRm;
+  for (const r of S2_TABLE.slice().reverse()) { if (countOf(out, r.newS) !== 1) throw new Error('S2 new line not present exactly once: ' + r.id); out = out.replace(r.newS, () => r.oldS); }
   return out;
 }
 
@@ -710,12 +751,12 @@ async function evaluate(S) {
   // ── TC-10 only main-panel change ────────────────────────────────────────────────────────
   const rm = extractFn(src, 'renderMainPanel') || '';
   await guard('TC-10', async () => {
-    const reverted = revertI7(revertA9(revertR2(revertR3(revertS1(rm)))));
-    chk('TC-10', 'reverting S1, R-3, R-2, A9 and I7a-I7i restores the base (LF-normalised pin)', sha256(reverted) === BASE_RM_LF);
-    chk('TC-10', 'reverting S1, R-3, R-2, A9 and I7a-I7i restores the OLD caliper pin d11b09a9', sha256(crlf(reverted)) === OLD_RM_CALIPER_PIN);
-    const forward = applyS1(applyR3(applyR2(applyA9(applyI7(reverted)))));
-    chk('TC-10', 'line diff is exactly I7a-I7c added, I7d-I7i and A9 replaced, the R-2 line replaced by four, the R-3 Score-row line replaced, and the seven S1 lines (RM-1..RM-7)', forward === rm);
-    chk('TC-10', 'line count = base + 3 (I7) + 3 (R-2) + 0 (R-3) - 1 (S1: RM-6 +1, RM-7 -2)', rm.split('\n').length === reverted.split('\n').length + 5);
+    const reverted = revertI7(revertA9(revertR2(revertR3(revertS1(revertS2(rm))))));
+    chk('TC-10', 'reverting S2, S1, R-3, R-2, A9 and I7a-I7i restores the base (LF-normalised pin)', sha256(reverted) === BASE_RM_LF);
+    chk('TC-10', 'reverting S2, S1, R-3, R-2, A9 and I7a-I7i restores the OLD caliper pin d11b09a9', sha256(crlf(reverted)) === OLD_RM_CALIPER_PIN);
+    const forward = applyS2(applyS1(applyR3(applyR2(applyA9(applyI7(reverted))))));
+    chk('TC-10', 'line diff is exactly I7a-I7c added, I7d-I7i and A9 replaced, the R-2 line replaced by four, the R-3 Score-row line replaced, the seven S1 lines (RM-1..RM-7) and the S2 row block (RM-A, RM-B)', forward === rm);
+    chk('TC-10', 'line count = base + 3 (I7) + 3 (R-2) + 0 (R-3) - 1 (S1: RM-6 +1, RM-7 -2) + 19 (S2: the row block)', rm.split('\n').length === reverted.split('\n').length + 24);
     chk('TC-10', 'task renderMainPanel hashes to the new LF pin', sha256(rm) === NEW_RM_LF);
     chk('TC-10', 'task renderMainPanel hashes to the new caliper (CRLF) pin', sha256(crlf(rm)) === NEW_RM_CALIPER_PIN);
   });

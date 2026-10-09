@@ -49,7 +49,7 @@ const PRE = {
 // index.html with the five changed functions masked: nothing else in the file changes in this task
 // (hence no new top-level function anywhere). Re-pinned by R-5 (Entry 37, nlm-consistency-1 S1), whose edits to
 // openScanResultsOverlay, _srRenderGrouped, _renderPortfolioPanel and the static overlay header sit outside the mask.
-const PRE_MASKED_FIVE = '0559edce2de564d07984b563ed88dd188f8d26ecf6c12e08cd3718636b1972c9';
+const PRE_MASKED_FIVE = '7760fb3e03f214af3c615810ce8fd3d96e8aaf8f0be08781550f7a81ae7c2bf2'; // + B4 (Entry 34, nlm-consistency-1 S2): _athCache / _athInflight, the four _ath* helpers, init(), runAnalysis, selectTicker
 // Surfaces the brief says are untouched (section 2.8 / NS-11).
 const ISOLATION_PINS = {
   enforceScoreConsistency: 'e1406d9bfe8358212ada456882bea248cb761cc68734213aa5151b9c02966a00',
@@ -159,6 +159,47 @@ function revertS1(fnSrc, name) {
   let out = fnSrc;
   for (const r of S1[name].slice().reverse()) {
     if (countOf(out, r.newS) !== 1) throw new Error('S1 new text not unique: ' + r.id);
+    out = out.replace(r.newS, () => r.oldS);
+  }
+  return out;
+}
+// ── S2 table (work/nlm-consistency-1/brief.md §S2, Entry 34, B4 client): the All-time-high row of renderMainPanel ──
+// Disjoint from the R-3 and S1 lines; reverted before S1 on the way back to the pre-task pin.
+const S2_ONE_Y_LINE = '          <div class="rr-row"><span class="rr-lbl">1Y High Distance</span><span class="rr-val ${snap.hasHigh1y ? (snap.high1yDist < -15 ? \'warn\' : snap.high1yDist < -5 ? \'neutral-v\' : \'pos\') : \'neutral-v\'}">${snap.hasHigh1y ? fmtPct(snap.high1yDist) : \'—\'}</span></div>';
+const S2_ROW_BLOCK = [
+  "  // B4 (Entry 34): All-time-high row — display only (never setup or score); verified records only; the distance is taken",
+  "  // at the displayed price (P-2A: TASE prices in ILS = agorot ÷ 100). Gate OFF yields '' so the card bytes are unchanged.",
+  "  const _athRowHtml = (() => {",
+  "    if (window.PT_ENABLE_ATH_CLIENT !== true) return '';",
+  "    const _a = _athCache[item.ticker] || null;",
+  "    let _v = '—';",
+  "    if (_a && _a.state === 'review') _v = 'ATH under review';",
+  "    else if (_a && _a.state === 'verified') {",
+  "      const _isTA = /\\.TA$/.test(item.ticker || '');",
+  "      const _dispCur = _isTA ? 'ILS' : 'USD';",
+  "      const _dispRaw = hasData ? _techPanelPrice(item) : null;",
+  "      const _dispP = (typeof _dispRaw === 'number' && isFinite(_dispRaw) && _dispRaw > 0) ? (_isTA ? _dispRaw / 100 : _dispRaw) : null;",
+  "      if (_a.currency === _dispCur) {",
+  "        const _d = _dispP === null ? null : (_dispP - _a.athValue) / _a.athValue * 100;",
+  "        _v = `${_a.athValue.toFixed(2)} ${_a.currency} · ${_a.athDate}` + (_d === null ? '' : ` · ${fmtPct(_d)}${_d >= 0 ? ' · at / above' : _d >= -2 ? ' · near' : ''}`);",
+  "      }",
+  "    }",
+  "    return `<div class=\"rr-row\"><span class=\"rr-lbl\">All-time high</span><span class=\"rr-val neutral-v\">${_v}</span></div>\\n          `;",
+  "  })();",
+  ""
+].join('\n');
+const S2 = {
+  analyzeChunk: [], orchestrate: [], _isValidScanResult: [], _srGroupResults: [],
+  renderMainPanel: [
+    { id: 'RM-A', oldS: "  // Backlog task 6 — gated row, filled post-render by _ts1FillRow. Gate OFF yields '' so the",
+      newS: S2_ROW_BLOCK + "  // Backlog task 6 — gated row, filled post-render by _ts1FillRow. Gate OFF yields '' so the" },
+    { id: 'RM-B', oldS: S2_ONE_Y_LINE, newS: '          ${_athRowHtml}' + S2_ONE_Y_LINE.slice(10) }
+  ]
+};
+function revertS2(fnSrc, name) {
+  let out = fnSrc;
+  for (const r of S2[name].slice().reverse()) {
+    if (countOf(out, r.newS) !== 1) throw new Error('S2 new text not unique: ' + r.id);
     out = out.replace(r.newS, () => r.oldS);
   }
   return out;
@@ -383,7 +424,7 @@ async function evaluate(src) {
   await guard('NS-12', () => {
     for (const n of CHANGED) {
       chk('NS-12', n + ': the R-3 table reverts cleanly (every task line present exactly once)', pre[n] !== null);
-      chk('NS-12', n + ': reverting only the R-3 lines (and, after them, the S1 lines of R-5) restores the pre-task source (LF pin)', pre[n] !== null && sha256(revertS1(pre[n], n)) === PRE[n]);
+      chk('NS-12', n + ': reverting only the R-3 lines (and, after them, the S2 block of B4 and the S1 lines of R-5) restores the pre-task source (LF pin)', pre[n] !== null && sha256(revertS1(revertS2(pre[n], n), n)) === PRE[n]);
       chk('NS-12', n + ': applying the R-3 table to the reverted source reproduces the task source byte-for-byte', pre[n] !== null && applyR3(pre[n], n) === task[n]);
     }
     chk('NS-12', 'line counts: analyzeChunk +0, orchestrate +0, _isValidScanResult +0, _srGroupResults +2, renderMainPanel +0',

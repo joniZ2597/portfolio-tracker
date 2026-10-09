@@ -64,16 +64,16 @@ const fnSrc = n => extractFn(content, n);
 // ---- Baseline literals / pins (captured at Step 0 from the 57afd9d index.html) ----
 const BASE_CLASSIFY_SRC = "function classifyTechnicalSetup(snap) {\n  const { pct20, pct50, pct150, athDist } = snap || {};\n  // Require at least pct20 + pct50 for any non-unknown classification\n  if (pct20 == null || pct50 == null) return 'unknown';\n  // extended_near_ath: price >10% above MA20 AND within 5% of 1Y high\n  if (athDist != null && athDist > -5 && pct20 > 10)\n    return 'extended_near_ath';\n  // healthy_uptrend_near_ath: above MA20+MA50, within 8% of ATH\n  if (athDist != null && athDist > -8 && pct20 > 2 && pct50 > 0)\n    return 'healthy_uptrend_near_ath';\n  // healthy_uptrend: above all three key MAs\n  if (pct150 != null && pct20 > 0 && pct50 > 0 && pct150 > 0)\n    return 'healthy_uptrend';\n  // support_test: below MA20, MA50 within ±3% (testing support), above MA150\n  // More specific than pullback_in_uptrend — must be evaluated first\n  if (pct150 != null && pct20 < 0 && pct50 >= -3 && pct50 <= 2 && pct150 > 0)\n    return 'support_test';\n  // pullback_in_uptrend: below MA20 but clearly above MA50 and MA150\n  if (pct150 != null && pct20 < 0 && pct50 > 0 && pct150 > 0)\n    return 'pullback_in_uptrend';\n  // breakdown_risk: below MA50 by >3% but MA150 still nearby\n  if (pct150 != null && pct50 < -3 && pct150 >= -5 && pct150 <= 2)\n    return 'breakdown_risk';\n  // below_key_mas: below MA20, MA50, and MA150 all\n  if (pct150 != null && pct20 < 0 && pct50 < 0 && pct150 < 0)\n    return 'below_key_mas';\n  return 'unknown';\n}";
 const PINS = {
-  "layer1": "22bc702abfdb8e53a4f2c64810785c021a1385b74031bcb9839d4aeb2a0ca6eb",
+  "layer1": "b59e7b490968fa3bb3d82c0fc93ec3620e61d17959b1ab545806960174e77d5d",
   "layer2": {
     "computeATHDistance|computeHigh1yDistance": "39b8ce7ec6d2f8e2fad10b050b16f87ab79119867e6f53d7e412f164b865a451",
     "classifyTechnicalSetup": "579f5bfea08fe9b499c8d59016f22116cdf4ac12cafdaa1e0caa3928417e044e",
-    "buildTechSnapshotBlock": "a6c8fd53866f727e7985e6c10e7d1e750b4e67cc8363d85fd6a75a8b365d7bfa",
+    "buildTechSnapshotBlock": "3bd4b2787884469349ff5ae8e1a50d3defd7c62b46a67ab6698dd053ac943539",
     "_techDeriveSnap": "39b93ac18718355e9768bdb6dc76e68b5fc25c1de446b730fcc03e273e4181f4",
     "fetchAnthropicAnalysis": "fad40ac1ea98d95d05c5efbe288b98732a6ddaa02da8b6eb15b33ade1754db29",
     "orchestrate": "d772badfdfa6c434c59b8fdce68d635544bf7ac173cc0460e4518267be238f67",
     "_srGroupResults": "657105a2f62abddaa85053fa7ba78e49c7fe1187439bfe2caf1ef7875ba4a4b2",
-    "renderMainPanel": "15f38ca158ed5665a8cf2880a8f2b9d81894d6dca36f85fbe9e82b4da94922b5",
+    "renderMainPanel": "c4df0046dad1f7257010ba3f2999c6fbe60f3982ca9865971f430e4b41967d92",
     "_dd0FetchAnalysis": "50b6d52bc1ec645afc239432878b816529cebf592a0a60fae8440581c03f6c38"
   }
 };
@@ -238,6 +238,13 @@ guard('HL-3', () => {
     check('HL-3 buildTechSnapshotBlock (' + st + ') has no ATH / all-time wording', !ATH_WORD.test(out), JSON.stringify(out.split('\n').slice(0, 5)));
     check('HL-3 buildTechSnapshotBlock (' + st + ') shows "1Y High Dist:"', out.indexOf('  1Y High Dist: ') !== -1);
   }
+  // B4 (Entry 34, D-B4-2 = A): with a verified All-time-high cache entry the ONLY all-time wording is the verified line itself,
+  // and no 1Y line carries it (the 1Y High is never called an all-time high).
+  const buildAth = new Function('_athCache', bsrc.join('\n') + '\nreturn buildTechSnapshotBlock;')({ TST: { state: 'verified', athValue: 191.37, athDate: '2025-07-15', currency: 'USD' } });
+  const outAth = buildAth('TST', snap, 'extended_near_ath');
+  const athLines = outAth.split('\n').filter(l => ATH_WORD.test(l));
+  check('HL-3 with a verified ATH entry the only all-time line is "  All-time high (verified): 191.37 USD (2025-07-15)"', athLines.length === 1 && athLines[0] === '  All-time high (verified): 191.37 USD (2025-07-15)', athLines.join(' | '));
+  check('HL-3 with a verified ATH entry the 1Y High Dist line is unchanged and carries no all-time wording', outAth.indexOf('  1Y High Dist: -2.50%') !== -1 && outAth.split('\n').filter(l => /1Y High/.test(l)).every(l => !ATH_WORD.test(l)));
   const blk = build('TST', snap, 'extended_near_ath');
   check('HL-3 snapshot header is "[setup: extended_near_ath = extended near 1Y high]"', blk.split('\n')[0] === 'TST [setup: extended_near_ath = extended near 1Y high]');
   const fa = fnSrc('fetchAnthropicAnalysis') || '';

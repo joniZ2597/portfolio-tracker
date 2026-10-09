@@ -136,7 +136,7 @@ const BASE_HASHES = {
   runTechScoreV1: 'f36bc4eb5cba98708d126414f9cad74c61faa0e8a66f80d7a6940a894fec504d',
   _ts1FillRow: '17c8863a09b38ed15b9126906185cfd35bf2107ad30e95523d19a62a6630ac5f',
   _ts1RowText: '6df1e8355698b11e89f5f01193184a17f536a57f047cac6eec322159f4f69a06',
-  renderMainPanel: '63ac78f76a4b5265d8c16a3f0812c592f345cca36ac3f0f546b19e73bd3bb9ef'
+  renderMainPanel: '7f7d0cf5442df1f687e296b14ff7144774a25dea7cb079eca4e00c24b30840a2'
 };
 function checkTx3(src) {
   const r = { ok: false, reason: null };
@@ -180,7 +180,7 @@ function checkTx4(src) {
 }
 
 // -- TX-5 --------------------------------------------------------------------
-const ALLOWED_DEFAULTS = ['PT_ENABLE_PORTFOLIO_RESEARCH', 'PT_ENABLE_TECH_SCORE'];
+const ALLOWED_DEFAULTS = ['PT_ENABLE_PORTFOLIO_RESEARCH', 'PT_ENABLE_TECH_SCORE', 'PT_ENABLE_ATH_CLIENT']; // ATH client default: B4 (Entry 34) ruling D-B4-1 = A, Owner ruling F-5 2026-10-09
 const MUST_HAVE_NO_DEFAULT = [
   'PT_ENABLE_DEEP_DIVE', 'PT_ENABLE_RESEARCH_EVIDENCE_CLIENT', 'PT_ENABLE_CAPITAL_RETURNS_CLIENT',
   'PT_ENABLE_SEC_EVIDENCE_STORE_CLIENT', 'PT_ENABLE_FUND_FACTS_READ_CLIENT', 'PT_ENABLE_EDGAR_FORM4'

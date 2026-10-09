@@ -93,7 +93,7 @@ const PROTECTED_FN_HASHES = {
   _ptScoreDial: '4092f243120f5c6bdf3269a02e599f3ad68afcd4a8afe8d766724879b0ef4bce',
   _srGroupResults: 'f4ebde1c851d2d2e38ee8a5b8b96812f802612f5faddd17972620138dbdfdc9d', // R-5 (Entry 37) re-pin: Pulse-only ordering
   _srRenderGrouped: 'b14b4ee040faae7f0d3e5e2168ff0489b026d550545950c38328a0d824c4c914', // R-5 (Entry 37) re-pin: neutral Analyst cell
-  renderMainPanel: '757decd7724c70e4875d88f82cd950e6cc3ebb43186b10fac927bfefc2cdd95c' // R-5 (Entry 37) re-pin: Pulse dial / chip, analyst line
+  renderMainPanel: '1c1505df3b8af5ac2230e8b255cceb55325aaf4ab5f173577fbe66a4a57e8327' // R-5 (Entry 37) + B4 (Entry 34) re-pin: Pulse dial / chip, analyst line, All-time-high row
 };
 for (const fnName of Object.keys(PROTECTED_FN_HASHES)) {
   const src = extractFunctionSource(content, fnName);

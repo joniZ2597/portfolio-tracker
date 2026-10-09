@@ -43,7 +43,7 @@ const PIN_CLASSIFY_LF = 'c143eb08d982cff036dd5678def08dc38e7dede6e2a0f4ae11a79d2
 const PIN_TSASSESSMAP_LF = '79b78d1ed91f3d6f8c2b867378a1a228f83399c8931ddd150eea31143bb3a31e';
 // index.html with renderMainPanel masked out: nothing outside the function changes in this task
 // (hence no new top-level function anywhere).
-const PIN_MASKED_MINUS_RM_LF = 'd41efca59ccb6d953ae0b9cabc32da8485bf129e8cc650a90c21a6f9ee60c5f2'; // re-pinned at R-3 (Entry 36)
+const PIN_MASKED_MINUS_RM_LF = '353af4381dce5b6791471bf2a3e62325893e7df96ba2b9224c8061158a9eb852'; // re-pinned at R-3 (Entry 36)
 
 // ── R-2 table: the one pre-task line and the four task lines (whole lines, exact bytes) ──────
 const R2_OLD = "  const _tsAssess = _panelSetup !== 'unknown' ? (_tsAssessMap[_panelSetup] || '') : '';";
@@ -107,6 +107,45 @@ function applyS1(rm) {
 function revertS1(taskRm) {
   let out = taskRm;
   for (const r of S1_TABLE.slice().reverse()) { if (countOf(out, r.newS) !== 1) throw new Error('S1 new line not present exactly once: ' + r.id); out = out.replace(r.newS, () => r.oldS); }
+  return out;
+}
+// ── S2 table (work/nlm-consistency-1/brief.md §S2, Entry 34, B4 client): the All-time-high row, reverted first / applied last ──
+const S2_ONE_Y_LINE = '          <div class="rr-row"><span class="rr-lbl">1Y High Distance</span><span class="rr-val ${snap.hasHigh1y ? (snap.high1yDist < -15 ? \'warn\' : snap.high1yDist < -5 ? \'neutral-v\' : \'pos\') : \'neutral-v\'}">${snap.hasHigh1y ? fmtPct(snap.high1yDist) : \'—\'}</span></div>';
+const S2_ROW_BLOCK = [
+  "  // B4 (Entry 34): All-time-high row — display only (never setup or score); verified records only; the distance is taken",
+  "  // at the displayed price (P-2A: TASE prices in ILS = agorot ÷ 100). Gate OFF yields '' so the card bytes are unchanged.",
+  "  const _athRowHtml = (() => {",
+  "    if (window.PT_ENABLE_ATH_CLIENT !== true) return '';",
+  "    const _a = _athCache[item.ticker] || null;",
+  "    let _v = '—';",
+  "    if (_a && _a.state === 'review') _v = 'ATH under review';",
+  "    else if (_a && _a.state === 'verified') {",
+  "      const _isTA = /\\.TA$/.test(item.ticker || '');",
+  "      const _dispCur = _isTA ? 'ILS' : 'USD';",
+  "      const _dispRaw = hasData ? _techPanelPrice(item) : null;",
+  "      const _dispP = (typeof _dispRaw === 'number' && isFinite(_dispRaw) && _dispRaw > 0) ? (_isTA ? _dispRaw / 100 : _dispRaw) : null;",
+  "      if (_a.currency === _dispCur) {",
+  "        const _d = _dispP === null ? null : (_dispP - _a.athValue) / _a.athValue * 100;",
+  "        _v = `${_a.athValue.toFixed(2)} ${_a.currency} · ${_a.athDate}` + (_d === null ? '' : ` · ${fmtPct(_d)}${_d >= 0 ? ' · at / above' : _d >= -2 ? ' · near' : ''}`);",
+  "      }",
+  "    }",
+  "    return `<div class=\"rr-row\"><span class=\"rr-lbl\">All-time high</span><span class=\"rr-val neutral-v\">${_v}</span></div>\\n          `;",
+  "  })();",
+  ""
+].join('\n');
+const S2_TABLE = [
+  { id: 'RM-A', oldS: "  // Backlog task 6 — gated row, filled post-render by _ts1FillRow. Gate OFF yields '' so the",
+    newS: S2_ROW_BLOCK + "  // Backlog task 6 — gated row, filled post-render by _ts1FillRow. Gate OFF yields '' so the" },
+  { id: 'RM-B', oldS: S2_ONE_Y_LINE, newS: '          ${_athRowHtml}' + S2_ONE_Y_LINE.slice(10) }
+];
+function applyS2(rm) {
+  let out = rm;
+  for (const r of S2_TABLE) { if (countOf(out, r.oldS) !== 1) throw new Error('S2 old line not unique: ' + r.id); out = out.replace(r.oldS, () => r.newS); }
+  return out;
+}
+function revertS2(taskRm) {
+  let out = taskRm;
+  for (const r of S2_TABLE.slice().reverse()) { if (countOf(out, r.newS) !== 1) throw new Error('S2 new line not present exactly once: ' + r.id); out = out.replace(r.newS, () => r.oldS); }
   return out;
 }
 
@@ -334,11 +373,11 @@ function evaluate(src) {
   // MS-7 diff confined to the _tsAssess region; the R-2 revert table reproduces the pre-task source
   guard('MS-7', () => {
     chk('MS-7', 'the four R-2 lines are present exactly once, as one block', countOf(rm, R2_BLOCK) === 1);
-    const reverted = revertR2(revertR3(revertS1(rm)));
-    chk('MS-7', 'reverting only the S1 lines, the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (LF pin)', sha256(reverted) === PRE_RM_LF);
-    chk('MS-7', 'reverting only the S1 lines, the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (CRLF pin)', sha256(crlf(reverted)) === PRE_RM_CRLF);
-    chk('MS-7', 'applying the R-2, then the R-3, then the S1 table to the reverted source reproduces the task source byte-for-byte', applyS1(applyR3(applyR2(reverted))) === rm);
-    chk('MS-7', 'line count = pre-task + 3 (R-2, at most four lines in the region) - 1 (S1: RM-6 +1, RM-7 -2)', rm.split('\n').length === reverted.split('\n').length + 2);
+    const reverted = revertR2(revertR3(revertS1(revertS2(rm))));
+    chk('MS-7', 'reverting only the S2 block, the S1 lines, the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (LF pin)', sha256(reverted) === PRE_RM_LF);
+    chk('MS-7', 'reverting only the S2 block, the S1 lines, the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (CRLF pin)', sha256(crlf(reverted)) === PRE_RM_CRLF);
+    chk('MS-7', 'applying the R-2, then the R-3, then the S1, then the S2 table to the reverted source reproduces the task source byte-for-byte', applyS2(applyS1(applyR3(applyR2(reverted)))) === rm);
+    chk('MS-7', 'line count = pre-task + 3 (R-2, at most four lines in the region) - 1 (S1: RM-6 +1, RM-7 -2) + 19 (S2: the row block)', rm.split('\n').length === reverted.split('\n').length + 21);
     chk('MS-7', 'the _tsAssessHtml line and the template interpolation are untouched',
       countOf(rm, "const _tsAssessHtml = _tsAssess ? `<div class=\"ts-assess\">${_tsAssess}</div>` : '';") === 1 && countOf(rm, '${_tsAssessHtml}`}${_ts1RowHtml}') === 1);
   });
