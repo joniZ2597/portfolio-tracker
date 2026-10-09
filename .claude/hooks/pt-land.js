@@ -7,12 +7,12 @@
  *
  * Verbs: brief-request work/<id>/brief.md | protected-request task/<id> | protected-commit task/<id> |
  *        land-request task/<id> | land task/<id> | push-request | push | cleanup task/<id> |
- *        resync task/<id>
+ *        resync task/<id> | task-start task/<id> | adopt-request task/<id> | adopt task/<id>
  * Exit 0 success, 1 refusal (fail closed), 3 usage error.
  *
  * Module API (for QA): runBriefRequest(opts), runProtectedRequest(opts), runProtectedCommit(opts),
  * runLandRequest(opts), runLand(opts), runPushRequest(opts), runPush(opts), runCleanup(opts),
- * runResync(opts),
+ * runResync(opts), runTaskStart(opts), runAdoptRequest(opts), runAdopt(opts),
  * parseRecord(text, kind), parseLandScope(briefText), parseProtectedScope(briefText),
  * approvalLine(kind, payload, commonDir).
  * opts = { cwd, task?, path?, gitExec?, expectedOriginUrls?, now?, archiveRoot? }.
@@ -33,6 +33,9 @@ const LAND_RECORD_NAME = 'pt-land-approval';
 const PUSH_RECORD_NAME = 'pt-push-approval';
 const BRIEF_RECORD_NAME = 'pt-brief-approval';
 const PROTECTED_RECORD_NAME = 'pt-protected-approval';
+const ADOPT_RECORD_NAME = 'pt-adopt-approval';
+const TASK_DIR_NAME = 'pt-task';
+const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const LOCK_NAME = 'pt-land.lock';
 const AUDIT_NAME = 'pt-land-log';
 const LAND_EVIDENCE_RE = /^LAND-EVIDENCE: qa-offline=PASS \d+; targeted=PASS; codex-classI-unresolved=0$/;
@@ -163,6 +166,14 @@ function parseRecord(raw, kind) {
     if (!TASK_RE.test(task)) return null;
     if (!OID_RE.test(head) || !OID_RE.test(tree)) return null;
     return { kind: 'PROTECTED', task, head, tree };
+  }
+  if (kind === 'ADOPT') {
+    const [verb, task, base, startedAt] = parts;
+    if (verb !== 'ADOPT') return null;
+    if (!TASK_RE.test(task)) return null;
+    if (!OID_RE.test(base)) return null;
+    if (!ISO_RE.test(startedAt)) return null;
+    return { kind: 'ADOPT', task, base, startedAt };
   }
   return null;
 }
@@ -516,6 +527,15 @@ function runLandCore(opts, doLand) {
   const l3 = resolveL3(G, canonicalRoot, task);
   if (!l3.ok) return refuse('L3', l3.reason);
 
+  // A recorded task must be current: the record's base is the branch-dev the task sits on (Second LAND keeps it so).
+  const recL = readTaskRecord(canonicalRoot, commonDir, task);
+  if (recL.exists) {
+    if (!recL.valid) return refuse('L3', 'RECORD INVALID: ' + recL.reason, l3.base, l3.tip);
+    if (recL.record.base !== l3.base) {
+      return refuse('L3', 'RECORD MISMATCH: recorded task base ' + recL.record.base + ' != branch-dev ' + l3.base + ' - resync through pt-land.js resync', l3.base, l3.tip);
+    }
+  }
+
   const l4 = canonicalClean(G, canonicalRoot);
   if (!l4.ok) return refuse('L4', l4.reason, l3.base, l3.tip);
 
@@ -544,7 +564,7 @@ function runLandCore(opts, doLand) {
   try { integrity = loadIntegrityModule(canonicalRoot); }
   catch (e) { return refuse('L10', 'could not load the integrity module (' + e.message + ')', l3.base, l3.tip); }
   const mainOid = currentMainOid(G, canonicalRoot);
-  const ires = integrity.runIntegrity({ baseMain: mainOid, baseDev: l3.base, task, root: canonicalRoot, gitExec: opts.gitExec });
+  const ires = integrity.runIntegrity({ baseMain: mainOid, baseDev: l3.base, task, root: canonicalRoot, commonDir, gitExec: opts.gitExec });
   if (!ires.ok) return refuse('L10', 'integrity FAIL: ' + ires.failures.join('; '), l3.base, l3.tip);
 
   const report = {
@@ -1218,9 +1238,26 @@ function runCleanupCore(opts) {
       return { ok: false, exitCode: 1, reason: 'K9: branch still present after delete - STOP' };
     }
 
+    // K10: a task-base record moves to pt-task/archive/ (a failed move is a warning; it never undoes the cleanup).
+    let recordArchived = false;
+    let recordWarning = null;
+    const recPath = taskRecordPath(commonDir, task);
+    if (fs.existsSync(recPath)) {
+      const archivedPath = path.join(commonDir, TASK_DIR_NAME, 'archive', taskEnc(task) + '.' + nowStamp(opts) + '.json');
+      try {
+        fs.mkdirSync(path.dirname(archivedPath), { recursive: true });
+        fs.renameSync(recPath, archivedPath);
+        recordArchived = true;
+      } catch (e) {
+        recordWarning = 'the task-base record could not be archived (' + (e && e.message ? e.message : String(e)) + ')';
+      }
+    }
+
     let auditWarning = null;
     try {
-      appendAudit(commonDir, { ts: nowIso(opts), verb: 'cleanup', task, from: tip, to: null, result: 'ok', reason: null });
+      const okLine = { ts: nowIso(opts), verb: 'cleanup', task, from: tip, to: null, result: 'ok', reason: null };
+      if (recordArchived) okLine.recordArchived = true;
+      appendAudit(commonDir, okLine);
     } catch (e) {
       auditWarning = 'audit log append failed: ' + (e && e.message ? e.message : String(e));
     }
@@ -1231,6 +1268,7 @@ function runCleanupCore(opts) {
         : '; no slot was checked out; no evidence to archive')
     };
     if (auditWarning) success.auditWarning = auditWarning;
+    if (recordWarning) success.recordWarning = recordWarning;
     return success;
   } finally {
     releaseLock(lock.path);
@@ -1360,6 +1398,8 @@ function runResyncCore(opts) {
   if (!cfg.ok) return refuse('S1', cfg.reason);
   const hooks = hooksClean(commonDir);
   if (!hooks.ok) return refuse('S1', hooks.reason);
+  const recState = readTaskRecord(canonicalRoot, commonDir, task);
+  if (recState.exists && !recState.valid) return refuse('S1', 'RECORD INVALID: ' + recState.reason);
 
   // S2: the canonical checkout is on branch-dev and clean.
   const s2 = canonicalClean(G, canonicalRoot);
@@ -1418,10 +1458,29 @@ function runResyncCore(opts) {
     function finish(newTip, extra) {
       const resyncTime = nowIso(opts);
       let auditWarning = null;
+      // A recorded task: the record's base becomes branch-dev (history +1) BEFORE the audit line, which carries the
+      // record's sha256; a write failure after the slot moved stops here (LAND then refuses the stale record).
+      let recordSha256 = null;
+      if (recState.exists) {
+        const newRecord = JSON.parse(JSON.stringify(recState.record));
+        newRecord.base = dev;
+        newRecord.history.push({ ts: resyncTime, verb: 'resync', mode, from: recState.record.base, to: dev });
+        recordSha256 = sha256OfBuffer(Buffer.from(recordText(newRecord)));
+        try { writeRecordAtomic(commonDir, task, newRecord); }
+        catch (e) { return { ok: false, exitCode: 1, reason: 'R-REC: record update failed - STOP (Owner) (' + (e && e.message ? e.message : String(e)) + ')' }; }
+      }
       try {
-        appendAudit(commonDir, { ts: resyncTime, verb: 'resync', task, mode, from: tip, to: newTip, base: dev, result: 'ok', reason: null });
+        // The no-record statement stays verbatim: the transcript recorder anchors its MUT-RS-12 / MUT-RS-13 mutants on it.
+        if (recordSha256 === null) {
+          appendAudit(commonDir, { ts: resyncTime, verb: 'resync', task, mode, from: tip, to: newTip, base: dev, result: 'ok', reason: null });
+        } else {
+          appendAudit(commonDir, { ts: resyncTime, verb: 'resync', task, mode, from: tip, to: newTip, base: dev, result: 'ok', reason: null, recordSha256 });
+        }
       } catch (e) {
         auditWarning = 'audit log append failed: ' + (e && e.message ? e.message : String(e));
+        if (recState.exists && sha256OfBuffer(Buffer.from(recordText(recState.record))) === recState.sha256) {
+          try { writeRecordAtomic(commonDir, task, recState.record); } catch (e2) { /* the audit warning already tells the Owner */ }
+        }
       }
       const res = {
         ok: true, exitCode: 0, verb: 'resync', mode, task, from: tip, to: newTip, base: dev, resyncTime,
@@ -1429,6 +1488,7 @@ function runResyncCore(opts) {
         stagedLost: extra && extra.stagedLost ? extra.stagedLost : [],
         message: 'RESYNCED ' + task + ' mode ' + mode + ' ' + tip + '..' + newTip + ' on branch-dev ' + dev
       };
+      if (recState.exists) { res.record = true; res.integrity.record = true; }
       if (auditWarning) res.auditWarning = auditWarning;
       return res;
     }
@@ -1539,7 +1599,279 @@ function runResyncCore(opts) {
 }
 function runResync(opts) { return safeRun(() => runResyncCore(opts)); }
 
+// ── TASK-BASE RECORD (work/task-base-record/brief.md §2-§3) ───────────────────────────────────
+// <git-common-dir>/pt-task/<enc>.json is the runtime baseline of a task: its fork point, main and start time. It is
+// created only by task-start or adopt (open flag 'wx'), changed only by resync, moved by cleanup, and valid only while
+// its sha256 equals the recordSha256 of the latest ok audit line. These verbs move no ref, push nothing, commit nothing
+// and write no approval record. Detection of a record is a file-system test only (no Git call), so a task without a
+// record takes exactly the Git calls it took before.
+function taskEnc(task) { return encodeURIComponent(String(task).replace(/^task\//, '')); }
+function taskRecordPath(commonDir, task) { return path.join(commonDir, TASK_DIR_NAME, taskEnc(task) + '.json'); }
+function recordText(record) { return JSON.stringify(record, null, 2) + '\n'; }
+function readTaskRecord(canonicalRoot, commonDir, task) {
+  if (!fs.existsSync(taskRecordPath(commonDir, task))) return { exists: false };
+  let integrity;
+  try { integrity = loadIntegrityModule(canonicalRoot); }
+  catch (e) { return { exists: true, valid: false, reason: 'the integrity module could not be loaded (' + e.message + ')' }; }
+  if (typeof integrity.loadTaskRecord !== 'function') return { exists: true, valid: false, reason: 'the integrity module cannot read task-base records' };
+  return integrity.loadTaskRecord(commonDir, task);
+}
+function writeRecordNew(commonDir, task, text) {
+  const recPath = taskRecordPath(commonDir, task);
+  fs.mkdirSync(path.dirname(recPath), { recursive: true });
+  const fd = fs.openSync(recPath, 'wx');
+  try { fs.writeSync(fd, text); } finally { fs.closeSync(fd); }
+  return recPath;
+}
+function writeRecordAtomic(commonDir, task, record) {
+  const p = taskRecordPath(commonDir, task);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const tmp = p + '.tmp';
+  fs.writeFileSync(tmp, recordText(record));
+  fs.renameSync(tmp, p);
+}
+
+// T1 (shared by task-start, adopt-request and adopt): the caller is the canonical checkout, self-integrity, no GIT_*
+// overrides, git config and hooks clean, the canonical checkout is on branch-dev and clean.
+function recordVerbPre(opts, verb, auditRefusals) {
+  const task = opts.task;
+  if (typeof task !== 'string' || !TASK_RE.test(task)) return { ok: false, exitCode: 3, reason: 'usage: pt-land.js ' + verb + ' task/<id>' };
+  const G = makeGitRunner(opts.gitExec);
+  const caller = resolveCaller(G, opts.cwd, null);
+  if (!caller.ok) return { ok: false, exitCode: 1, reason: 'T1: ' + caller.reason };
+  if (caller.kind !== 'canonical') return { ok: false, exitCode: 1, reason: 'T1: ' + verb + ' runs only from the canonical checkout' };
+  const canonicalRoot = caller.canonicalRoot;
+  const commonDir = path.join(canonicalRoot, '.git');
+  function refuse(step, reason, from, to) {
+    if (auditRefusals) {
+      bestEffortAudit(commonDir, { ts: nowIso(opts), verb, task, from: from || null, to: to || null, result: 'refuse', reason: step + ': ' + reason });
+    }
+    return { ok: false, exitCode: 1, reason: step + ': ' + reason };
+  }
+  const si = selfIntegrity(G, canonicalRoot);
+  if (!si.ok) return refuse('T1', si.reason);
+  const envBad = Object.keys(process.env).find((k) => GIT_ENV_OVERRIDE_RE.test(k) || R10_GIT_CONFIG_ENV_RE.test(k));
+  if (envBad !== undefined) return refuse('T1', 'the session environment sets ' + envBad);
+  const cfg = configClean(G, canonicalRoot);
+  if (!cfg.ok) return refuse('T1', cfg.reason);
+  const hooks = hooksClean(commonDir);
+  if (!hooks.ok) return refuse('T1', hooks.reason);
+  const clean = canonicalClean(G, canonicalRoot);
+  if (!clean.ok) return refuse('T1', clean.reason);
+  return { ok: true, G, task, canonicalRoot, commonDir, refuse, briefPath: 'work/' + task.replace(/^task\//, '') + '/brief.md' };
+}
+
+function runTaskStartCore(opts) {
+  const c = recordVerbPre(opts, 'task-start', true);
+  if (!c.ok) return c;
+  const { G, task, canonicalRoot, commonDir, refuse, briefPath } = c;
+
+  // T2: the task branch exists, is checked out in exactly one Worker slot, and sits exactly on branch-dev.
+  const tipR = G(['rev-parse', '--verify', '-q', 'refs/heads/' + task], canonicalRoot, { read: true });
+  if (tipR.status !== 0) return refuse('T2', 'refs/heads/' + task + ' does not exist');
+  const tip = String(tipR.stdout).trim();
+  const devR = G(['rev-parse', '--verify', '-q', 'refs/heads/branch-dev'], canonicalRoot, { read: true });
+  if (devR.status !== 0) return refuse('T2', 'refs/heads/branch-dev does not exist', tip);
+  const dev = String(devR.stdout).trim();
+  const trees = worktreeList(G, canonicalRoot);
+  if (!trees) return refuse('T2', 'could not list worktrees', tip, null);
+  const homes = trees.filter((t) => t.branch === task);
+  if (homes.length !== 1 || WORKER_SLOT_NAMES.indexOf(path.basename(toForwardSlash(homes[0].path).replace(/\/+$/, ''))) === -1) {
+    return refuse('T2', 'the task branch is not checked out in exactly one Worker slot', tip);
+  }
+  if (tip !== dev) return refuse('T2', 'the task tip ' + tip + ' differs from branch-dev ' + dev + ' (a record is made at the fork point only)', tip, dev);
+
+  // T3: the brief exists at the tip.
+  const briefBlob = G(['rev-parse', '-q', '--verify', tip + ':' + briefPath], canonicalRoot, { read: true });
+  if (briefBlob.status !== 0) return refuse('T3', briefPath + ' is missing at the tip', tip);
+  const briefBuf = catFileBlobBuffer(opts.gitExec, canonicalRoot, tip + ':' + briefPath);
+  if (!briefBuf) return refuse('T3', 'could not read ' + briefPath + ' at the tip', tip);
+  const briefCommitR = G(['log', '-1', '--format=%H', tip, '--', briefPath], canonicalRoot, { read: true });
+  const briefCommit = briefCommitR.status === 0 ? String(briefCommitR.stdout).trim() : '';
+  if (!OID_RE.test(briefCommit)) return refuse('T3', 'could not find the commit of ' + briefPath, tip);
+
+  // T4: write-once - nothing, valid or not, may already be at the record path.
+  const existing = { exists: fs.existsSync(taskRecordPath(commonDir, task)) };
+  if (existing.exists) return refuse('T4', 'a task-base record already exists for ' + task + ' (write-once)', tip);
+
+  const mainOid = currentMainOid(G, canonicalRoot);
+  if (!mainOid) return refuse('T2', 'refs/heads/main does not exist', tip);
+  const originR = G(['rev-parse', '--verify', '-q', 'refs/remotes/origin/branch-dev'], canonicalRoot, { read: true });
+  const originDevAtStart = originR.status === 0 ? String(originR.stdout).trim() : null;
+
+  // T5: lock, re-verify, write the record, then the audit line (which carries the record's sha256).
+  const lock = acquireLock(commonDir);
+  if (!lock.ok) return refuse('T5', lock.reason, tip);
+  try {
+    const tipB = G(['rev-parse', '--verify', '-q', 'refs/heads/' + task], canonicalRoot, { read: true });
+    const devB = G(['rev-parse', '--verify', '-q', 'refs/heads/branch-dev'], canonicalRoot, { read: true });
+    if (tipB.status !== 0 || String(tipB.stdout).trim() !== tip || devB.status !== 0 || String(devB.stdout).trim() !== dev) {
+      return refuse('T5', 'the repository state changed since preflight (race)', tip);
+    }
+    const startedAt = nowIso(opts);
+    const record = {
+      schema: 'pt-task-base/v1', task, base: tip, mainAtStart: mainOid, originDevAtStart, startedAt, briefPath,
+      briefSha256: sha256OfBuffer(briefBuf), briefCommit, adopted: false,
+      history: [{ ts: startedAt, verb: 'task-start', mode: null, from: null, to: tip }]
+    };
+    const text = recordText(record);
+    let recPath;
+    try { recPath = writeRecordNew(commonDir, task, text); }
+    catch (e) { return refuse('T5', 'could not write the record (' + (e && e.message ? e.message : String(e)) + ')', tip); }
+    try {
+      appendAudit(commonDir, { ts: startedAt, verb: 'task-start', task, from: null, to: tip, result: 'ok', reason: null, recordSha256: sha256OfBuffer(Buffer.from(text)) });
+    } catch (e) {
+      try { fs.unlinkSync(recPath); } catch (e2) { /* best effort - nothing may stay recorded */ }
+      return refuse('T5', 'audit log append failed (' + (e && e.message ? e.message : String(e)) + ') - nothing was recorded', tip);
+    }
+    return {
+      ok: true, exitCode: 0, verb: 'task-start', task, record, recordPath: recPath, canonicalRoot,
+      message: 'TASK-START ' + task + ' base ' + tip + ' started ' + startedAt
+    };
+  } finally {
+    releaseLock(lock.path);
+  }
+}
+function runTaskStart(opts) { return safeRun(() => runTaskStartCore(opts)); }
+
+// adopt-request / adopt (ATB-D4): a record for a task that was opened before records existed. Everything is derived
+// from Git and the audit log; the Owner's single-use ADOPT line names the derived base and start time.
+function deriveAdopt(c, opts) {
+  const { G, task, canonicalRoot, commonDir, refuse, briefPath } = c;
+  if (fs.existsSync(taskRecordPath(commonDir, task))) return refuse('T4', 'a task-base record already exists for ' + task);
+  const tipR = G(['rev-parse', '--verify', '-q', 'refs/heads/' + task], canonicalRoot, { read: true });
+  if (tipR.status !== 0) return refuse('T2', 'refs/heads/' + task + ' does not exist');
+  const tip = String(tipR.stdout).trim();
+  const trees = worktreeList(G, canonicalRoot);
+  if (!trees) return refuse('T2', 'could not list worktrees', tip);
+  const homes = trees.filter((t) => t.branch === task);
+  if (homes.length !== 1 || WORKER_SLOT_NAMES.indexOf(path.basename(toForwardSlash(homes[0].path).replace(/\/+$/, ''))) === -1) {
+    return refuse('T2', 'the task branch is not checked out in exactly one Worker slot', tip);
+  }
+  const mbR = G(['merge-base', 'refs/heads/branch-dev', 'refs/heads/' + task], canonicalRoot, { read: true });
+  if (mbR.status !== 0) return refuse('A1', 'branch-dev and the task share no merge base', tip);
+  const base = String(mbR.stdout).trim();
+  const merges = G(['rev-list', '--merges', base + '..' + tip], canonicalRoot, { read: true });
+  if (merges.status !== 0 || String(merges.stdout).trim()) return refuse('A1', 'a merge commit is present in base..task (Owner)', tip, base);
+
+  // startedAt: the latest ok resync line for the task (its base must be this base), else the branch-creation reflog entry.
+  const resyncs = readAuditEntries(commonDir).filter((e) => e && e.verb === 'resync' && e.task === task && e.result === 'ok');
+  let startedAt;
+  if (resyncs.length) {
+    const last = resyncs[resyncs.length - 1];
+    if (last.base !== base) return refuse('A2', 'rebased outside resync: Owner (merge-base ' + base + ' != the latest resync base ' + last.base + ')', tip, base);
+    if (typeof last.ts !== 'string' || !ISO_RE.test(last.ts)) return refuse('A2', 'the latest resync audit line has no usable time', tip, base);
+    startedAt = last.ts;
+  } else {
+    const rl = G(['log', '-g', '--date=unix', '--format=%gd%x1f%gs', 'refs/heads/' + task], canonicalRoot, { read: true });
+    const created = rl.status === 0
+      ? String(rl.stdout).split('\n').filter((l) => /\u001fbranch: Created from/.test(l)).map((l) => /@\{(\d+)\}/.exec(l)).filter(Boolean).map((m) => Number(m[1]))
+      : [];
+    if (!created.length) return refuse('A3', 'no branch-creation reflog entry for ' + task + ' (Owner)', tip, base);
+    startedAt = new Date(Math.min(...created) * 1000).toISOString();
+  }
+  const mainOid = currentMainOid(G, canonicalRoot);
+  if (!mainOid) return refuse('A4', 'refs/heads/main does not exist', tip, base);
+  const startedSec = Math.floor(Date.parse(startedAt) / 1000);
+  const orl = G(['log', '-g', '--date=unix', '--format=%gd%x1f%H', 'refs/remotes/origin/branch-dev'], canonicalRoot, { read: true });
+  let originDevAtStart = null;
+  if (orl.status === 0) {
+    for (const line of String(orl.stdout).split('\n').filter(Boolean)) {
+      const m = /@\{(\d+)\}/.exec(line);
+      const oid = line.split('\u001f')[1];
+      if (m && Number(m[1]) <= startedSec && OID_RE.test(oid)) { originDevAtStart = oid; break; }
+    }
+  }
+  if (originDevAtStart === null) return refuse('A4', 'origin/branch-dev at ' + startedAt + ' is unreadable from its reflog (Owner)', tip, base);
+  const briefBlob = G(['rev-parse', '-q', '--verify', base + ':' + briefPath], canonicalRoot, { read: true });
+  if (briefBlob.status !== 0) return refuse('T3', briefPath + ' is missing at the base', tip, base);
+  const briefBuf = catFileBlobBuffer(opts.gitExec, canonicalRoot, base + ':' + briefPath);
+  if (!briefBuf) return refuse('T3', 'could not read ' + briefPath + ' at the base', tip, base);
+  const bc = G(['log', '-1', '--format=%H', base, '--', briefPath], canonicalRoot, { read: true });
+  const briefCommit = bc.status === 0 ? String(bc.stdout).trim() : '';
+  if (!OID_RE.test(briefCommit)) return refuse('T3', 'could not find the commit of ' + briefPath, tip, base);
+  return { ok: true, derived: { tip, base, startedAt, mainAtStart: mainOid, originDevAtStart, briefSha256: sha256OfBuffer(briefBuf), briefCommit } };
+}
+
+function runAdoptRequestCore(opts) {
+  const c = recordVerbPre(opts, 'adopt-request', false);
+  if (!c.ok) return c;
+  const r = deriveAdopt(c, opts);
+  if (!r.ok) return r;
+  const d = r.derived;
+  const line = approvalLine('adopt', 'ADOPT ' + c.task + ' ' + d.base + ' ' + d.startedAt, c.commonDir);
+  return Object.assign({ ok: true, exitCode: 0, verb: 'adopt-request', task: c.task, approvalLine: line }, d);
+}
+function runAdoptRequest(opts) { return safeRun(() => runAdoptRequestCore(opts)); }
+
+function runAdoptCore(opts) {
+  const c = recordVerbPre(opts, 'adopt', true);
+  if (!c.ok) return c;
+  const { task, commonDir, refuse, briefPath } = c;
+  const r = deriveAdopt(c, opts);
+  if (!r.ok) return r;
+  const d = r.derived;
+  const apr = parseRecord(readRecordFile(commonDir, ADOPT_RECORD_NAME), 'ADOPT');
+  if (!apr || apr.task !== task || apr.base !== d.base || apr.startedAt !== d.startedAt) {
+    return refuse('A5', 'no/stale ADOPT approval', d.tip, d.base);
+  }
+  const lock = acquireLock(commonDir);
+  if (!lock.ok) return refuse('A6', lock.reason, d.tip, d.base);
+  try {
+    const again = deriveAdopt(Object.assign({}, c, { refuse: (s, why) => ({ ok: false, exitCode: 1, reason: s + ': ' + why }) }), opts);
+    if (!again.ok || JSON.stringify(again.derived) !== JSON.stringify(d)) return refuse('A6', 'the repository state changed since preflight (race)', d.tip, d.base);
+    const adoptedAt = nowIso(opts);
+    const record = {
+      schema: 'pt-task-base/v1', task, base: d.base, mainAtStart: d.mainAtStart, originDevAtStart: d.originDevAtStart, startedAt: d.startedAt,
+      briefPath, briefSha256: d.briefSha256, briefCommit: d.briefCommit, adopted: true,
+      history: [{ ts: adoptedAt, verb: 'adopt', mode: null, from: null, to: d.base }]
+    };
+    const text = recordText(record);
+    let recPath;
+    try { recPath = writeRecordNew(commonDir, task, text); }
+    catch (e) { return refuse('A6', 'could not write the record (' + (e && e.message ? e.message : String(e)) + ')', d.tip, d.base); }
+    // brief 3.2 order: write the record, delete the single-use approval, then append the audit line.
+    // The approval is single-use: if it cannot be deleted, fail closed - nothing may stay recorded and no adopt line is appended.
+    try { fs.unlinkSync(path.join(commonDir, ADOPT_RECORD_NAME)); } catch (e) {
+      try { fs.unlinkSync(recPath); } catch (e2) { /* best effort - the approval could not be deleted: nothing may stay recorded */ }
+      return refuse('A6', 'could not delete the single-use ADOPT approval (' + (e && e.message ? e.message : String(e)) + ') - nothing was recorded', d.tip, d.base);
+    }
+    try {
+      appendAudit(commonDir, { ts: adoptedAt, verb: 'adopt', task, from: null, to: d.base, result: 'ok', reason: null, recordSha256: sha256OfBuffer(Buffer.from(text)) });
+    } catch (e) {
+      try { fs.unlinkSync(recPath); } catch (e2) { /* best effort - nothing may stay recorded */ }
+      return refuse('A6', 'audit log append failed (' + (e && e.message ? e.message : String(e)) + ') - nothing was recorded', d.tip, d.base);
+    }
+    return {
+      ok: true, exitCode: 0, verb: 'adopt', task, record, recordPath: recPath,
+      message: 'ADOPTED ' + task + ' base ' + d.base + ' started ' + d.startedAt
+    };
+  } finally {
+    releaseLock(lock.path);
+  }
+}
+function runAdopt(opts) { return safeRun(() => runAdoptCore(opts)); }
+
 // ── CLI ─────────────────────────────────────────────────────────────────────────────────
+function printTaskStart(res) {
+  const r = res.record;
+  process.stdout.write('TASK-START ' + res.task + '\n');
+  process.stdout.write('  base:      ' + r.base + '\n');
+  process.stdout.write('  main:      ' + r.mainAtStart + '\n');
+  process.stdout.write('  startedAt: ' + r.startedAt + '\n');
+  process.stdout.write('  brief sha256: ' + r.briefSha256 + '\n');
+  process.stdout.write('  record:    ' + toForwardSlash(res.recordPath) + '\n');
+  process.stdout.write('  step 13:   node qa/guard_integrity_check.js --task ' + res.task + ' --root ' + toForwardSlash(res.canonicalRoot) + '\n');
+}
+function printAdoptRequest(res) {
+  process.stdout.write('ADOPT REQUEST for ' + res.task + '\n');
+  process.stdout.write('  base:      ' + res.base + '\n');
+  process.stdout.write('  startedAt: ' + res.startedAt + '\n');
+  process.stdout.write('  main:      ' + res.mainAtStart + '\n');
+  process.stdout.write('  origin/branch-dev at start: ' + res.originDevAtStart + '\n');
+  process.stdout.write('  brief sha256: ' + res.briefSha256 + ' (commit ' + res.briefCommit + ')\n');
+  process.stdout.write('\n' + res.approvalLine + '\n');
+}
 function printLandRequest(res) {
   process.stdout.write('LAND REQUEST for ' + res.report.task + '\n');
   process.stdout.write('  tip:  ' + res.report.tip + '\n');
@@ -1583,7 +1915,8 @@ function printResync(res) {
   }
   const i = res.integrity;
   process.stdout.write('  next (the Worker resumes): re-run npm run qa:offline and the relevant targeted tests, then\n');
-  process.stdout.write('    node qa/guard_integrity_check.js --base-main ' + i.baseMain + ' --base-dev ' + i.baseDev + ' --task ' + i.task + ' --since ' + i.since + ' --root ' + i.root + '\n');
+  if (i.record) process.stdout.write('    node qa/guard_integrity_check.js --task ' + i.task + ' --root ' + i.root + '\n');
+  else process.stdout.write('    node qa/guard_integrity_check.js --base-main ' + i.baseMain + ' --base-dev ' + i.baseDev + ' --task ' + i.task + ' --since ' + i.since + ' --root ' + i.root + '\n');
   process.stdout.write('  then request LAND again - the LAND line stays the Owner\'s gate.\n');
   if (res.cleanupWarning) process.stderr.write('pt-land: WARNING - ' + res.cleanupWarning + '\n');
 }
@@ -1601,6 +1934,10 @@ function output(res, verb) {
   else if (verb === 'protected-request') printProtectedRequest(res);
   else if (verb === 'protected-commit') process.stdout.write(res.message + '\n');
   else if (verb === 'resync') printResync(res);
+  else if (verb === 'task-start') printTaskStart(res);
+  else if (verb === 'adopt-request') printAdoptRequest(res);
+  else if (verb === 'adopt') process.stdout.write(res.message + '\n');
+  if (res.recordWarning) process.stderr.write('pt-land: WARNING - ' + res.recordWarning + '\n');
   // The Owner reads the mutation result from CLI output; a successful merge/push/cleanup whose
   // audit append failed must still surface that warning here, not only in the module-API result
   // (protected-commit has no such path: its audit entry is load-bearing and a failed append refuses).
@@ -1657,6 +1994,14 @@ function main(argv) {
     }
     opts.task = argv[1];
     output(runResync(opts), verb);
+  } else if (verb === 'task-start' || verb === 'adopt-request' || verb === 'adopt') {
+    if (argv.length !== 2 || typeof argv[1] !== 'string' || !argv[1]) {
+      process.stderr.write('pt-land: usage error - usage: pt-land.js ' + verb + ' task/<id>\n');
+      process.exit(3);
+      return;
+    }
+    opts.task = argv[1];
+    output(verb === 'task-start' ? runTaskStart(opts) : verb === 'adopt' ? runAdopt(opts) : runAdoptRequest(opts), verb);
   } else {
     process.stderr.write('pt-land: usage error - unknown verb ' + JSON.stringify(verb) + '\n');
     process.exit(3);
@@ -1665,6 +2010,7 @@ function main(argv) {
 
 module.exports = {
   runLandRequest, runLand, runPushRequest, runPush, runCleanup, runResync,
+  runTaskStart, runAdoptRequest, runAdopt,
   runBriefRequest, runProtectedRequest, runProtectedCommit,
   parseRecord, parseLandScope, parseProtectedScope, approvalLine
 };

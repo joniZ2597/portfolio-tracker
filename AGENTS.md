@@ -43,7 +43,7 @@ commit) or on a STOP condition below.
 **Before writing any implementation code:**
 
 0. **Worktree bootstrap — automatic, pre-authorized.** Confirm the session's cwd is the assigned
-   Worker slot (see "Worker slot model") with the task branch checked out. If `node_modules/`
+   Worker slot (see "Worker slot model") with the task branch checked out. Then run `node qa/guard_integrity_check.js --task task/<id> --root <canonical checkout> --print-record`; a missing or invalid task-base record is **STOP-6** (Bootstrap runs `task-start`, or the Owner adopts the task). If `node_modules/`
    is missing or older than `package-lock.json`, run `npm ci` (it touches only the gitignored
    `node_modules/`). Then run `npm run qa:offline` once, before any edit, and record the result
    and suite count on the first line of `work/<id>/qa.log` as the pre-edit baseline every
@@ -132,7 +132,7 @@ commit) or on a STOP condition below.
     - A gate denial is **STOP-6**.
     - After the final commit — for a brief with a `protected-scope` block, after the step-13a
       protected commit — run
-      `node qa/guard_integrity_check.js --base-main <main oid> --base-dev <brief base> --task task/<id> --since <task-start ISO> --root <canonical checkout>`.
+      `node qa/guard_integrity_check.js --task task/<id> --root <canonical checkout>` — base, start time and `main` come from the task-base record; never pass `--base-dev`, `--since` or `--base-main` (a value that differs from the record is a MISMATCH FAIL). A task without a record (opened before records existed and not adopted) uses `--base-main <main oid> --base-dev <actual task base> --task task/<id> --since <task-start ISO> --root <canonical checkout>` with the values from its handoff.
       Any FAIL is **STOP-6**.
     - The integrity result is **LAND evidence**: report it only in the step-13 STOP report (the `CLAUDE.md` task-completion report). It is never written into `review.md` — no amend, and no second commit made only to record it — and `review.md` does not list it as pending.
     - If a FAIL comes from a baseline or ruling issue that the Owner resolves, and a re-run PASSes without any implementation change, the task proceeds to LAND with the original task commit unchanged.
@@ -150,7 +150,7 @@ commit) or on a STOP condition below.
 15. **Push — Owner-approved (R12).** Run `node .claude/hooks/pt-land.js push-request`, show its report — including the public Netlify DEV deploy notice and the commits to publish — print its approval line exactly, and **STOP until the Owner answers**. After the Owner enters it with `!`, run `node .claude/hooks/pt-land.js push`; it verifies `branch-dev == origin/branch-dev`. Any refusal is **STOP-6**. If the Owner declines, the task ends LANDed and unpushed. Then run step 16.
 16. **Cleanup.** After a verified push, run `node .claude/hooks/pt-land.js cleanup task/<id>` — it archives the task's ignored evidence (`plan.md`, `codex.md`, `qa.log`) to `pt-work-artifacts/<id>/`, detaches the slot at `branch-dev` and safely deletes the local task branch. A refusal is reported, not retried. Then **STOP** with the final completion report.
 
-**The `!` rule.** After `!`, the Owner types only a line printed by `pt-land.js` (`brief-request`, `protected-request`, `land-request` or `push-request`) in the exact shape `! printf '%s\n' '<payload>' > '<common-dir>/pt-<kind>-approval'`, where `<kind>` is `brief`, `protected`, `land` or `push` — nothing else. Claude never writes an approval record.
+**The `!` rule.** After `!`, the Owner types only a line printed by `pt-land.js` (`brief-request`, `protected-request`, `land-request`, `push-request` or `adopt-request`) in the exact shape `! printf '%s\n' '<payload>' > '<common-dir>/pt-<kind>-approval'`, where `<kind>` is `brief`, `protected`, `land`, `push` or `adopt` — nothing else. Claude never writes an approval record.
 
 **The Owner does not approve individual file edits, inspect code previews, relay Codex
 findings, or decide ordinary in-scope implementation questions — LAND approval remains the
@@ -504,7 +504,7 @@ for a Codex review, make the actual implementation diff available in the task wo
 task branch, then give Codex the real diff (`git diff`, commit, or branch comparison). Codex
 review normally happens before LAND.
 
-**Two diffs.** Both compare `<base>` — the `branch-dev` commit named in the brief — against the
+**Two diffs.** Both compare `<base>` — the recorded task base (`--print-record`; for a task without a record, the `branch-dev` commit named in the brief) — against the
 current working tree, covering committed, staged, and unstaged tracked changes, **and** any new
 untracked in-scope files; neither diff is ever taken against `HEAD` alone, and neither omits an
 untracked file just because it is new. Untracked coverage is always scoped to named paths —
@@ -553,7 +553,7 @@ above.
     `node .claude/hooks/pt-land.js resync task/<id>` while the Worker is paused. If it refuses
     (conflict, overlapping uncommitted work, or PROTECTED-approved commits), STOP: the Owner decides.
     Otherwise the Worker re-runs `npm run qa:offline`, the relevant targeted tests and the
-    integrity check (with the `--base-dev` and `--since` values `resync` prints) in its slot and reports, before LAND — the
+    integrity check (in the form `resync` prints; for a recorded task, `resync` also advances the record's base) in its slot and reports, before LAND — the
     post-rebase integrity result is LAND evidence only, never recorded in `review.md`.
 - **Push** runs only through `pt-land.js push` after the Owner's single-use PUSH record (step 15), or by the Owner in a normal terminal; a direct `git push` stays HOOK-DENY (R3g). A push publishes the public Netlify DEV deploy of `branch-dev`; the PUSH record is the explicit approval for that branch deploy. One consolidated push after a batch is preferred.
 - **SHIP** (`branch-dev` → `main`/production): always requires explicit, separate Owner
@@ -582,7 +582,7 @@ above.
   Slice (no per-task `git worktree add`), and do not remove a slot when its Slice lands.
 - Task branches remain **per Slice** (`task/<id>`): created from the current `branch-dev` and
   switched to inside the assigned slot (`git -C <slot> switch -c task/<id> <base>`). A slot is
-  switched only when its working tree is clean.
+  switched only when its working tree is clean. Immediately after creating the task branch, Bootstrap runs `node .claude/hooks/pt-land.js task-start task/<id>` from the canonical checkout. It records once (write-once) the actual task base (the fork point), `main` and the start time in `.git/pt-task/` — the runtime baseline for integrity, resync and LAND. The brief's Baseline row stays the planning and pin baseline. A task opened before records existed gets one only through `adopt-request` / `adopt` after the Owner's single-use ADOPT line.
 - One Slice per slot at a time; do not stack unrelated work on a slot's task branch. Between
   Slices a slot sits detached and clean at `branch-dev`.
 - A slot keeps its `node_modules/`; step 0 of the Worker execution contract refreshes it when it
