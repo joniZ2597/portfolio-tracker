@@ -3838,10 +3838,10 @@ function phaseScoreContract() {
     ];
     const groups = api._srGroupResults(src);
     const ids = function (g) { return g.items.map(function (r) { return r.ticker; }).join(','); };
-    check('Strong Setup keeps the Buy -> Neutral -> Sell tie-break among equal scores', ids(groups[0]) === 'D,F,E');
+    check('Strong Setup: equal scores keep source order (Pulse-only tie-break, R-5 B1)', ids(groups[0]) === 'D,E,F');
     check('missing-score bullish-setup item is NOT Strong Setup (tier gate needs a numeric >= 55)', groups[0].items.indexOf(src[6]) === -1 && groups[1].items.indexOf(src[6]) !== -1);
     check('genuine-0 bullish-setup item is NOT Strong Setup and is not treated as 50', groups[0].items.indexOf(src[7]) === -1);
-    check('Watch: numeric first (40), then genuine zeros, then missing last — rating tie-break preserved within each tier (H,A and G,C)', ids(groups[1]) === 'B,H,A,G,C');
+    check('Watch: numeric first (40), then genuine zeros, then missing last — source order within each tier (A,H and C,G)', ids(groups[1]) === 'B,A,H,C,G');
     const w = groups[1].items;
     check('genuine 0 sorts after every numeric item and before every missing item in its group', w.indexOf(src[0]) > w.indexOf(src[1]) && w.indexOf(src[0]) < w.indexOf(src[2]));
   })();
