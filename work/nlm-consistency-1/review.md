@@ -2,7 +2,7 @@
 
 Brief: `work/nlm-consistency-1/brief.md` (brief-only commit `e8a4bab`). Worker A, Mode Manual. Master program of three slices on `task/nlm-consistency-1`.
 Task base: `e8a4bab` (brief-only commit above code base `1e4b773` = `branch-dev` = `origin/branch-dev`; `main` = `fbec2c1` untouched). `index.html` is byte-identical at `1e4b773` and `e8a4bab`.
-Checkpoints: C1 `34f77ce` (S1) · C2 `b7be662` (S2) · C3 `11b9b1b` (S3) · step-13 commit (to be created after this review; carries this file, BACKLOG.md and the UI1B re-pin — not yet committed when this was written). Step 13a (`qa/run-offline.js`, protected) is NOT yet executed — waiting for Worker B's task-base-record.
+Checkpoints (pre-resync hashes — see "Post-resync revalidation" for the current ones): C1 `34f77ce` (S1) · C2 `b7be662` (S2) · C3 `11b9b1b` (S3) · step-13 commit (to be created after this review; carries this file, BACKLOG.md and the UI1B re-pin — not yet committed when this was written). Step 13a (`qa/run-offline.js`, protected) is NOT yet executed — waiting for Worker B's task-base-record.
 
 ## Files changed
 - Slice checkpoints (13 ordinary paths vs `e8a4bab`): index.html, qa/pulse_analyst_view_offline.js (new), qa/ath_client_offline.js (new), qa/narrative_consistency_offline.js (new), qa/vis_score_caliper_offline.js, qa/ts1_default_exposure_offline.js, qa/tech_snapshot_cache_offline.js, qa/high1y_label_offline.js, qa/ma_stack_label_offline.js, qa/analyst_parser_offline.js, qa/ath_isolation_offline.js, qa/no_synthetic_score_offline.js, qa/scan_results_enrichment_offline.js
@@ -28,6 +28,23 @@ Checkpoints: C1 `34f77ce` (S1) · C2 `b7be662` (S2) · C3 `11b9b1b` (S3) · step
 - Per slice: RED → GREEN with planted negatives, re-pin ledger with revert proof, land-tests on the task tree (S1 13, S2 14, S3 15 non-protected suites PASS), Codex step 8 + scoped re-pass (see "Codex ledger"). Re-pins: S1 16 values / 8 suites, S2 11 values / 8 suites (+5 whole-file values re-pinned after the S2 fix), S3 9 values / 8 suites (+5 after the S3 fixes) — all named in brief S1.4 / S2.4 / S3.4 or Owner-ruled (F-1, F-5); pins the brief does not name: none.
 - **Step-10 full `qa:offline`, first run (15:18–15:33): FAIL — 74/75 suites PASS, 1 hard failure:** `qa/ui1b_cards_offline.js` U09 (`Rating label present`) and U17 (`RATING_SUMMARY_RE` appears exactly 6 times). Cause: S1 relabelled the comparison-card row and dropped one `RATING_SUMMARY_RE` use; the suite was missing from the §2 coupling sweep and from every slice's land-test list. Not retried; STOP; Owner ruled the re-pin (ruling 3). Re-pin: suite alone PASS (19 tests, 64 assertions); revert proof — the reverse of the two replacements on a copy is byte-identical to the pre-edit file (CRLF 235/235) and equals HEAD LF-normalised, and the reverted copy fails exactly U09 and U17; Codex scoped re-pass PASS, 0 findings.
 - **Step-10 full `qa:offline`, final run (Owner-released heavy lane, 15:51:46 → 16:03:44), tree = C3 + UI1B re-pin + protected Phase 13 flip:** `OFFLINE VALIDATION: PASS`, **75 spawned suites (75 PASS, 0 FAIL)**, 14 phases, 0 hard failures, one advisory warning (unchanged pre-existing). Phase 2 (offline tests) 699 965 ms, Phase 1 14 734 ms, Phases 3–14 each < 120 ms. Five slowest: `pt_land_offline` 355 052 ms, `pt_land_resync_offline` 212 143 ms, `auto_mode_hardening_offline` 77 136 ms, `pt_land_logic_offline` 23 398 ms, `run_isolation_offline` 10 359 ms. 75 = 72 + 3 new suites. The Phase 13 flip is exercised by this run (it passes with the two flipped expectations). The BACKLOG.md / review.md edits were made after this run and are not pinned by any suite (the `BACKLOG` mentions in `qa/` are comments / a fixture string).
+
+## Post-resync revalidation (2026-10-10)
+
+Governed resync (Owner-run) moved the task onto `branch-dev` `eb1f6dc` (= brief commit `e8a4bab` + Worker B's `4ca4c90` and `eb1f6dc`, task-base-record). The four task commits were replayed unchanged in content:
+
+| Commit | Before resync | After resync |
+|---|---|---|
+| C1 slice 1 (R-5) | `34f77ce` | `dbcad76` |
+| C2 slice 2 (B4 client) | `b7be662` | `c777515` |
+| C3 slice 3 (R-6 checker) | `11b9b1b` | `9fcc8e0` |
+| Step-13 closure commit | `5606c95` | `bbf4d1c` |
+
+The brief-only commit `e8a4bab` is unchanged. The code base `1e4b773` is now an ancestor of the new base.
+
+- Protected candidate `qa/run-offline.js` (SHA-256 `18803e6274413d0f9c0eed461778031d7867ac3bea0e842be506e20088158163`, 2+/2−, Phase 13 lines 3841 and 3844 only) was preserved before the resync and restored afterwards byte-identical; `qa/run-offline.js` at the new base is unchanged from `1e4b773`. It remains an unstaged working-tree edit until step 13a.
+- Targeted suites on the resynced tree: 16 PASS with unchanged counts (narrative 79, ath_client 119, pulse 104, caliper 307, ts1 45, tech_snapshot 319, high1y 103, ma_stack 81, analyst_parser 57, ath_isolation 23, no_synthetic 157, enrichment 67, dh_ui_vocabulary 64, ddv0 74, ui_hygiene, ui1b).
+- Full `npm run qa:offline` on the resynced tree with the candidate in place (00:26:51 → 00:46:07): **PASS, 76 of 76 suites, 0 failures**, 14 phases, 1 154 753 ms (Phase 2 1 140 399 ms), one advisory warning (unchanged). 76 = 75 + Worker B's `task_base_offline`. No implementation or test file was changed by the resync revalidation.
 
 ## Codex ledger
 - S1: PASS, no findings. S2: 1 Class I (`_athAccept` classified `stale-suspect` as "under review" only inside an OK / ath-read-v2 envelope) → FIX, scoped re-pass PASS. S3: 2 Class I (K2 level/direction binding too loose; impossible calendar dates accepted) → 2 FIX; scoped re-pass confirmed both and raised 1 new Class I (ISO years 0001–0099 rejected by the `Date.UTC` round-trip) → **REJECT** (no scan catalyst or narrative carries a year < 100; a skipped date only skips K1, which is warn-only); no third round (AGENTS step 12). Surfaced for the Owner: the one-line `setUTCFullYear` alternative exists if wanted. UI1B delta: PASS, 0 findings.
