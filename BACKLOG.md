@@ -15,7 +15,15 @@ Commit positions, counts and suite totals are not recorded here — they go stal
 Read them from Git (`git log`, `git rev-list --count origin/main..branch-dev`) and from
 `npm run qa:offline`.
 
-**Active ARC:** S2 — the news-catalyst evidence pipeline (entry 4). The 23 legacy ARC
+**Execution model: Masters** (Owner rulings 2026-10-08 / 2026-10-09, confirmed by the `nlm-consistency-1` pilot).
+Work is planned and executed as **Masters** — one task branch, one Worker, one brief with sequential slices — listed
+in **MASTERS** below; Masters are the primary planning and execution view, and the product domains (the former
+roadmap tracks) remain as secondary classification. Entries stay the unit of *intent*; each open entry is mapped to
+a Master or marked STANDALONE / INVESTIGATION / BLOCKED in the MASTERS mapping table. No entry is deleted by the
+mapping.
+
+**Former active ARC:** S2 — the news-catalyst evidence pipeline (entry 4) — is now planned as the
+`catalyst-evidence-2` Master. The 23 legacy ARC
 directories under `.ai-reports/arcs/` remain **FROZEN / SUPERSEDED** as a class
 (11 DONE/ABSORBED · 7 SUPERSEDED · 5 OBSOLETE) and are not active backlog. Their useful
 residual intent is absorbed into entries 7, 14 and 18 below; none is reopened.
@@ -27,9 +35,83 @@ decisions and are tracked in entries 22 and the HOLD / EXTERNAL table, not as Wo
 
 ---
 
+## MASTERS
+
+**Gap rule (M-5).** A gap discovered during a running Master does **not** automatically become a new task. If it does
+not block the current slice's Definition of Done, stays in the same lane / objective, needs no new Owner decision and
+no protected / live / env boundary, and can be isolated and rolled back → it is recorded as a `[backlog]` /
+`[design]` lesson and considered as a slice of the **next** Master. A standalone task exists only at a real boundary:
+protected / ASK / DENY path · live / deploy / environment action · unresolved Owner decision · findings-only
+investigation · incompatible execution mode · separate parallel lane · a gap that directly blocks the current DoD.
+
+### Worker A lane — product (`index.html`)
+
+| Order | Master | Purpose | Slices | Covers | Mode |
+|---|---|---|---|---|---|
+| A1 | **nlm-consistency-1** — **DONE** (`work/nlm-consistency-1/`) | Pulse vs analyst separation, ATH in UI + AI, narrative consistency warnings | S1 R-5 → S2 B4 client → S3 R-6 | 37 (closed) · 34 (closed) · 14 (slice 1) | Manual |
+| A2 | **pin-consolidation** *(short tooling task)* | one `index.html` pin map instead of per-suite pins and revert chains | single | — (QA tooling) | attended Auto (proposed) |
+| A3 | **surface-1** | product surface | S1 P2a → S2 22b → S3 Entry 30 | 12 (partial) · 22 (close) · 30 (close) | attended Auto |
+| A4 | **ai-output-1** | AI output reliability | S1 R-7-derived fix → S2 R-4b strict analyst template / reader → S3 8b (only if evidence justifies it) | 38 (R-7 fix) · 33 residual (R-4b) · 8b · 14 (later slices) | Manual (expected) |
+| later | **surface-2** | the rest of entry 12 | P2b Edit-ticker ETF / Stock choice + persistence | 12 (rest) | Manual |
+
+### Worker B lane — platform / server
+
+| Order | Item | Purpose | Kind | Covers | Mode |
+|---|---|---|---|---|---|
+| B1 | **task-base-record** — **DONE** (`work/task-base-record/`) | recorded actual task base for integrity / resync / LAND | governance task (protected) | — (workflow tooling) | Manual |
+| B2 | **late-sync-1** | one governed late sync per task before final validation / LAND instead of routine resync ping-pong (Main Control, 2026-10-09; runs before 3A-L, never in parallel with it) | governance task | — (workflow tooling) | per its brief |
+| B3 | **3A-L** | QA tiers, heavy-lane lock, memory floor | governance task (protected) | — (QA tooling) | Manual |
+| B4 | **governance-docs-1** | Skill / `AGENTS.md` updates (pin-consolidation's Skill text, M-5, the Master model) | governance task (protected) | — | Manual |
+| B5 | **catalyst-evidence-2** | the remaining news-catalyst evidence work | Master | 4 (remaining) | to be set |
+
+### Standalone (outside the Masters)
+
+| Item | Kind | Why standalone |
+|---|---|---|
+| 38 · NVDA AI parse failure (R-7) | INVESTIGATION | findings-only; one Owner-approved DEV scan |
+| VERIFY table | INVESTIGATION | read-only closure checks |
+| 15 · Visual Control Center | STANDALONE | Owner ruling 2026-10-09 |
+| 16 · Step 2B workflow hooks | STANDALONE (Owner-only) | protected workflow |
+| 29 · Remote push prevention | STANDALONE (Owner-only) | external setting |
+| 17 · SEC egress activation | STANDALONE (live / env) | Netlify env write |
+| Activation Register (Deep Dive, Research Evidence, P-5 call-2, Portfolio FX, Portfolio sync, SHIP) | Owner decisions | policy / env / cost |
+| 4 · Ticker Detail catalyst card + live seeding canary | STANDALONE (live) → then a lane-A slice | live DEV action before the card is non-empty |
+| 24 · Sidecar harness noise | STANDALONE | Worker-local tool outside this repository |
+
+### Mapping — every open or recently closed entry
+
+| Entry | Mapping | Note |
+|---|---|---|
+| 4 | MERGED INTO **catalyst-evidence-2** | A3b **BLOCKED** (Owner rule O-4); A7a, A4 / A7b; A6 HOLD; card → standalone live canary, then lane A |
+| 8 (8b) | COVERED BY **ai-output-1** (S3, conditional) | evidence-gated: reopens only on a failing summary string or a parser contract |
+| 12 | COVERED BY **surface-1** S1 (P2a) — partial | P2b (Edit-ticker choice + persistence, Manual) → the future **surface-2** Master |
+| 13 | BLOCKED | no v1 scope defined |
+| 14 | slice 1 DONE in **nlm-consistency-1** S3 · later slices → **ai-output-1** | later slices stay behind 8b |
+| 15 | STANDALONE (workflow) | partly served by the COWORK Pulse Control artifact; no repo work defined |
+| 16, 29 | STANDALONE (Owner-only) | |
+| 17 | STANDALONE (live / env) · BLOCKED | `SEC_USER_AGENT` Netlify env write |
+| 18 | BLOCKED | on 17 + Owner fundamentals decisions |
+| 19 | BLOCKED | on 12 (surface-1) and 17 |
+| 20 | BLOCKED | server-side cost backstop missing |
+| 21 | BLOCKED | no data source |
+| P-5 call-2 | Owner decision (Activation Register) | |
+| 22 | COVERED BY **surface-1** S2 (22b) — closes | |
+| 24 | STANDALONE | outside the repo |
+| 25 | INVESTIGATION → future-Master candidate | stays a candidate until its Breakdown exists |
+| 26 | INVESTIGATION → future-Master candidate | stays a candidate until its contract exists (Owner-initiated read-only pilot) |
+| 27, 28 | BLOCKED → future-Master candidates | on 26; candidates until their Breakdown / contract exists |
+| 30 | COVERED BY **surface-1** S3 — closes | D8 ruled (route through the shared labels) |
+| 33 residual (R-4b) | MERGED INTO **ai-output-1** S2 | not a standalone task |
+| 34 | DONE — closed by **nlm-consistency-1** S2 | |
+| 36 residual (legacy synthetic 50s) | no task | remedy: rescan; a future slice only on an Owner decision |
+| 37 (R-5) | DONE — created and closed by **nlm-consistency-1** S1 | |
+| 38 (R-7) | INVESTIGATION | its fix → **ai-output-1** S1 |
+
+---
+
 ## NOW
 
-### 4 · Catalyst news evidence pipeline — **ACTIVE ARC (S2)**
+### 4 · Catalyst news evidence pipeline — **→ catalyst-evidence-2 (Master, Worker B)**
 **News / Catalysts**
 
 Gated, fail-closed server capability storing structured catalyst evidence, surfaced as a
@@ -62,6 +144,8 @@ measured true duplicate within one run.
 the 7 hub-class `nvidianews.nvidia.com/news/latest` URLs are none a candidate, survivor or
 skip, and neither candidate predicate dropped a survivor or changed a `fixtureSha256`. Reopens
 only on a hub-class survivor in a new corpus.
+*Master:* MERGED INTO `catalyst-evidence-2`. The Ticker Detail card needs a live seeding canary first (STANDALONE)
+and is `index.html` work (lane A).
 *Legacy refs:* `WP-P7 A1/A2/A3/Slice B`, `C3-S1…S5`, `EG-25C-3`, `J3`.
 
 ---
@@ -109,6 +193,7 @@ on a failing summary string or a committed parser contract.
 *D-2 — `PT:` case-sensitivity: **DROPPED**.* Not reproducible: both matchers
 (`index.html:7379`, `:3109`) already carry the `i` flag. Re-enters only on distinct `BC-3a`
 evidence.
+*Master:* 8b COVERED BY `ai-output-1` (S3, only if evidence justifies it).
 *Deps:* none.
 *Legacy refs:* `WP-P1 Slice A`, `BC-3a`.
 
@@ -122,6 +207,8 @@ evidence.
 
 Replace `_isETF` (`index.html:11881`) with one `ptAssetType`; stop showing stock-only XBRL
 fields as missing on ETFs. Widens ETF treatment to TAN/ITA/KRE. **Gates entry 19.**
+*Master:* COVERED BY `surface-1` S1 (P2a) — partial; P2b (Edit-ticker choice + persistence, Manual) belongs to the
+future `surface-2` Master.
 *Legacy refs:* `WP-P2 Slice B`, `BC-3b`.
 
 ### 22 · Gate exposure & surfacing policy
@@ -139,6 +226,7 @@ individual capability's activation decision; those stay in the Activation Regist
 per dark surface would be inventory, not a plan.
 *Ruled 2026-10-03:* Tech Score v1 exposed by default; Deep Dive Labs-only; Research Evidence disabled; all other hidden cards stay hidden until their backend/data exists; Labs switches are session-only, never persisted. *22a landed (`work/tech-score-default/`):* Tech Score v1 shown by default. *Remains — 22b:* the session-only ⚙ Labs section (Deep Dive).
 *Deps:* Owner policy ruling before any implementation.
+*Master:* 22b COVERED BY `surface-1` S2 — closes the entry.
 *Evidence:* `.ai-reports/status/product-surface-audit-52c322b.PREP.local.md`.
 
 ### 32 · Technical snapshot reuses a stale price — **DONE**
@@ -260,6 +348,7 @@ prompt, parsing or persistence change.
 | 27 | Portfolio Reconciliation / Verification | Portfolio / Verification | **Breakdown-first; added 2026-09-26.** Compares recorded Pulse state with one entry-26 observation. **v1 direct comparisons:** cash · symbol set · total portfolio value. **Informational only:** broker position value, average cost. **After schema support:** share quantities. **Mismatch classes:** `match · explained · unexplained-gap · structural · unverifiable`; reuses `pt_recon` concepts where they fit (tolerance, declared exclusions → explained, `unset/invalid/stale/total-incomplete` → unverifiable). Deposits/withdrawals surface as a **cash** mismatch; external trades as a **structural/value** mismatch. *Owner rulings 2026-09-26:* intake is **manual import of a contract JSON file** (not paste as the primary path); **Pulse never fetches broker data**. Recorded cash stays the **existing single ILS value** — no per-currency cash schema; broker cash-by-currency is normalized to ILS via the existing FX freshness owner (`_pfFxState`), and **if required FX is not Current the cash comparison is unverifiable/suppressed, never guessed**. **v1 is report-only — no Accept/write action;** any future Owner-confirmed update of cash, recon, holdings, quantity or cost basis needs its own explicit slice. **No transaction ledger.** DH-M1 scope unchanged — its old-cash rule remains the recorded-cash freshness fallback. *Deferred to the 27 Breakdown:* tolerances; whether a matching observation may later contribute to readiness. *Deps:* 26 (contract); quantities need the holdings-schema slice shared with 25 | — |
 | 28 | Broker API / MCP observation producer | Portfolio / Verification | **Placeholder; added 2026-09-26.** A future producer emitting **the same entry-26 contract** from a broker API or MCP instead of browser observation. Same read-only, fail-closed, report-only and storage rules; no broker writes. Not scheduled; considered only after the 26 pilot shows the contract holds | — |
 | 30 | ResearchView `Stale` badge — shared-contract decision | Data honesty | **Split from entry 7 at its closure (Owner ruling 2026-10-03).** The ResearchView result badge (`'Stale'` / `'Research'` in `_renderPortfolioPanel`) is an independent literal, text-identical to `DH_DISPLAY.state['stale']` but not routed through `_dhLabel`. Decide whether this local vocabulary joins the shared data-state contract (the DH-M0b ownership decision was never made for it); if yes, a small slice routes it through `DH_DISPLAY`. *Evidence:* `work/dh-entry7-closure-census/census.md` (I-1); `work/dh-vocabulary-census/census.md` | — |
+| 38 | NVDA AI parse failure (R-7) | Research / Analysis | **INVESTIGATION; added 2026-10-10 (Master restructure, OD-2).** The NVDA scan failed to parse (consistency pilot 2026-10-03). One Owner-approved DEV scan after R-3 is live (G-R7-1) classifies the cause; the fix becomes `ai-output-1` S1. Findings: COWORK `r7-nvda-parse-findings.md` | — |
 
 ---
 
