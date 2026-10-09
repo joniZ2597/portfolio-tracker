@@ -226,7 +226,7 @@ const FPLIB = require('./lib/exec-env-fingerprint');
 const TEMPLATE_CONTRACT_PIN = {
   // set from the passing real run of this task (2026-10-07, Worker A laptop, Windows 11, Git for Windows 2.53.0, Node 24); further environments
   // are added only by a later task with evidence
-  source: '16159dc55d595761a60fa566db08b1bfe7066934e62ec5fcdfd8ad4ebed41126',
+  source: '288591877fee2d60d5de1732e72db18588107e58ccc486f61642d9fbcd216e90',
   environments: ['ef28452b4eb84527b7208fc76792410d4948cc9d0fa91173a94c79edefa90858']
 };
 function ftSourceParts() {

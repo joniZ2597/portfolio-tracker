@@ -2532,6 +2532,13 @@ check('AH-23 control: a planted forbidden entry is detected',
 // mutant anchor and the AH-24 differential below are pinned to the real on-disk line; RESYNC_PRE_LINE is the post-OAG line.
 const RESYNC_PRE_LINE = 'const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land|cleanup) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push|brief-request work\\/[a-z0-9][a-z0-9._-]*\\/brief\\.md|(?:protected-request|protected-commit) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*)$/;';
 const RESYNC_POST_LINE = 'const R12_FORM_RE = /^node \\.claude\\/hooks\\/pt-land\\.js (?:(?:land-request|land|cleanup) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|push-request|push|brief-request work\\/[a-z0-9][a-z0-9._-]*\\/brief\\.md|(?:protected-request|protected-commit) task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|resync task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*)$/;';
+// task-base-record (work/task-base-record/brief.md §5): the post-ATB line is the post-resync line plus exactly three trailing
+// alternatives, task-start / adopt-request / adopt task/<id> (the existing task-id pattern). Every anchor below that was pinned to the
+// real on-disk line (AH-20 widened-regex mutant, AH-24 and AH-25 differentials and mutants) first maps ATB_POST_LINE back to
+// RESYNC_POST_LINE - the same PRE/POST mapping AH-25 used for AH-24 - so each still isolates exactly the alternation it was written for.
+const ATB_ID = 'task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*';
+const ATB_POST_LINE = RESYNC_POST_LINE.slice(0, RESYNC_POST_LINE.length - ')$/;'.length) +
+  '|task-start ' + ATB_ID + '|adopt-request ' + ATB_ID + '|adopt ' + ATB_ID + ')$/;';
 const OAG_FORMS = [
   'node .claude/hooks/pt-land.js brief-request work/x/brief.md',
   'node .claude/hooks/pt-land.js protected-request task/x',
@@ -2572,7 +2579,7 @@ for (const [label, cmd] of OAG_DENY_FORMS) {
   const normalizedSrc = fs.readFileSync(HOOK_PATH, 'utf8').replace(/\r\n/g, '\n');
   // AH-25: the real source now carries the post-RESYNC line. Map it back to the post-OAG line first, so this
   // differential still isolates the OAG alternation (the resync alternative has its own differential in AH-25).
-  const normalizedBeforeResync = normalizedSrc.replace(RESYNC_POST_LINE, postOagLine);
+  const normalizedBeforeResync = normalizedSrc.replace(ATB_POST_LINE, RESYNC_POST_LINE).replace(RESYNC_POST_LINE, postOagLine);
   const found = normalizedBeforeResync.split(postOagLine).length - 1;
   check('AH-24 differential sanity: the post-OAG R12_FORM_RE line was found exactly once', found === 1);
   if (found === 1) {
@@ -2625,8 +2632,8 @@ check('AH-20 unchanged: a Bash redirect into .git/pt-land-approval still denied 
 
 // AH-20 mutants (5, each caught): the R12-specific guard-side invariants.
 mutantCatches('R12 form regex widened (any pt-land invocation accepted)',
-  // second-finisher-resync: the anchor is the post-resync line (post-OAG plus the one `resync task/<id>` alternative, brief §3).
-  RESYNC_POST_LINE,
+  // task-base-record: the anchor is the real post-ATB line (post-resync plus the three task-start / adopt-request / adopt alternatives, brief §5).
+  ATB_POST_LINE,
   'const R12_FORM_RE = /pt-land/;',
   (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js push extra-arg', { cwd: SLOT_A }).decision === 'deny');
 mutantCatches('R12 tool check dropped (PowerShell accepted)',
@@ -2720,7 +2727,9 @@ check('AH-25 unchanged: git -C ../pt-wt-worker-b rebase branch-dev still denied'
 // resync deny form stays denied by both. Nothing else in the hook changes (brief §3). Red until the PROTECTED gate applies
 // the candidate, like every other "real on-disk hook" check in this suite.
 {
-  const normalizedSrc = fs.readFileSync(HOOK_PATH, 'utf8').replace(/\r\n/g, '\n');
+  // task-base-record: the real source now carries the post-ATB line; map it back to the post-resync line so this differential still
+  // isolates the resync alternation (the three new alternatives have their own differential in AH-26).
+  const normalizedSrc = fs.readFileSync(HOOK_PATH, 'utf8').replace(/\r\n/g, '\n').replace(ATB_POST_LINE, RESYNC_POST_LINE);
   const found = normalizedSrc.split(RESYNC_POST_LINE).length - 1;
   check('AH-25 differential sanity: the post-resync R12_FORM_RE line was found exactly once', found === 1);
   if (found === 1) {
@@ -2769,12 +2778,146 @@ check('AH-25 control: a planted resync allow entry is detected',
 
 // AH-25 mutants: the new alternative is the only thing that makes the verb pass, and it stays exactly as narrow as the others.
 mutantCatches('R12 resync alternative dropped (the verb is denied again)',
-  RESYNC_POST_LINE, RESYNC_PRE_LINE,
+  ATB_POST_LINE, RESYNC_PRE_LINE,
   (m) => r12DecideOn(m, RESYNC_FORMS[0], { cwd: SLOT_A }).decision === 'allow');
 mutantCatches('R12 resync alternative widened (any argument accepted)',
-  '|resync task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*)$/;',
-  '|resync .*)$/;',
+  '|resync task\\/[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*|task-start ',
+  '|resync .*|task-start ',
   (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js resync task/x --force', { cwd: SLOT_A }).decision === 'deny');
+
+// ── AH-26 (work/task-base-record/brief.md §5 and §9 "Hook") ────────────────────────────────
+// R12 gains exactly three new alternatives: task-start task/<id>, adopt-request task/<id>, adopt task/<id>. The shared
+// trigger/cwd/env/identity branching (AH-20) is not re-specialised per verb, so only the form-shape rows differ.
+const ATB_FORMS = [
+  'node .claude/hooks/pt-land.js task-start task/x',
+  'node .claude/hooks/pt-land.js adopt-request task/x',
+  'node .claude/hooks/pt-land.js adopt task/x',
+  'node .claude/hooks/pt-land.js task-start task/task-base-record',
+  'node .claude/hooks/pt-land.js adopt task/a/b'
+];
+for (const form of ATB_FORMS) {
+  check('AH-26 allow, slot cwd: ' + JSON.stringify(form), r12Decide(form, { cwd: SLOT_A }).decision === 'allow');
+  check('AH-26 allow, canonical cwd: ' + JSON.stringify(form), r12Decide(form, { cwd: R11_CANON, projectDir: R11_CANON }).decision === 'allow');
+}
+const ATB_DENY_FORMS = [];
+for (const verb of ['task-start', 'adopt-request', 'adopt']) {
+  const p = 'node .claude/hooks/pt-land.js ' + verb;
+  ATB_DENY_FORMS.push(
+    [verb + ' trailing space', p + ' task/x '],
+    [verb + ' double space', 'node .claude/hooks/pt-land.js  ' + verb + ' task/x'],
+    [verb + ' no task', p],
+    [verb + ' non-task/ ref', p + ' branch-dev'],
+    [verb + ' empty task id', p + ' task/'],
+    [verb + ' two tasks', p + ' task/x task/y'],
+    [verb + ' extra flag', p + ' task/x --force'],
+    [verb + ' quoted task', p + ' "task/x"'],
+    [verb + ' uppercase verb', 'node .claude/hooks/pt-land.js ' + verb.toUpperCase() + ' task/x'],
+    [verb + ' prefixed verb', 'node .claude/hooks/pt-land.js x' + verb + ' task/x'],
+    [verb + ' suffixed verb', 'node .claude/hooks/pt-land.js ' + verb + 's task/x'],
+    [verb + ' leading ./', 'node ./.claude/hooks/pt-land.js ' + verb + ' task/x'],
+    [verb + ' absolute path', 'node C:/repo/.claude/hooks/pt-land.js ' + verb + ' task/x'],
+    [verb + ' env prefix', 'FOO=bar ' + p + ' task/x'],
+    [verb + ' bash -c wrapper', 'bash -c "' + p + ' task/x"'],
+    [verb + ' npm exec wrapper', 'npm exec -- ' + p + ' task/x'],
+    [verb + ' compound &&', p + ' task/x && echo done'],
+    [verb + ' compound ;', p + ' task/x; echo done'],
+    [verb + ' pipe', p + ' task/x | cat'],
+    [verb + ' escaped pt\\-land', 'node .claude/hooks/pt\\-land.js ' + verb + ' task/x']
+  );
+}
+ATB_DENY_FORMS.push(
+  ['unknown verb task-stop', 'node .claude/hooks/pt-land.js task-stop task/x'],
+  ['unknown verb adopt-apply', 'node .claude/hooks/pt-land.js adopt-apply task/x'],
+  ['unknown verb adoption', 'node .claude/hooks/pt-land.js adoption task/x']
+);
+for (const [label, cmd] of ATB_DENY_FORMS) {
+  check('AH-26 deny (' + label + ')', r12Decide(cmd, { cwd: SLOT_A }).decision === 'deny');
+}
+check('AH-26 deny: the PowerShell tool', r12Decide(ATB_FORMS[0], { cwd: SLOT_A, tool: 'PowerShell' }).decision === 'deny');
+check('AH-26 deny: a missing cwd', r12Decide(ATB_FORMS[0], { cwd: NO_CWD }).decision === 'deny');
+check('AH-26 deny: cwd outside the slots and canonical',
+  r12Decide(ATB_FORMS[0], { cwd: 'C:\\Users\\Owner\\Documents\\Project\\somewhere-else', projectDir: R11_CANON }).decision === 'deny');
+{
+  const saved = process.env.GIT_DIR;
+  process.env.GIT_DIR = 'x';
+  try {
+    check('AH-26 deny: session env GIT_DIR set', r12Decide(ATB_FORMS[0], { cwd: SLOT_A }).decision === 'deny');
+  } finally {
+    if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved;
+  }
+}
+
+// Differential: swap the real, on-disk post-ATB R12_FORM_RE line for the post-resync line and reload - over every pre-existing
+// corpus form AND the new forms, the two modules disagree ONLY on the allow forms of the three new verbs (deny -> allow);
+// every ATB deny form stays denied by both. Nothing else in the hook changes (brief §5).
+{
+  const normalizedSrc = fs.readFileSync(HOOK_PATH, 'utf8').replace(/\r\n/g, '\n');
+  const found = normalizedSrc.split(ATB_POST_LINE).length - 1;
+  check('AH-26 differential sanity: the post-ATB R12_FORM_RE line was found exactly once', found === 1);
+  if (found === 1) {
+    const srcBeforeAtb = normalizedSrc.replace(ATB_POST_LINE, RESYNC_POST_LINE);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ah-atb-diff-'));
+    let modBeforeAtb = null;
+    try {
+      const file = path.join(dir, 'pretooluse-guard.js');
+      fs.writeFileSync(file, srcBeforeAtb);
+      modBeforeAtb = require(file);
+    } catch (e) { /* handled by the null check below */ } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    check('AH-26 differential sanity: the pre-ATB module loads', modBeforeAtb !== null);
+    if (modBeforeAtb) {
+      const corpus = [...ALLOWED, ...R12_FORMS, ...R12_DENY_FORMS.map((row) => row[1]), ...R13_RISKY_FORMS, ...R13_CONTROL_FORMS,
+        ...OAG_FORMS, ...OAG_DENY_FORMS.map((row) => row[1]), ...RESYNC_FORMS, ...RESYNC_DENY_FORMS.map((row) => row[1]),
+        ...ATB_FORMS, ...ATB_DENY_FORMS.map((row) => row[1])];
+      const changed = [];
+      for (const cmd of corpus) {
+        const before = dec(modBeforeAtb, cmd, SLOT_A).decision;
+        const after = dec(guard, cmd, SLOT_A).decision;
+        if (before !== after) changed.push(cmd + ' (' + before + ' -> ' + after + ')');
+      }
+      const expected = ATB_FORMS.map((cmd) => cmd + ' (deny -> allow)').sort();
+      check('AH-26 differential: R12_FORM_RE changes a decision only on the task-start / adopt-request / adopt allow forms (' + changed.join('; ') + ')',
+        JSON.stringify(changed.slice().sort()) === JSON.stringify(expected));
+    }
+  }
+}
+
+// AH-26 CLI: a real hook-process spawn - allow from a slot cwd (exit 0, silent); wrapped / compound variants deny with R12.
+for (const form of ATB_FORMS) {
+  const r = spawnCliEnv(payload(form, SLOT_A), undefined);
+  check('AH-26 CLI allow [slot] ' + form + ' -> exit 0, empty stdout/stderr', r.status === 0 && r.stdout === '' && r.stderr === '');
+}
+for (const [label, cmd] of ATB_DENY_FORMS.filter((row) => /wrapper|compound|pipe/.test(row[0]))) {
+  const r = spawnCliEnv(payload(cmd, SLOT_A), undefined);
+  check('AH-26 CLI deny (' + label + ') -> exit 2, empty stdout, R12 on stderr', r.status === 2 && r.stdout === '' && /R12/.test(r.stderr));
+}
+
+// AH-26 settings (brief §5): settings.json is unchanged - the verbs are not allowlisted, so they prompt in Manual.
+check('AH-26: the real allow list has no task-start / adopt entry (the verbs stay prompting)',
+  !AH23_REAL_ALLOW.some((rule) => /task-start|adopt/.test(rule)));
+check('AH-26 control: a planted adopt allow entry is detected',
+  [...AH23_REAL_ALLOW, 'Bash(node .claude/hooks/pt-land.js adopt *)'].some((rule) => /task-start|adopt/.test(rule)));
+
+// AH-26 mutants: each new alternative is the only thing that makes its verb pass, and each stays exactly as narrow as the others.
+mutantCatches('R12 task-start alternative dropped (the verb is denied again)',
+  '|task-start ' + ATB_ID, '',
+  (m) => r12DecideOn(m, ATB_FORMS[0], { cwd: SLOT_A }).decision === 'allow');
+mutantCatches('R12 adopt-request alternative dropped (the verb is denied again)',
+  '|adopt-request ' + ATB_ID, '',
+  (m) => r12DecideOn(m, ATB_FORMS[1], { cwd: SLOT_A }).decision === 'allow');
+mutantCatches('R12 adopt alternative dropped (the verb is denied again)',
+  '|adopt ' + ATB_ID, '',
+  (m) => r12DecideOn(m, ATB_FORMS[2], { cwd: SLOT_A }).decision === 'allow');
+mutantCatches('R12 task-start alternative widened (any argument accepted)',
+  '|task-start ' + ATB_ID, '|task-start .*',
+  (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js task-start task/x --force', { cwd: SLOT_A }).decision === 'deny');
+mutantCatches('R12 adopt-request alternative widened (any argument accepted)',
+  '|adopt-request ' + ATB_ID, '|adopt-request .*',
+  (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js adopt-request task/x --force', { cwd: SLOT_A }).decision === 'deny');
+mutantCatches('R12 adopt alternative widened (any argument accepted)',
+  '|adopt ' + ATB_ID, '|adopt .*',
+  (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js adopt task/x --force', { cwd: SLOT_A }).decision === 'deny');
 
 fs.rmSync(R11_CANON, { recursive: true, force: true });
 

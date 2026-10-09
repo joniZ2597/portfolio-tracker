@@ -395,7 +395,7 @@ test('FP: reading the real environment costs exactly 2 Git starts (git version -
 // re-pins in its own diff; a further environment is added only by a later task with evidence.
 const GIT_CONTRACT_PIN = {
   // set 2026-10-07 from the completed batched real replay (16/16 batches, 153/153 identical; Owner-approved)
-  source: '77a1bc916bd33be923118365cdbd0e355b4d6ca72ec314a7e86ae65242b53cb5',
+  source: '552ccfc8e1ee3924571063b210d2da97285331bb82f97683ab389738b20d80ed',
   environments: ['ef28452b4eb84527b7208fc76792410d4948cc9d0fa91173a94c79edefa90858'] // the Worker A laptop environment that ran the replay
 };
 const REC = require('./tools/record-git-transcripts');
