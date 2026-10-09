@@ -92,8 +92,8 @@ const PROTECTED_FN_HASHES = {
   _ptScoreFillHtml: 'dfeb1959f3ca9f877d7158db68d5109c64bf36eb4f3f23eb300b735ae69f5a23',
   _ptScoreDial: '4092f243120f5c6bdf3269a02e599f3ad68afcd4a8afe8d766724879b0ef4bce',
   _srGroupResults: 'f4ebde1c851d2d2e38ee8a5b8b96812f802612f5faddd17972620138dbdfdc9d', // R-5 (Entry 37) re-pin: Pulse-only ordering
-  _srRenderGrouped: 'b14b4ee040faae7f0d3e5e2168ff0489b026d550545950c38328a0d824c4c914', // R-5 (Entry 37) re-pin: neutral Analyst cell
-  renderMainPanel: '1c1505df3b8af5ac2230e8b255cceb55325aaf4ab5f173577fbe66a4a57e8327' // R-5 (Entry 37) + B4 (Entry 34) re-pin: Pulse dial / chip, analyst line, All-time-high row
+  _srRenderGrouped: 'cf7cc5c9dffdcc0ea48d9fdefa7717da4b2017e26a0a6f245b0848e8a6ce132b', // R-5 (Entry 37) + R-6 (Entry 14 s1) re-pin: neutral Analyst cell, ⚠ consistency count
+  renderMainPanel: 'cb02c39575356609436f2f950d0c4479531de0f6f9388ecd99b9b28cedfb135b' // R-5 (Entry 37) + B4 (Entry 34) + R-6 (Entry 14 s1) re-pin: Pulse dial / chip, analyst line, All-time-high row, Consistency line
 };
 for (const fnName of Object.keys(PROTECTED_FN_HASHES)) {
   const src = extractFunctionSource(content, fnName);

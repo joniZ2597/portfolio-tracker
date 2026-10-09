@@ -166,7 +166,7 @@ function makeScope(map) {
     set(t, k, v) { map[k] = v; return true; }
   });
 }
-const RENDER_REAL = ['hasVerifiedMarketData', '_techPanelPrice', '_techSnapFor', '_techRefInput', 'classifyTechnicalSetup', '_setupDisplay', '_ptScoreNorm', '_ptScoreText', '_ptScoreDial'];
+const RENDER_REAL = ['hasVerifiedMarketData', '_techPanelPrice', '_techSnapFor', '_techRefInput', 'classifyTechnicalSetup', '_setupDisplay', '_ptScoreNorm', '_ptScoreText', '_ptScoreDial', '_nlmConsistencyChecks']; // R-6 (Entry 14 s1): the checker renderMainPanel now calls (brief S3.4 class c)
 function buildRenderer(src, rmSrc) {
   if (!rmSrc) throw new Error('renderMainPanel not extractable');
   const helpers = RENDER_REAL.map(n => { const s = extractFn(src, n); if (!s) throw new Error('missing ' + n); return s; });

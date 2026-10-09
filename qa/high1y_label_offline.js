@@ -64,7 +64,7 @@ const fnSrc = n => extractFn(content, n);
 // ---- Baseline literals / pins (captured at Step 0 from the 57afd9d index.html) ----
 const BASE_CLASSIFY_SRC = "function classifyTechnicalSetup(snap) {\n  const { pct20, pct50, pct150, athDist } = snap || {};\n  // Require at least pct20 + pct50 for any non-unknown classification\n  if (pct20 == null || pct50 == null) return 'unknown';\n  // extended_near_ath: price >10% above MA20 AND within 5% of 1Y high\n  if (athDist != null && athDist > -5 && pct20 > 10)\n    return 'extended_near_ath';\n  // healthy_uptrend_near_ath: above MA20+MA50, within 8% of ATH\n  if (athDist != null && athDist > -8 && pct20 > 2 && pct50 > 0)\n    return 'healthy_uptrend_near_ath';\n  // healthy_uptrend: above all three key MAs\n  if (pct150 != null && pct20 > 0 && pct50 > 0 && pct150 > 0)\n    return 'healthy_uptrend';\n  // support_test: below MA20, MA50 within ±3% (testing support), above MA150\n  // More specific than pullback_in_uptrend — must be evaluated first\n  if (pct150 != null && pct20 < 0 && pct50 >= -3 && pct50 <= 2 && pct150 > 0)\n    return 'support_test';\n  // pullback_in_uptrend: below MA20 but clearly above MA50 and MA150\n  if (pct150 != null && pct20 < 0 && pct50 > 0 && pct150 > 0)\n    return 'pullback_in_uptrend';\n  // breakdown_risk: below MA50 by >3% but MA150 still nearby\n  if (pct150 != null && pct50 < -3 && pct150 >= -5 && pct150 <= 2)\n    return 'breakdown_risk';\n  // below_key_mas: below MA20, MA50, and MA150 all\n  if (pct150 != null && pct20 < 0 && pct50 < 0 && pct150 < 0)\n    return 'below_key_mas';\n  return 'unknown';\n}";
 const PINS = {
-  "layer1": "b59e7b490968fa3bb3d82c0fc93ec3620e61d17959b1ab545806960174e77d5d",
+  "layer1": "f800c5a374f3b835eaa8fa2719cf3d159d571aea3d170d2f6c9a06b7ff2eaaa6",
   "layer2": {
     "computeATHDistance|computeHigh1yDistance": "39b8ce7ec6d2f8e2fad10b050b16f87ab79119867e6f53d7e412f164b865a451",
     "classifyTechnicalSetup": "579f5bfea08fe9b499c8d59016f22116cdf4ac12cafdaa1e0caa3928417e044e",
@@ -73,7 +73,7 @@ const PINS = {
     "fetchAnthropicAnalysis": "fad40ac1ea98d95d05c5efbe288b98732a6ddaa02da8b6eb15b33ade1754db29",
     "orchestrate": "d772badfdfa6c434c59b8fdce68d635544bf7ac173cc0460e4518267be238f67",
     "_srGroupResults": "657105a2f62abddaa85053fa7ba78e49c7fe1187439bfe2caf1ef7875ba4a4b2",
-    "renderMainPanel": "c4df0046dad1f7257010ba3f2999c6fbe60f3982ca9865971f430e4b41967d92",
+    "renderMainPanel": "a3b3c7427aa045a3a22c34dcdcace190cb864fa462ed8ba9f1a6a3d87127354d",
     "_dd0FetchAnalysis": "50b6d52bc1ec645afc239432878b816529cebf592a0a60fae8440581c03f6c38"
   }
 };
@@ -298,7 +298,7 @@ function makeScope(map) {
 }
 guard('HL-5', () => {
   const helperNames = ['hasVerifiedMarketData', '_techPanelPrice', '_techSnapFor', '_techRefInput', 'classifyTechnicalSetup', '_setupDisplay',
-    '_ptScoreNorm', '_ptScoreText', '_ptScoreDial'];
+    '_ptScoreNorm', '_ptScoreText', '_ptScoreDial', '_nlmConsistencyChecks']; // R-6 (Entry 14 s1): the checker renderMainPanel now calls (brief S3.4 class c)
   const helpers = helperNames.map(fnSrc).filter(Boolean);
   const rmSrc = fnSrc('renderMainPanel');
   const ratingRe = /var RATING_SUMMARY_RE = (\/[^\n]*\/[a-z]*);/.exec(content);

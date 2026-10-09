@@ -37,6 +37,7 @@ function extractFunctionSource(c, name) {
 
 const FNS = ['_ptScoreNorm', '_ptScoreText', '_ptScoreCmp', '_ptScoreStates', '_ptScoreFillHtml',
   '_vscCellHtml', '_srGroupResults', '_crEsc', '_srHeldMap', '_srHeldHtml',
+  '_nlmConsistencyChecks', // R-6 (Entry 14 slice 1, nlm-consistency-1 S3): the renderers call the checker (brief S3.4 class c list edit only)
   '_srRenderGrouped', 'openScanResultsOverlay'];
 const srcs = {};
 for (const f of FNS) {

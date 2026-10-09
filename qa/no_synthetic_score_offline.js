@@ -49,7 +49,7 @@ const PRE = {
 // index.html with the five changed functions masked: nothing else in the file changes in this task
 // (hence no new top-level function anywhere). Re-pinned by R-5 (Entry 37, nlm-consistency-1 S1), whose edits to
 // openScanResultsOverlay, _srRenderGrouped, _renderPortfolioPanel and the static overlay header sit outside the mask.
-const PRE_MASKED_FIVE = '7760fb3e03f214af3c615810ce8fd3d96e8aaf8f0be08781550f7a81ae7c2bf2'; // + B4 (Entry 34, nlm-consistency-1 S2): _athCache / _athInflight, the four _ath* helpers, init(), runAnalysis, selectTicker
+const PRE_MASKED_FIVE = 'f122f497ecccaf24781e16a0f2ee520f6b6845111c24b08f2b0b7c876dad146d'; // + R-6 (Entry 14 s1, nlm-consistency-1 S3): _nlmConsistencyChecks is the one new top-level function allowed by Master ruling §0.4; the Scan Results ⚠ cells // + B4 (Entry 34, nlm-consistency-1 S2): _athCache / _athInflight, the four _ath* helpers, init(), runAnalysis, selectTicker
 // Surfaces the brief says are untouched (section 2.8 / NS-11).
 const ISOLATION_PINS = {
   enforceScoreConsistency: 'e1406d9bfe8358212ada456882bea248cb761cc68734213aa5151b9c02966a00',
@@ -204,6 +204,34 @@ function revertS2(fnSrc, name) {
   }
   return out;
 }
+// ── S3 table (work/nlm-consistency-1/brief.md §S3, Entry 14 slice 1, R-6 checker): the Consistency line of renderMainPanel ──
+const S3_NLM_LINE = [
+  "  // R-6 (Entry 14, slice 1; D9-3): one compact Consistency line under the Actionable Take — display only; it never alters",
+  "  // the AI text, the score, the action, the grouping or any stored field, and a failed analysis gets no line.",
+  "  const _nlmLine = (() => {",
+  "    if (item._aiUnavailable === true) return '';",
+  "    const _h = _srHeldMap();",
+  "    const _ks = _nlmConsistencyChecks(item, { price: hasData ? _techPanelPrice(item) : null, mas: _panelSnap, held: (_h && typeof _h === 'object') ? Object.prototype.hasOwnProperty.call(_h, String(item.ticker || '').trim().toUpperCase()) : null });",
+  "    return (Array.isArray(_ks) && _ks.length) ? `\\n        <div class=\"mp-act-row mp-nlm\"><span class=\"mp-act-lbl\">Consistency</span><span class=\"mp-act-val\" style=\"color:var(--yellow2)\">${_esc(_ks.map(k => k.text).join(' · '))}</span></div>` : '';",
+  "  })();",
+  ""
+].join('\n');
+const S3 = {
+  analyzeChunk: [], orchestrate: [], _isValidScanResult: [], _srGroupResults: [],
+  renderMainPanel: [
+    { id: 'RM-C', oldS: '  const _crn = item._crNudge;', newS: S3_NLM_LINE + '  const _crn = item._crNudge;' },
+    { id: 'RM-D', oldS: "            : '<div class=\"pc-empty\">No analysis available — run scan for actionable take</div>'}",
+      newS: "            : '<div class=\"pc-empty\">No analysis available — run scan for actionable take</div>'}${_nlmLine}" }
+  ]
+};
+function revertS3(fnSrc, name) {
+  let out = fnSrc;
+  for (const r of S3[name].slice().reverse()) {
+    if (countOf(out, r.newS) !== 1) throw new Error('S3 new text not unique: ' + r.id);
+    out = out.replace(r.newS, () => r.oldS);
+  }
+  return out;
+}
 
 // ── Source extraction (same rule as qa/tech_snapshot_cache_offline.js) ──────────────────────────
 function extractFn(content, name) {
@@ -326,7 +354,7 @@ function buildChain(src) {
 }
 // Scan Results renderers (qa/scan_results_enrichment_offline.js pattern): a vm context with the real functions.
 const SR_FNS = ['_ptScoreNorm', '_ptScoreText', '_ptScoreCmp', '_ptScoreStates', '_ptScoreFillHtml', '_vscCellHtml',
-  '_srGroupResults', '_crEsc', '_srHeldMap', '_srHeldHtml', '_srRenderGrouped', 'openScanResultsOverlay'];
+  '_srGroupResults', '_crEsc', '_srHeldMap', '_srHeldHtml', '_nlmConsistencyChecks', '_srRenderGrouped', 'openScanResultsOverlay']; // R-6 (Entry 14 s1): the renderers call the checker (brief S3.4 class c)
 function buildScanResults(src, groupSrcOverride) {
   const srcs = SR_FNS.map(n => (n === '_srGroupResults' && groupSrcOverride) ? groupSrcOverride : extractFn(src, n));
   if (srcs.some(s => !s)) throw new Error('scan results pieces missing');
@@ -373,7 +401,7 @@ function makeScope(map) {
   });
 }
 const RENDER_REAL = ['hasVerifiedMarketData', '_techPanelPrice', '_techSnapFor', '_techRefInput', 'classifyTechnicalSetup', '_setupDisplay',
-  '_ptScoreNorm', '_ptScoreText', '_ptScoreDial'];
+  '_ptScoreNorm', '_ptScoreText', '_ptScoreDial', '_nlmConsistencyChecks']; // R-6 (Entry 14 s1): the checker renderMainPanel now calls (brief S3.4 class c)
 function buildRenderer(src, rmSrc) {
   if (!rmSrc) throw new Error('renderMainPanel not extractable');
   const helpers = [];
@@ -424,7 +452,7 @@ async function evaluate(src) {
   await guard('NS-12', () => {
     for (const n of CHANGED) {
       chk('NS-12', n + ': the R-3 table reverts cleanly (every task line present exactly once)', pre[n] !== null);
-      chk('NS-12', n + ': reverting only the R-3 lines (and, after them, the S2 block of B4 and the S1 lines of R-5) restores the pre-task source (LF pin)', pre[n] !== null && sha256(revertS1(revertS2(pre[n], n), n)) === PRE[n]);
+      chk('NS-12', n + ': reverting only the R-3 lines (and, after them, the S3 block of R-6, the S2 block of B4 and the S1 lines of R-5) restores the pre-task source (LF pin)', pre[n] !== null && sha256(revertS1(revertS2(revertS3(pre[n], n), n), n)) === PRE[n]);
       chk('NS-12', n + ': applying the R-3 table to the reverted source reproduces the task source byte-for-byte', pre[n] !== null && applyR3(pre[n], n) === task[n]);
     }
     chk('NS-12', 'line counts: analyzeChunk +0, orchestrate +0, _isValidScanResult +0, _srGroupResults +2, renderMainPanel +0',

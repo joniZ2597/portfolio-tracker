@@ -139,7 +139,7 @@ const failedItem = over => Object.assign({ ticker: 'TST', company_name: 'Test Co
 
 // ── Scan Results sandbox (vm context with the real functions) ────────────────────────────────────
 const SR_FNS = ['_ptScoreNorm', '_ptScoreText', '_ptScoreCmp', '_ptScoreStates', '_ptScoreFillHtml', '_vscCellHtml',
-  '_srGroupResults', '_crEsc', '_srHeldMap', '_srHeldHtml', '_srRenderGrouped', 'openScanResultsOverlay'];
+  '_srGroupResults', '_crEsc', '_srHeldMap', '_srHeldHtml', '_nlmConsistencyChecks', '_srRenderGrouped', 'openScanResultsOverlay']; // R-6 (Entry 14 s1): the renderers call the checker (brief S3.4 class c)
 function buildScanResults(src, over) {
   const srcs = SR_FNS.map(n => (over && over[n]) ? over[n] : extractFn(src, n));
   if (srcs.some(s => !s)) throw new Error('scan results pieces missing');
@@ -186,7 +186,7 @@ function makeScope(map) {
   });
 }
 const RENDER_REAL = ['hasVerifiedMarketData', '_techPanelPrice', '_techSnapFor', '_techRefInput', 'classifyTechnicalSetup', '_setupDisplay',
-  '_ptScoreNorm', '_ptScoreText', '_ptScoreDial'];
+  '_ptScoreNorm', '_ptScoreText', '_ptScoreDial', '_nlmConsistencyChecks']; // R-6 (Entry 14 s1): the checker renderMainPanel now calls (brief S3.4 class c)
 function buildRenderer(src, rmSrc) {
   if (!rmSrc) throw new Error('renderMainPanel not extractable');
   const helpers = RENDER_REAL.map(n => { const s = extractFn(src, n); if (!s) throw new Error('missing ' + n); return s; });

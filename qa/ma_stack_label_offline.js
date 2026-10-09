@@ -43,7 +43,7 @@ const PIN_CLASSIFY_LF = 'c143eb08d982cff036dd5678def08dc38e7dede6e2a0f4ae11a79d2
 const PIN_TSASSESSMAP_LF = '79b78d1ed91f3d6f8c2b867378a1a228f83399c8931ddd150eea31143bb3a31e';
 // index.html with renderMainPanel masked out: nothing outside the function changes in this task
 // (hence no new top-level function anywhere).
-const PIN_MASKED_MINUS_RM_LF = '353af4381dce5b6791471bf2a3e62325893e7df96ba2b9224c8061158a9eb852'; // re-pinned at R-3 (Entry 36)
+const PIN_MASKED_MINUS_RM_LF = '2cb45b3fbdd422bc1cc2331fefb68db592da4255d90c1ff2eb971e2f455085f0'; // re-pinned at R-3 (Entry 36)
 
 // ── R-2 table: the one pre-task line and the four task lines (whole lines, exact bytes) ──────
 const R2_OLD = "  const _tsAssess = _panelSetup !== 'unknown' ? (_tsAssessMap[_panelSetup] || '') : '';";
@@ -148,6 +148,33 @@ function revertS2(taskRm) {
   for (const r of S2_TABLE.slice().reverse()) { if (countOf(out, r.newS) !== 1) throw new Error('S2 new line not present exactly once: ' + r.id); out = out.replace(r.newS, () => r.oldS); }
   return out;
 }
+// ── S3 table (work/nlm-consistency-1/brief.md §S3, Entry 14 slice 1, R-6 checker): the Consistency line, reverted first / applied last ──
+const S3_NLM_LINE = [
+  "  // R-6 (Entry 14, slice 1; D9-3): one compact Consistency line under the Actionable Take — display only; it never alters",
+  "  // the AI text, the score, the action, the grouping or any stored field, and a failed analysis gets no line.",
+  "  const _nlmLine = (() => {",
+  "    if (item._aiUnavailable === true) return '';",
+  "    const _h = _srHeldMap();",
+  "    const _ks = _nlmConsistencyChecks(item, { price: hasData ? _techPanelPrice(item) : null, mas: _panelSnap, held: (_h && typeof _h === 'object') ? Object.prototype.hasOwnProperty.call(_h, String(item.ticker || '').trim().toUpperCase()) : null });",
+  "    return (Array.isArray(_ks) && _ks.length) ? `\\n        <div class=\"mp-act-row mp-nlm\"><span class=\"mp-act-lbl\">Consistency</span><span class=\"mp-act-val\" style=\"color:var(--yellow2)\">${_esc(_ks.map(k => k.text).join(' · '))}</span></div>` : '';",
+  "  })();",
+  ""
+].join('\n');
+const S3_TABLE = [
+  { id: 'RM-C', oldS: '  const _crn = item._crNudge;', newS: S3_NLM_LINE + '  const _crn = item._crNudge;' },
+  { id: 'RM-D', oldS: "            : '<div class=\"pc-empty\">No analysis available — run scan for actionable take</div>'}",
+    newS: "            : '<div class=\"pc-empty\">No analysis available — run scan for actionable take</div>'}${_nlmLine}" }
+];
+function applyS3(rm) {
+  let out = rm;
+  for (const r of S3_TABLE) { if (countOf(out, r.oldS) !== 1) throw new Error('S3 old line not unique: ' + r.id); out = out.replace(r.oldS, () => r.newS); }
+  return out;
+}
+function revertS3(taskRm) {
+  let out = taskRm;
+  for (const r of S3_TABLE.slice().reverse()) { if (countOf(out, r.newS) !== 1) throw new Error('S3 new line not present exactly once: ' + r.id); out = out.replace(r.newS, () => r.oldS); }
+  return out;
+}
 
 // ── Source extraction (same rule as qa/tech_snapshot_cache_offline.js) ──────────────────────
 function extractFn(content, name) {
@@ -210,7 +237,7 @@ function makeScope(map) {
   });
 }
 const RENDER_REAL = ['hasVerifiedMarketData', '_techPanelPrice', '_techSnapFor', '_techRefInput', 'classifyTechnicalSetup',
-  '_ptScoreNorm', '_ptScoreText', '_ptScoreDial'];
+  '_ptScoreNorm', '_ptScoreText', '_ptScoreDial', '_nlmConsistencyChecks']; // R-6 (Entry 14 s1): the checker renderMainPanel now calls (brief S3.4 class c)
 function buildRenderer(src) {
   const rmSrc = extractFn(src, 'renderMainPanel');
   if (!rmSrc) throw new Error('renderMainPanel not extractable');
@@ -373,11 +400,11 @@ function evaluate(src) {
   // MS-7 diff confined to the _tsAssess region; the R-2 revert table reproduces the pre-task source
   guard('MS-7', () => {
     chk('MS-7', 'the four R-2 lines are present exactly once, as one block', countOf(rm, R2_BLOCK) === 1);
-    const reverted = revertR2(revertR3(revertS1(revertS2(rm))));
-    chk('MS-7', 'reverting only the S2 block, the S1 lines, the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (LF pin)', sha256(reverted) === PRE_RM_LF);
-    chk('MS-7', 'reverting only the S2 block, the S1 lines, the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (CRLF pin)', sha256(crlf(reverted)) === PRE_RM_CRLF);
-    chk('MS-7', 'applying the R-2, then the R-3, then the S1, then the S2 table to the reverted source reproduces the task source byte-for-byte', applyS2(applyS1(applyR3(applyR2(reverted)))) === rm);
-    chk('MS-7', 'line count = pre-task + 3 (R-2, at most four lines in the region) - 1 (S1: RM-6 +1, RM-7 -2) + 19 (S2: the row block)', rm.split('\n').length === reverted.split('\n').length + 21);
+    const reverted = revertR2(revertR3(revertS1(revertS2(revertS3(rm)))));
+    chk('MS-7', 'reverting only the S3 block, the S2 block, the S1 lines, the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (LF pin)', sha256(reverted) === PRE_RM_LF);
+    chk('MS-7', 'reverting only the S3 block, the S2 block, the S1 lines, the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (CRLF pin)', sha256(crlf(reverted)) === PRE_RM_CRLF);
+    chk('MS-7', 'applying the R-2, then the R-3, then the S1, then the S2, then the S3 table to the reverted source reproduces the task source byte-for-byte', applyS3(applyS2(applyS1(applyR3(applyR2(reverted))))) === rm);
+    chk('MS-7', 'line count = pre-task + 3 (R-2, at most four lines in the region) - 1 (S1: RM-6 +1, RM-7 -2) + 19 (S2: the row block) + 8 (S3: the _nlmLine block)', rm.split('\n').length === reverted.split('\n').length + 29);
     chk('MS-7', 'the _tsAssessHtml line and the template interpolation are untouched',
       countOf(rm, "const _tsAssessHtml = _tsAssess ? `<div class=\"ts-assess\">${_tsAssess}</div>` : '';") === 1 && countOf(rm, '${_tsAssessHtml}`}${_ts1RowHtml}') === 1);
   });

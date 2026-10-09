@@ -7041,6 +7041,85 @@ function _srHeldHtml(held, ticker) {
   const k = String(ticker || '').trim().toUpperCase();
   return k && Object.prototype.hasOwnProperty.call(held, k) ? '<span class="sr-held">HELD</span>' : '';
 }
+// ── R-6 (Entry 14, slice 1): deterministic narrative-consistency checks K1–K6 — display only ──
+// Pure: reads item + ctx, never mutates, never re-prompts, never touches score / action / grouping / storage.
+// ctx = { price (the displayed price), mas (panel snapshot, optional), held (true / false / null), today (ISO date, optional) }.
+// A check whose inputs are missing or unparsable is skipped, never failed. A failed analysis gets no checks.
+function _nlmConsistencyChecks(item, ctx) {
+  const out = [];
+  if (!item || typeof item !== 'object' || item._aiUnavailable === true) return out;
+  const c = ctx && typeof ctx === 'object' ? ctx : {};
+  const text = String(item.summary || '');
+  const price = (typeof c.price === 'number' && isFinite(c.price) && c.price > 0) ? c.price : null;
+  const num = s => { const n = parseFloat(String(s).replace(/,/g, '')); return isFinite(n) ? n : null; };
+  const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+  const today = /^\d{4}-\d{2}-\d{2}$/.test(String(c.today || '')) ? String(c.today) : String(item._orchestratedAt || '').slice(0, 10);
+  const year = /^\d{4}/.test(today) ? Number(today.slice(0, 4)) : null;
+  const iso = (y, m, d) => { if (!y || !(m >= 1 && m <= 12) || !(d >= 1 && d <= 31)) return null; const dt = new Date(Date.UTC(y, m - 1, d)); return (dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d) ? y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0') : null; }; // real calendar days only
+  const datesIn = s => {
+    const found = [];
+    const str = String(s || '');
+    let m;
+    const reIso = /\b(\d{4})-(\d{2})-(\d{2})\b/g;
+    while ((m = reIso.exec(str))) found.push(iso(Number(m[1]), Number(m[2]), Number(m[3])));
+    const reMD = /\b(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(\d{4}))?\b/gi;
+    while ((m = reMD.exec(str))) found.push(iso(m[3] ? Number(m[3]) : year, MONTHS[m[1].toLowerCase().slice(0, 4)] || MONTHS[m[1].toLowerCase().slice(0, 3)], Number(m[2])));
+    const reDM = /\b(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec)[a-z]*\.?(?:\s+(\d{4}))?\b/gi;
+    while ((m = reDM.exec(str))) found.push(iso(m[3] ? Number(m[3]) : year, MONTHS[m[2].toLowerCase().slice(0, 4)] || MONTHS[m[2].toLowerCase().slice(0, 3)], Number(m[1])));
+    return found.filter(Boolean);
+  };
+  // K1 — the narrative says "today" while every catalyst date is an earlier day
+  if (/^\d{4}-\d{2}-\d{2}$/.test(today) && /\btoday\b/i.test(text)) {
+    const cat = item._catalysts && typeof item._catalysts === 'object' ? item._catalysts : null;
+    const strings = cat ? [].concat(cat.bullish || [], cat.bearish || [], cat.macro || [], cat.earnings ? [cat.earnings] : []) : [];
+    const dates = strings.map(datesIn).reduce((a, b) => a.concat(b), []);
+    if (dates.length && dates.every(d => d < today)) out.push({ id: 'K1', text: 'says "today" but the catalyst is dated ' + dates.slice().sort().pop() });
+  }
+  // K2 — a downside / support level above the price, or an upside / resistance level below it. The direction word and the
+  // $ level must sit within one short clause of each other (≤ 40 chars, no clause break), so unrelated wording never binds.
+  if (price !== null) {
+    const reK2 = /\b(downside|support|upside|resistance)\b[^$;.,\n]{0,40}\$\s?(\d[\d,]*\.?\d*)|\$\s?(\d[\d,]*\.?\d*)[^;.,\n]{0,40}?\b(downside|support|upside|resistance)\b/gi;
+    let m2;
+    while ((m2 = reK2.exec(text))) {
+      const word = String(m2[1] || m2[4]).toLowerCase();
+      const level = num(m2[2] !== undefined ? m2[2] : m2[3]);
+      if (level === null) continue;
+      if ((word === 'downside' || word === 'support') && level > price) { out.push({ id: 'K2', text: 'downside/support level $' + level + ' is above the price ' + price.toFixed(2) }); break; }
+      if ((word === 'upside' || word === 'resistance') && level < price) { out.push({ id: 'K2', text: 'upside/resistance level $' + level + ' is below the price ' + price.toFixed(2) }); break; }
+    }
+  }
+  // K3 — a stated % to a stated $ level vs the distance computed from the price (tolerance 0.5 pp)
+  if (price !== null) {
+    const re = /(\d+(?:\.\d+)?)\s?%[^.;\n]{0,60}?\$\s?(\d[\d,]*\.?\d*)|\$\s?(\d[\d,]*\.?\d*)[^.;\n]{0,60}?\((?:[+\-−~]\s?)?(\d+(?:\.\d+)?)\s?%\)/g;
+    let m;
+    while ((m = re.exec(text))) {
+      const pct = num(m[1] !== undefined ? m[1] : m[4]);
+      const level = num(m[2] !== undefined ? m[2] : m[3]);
+      if (pct === null || level === null) continue;
+      const actual = Math.abs(level - price) / price * 100;
+      if (Math.abs(actual - pct) > 0.5) { out.push({ id: 'K3', text: pct + '% to $' + level + ' is ' + actual.toFixed(2) + '% from the price ' + price.toFixed(2) }); break; }
+    }
+  }
+  // K4 — the entry-zone floor at or below the invalidation level (long setups)
+  if (item.entry_zone && item.invalidation && item.action !== 'trim' && item.action !== 'avoid') {
+    const floors = (String(item.entry_zone).match(/\d[\d,]*\.?\d*/g) || []).map(num).filter(v => v !== null);
+    const inv = num((String(item.invalidation).match(/\d[\d,]*\.?\d*/g) || [])[0]);
+    if (floors.length && inv !== null) {
+      const floor = Math.min.apply(null, floors);
+      if (floor <= inv) out.push({ id: 'K4', text: 'entry-zone floor ' + floor + ' is at or below the invalidation ' + inv });
+    }
+  }
+  // K5 — holder / exit language on a ticker that is not held
+  if (c.held === false && /\b(current holders|exit(?:ing)?(?: the| your)? position|exit\b|trim(?: the| your)? position|take profits?)\b/i.test(text)) {
+    out.push({ id: 'K5', text: 'holder / exit language on a ticker not in holdings' });
+  }
+  // K6 — a score stated in the narrative differs from the product score
+  if (typeof item.sentiment_score === 'number') {
+    const m = /\bscore\b[^0-9\n]{0,15}(\d{1,3})\b/i.exec(text);
+    if (m && Number(m[1]) !== item.sentiment_score) out.push({ id: 'K6', text: 'narrative score ' + m[1] + ' differs from the product score ' + item.sentiment_score });
+  }
+  return out;
+}
 
 function _srRenderGrouped(source, tbody) {
   if (!source.length) {
@@ -7074,7 +7153,7 @@ function _srRenderGrouped(source, tbody) {
       const sym  = _crEsc(r.ticker || '');
       const name = _crEsc((r.company_name || '').slice(0, 30));
       rows.push(`<tr data-ticker="${sym}">
-        <td class="sr-sym">${sym}${_srHeldHtml(held, r.ticker)}</td>
+        <td class="sr-sym">${sym}${_srHeldHtml(held, r.ticker)}${(() => { const _ks = _nlmConsistencyChecks(r, { price: typeof r._verifiedPrice === 'number' ? r._verifiedPrice : null, held: Object.prototype.hasOwnProperty.call(held, String(r.ticker || '').trim().toUpperCase()) }); return (Array.isArray(_ks) && _ks.length) ? `<span class="sr-warn" title="${_crEsc(_ks.map(k => k.text).join(' · '))}" style="margin-left:6px;font-size:9px;color:var(--yellow2)">⚠ ${_ks.length}</span>` : ''; })()}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
         <td class="r sr-score"><span>${_ptScoreText(score)}</span><div class="sr-score-track">${_ptScoreFillHtml(score)}</div></td>
         <td class="sr-rating ${rCls}">${rating ? rating.toUpperCase() : '—'}</td>
@@ -7274,7 +7353,7 @@ function openScanResultsOverlay() {
       const name = _crEsc((r.company_name || '').slice(0, 30));
       return `<tr data-ticker="${sym}">
         <td class="r sr-rank">${i + 1}</td>
-        <td class="sr-sym">${sym}${_srHeldHtml(held, r.ticker)}</td>
+        <td class="sr-sym">${sym}${_srHeldHtml(held, r.ticker)}${(() => { const _ks = _nlmConsistencyChecks(r, { price: typeof r._verifiedPrice === 'number' ? r._verifiedPrice : null, held: Object.prototype.hasOwnProperty.call(held, String(r.ticker || '').trim().toUpperCase()) }); return (Array.isArray(_ks) && _ks.length) ? `<span class="sr-warn" title="${_crEsc(_ks.map(k => k.text).join(' · '))}" style="margin-left:6px;font-size:9px;color:var(--yellow2)">⚠ ${_ks.length}</span>` : ''; })()}</td>
         <td class="sr-col-name" style="color:var(--text3);font-size:10px">${name}</td>
         <td class="r sr-score">${_vscCellHtml(score)}</td>
         <td class="sr-rating ${rCls}">${rating ? rating.toUpperCase() : '—'}</td>
@@ -8386,6 +8465,14 @@ function renderMainPanel(item) {
     ? `<div class="at-dial-row"><div class="${_dial.cls}" style="${_dial.style}"><span class="at-dial-num" style="color:${_dial.numColor}">${_ptScoreText(score)}</span></div><div><div class="at-dial-lbl">Score${_fromScan ? '<span style="margin-left:6px;text-transform:none;font-weight:400">from scan</span>' : ''}</div><div class="at-dial-val ${_pulseBand}">${item.action ? _esc(item.action).replace(/_/g,' ') : ''}</div></div></div>`
     : '';
 
+  // R-6 (Entry 14, slice 1; D9-3): one compact Consistency line under the Actionable Take — display only; it never alters
+  // the AI text, the score, the action, the grouping or any stored field, and a failed analysis gets no line.
+  const _nlmLine = (() => {
+    if (item._aiUnavailable === true) return '';
+    const _h = _srHeldMap();
+    const _ks = _nlmConsistencyChecks(item, { price: hasData ? _techPanelPrice(item) : null, mas: _panelSnap, held: (_h && typeof _h === 'object') ? Object.prototype.hasOwnProperty.call(_h, String(item.ticker || '').trim().toUpperCase()) : null });
+    return (Array.isArray(_ks) && _ks.length) ? `\n        <div class="mp-act-row mp-nlm"><span class="mp-act-lbl">Consistency</span><span class="mp-act-val" style="color:var(--yellow2)">${_esc(_ks.map(k => k.text).join(' · '))}</span></div>` : '';
+  })();
   const _crn = item._crNudge;
   const _crNudgeHtml = (_crn && typeof _crn.nudge === 'number' && _crn.nudge > 0) ? (() => {
     const _parts = [];
@@ -8573,7 +8660,7 @@ function renderMainPanel(item) {
           <div class="mp-action-text">${actionable.replace(/Rating:.*$/s,'').replace(/\*\*/g,'').replace(/^[\]\[:\-"'\s]+/,'').trim()}</div>
         ` : !hasData && item._aiUnavailable
             ? '<div class="pc-empty" style="color:var(--red2);opacity:.8">Data unavailable — run scan to refresh or verify ticker validity</div>'
-            : '<div class="pc-empty">No analysis available — run scan for actionable take</div>'}
+            : '<div class="pc-empty">No analysis available — run scan for actionable take</div>'}${_nlmLine}
         <div class="mp-action-time" style="margin-top:8px">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
       </div>
 
