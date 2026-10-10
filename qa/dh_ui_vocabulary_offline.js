@@ -15,6 +15,11 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const crypto = require('crypto');
+// pin-consolidation (work/pin-consolidation): the per-function and constant-declaration pins are carried by the generated
+// pin map (qa/fixtures/index-pins.json; refresh: node qa/tools/index-pins.js --update).
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
+const idxMismatch = (text, names) => IDX_CORE.entryMismatches(IDX_CORE.normalizeText(text), IDX_MAP, names);
 
 const INDEX_PATH = path.resolve(__dirname, '..', 'index.html');
 const SRC = fs.readFileSync(INDEX_PATH, 'utf8').replace(/\r\n/g, '\n');
@@ -241,28 +246,30 @@ function displayFailures(d) {
 }
 
 // ---------------------------------------------------------------------- UV-6
-const FN_HASHES = {
-  _pfEodIsStale: '251a554adacbe3049eda5e2ef0d5bf3003f9b13684bd95b46cc4f35a70f1d941',
-  _pfFxState: 'e59989a2b68b42bbca26f52e282867edf808d973431368ebc5229feeedbfe0fc',
-  _pfComputeReconciliation: '175a6ae8ddebc611a4c4cf93e5b08d912d09ebbfbbfcb89aacf770b616c8dbed',
-  _pfComputeNeedsAttention: 'f42b25e470602b4b3d0456e7b49ad0fb1d4f44c24a76931495e65319de274545',
-  _pfComputePortfolioReporting: '2b62766507c2d90455e484882ae6cef40da387b724e1ca42081f9590d60e041b'
-};
-const CONST_HASH = '8c802d21fa4e580a6d61623751b8f70e7abfd8f008efaece45e24d656e26561c';
-function constHash(content) {
-  const lines = content.split('\n').filter((l) => /^\s*(?:const|var|let)\s+(PF_\w+|STALE_RESULT_THRESHOLD_MS)\b/.test(l));
-  return sha(lines.join('\n'));
+const FN_NAMES = ['_pfEodIsStale', '_pfFxState', '_pfComputeReconciliation', '_pfComputeNeedsAttention', '_pfComputePortfolioReporting'];
+const fnOk = (content, name) => idxMismatch(content, ['functions.' + name]).length === 0;
+// The old CONST_HASH hashed the sequence of every `const|var|let PF_* / STALE_RESULT_THRESHOLD_MS` declaration line. The map
+// holds one region (dh_const_*) per such line; the same guarantee is: the live declaration lines are exactly the regions'
+// lines, in file order (a new, removed or reordered declaration fails), and every region digest is unchanged.
+const CONST_LINE_RE = /^\s*(?:const|var|let)\s+(PF_\w+|STALE_RESULT_THRESHOLD_MS)\b/;
+function constOk(content) {
+  const lines = content.split('\n').filter((l) => CONST_LINE_RE.test(l));
+  const names = Object.keys(IDX_MAP.regions).filter((k) => k.indexOf('dh_const_') === 0);
+  const expected = names.map((k) => IDX_MAP.regions[k].end).sort((a, b) => content.indexOf('\n' + a) - content.indexOf('\n' + b));
+  return names.length > 0 && lines.length === expected.length && lines.every((l, i) => l === expected[i]) &&
+    idxMismatch(content, names.map((k) => 'regions.' + k)).length === 0;
 }
-for (const name of Object.keys(FN_HASHES)) {
+for (const name of FN_NAMES) {
   const f = extractFunctionSource(SRC, name);
-  check('UV-6: ' + name + ' source byte-equal to baseline (CR-normalized)', f !== null && sha(f) === FN_HASHES[name]);
+  check('UV-6: ' + name + ' source byte-equal to baseline (CR-normalized)', f !== null && fnOk(SRC, name));
 }
-check('UV-6: PF_* constants and STALE_RESULT_THRESHOLD_MS declarations equal baseline', constHash(SRC) === CONST_HASH);
-check('UV-6 control: a changed threshold is detected', constHash(swap(SRC, 'PF_FX_VALID_MAX_AGE_DAYS = 6;', 'PF_FX_VALID_MAX_AGE_DAYS = 7;')) !== CONST_HASH);
+check('UV-6: PF_* constants and STALE_RESULT_THRESHOLD_MS declarations equal baseline', constOk(SRC));
+check('UV-6 control: a changed threshold is detected', !constOk(swap(SRC, 'PF_FX_VALID_MAX_AGE_DAYS = 6;', 'PF_FX_VALID_MAX_AGE_DAYS = 7;')));
+check('UV-6 control: a new PF_* declaration is detected', !constOk(swap(SRC, 'var PF_CASH_KEY', 'var PF_NEW_X = 1;\nvar PF_CASH_KEY')));
 {
   const f = extractFunctionSource(SRC, '_pfFxState');
   const mutated = swap(SRC, f, f.replace('fresh', 'fresh2'));
-  check('UV-6 control: a changed owner function is detected', sha(extractFunctionSource(mutated, '_pfFxState')) !== FN_HASHES._pfFxState);
+  check('UV-6 control: a changed owner function is detected', !fnOk(mutated, '_pfFxState'));
 }
 
 // ---------------------------------------------------------------------- UV-7
@@ -620,16 +627,12 @@ check('AG-5: chip/qualifier carry the exact after-text once each, no " (aged)" l
 // AG-6: purity / no drift — _pfFxState, _pfFxRateValid and _dhLabel are
 // byte-equal to baseline; the two new helpers reference no storage/DOM/
 // scoring surface; the UV-6 hashes and CONST_HASH are unchanged.
-const AG6_HASHES = {
-  _pfFxState: 'e59989a2b68b42bbca26f52e282867edf808d973431368ebc5229feeedbfe0fc',
-  _pfFxRateValid: 'b444b89c17e2f6e87810f117d02903f8e03878a9b3c38fb6780e5ccda0f52678',
-  _dhLabel: '900eb54bd0ac78d8a55067b02acc17d874ff1b15c3e01005f7c95dc389fd5683'
-};
+const AG6_FNS = ['_pfFxState', '_pfFxRateValid', '_dhLabel'];
 function ag6Failures(content) {
   const out = [];
-  for (const name of Object.keys(AG6_HASHES)) {
+  for (const name of AG6_FNS) {
     const f = extractFunctionSource(content, name);
-    if (!f || sha(f) !== AG6_HASHES[name]) out.push(name + ' changed from baseline');
+    if (!f || !fnOk(content, name)) out.push(name + ' changed from baseline');
   }
   for (const name of ['_dhFxAgedLabel', '_pfFxAgeWholeDays']) {
     const f = extractFunctionSource(content, name);
@@ -638,10 +641,10 @@ function ag6Failures(content) {
       out.push(name + ' references storage/DOM/scoring');
     }
   }
-  if (constHash(content) !== CONST_HASH) out.push('CONST_HASH changed');
-  for (const name of Object.keys(FN_HASHES)) {
+  if (!constOk(content)) out.push('CONST_HASH changed');
+  for (const name of FN_NAMES) {
     const f = extractFunctionSource(content, name);
-    if (!f || sha(f) !== FN_HASHES[name]) out.push(name + ' (UV-6) changed');
+    if (!f || !fnOk(content, name)) out.push(name + ' (UV-6) changed');
   }
   return out;
 }

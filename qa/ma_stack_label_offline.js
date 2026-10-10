@@ -38,12 +38,12 @@ const quietConsole = { log() {}, warn() {}, error() {} };
 // Pre-task renderMainPanel: LF form = the TS1 TX-3 pin, CRLF form = the caliper pin at e7bbbbb.
 const PRE_RM_LF = 'ed2c8bdcac6070d442241c4138b5f3ed155794b378d34349ac20cf0dc25aae2a';
 const PRE_RM_CRLF = 'aea925b1775bef6c1475ff00979dda4c12cdead55e49b45d8045175052654254';
-const PIN_CLASSIFY_LF = 'c143eb08d982cff036dd5678def08dc38e7dede6e2a0f4ae11a79d277e3ab3ad';
-// The `const _tsAssessMap = {...};` literal (regex-extracted, whole statement).
-const PIN_TSASSESSMAP_LF = '79b78d1ed91f3d6f8c2b867378a1a228f83399c8931ddd150eea31143bb3a31e';
-// index.html with renderMainPanel masked out: nothing outside the function changes in this task
-// (hence no new top-level function anywhere).
-const PIN_MASKED_MINUS_RM_LF = '2cb45b3fbdd422bc1cc2331fefb68db592da4255d90c1ff2eb971e2f455085f0'; // re-pinned at R-3 (Entry 36)
+// pin-consolidation (work/pin-consolidation): classifyTechnicalSetup, the `const _tsAssessMap = {...};` literal (region
+// tsassessmap) and "index.html outside renderMainPanel" are guarded by the generated pin map (qa/fixtures/index-pins.json;
+// refresh: node qa/tools/index-pins.js --update).
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
+const idxMismatch = (text, names) => IDX_CORE.entryMismatches(IDX_CORE.normalizeText(text), IDX_MAP, names);
 
 // ── R-2 table: the one pre-task line and the four task lines (whole lines, exact bytes) ──────
 const R2_OLD = "  const _tsAssess = _panelSetup !== 'unknown' ? (_tsAssessMap[_panelSetup] || '') : '';";
@@ -296,7 +296,10 @@ const ROK = () => mkSnap(428.11, 437.80, 429.35, { price: 445 });               
 const EQUAL = () => mkSnap(180, 180, 160);                                     // 20 = 50 > 150
 
 // ── Evaluate every group on one source text ─────────────────────────────────────────────────
-function evaluate(src) {
+// R4 (frozen revert chain): MS-7 reverts and re-applies its historical tables on the frozen renderMainPanel text of the task base
+// (qa/fixtures/index-pins-frozen.json), not on the live file; the tables are not extended by later tasks.
+const FROZEN_RM = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins-frozen.json'), 'utf8')).chains.ma_stack_label.renderMainPanel.source;
+function evaluate(src, frozenRm) {
   const R = {};
   const chk = (id, name, ok) => { (R[id] = R[id] || []).push({ name, ok: !!ok }); };
   const guard = (id, fn) => { try { fn(); } catch (e) { chk(id, 'group threw: ' + String(e && e.message || e).slice(0, 160), false); } };
@@ -372,7 +375,7 @@ function evaluate(src) {
         assessOf(html) === want && assessCount(html) === (want ? 1 : 0));
     }
     chk('MS-5', 'the _tsAssessMap literal is byte-identical to the baseline (no other key\'s text changed)',
-      !!mapStmt && sha256(mapStmt[0]) === PIN_TSASSESSMAP_LF);
+      !!mapStmt && idxMismatch(src, ['regions.tsassessmap']).length === 0);
     chk('MS-5', 'unknown (no snapshot for the panel price) -> no assessment div', assessCount(renderOf(mkItem(), null)) === 0);
     chk('MS-5', 'unknown (no verified data) -> no assessment div',
       assessCount(renderOf(mkItem({ _verifiedPrice: undefined, _verifiedChangePct: undefined }), STACKED())) === 0);
@@ -400,11 +403,13 @@ function evaluate(src) {
   // MS-7 diff confined to the _tsAssess region; the R-2 revert table reproduces the pre-task source
   guard('MS-7', () => {
     chk('MS-7', 'the four R-2 lines are present exactly once, as one block', countOf(rm, R2_BLOCK) === 1);
-    const reverted = revertR2(revertR3(revertS1(revertS2(revertS3(rm)))));
+    const rmF = frozenRm;   // R4: the chain runs on the frozen source (a planted negative may mutate it)
+    chk('MS-7', 'the live renderMainPanel equals its pin-map entry (the former LF / CRLF chain pins, now carried by the map)', rm !== '' && idxMismatch(src, ['functions.renderMainPanel']).length === 0);
+    const reverted = revertR2(revertR3(revertS1(revertS2(revertS3(rmF)))));
     chk('MS-7', 'reverting only the S3 block, the S2 block, the S1 lines, the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (LF pin)', sha256(reverted) === PRE_RM_LF);
     chk('MS-7', 'reverting only the S3 block, the S2 block, the S1 lines, the R-3 line and the R-2 lines restores the pre-R-2 renderMainPanel (CRLF pin)', sha256(crlf(reverted)) === PRE_RM_CRLF);
-    chk('MS-7', 'applying the R-2, then the R-3, then the S1, then the S2, then the S3 table to the reverted source reproduces the task source byte-for-byte', applyS3(applyS2(applyS1(applyR3(applyR2(reverted))))) === rm);
-    chk('MS-7', 'line count = pre-task + 3 (R-2, at most four lines in the region) - 1 (S1: RM-6 +1, RM-7 -2) + 19 (S2: the row block) + 8 (S3: the _nlmLine block)', rm.split('\n').length === reverted.split('\n').length + 29);
+    chk('MS-7', 'applying the R-2, then the R-3, then the S1, then the S2, then the S3 table to the reverted source reproduces the task source byte-for-byte', applyS3(applyS2(applyS1(applyR3(applyR2(reverted))))) === rmF);
+    chk('MS-7', 'line count = pre-task + 3 (R-2, at most four lines in the region) - 1 (S1: RM-6 +1, RM-7 -2) + 19 (S2: the row block) + 8 (S3: the _nlmLine block)', rmF.split('\n').length === reverted.split('\n').length + 29);
     chk('MS-7', 'the _tsAssessHtml line and the template interpolation are untouched',
       countOf(rm, "const _tsAssessHtml = _tsAssess ? `<div class=\"ts-assess\">${_tsAssess}</div>` : '';") === 1 && countOf(rm, '${_tsAssessHtml}`}${_ts1RowHtml}') === 1);
   });
@@ -412,10 +417,11 @@ function evaluate(src) {
   // MS-8 no new top-level function; classifyTechnicalSetup and _tsAssessMap byte-identical
   guard('MS-8', () => {
     const masked = maskFn(src, 'renderMainPanel');
-    chk('MS-8', 'index.html outside renderMainPanel is byte-identical to the baseline (no new top-level function, no other edit)',
-      !!masked && sha256(masked) === PIN_MASKED_MINUS_RM_LF);
-    chk('MS-8', 'classifyTechnicalSetup is byte-identical to the baseline', !!classifySrc && sha256(classifySrc) === PIN_CLASSIFY_LF);
-    chk('MS-8', 'the _tsAssessMap literal is byte-identical to the baseline', !!mapStmt && sha256(mapStmt[0]) === PIN_TSASSESSMAP_LF);
+    // every pin-map entry except renderMainPanel itself: all other functions, all named regions and the remainder
+    chk('MS-8', 'index.html outside renderMainPanel is byte-identical to the baseline (no other edit; a new top-level function is a pin-map change)',
+      !!masked && idxMismatch(src, IDX_CORE.entryNamesExcept(IDX_MAP, ['functions.renderMainPanel'])).length === 0);
+    chk('MS-8', 'classifyTechnicalSetup is byte-identical to the baseline', !!classifySrc && idxMismatch(src, ['functions.classifyTechnicalSetup']).length === 0);
+    chk('MS-8', 'the _tsAssessMap literal is byte-identical to the baseline', !!mapStmt && idxMismatch(src, ['regions.tsassessmap']).length === 0);
     chk('MS-8', 'no top-level function is named in the R-2 lines (locals only)', !/\bfunction\b/.test(R2_BLOCK) && R2_NEW.every(l => l.startsWith('  const _')));
   });
 
@@ -443,6 +449,10 @@ const NEGATIVES = [
     f: s => mut(mut(s, R2_NEW[1], R2_NEW[1].replace(/_panelSnap\.sma/g, 'item.technical_sma')), R2_NEW[2], R2_NEW[2].replace(/_panelSnap\.sma/g, 'item.technical_sma')) },
   { id: 'MS-7', label: 'a second renderMainPanel region changed',
     f: s => mut(s, "const hasCrit = (item.alerts||[]).some(a=>a.type==='critical');", "const hasCrit = (item.alerts||[]).some(a=>a.type==='warn');") },
+  { id: 'MS-7', label: 'frozen chain input: a second renderMainPanel region changed', frozen: true,
+    f: s => mut(s, "const hasCrit = (item.alerts||[]).some(a=>a.type==='critical');", "const hasCrit = (item.alerts||[]).some(a=>a.type==='warn');") },
+  { id: 'MS-7', label: 'frozen chain input: an S3 line altered', frozen: true,
+    f: s => mut(s, '  // R-6 (Entry 14, slice 1; D9-3): one compact Consistency line under the Actionable Take', '  // R-6 (Entry 14, slice 1; D9-3): one compact Consistency line under the Actionable Take.') },
   { id: 'MS-8', label: 'a new top-level function added',
     f: s => { const c = extractFn(s, 'classifyTechnicalSetup'); return mut(s, c, c + '\n\nfunction _maStackHelper(s) { return s; }'); } },
   { id: 'MS-8', label: 'classifyTechnicalSetup threshold changed',
@@ -455,7 +465,7 @@ let asserts = 0;
 const check = (name, cond) => { asserts += 1; if (!cond) { failures += 1; console.log('  FAIL  ' + name); } };
 
 const index = norm(fs.readFileSync(INDEX_PATH, 'utf8'));
-const real = evaluate(index);
+const real = evaluate(index, FROZEN_RM);
 const GROUPS = ['MS-1', 'MS-2', 'MS-3', 'MS-4', 'MS-5', 'MS-6', 'MS-7', 'MS-8'];
 for (const g of GROUPS) for (const c of (real[g] || [])) check(g + ' ' + c.name, c.ok);
 for (const g of GROUPS) check(g + ' group ran', Array.isArray(real[g]) && real[g].length > 0);
@@ -464,10 +474,11 @@ for (const g of GROUPS) check(g + ' group ran', Array.isArray(real[g]) && real[g
 const realClean = failures === 0;
 for (const n of NEGATIVES) {
   let mutated = null;
-  try { mutated = n.f(index); } catch (e) { mutated = null; }
-  check('negative anchor resolves: ' + n.id + ' / ' + n.label, mutated !== null && mutated !== index);
+  let frozenMut = FROZEN_RM;
+  try { if (n.frozen) { frozenMut = n.f(FROZEN_RM); mutated = index; } else { mutated = n.f(index); } } catch (e) { mutated = null; }
+  check('negative anchor resolves: ' + n.id + ' / ' + n.label, mutated !== null && (n.frozen ? frozenMut !== FROZEN_RM : mutated !== index));
   if (mutated === null || !realClean) continue;
-  const res = evaluate(mutated);
+  const res = evaluate(mutated, frozenMut);
   const group = res[n.id] || [];
   check('negative: ' + n.id + ' rejects "' + n.label + '"', group.some(c => !c.ok));
 }

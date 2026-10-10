@@ -196,7 +196,18 @@ const ROW_RE = /<span class="rr-lbl">All-time high<\/span><span class="rr-val ([
 const rowOf = html => { const m = ROW_RE.exec(html); return m ? { cls: m[1], text: m[2] } : null; };
 
 // ── Evaluate every group on one source text ─────────────────────────────────────────────────────
-async function evaluate(src) {
+// R4 (frozen revert chain): AC-13 reverts and re-applies the S2 table on the frozen renderMainPanel / buildTechSnapshotBlock texts
+// of the task base (qa/fixtures/index-pins-frozen.json), not on the live file; the S2 table is not extended by later tasks.
+// (The AC-1 gate-off byte-identity comparisons keep their pre-slice variants, reverted from the live functions, unchanged.)
+const FROZEN_S2 = (() => {
+  const c = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins-frozen.json'), 'utf8')).chains.ath_client;
+  const o = {};
+  for (const n of Object.keys(c)) o[n] = c[n].source;
+  return o;
+})();
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
+async function evaluate(src, frozenS2) {
   const R = {};
   const chk = (id, name, ok) => { (R[id] = R[id] || []).push({ name, ok: !!ok }); };
   const guard = async (id, fn) => { try { await fn(); } catch (e) { chk(id, 'group threw: ' + String(e && e.message || e).slice(0, 220), false); } };
@@ -390,7 +401,12 @@ async function evaluate(src) {
 
   // AC-13 structure and AR-7f needles
   await guard('AC-13', () => {
-    chk('AC-13', 'S2 table round-trips on renderMainPanel and buildTechSnapshotBlock', rmPre !== null && btsPre !== null && applyS2(rmPre, 'renderMainPanel') === rm && applyS2(btsPre, 'buildTechSnapshotBlock') === bts);
+    let rmPreF = null, btsPreF = null;
+    try { rmPreF = revertS2(frozenS2.renderMainPanel, 'renderMainPanel'); } catch (e) { rmPreF = null; }
+    try { btsPreF = revertS2(frozenS2.buildTechSnapshotBlock, 'buildTechSnapshotBlock'); } catch (e) { btsPreF = null; }
+    chk('AC-13', 'the live renderMainPanel and buildTechSnapshotBlock equal their pin-map entries (the live side of the chain)',
+      rm !== '' && bts !== '' && IDX_CORE.entryMismatches(IDX_CORE.normalizeText(src), IDX_MAP, ['functions.renderMainPanel', 'functions.buildTechSnapshotBlock']).length === 0);
+    chk('AC-13', 'S2 table round-trips on renderMainPanel and buildTechSnapshotBlock', rmPreF !== null && btsPreF !== null && applyS2(rmPreF, 'renderMainPanel') === frozenS2.renderMainPanel && applyS2(btsPreF, 'buildTechSnapshotBlock') === frozenS2.buildTechSnapshotBlock);
     chk('AC-13', 'forbidden ATH needles absent from index.html: ' + AR7F_FORBIDDEN.join(', '), AR7F_FORBIDDEN.every(n => src.indexOf(n) === -1));
     chk('AC-13', 'allowed needles present: ' + AR7F_ALLOWED.join(', '), AR7F_ALLOWED.every(n => src.indexOf(n) !== -1));
     chk('AC-13', 'the rr-lbl "Score" row is still exactly once in renderMainPanel', countOf(rm, '<span class="rr-lbl">Score</span>') === 1);
@@ -415,6 +431,9 @@ const NEGATIVES = [
   { id: 'AC-6', label: '_athCache read by classifyTechnicalSetup', f: s => mut(s, 'function classifyTechnicalSetup(snap) {', "function classifyTechnicalSetup(snap) {\n  const _z = (typeof _athCache === 'object') ? _athCache : null;") },
   { id: 'AC-7', label: 'cache persisted to localStorage', f: s => mut(s, '  _athCache[t] = _athAccept(body);', "  _athCache[t] = _athAccept(body); localStorage.setItem('pt_ath_' + t, JSON.stringify(_athCache[t]));") },
   { id: 'AC-8', label: 'renderMainPanel calls the ATH client', f: s => mut(s, '    const _a = _athCache[item.ticker] || null;', '    const _a = _athCache[item.ticker] || _athReadForView(item.ticker) || null;') },
+  { id: 'AC-13', label: 'frozen chain input: an S2 line of renderMainPanel altered', frozenFn: 'renderMainPanel', f: s => mut(s, S2.renderMainPanel[1].newS, S2.renderMainPanel[1].newS.slice(0, -1) + '!') },
+  { id: 'AC-13', label: 'frozen chain input: an S2 line of buildTechSnapshotBlock altered', frozenFn: 'buildTechSnapshotBlock', f: s => mut(s, S2.buildTechSnapshotBlock[1].newS, S2.buildTechSnapshotBlock[1].newS.slice(0, -1) + '!') },
+  { id: 'AC-13', label: 'a live S2 function changed (pin-map entry differs)', f: s => mut(s, "const hasCrit = (item.alerts||[]).some(a=>a.type==='critical');", "const hasCrit = (item.alerts||[]).some(a=>a.type==='warn');") },
   { id: 'AC-9', label: 'row suppressed for a failed item', f: s => mut(s, "    if (window.PT_ENABLE_ATH_CLIENT !== true) return '';", "    if (window.PT_ENABLE_ATH_CLIENT !== true || item._aiUnavailable === true) return '';") },
   { id: 'AC-10', label: 'truthy gate check', f: s => mut(s, "  if (window.PT_ENABLE_ATH_CLIENT !== true) return null;\n  const t = String(sym || '').trim().toUpperCase();\n  if (!t) return null;\n  let body = null;", "  if (!window.PT_ENABLE_ATH_CLIENT) return null;\n  const t = String(sym || '').trim().toUpperCase();\n  if (!t) return null;\n  let body = null;") },
   { id: 'AC-11', label: 'ILA value left unconverted', f: s => mut(s, '? b.athValue / 100 : b.athValue; // agorot -> ILS (P-2A)', '? b.athValue : b.athValue; // agorot -> ILS (P-2A)') },
@@ -428,15 +447,19 @@ const NEGATIVES = [
   let asserts = 0;
   const check = (name, cond) => { asserts += 1; if (!cond) { failures += 1; console.log('  FAIL  ' + name); } };
   const index = norm(fs.readFileSync(INDEX_PATH, 'utf8'));
-  const real = await evaluate(index);
+  const real = await evaluate(index, FROZEN_S2);
   const order = ['AC-1', 'AC-2', 'AC-3', 'AC-4', 'AC-5', 'AC-6', 'AC-7', 'AC-8', 'AC-9', 'AC-10', 'AC-11', 'AC-12', 'AC-13'];
   for (const id of order) for (const c of (real[id] || [])) check(id + ' ' + c.name, c.ok);
   for (const g of order) check(g + ' group ran', Array.isArray(real[g]) && real[g].length > 0);
   const realClean = failures === 0;
   for (const n of NEGATIVES) {
     let mutated = null;
-    try { mutated = n.f(index); } catch (e) { check('negative ' + n.id + ' (' + n.label + '): anchor unique — ' + e.message, false); continue; }
-    const r = await evaluate(mutated);
+    let frozenMut = FROZEN_S2;
+    try {
+      if (n.frozenFn) { mutated = index; frozenMut = Object.assign({}, FROZEN_S2, { [n.frozenFn]: n.f(FROZEN_S2[n.frozenFn]) }); }
+      else mutated = n.f(index);
+    } catch (e) { check('negative ' + n.id + ' (' + n.label + '): anchor unique — ' + e.message, false); continue; }
+    const r = await evaluate(mutated, frozenMut);
     const bit = Array.isArray(r[n.id]) && r[n.id].some(c => !c.ok);
     check('negative ' + n.id + ' (' + n.label + ') is caught by ' + n.id + (realClean ? '' : ' [unproven: real run not clean]'), bit && realClean);
   }

@@ -18,7 +18,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 
 const INDEX_PATH = path.resolve(__dirname, '..', 'index.html');
 
@@ -78,7 +77,6 @@ function extractVarObjectSource(content, name) {
   }
   return null;
 }
-function sha(s) { return crypto.createHash('sha256').update(s, 'utf8').digest('hex'); }
 function stripComments(s) { return s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, ''); }
 
 const rawContent = fs.readFileSync(INDEX_PATH, 'utf8');
@@ -114,17 +112,22 @@ if (missingExtract.length > 0) {
 // DH-M4a re-pin: _eodBuildPacket (E4), DH_DISPLAY (E1)
 // DH-M4b re-pin: _eodComputeReadiness (E5), DH_DISPLAY (E1)
 // DH-M4c re-pin: _eodBuildPacket (E1)
-const BASELINE_SHA256 = {
-  _eodComputeReadiness: '75dd711f2911d0a5a01bf1c08b7f1c341c828ee7ab9ac258fa25d72a876772ba',
-  _eodBuildPacket: '7624e7139a698516fad5a76f3b258179480be92044a195d2a1e3d0c34bd272a0',
-  _eodReadinessLines: 'd1b7c64763db7a28f0719e0c0047e29f8d37e452675ac7dca0c85388204771e9',
-  _eodPacketToMarkdown: 'bdaba2e2a460b07e6873a25ff64e3a8351dfbd1663be61047e268ad482879967',
-  _eodPacketToBriefing: '120d02d68633dc9343555bcddb51cd8043b851e6affc307888c7531d80806869',
-  _dhLabel: '1d95989fe9eea086a34a44bd9d2fe1fef3411b721d941e87236f1023c658ee41',
-  DH_DISPLAY: 'ba21a81181496edc20500d1a9cb02bc1a8fa617f07a4798a4332d297c1dc7dc0'
+// pin-consolidation (work/pin-consolidation): the digests now live in the generated pin map
+// (qa/fixtures/index-pins.json; refresh: node qa/tools/index-pins.js --update). DH_DISPLAY is the `var DH_DISPLAY = {...};` region.
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
+const BASELINE_ENTRY = {
+  _eodComputeReadiness: 'functions._eodComputeReadiness',
+  _eodBuildPacket: 'functions._eodBuildPacket',
+  _eodReadinessLines: 'functions._eodReadinessLines',
+  _eodPacketToMarkdown: 'functions._eodPacketToMarkdown',
+  _eodPacketToBriefing: 'functions._eodPacketToBriefing',
+  _dhLabel: 'functions._dhLabel',
+  DH_DISPLAY: 'regions.dh_display'
 };
-Object.keys(BASELINE_SHA256).forEach(function (n) {
-  check('PX-9: ' + n + ' byte-equal (sha256) to baseline 0522247', sha(src[n]) === BASELINE_SHA256[n]);
+Object.keys(BASELINE_ENTRY).forEach(function (n) {
+  check('PX-9: ' + n + ' byte-equal (pin map) to baseline 0522247',
+    !!src[n] && IDX_CORE.entryMismatches(IDX_CORE.normalizeText(content), IDX_MAP, [BASELINE_ENTRY[n]]).length === 0);
 });
 check('PX-9: no new pt_* / localStorage reference in _eodPreExportWarning',
   !/pt_[a-zA-Z_]+|localStorage/.test(src._eodPreExportWarning));

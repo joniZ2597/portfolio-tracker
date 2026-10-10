@@ -32,7 +32,10 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
+// pin-consolidation (work/pin-consolidation): live digests come from the generated pin map (qa/fixtures/index-pins.json;
+// refresh: node qa/tools/index-pins.js --update).
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
 
 const INDEX_PATH = path.resolve(__dirname, '..', 'index.html');
 
@@ -694,9 +697,10 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
   // post-DH-M1 form — still a real drift pin, not a same-call tautology.
   const EOD_PACKET_TO_MARKDOWN_PRETASK_SHA256 = 'b7ea051d1b5c4d682424b5fdde6904cb012bf6577c48e9561b7a457682fc9c03';
   const EOD_PACKET_TO_MARKDOWN_DH_M1_SHA256 = '366f51e36c1fb5c174187ccfd76534e1e7ef4a370a0d92f71c4e16813ccd108b';
-  const mdSrcHash = crypto.createHash('sha256').update(src._eodPacketToMarkdown.replace(/\r\n/g, '\n'), 'utf8').digest('hex');
-  check('NB-4: _eodPacketToMarkdown extracted source hash matches its pinned DH-M1 baseline (deliberately re-pinned)',
-    mdSrcHash === EOD_PACKET_TO_MARKDOWN_DH_M1_SHA256);
+  // pin-consolidation: the live comparison moved to the generated pin map; the DH-M1 value above is kept only as the operand of
+  // the historical "genuinely a re-pin" assertion below.
+  check('NB-4: _eodPacketToMarkdown extracted source matches its pin-map entry (deliberately re-pinned)',
+    !!src._eodPacketToMarkdown && IDX_CORE.entryMismatches(IDX_CORE.normalizeText(content), IDX_MAP, ['functions._eodPacketToMarkdown']).length === 0);
   check('NB-4: the DH-M1 pin is genuinely a re-pin — it differs from the NC-M1 pre-task hash',
     EOD_PACKET_TO_MARKDOWN_DH_M1_SHA256 !== EOD_PACKET_TO_MARKDOWN_PRETASK_SHA256);
   check('NB-4: _eodPacketToMarkdown extracted source carries no reference to the briefing projector',
@@ -1117,9 +1121,8 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
     !/Date\.now|new Date\s*\(/.test(stripped('_eodComputeReadiness') + stripped('_eodReadinessLines') + stripped('_dhLabel')));
 
   // ── RD-AC9 / R-D3: _pfEodIsStale byte-unchanged; relabel only ───────────────
-  const IS_STALE_BASE_SHA256 = '251a554adacbe3049eda5e2ef0d5bf3003f9b13684bd95b46cc4f35a70f1d941';
-  check('RD-AC9/R-D3: _pfEodIsStale extracted source is byte-identical to its pinned base',
-    crypto.createHash('sha256').update(src._pfEodIsStale.replace(/\r\n/g, '\n'), 'utf8').digest('hex') === IS_STALE_BASE_SHA256);
+  check('RD-AC9/R-D3: _pfEodIsStale extracted source is byte-identical to its pin-map entry',
+    !!src._pfEodIsStale && IDX_CORE.entryMismatches(IDX_CORE.normalizeText(content), IDX_MAP, ['functions._pfEodIsStale']).length === 0);
   check('RD-AC9: _pfEodIsStale call sites unchanged (4 occurrences of the call/definition text, as at base)',
     (content.match(/_pfEodIsStale\(/g) || []).length === 4);
   const dhTable = new Function(src.DH_DISPLAY + '\nreturn DH_DISPLAY;')();

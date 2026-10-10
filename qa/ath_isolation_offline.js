@@ -208,25 +208,36 @@ test('AR-7h the 1Y High cannot reach the comparison: compareToVerifiedAth takes 
 // (orchestrate, analyzeChunk, enforceScoreConsistency, _techCache), the Deep Dive / scan / Actionable
 // Take flows, the 1Y High code and every pt_* storage key. The two preflight modules are the ones
 // brief section 2 says are not edited; market-data.js is the existing price / history path.
+// pin-consolidation (work/pin-consolidation): the index.html whole-file digest is the generated pin map's fileSha256
+// (qa/fixtures/index-pins.json; refresh: node qa/tools/index-pins.js --update); it equals the former pin 953aaf6a…. The
+// three server modules below are not index.html and keep their own pins.
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
 const BASELINE_PINS = {
-  'index.html': '953aaf6a661b115f6d0d4ed81b5d195ff97428dd231437bc44aea10d6701c77f',
   'netlify/functions/lib/fund-facts-preflight.js': '2a9a4d3682d68904745b9ec14cbc6fa19fb18e81ad3cd29fa7848eb5455101c2',
   'netlify/functions/lib/fund-facts-read-preflight.js': '1ce8c4c5bead5ddd0f0b52e24f012266f1ff06e44daf77721e9a34131c431990',
   'netlify/functions/market-data.js': 'f9b70977eade3a9ec967b87111a54a5a85d634f0824e448ab2ed746989c61125'
 };
 
 function sha256Lf(text) { return crypto.createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex'); }
-function pinHolds(rel, text) { return sha256Lf(text) === BASELINE_PINS[rel]; }
+const PINNED_FILES = ['index.html'].concat(Object.keys(BASELINE_PINS));
+function pinHolds(rel, text) {
+  if (rel === 'index.html') {
+    // whole-file digest of the LF-normalised text; a text the map cannot be computed for (an anchor lost) does not hold
+    try { return IDX_CORE.buildMap(IDX_CORE.normalizeText(text), IDX_MAP.regions).fileSha256 === IDX_MAP.fileSha256; } catch (e) { return false; }
+  }
+  return sha256Lf(text) === BASELINE_PINS[rel];
+}
 
 test('AR-7i index.html, the scoring/storage code and the untouched server modules are byte-equal to the baseline pins', function () {
-  Object.keys(BASELINE_PINS).forEach(function (rel) {
+  PINNED_FILES.forEach(function (rel) {
     ok(pinHolds(rel, read(rel)), rel + ' differs from its baseline pin (re-pin deliberately if another task changed it)');
   });
 });
 
 // ── planted negatives: the scanner must flag a forbidden token added to the real source ──
 test('PN any byte change to index.html, a pinned module or the preflights breaks its pin (AR-7)', function () {
-  Object.keys(BASELINE_PINS).forEach(function (rel) {
+  PINNED_FILES.forEach(function (rel) {
     const text = read(rel);
     ok(!pinHolds(rel, text + ' '), rel + ': an appended space must break the pin');
     ok(!pinHolds(rel, text.replace(/[A-Za-z]/, function (c) { return c === 'x' ? 'y' : 'x'; })), rel + ': a changed character must break the pin');

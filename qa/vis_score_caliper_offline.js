@@ -32,6 +32,11 @@
 
 const fs = require('fs');
 const path = require('path');
+// pin-consolidation (work/pin-consolidation): the "byte-identical to the pinned base" guarantees below are carried by the
+// generated index.html pin map (qa/fixtures/index-pins.json; refresh with `node qa/tools/index-pins.js --update`).
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
+const idxMismatch = (text, names) => IDX_CORE.entryMismatches(IDX_CORE.normalizeText(text), IDX_MAP, names);
 
 const INDEX_PATH = path.resolve(__dirname, '..', 'index.html');
 
@@ -43,10 +48,6 @@ function check(name, cond) {
     failures += 1;
     console.log('  FAIL  ' + name);
   }
-}
-
-function sha256(s) {
-  return require('crypto').createHash('sha256').update(s).digest('hex');
 }
 
 function extractFunctionSource(content, name) {
@@ -81,25 +82,15 @@ const protectedCssBlock = (protectedCssStartIdx === -1 || protectedCssEndIdx ===
 check('protected .sr-score/.sr-score-track/.sr-score-fill CSS is present and extractable',
   !!protectedCssBlock);
 check('protected .sr-score/.sr-score-track/.sr-score-fill CSS is byte-identical to the pinned base',
-  protectedCssBlock !== null && sha256(protectedCssBlock) === 'b4c63e696fe93f7ab693b2d778c4426b58ae3f719bc95e92a97e0a117c4828d5');
+  protectedCssBlock !== null && idxMismatch(content, ['regions.caliper_protected_css']).length === 0);
 
-const PROTECTED_FN_HASHES = {
-  _ptScoreNorm: 'f1e1fb44de603a04909339daa62d598f5e3b9143d05070a3601a0c8503e17e0b',
-  _ptScoreText: '27c3d9d3ad7bb737068c09eeb17088a0982ce87685637fcaecd30b0485918f25',
-  _ptScoreCmp: 'bf237908d383b92446148828d3f9b74609f0e0979a22345056a5ff5418cdd2e5',
-  _ptScoreAvg: '29413b98a5ed8d38bf837173ec61cda500580de294c5dce8b2f9ccddf27a2a6b',
-  _ptScoreStates: '41968b418333e8a95f8fa6c15225351b9b7d73196bd808e7dd4ac6b7e3d83771',
-  _ptScoreFillHtml: 'dfeb1959f3ca9f877d7158db68d5109c64bf36eb4f3f23eb300b735ae69f5a23',
-  _ptScoreDial: '4092f243120f5c6bdf3269a02e599f3ad68afcd4a8afe8d766724879b0ef4bce',
-  _srGroupResults: 'f4ebde1c851d2d2e38ee8a5b8b96812f802612f5faddd17972620138dbdfdc9d', // R-5 (Entry 37) re-pin: Pulse-only ordering
-  _srRenderGrouped: 'cf7cc5c9dffdcc0ea48d9fdefa7717da4b2017e26a0a6f245b0848e8a6ce132b', // R-5 (Entry 37) + R-6 (Entry 14 s1) re-pin: neutral Analyst cell, ⚠ consistency count
-  renderMainPanel: 'cb02c39575356609436f2f950d0c4479531de0f6f9388ecd99b9b28cedfb135b' // R-5 (Entry 37) + B4 (Entry 34) + R-6 (Entry 14 s1) re-pin: Pulse dial / chip, analyst line, All-time-high row, Consistency line
-};
-for (const fnName of Object.keys(PROTECTED_FN_HASHES)) {
+const PROTECTED_FNS = ['_ptScoreNorm', '_ptScoreText', '_ptScoreCmp', '_ptScoreAvg', '_ptScoreStates', '_ptScoreFillHtml', '_ptScoreDial',
+  '_srGroupResults', '_srRenderGrouped', 'renderMainPanel'];
+for (const fnName of PROTECTED_FNS) {
   const src = extractFunctionSource(content, fnName);
   check('protected function ' + fnName + ' is present and extractable', !!src);
   check('protected function ' + fnName + ' is byte-identical to the pinned base',
-    src !== null && sha256(src) === PROTECTED_FN_HASHES[fnName]);
+    src !== null && idxMismatch(content, ['functions.' + fnName]).length === 0);
 }
 // _srRenderGrouped's own hash check above covers the Daily Review score cell
 // byte-for-byte (it is inside that function's body) — proving the twin at

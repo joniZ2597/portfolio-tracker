@@ -15,7 +15,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 
 const INDEX_PATH = path.resolve(__dirname, '..', 'index.html');
 
@@ -31,7 +30,6 @@ function check(name, cond, detail) {
 const guard = (id, fn) => {
   try { fn(); } catch (e) { check(id + ' group did not throw', false, String(e && e.stack || e).split('\n').slice(0, 3).join(' | ')); }
 };
-const sha256 = s => crypto.createHash('sha256').update(s).digest('hex');
 const lf = s => s.replace(/\r\n/g, '\n');
 const quiet = { log() {}, warn() {}, error() {} };
 const asyncWork = [];
@@ -63,90 +61,20 @@ const fnSrc = n => extractFn(content, n);
 
 // ---- Baseline literals / pins (captured at Step 0 from the 57afd9d index.html) ----
 const BASE_CLASSIFY_SRC = "function classifyTechnicalSetup(snap) {\n  const { pct20, pct50, pct150, athDist } = snap || {};\n  // Require at least pct20 + pct50 for any non-unknown classification\n  if (pct20 == null || pct50 == null) return 'unknown';\n  // extended_near_ath: price >10% above MA20 AND within 5% of 1Y high\n  if (athDist != null && athDist > -5 && pct20 > 10)\n    return 'extended_near_ath';\n  // healthy_uptrend_near_ath: above MA20+MA50, within 8% of ATH\n  if (athDist != null && athDist > -8 && pct20 > 2 && pct50 > 0)\n    return 'healthy_uptrend_near_ath';\n  // healthy_uptrend: above all three key MAs\n  if (pct150 != null && pct20 > 0 && pct50 > 0 && pct150 > 0)\n    return 'healthy_uptrend';\n  // support_test: below MA20, MA50 within ±3% (testing support), above MA150\n  // More specific than pullback_in_uptrend — must be evaluated first\n  if (pct150 != null && pct20 < 0 && pct50 >= -3 && pct50 <= 2 && pct150 > 0)\n    return 'support_test';\n  // pullback_in_uptrend: below MA20 but clearly above MA50 and MA150\n  if (pct150 != null && pct20 < 0 && pct50 > 0 && pct150 > 0)\n    return 'pullback_in_uptrend';\n  // breakdown_risk: below MA50 by >3% but MA150 still nearby\n  if (pct150 != null && pct50 < -3 && pct150 >= -5 && pct150 <= 2)\n    return 'breakdown_risk';\n  // below_key_mas: below MA20, MA50, and MA150 all\n  if (pct150 != null && pct20 < 0 && pct50 < 0 && pct150 < 0)\n    return 'below_key_mas';\n  return 'unknown';\n}";
-const PINS = {
-  "layer1": "f800c5a374f3b835eaa8fa2719cf3d159d571aea3d170d2f6c9a06b7ff2eaaa6",
-  "layer2": {
-    "computeATHDistance|computeHigh1yDistance": "39b8ce7ec6d2f8e2fad10b050b16f87ab79119867e6f53d7e412f164b865a451",
-    "classifyTechnicalSetup": "579f5bfea08fe9b499c8d59016f22116cdf4ac12cafdaa1e0caa3928417e044e",
-    "buildTechSnapshotBlock": "3bd4b2787884469349ff5ae8e1a50d3defd7c62b46a67ab6698dd053ac943539",
-    "_techDeriveSnap": "39b93ac18718355e9768bdb6dc76e68b5fc25c1de446b730fcc03e273e4181f4",
-    "fetchAnthropicAnalysis": "fad40ac1ea98d95d05c5efbe288b98732a6ddaa02da8b6eb15b33ade1754db29",
-    "orchestrate": "d772badfdfa6c434c59b8fdce68d635544bf7ac173cc0460e4518267be238f67",
-    "_srGroupResults": "657105a2f62abddaa85053fa7ba78e49c7fe1187439bfe2caf1ef7875ba4a4b2",
-    "renderMainPanel": "a3b3c7427aa045a3a22c34dcdcace190cb864fa462ed8ba9f1a6a3d87127354d",
-    "_dd0FetchAnalysis": "50b6d52bc1ec645afc239432878b816529cebf592a0a60fae8440581c03f6c38"
-  }
-};
 
 // ---- HL-8 helpers: layer 1 (masked file) and layer 2 (per-function, brief-mandated tokens masked) ----
 const NAMED_FNS = ['computeATHDistance|computeHigh1yDistance', 'classifyTechnicalSetup', 'buildTechSnapshotBlock', '_techDeriveSnap',
   'fetchAnthropicAnalysis', 'orchestrate', '_srGroupResults', 'renderMainPanel', '_dd0FetchAnalysis'];
+// pin-consolidation (work/pin-consolidation): layer 1 and layer 2 are carried by the generated pin map
+// (qa/fixtures/index-pins.json; refresh: node qa/tools/index-pins.js --update).
+//   layer 1: every pin-map entry except the named functions (and _setupDisplay) is unchanged;
+//   layer 2: each named function equals its pin-map entry (the raw digest is stricter than the old normalised one).
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
+const idxMismatch = (text, names) => IDX_CORE.entryMismatches(IDX_CORE.normalizeText(text), IDX_MAP, names);
+const liveNameOf = alts => alts.split('|').find(n => !!fnSrc(n)) || null;
+const LAYER1_EXCLUDED = NAMED_FNS.reduce((a, alts) => a.concat(alts.split('|')), ['_setupDisplay']).map(n => 'functions.' + n);
 
-function regionOf(src, alts) {
-  for (const n of alts.split('|')) {
-    const s = extractFn(src, n);
-    if (!s) continue;
-    let start = src.indexOf(s);
-    const end = start + s.length;
-    // the doc comment directly above the 1Y distance function is part of A1
-    if (/^compute(ATH|High1y)Distance$/.test(n) && src.slice(0, start).endsWith('*/\n')) start = src.lastIndexOf('/**', start);
-    return [start, end, n];
-  }
-  return null;
-}
-function layer1(src) {
-  let s = src;
-  const SD = '/** Display wording for a setup key';
-  const sdAt = s.indexOf(SD);
-  if (sdAt !== -1) {                                   // A3: strip _setupDisplay (+ its comment and the blank line after it)
-    const f = extractFn(s, '_setupDisplay');
-    if (f) { const e = s.indexOf(f) + f.length; s = s.slice(0, sdAt) + s.slice(e + 2); }
-  }
-  for (const alts of NAMED_FNS) {
-    const r = regionOf(s, alts);
-    if (!r) return null;
-    s = s.slice(0, r[0]) + '/*MASK*/' + s.slice(r[1]);
-  }
-  return s;
-}
-const stripComments = s => s.replace(/\/\/.*$/gm, '//');
-const NORM = {
-  'computeATHDistance|computeHigh1yDistance': s => stripComments(s.replace(/^\/\*\*[\s\S]*?\*\/\n/, '')).replace(/compute(?:ATH|High1y)Distance/g, '@FN').replace(/\b(?:ath|high1y)\b/g, '@V'),
-  classifyTechnicalSetup: s => stripComments(s).replace(/\b(?:athDist|high1yDist)\b/g, '@D'),
-  buildTechSnapshotBlock: s => s
-    .replace(' = ${_setupDisplay(setupState)}]', ']')
-    .replace(/(?:ATH|1Y High) Dist: \$\{fmt\(s\.(?:athDist|high1yDist)\)\}/, '@LD'),
-  _techDeriveSnap: s => stripComments(s).replace(/\b(?:athDist|high1yDist)\b/g, '@D').replace(/\b(?:hasATH|hasHigh1y)\b/g, '@H')
-    .replace(/compute(?:ATH|High1y)Distance/g, '@FN'),
-  fetchAnthropicAnalysis: s => s
-    .replace(/^ {2}\("ath" in these setup names means the 1-year high from 1Y candles .* never call it an all-time high\.\)\n/m, '')
-    .replace('Price is too extended near its 1-year high.', 'Price is too extended.')
-    .replace('Near the 1-year high = no chase.', 'Near ATH = no chase.'),
-  orchestrate: s => s.replace(/(?:athDist: {7}_snap6a\.athDist {5}|high1yDist: {4}_snap6a\.high1yDist {2})\?\? null,/, '@AUD'),
-  _srGroupResults: s => s.replace(/Extended \/ (?:ATH|near 1Y high)/g, '@G'),
-  renderMainPanel: s => s
-    .replace(/near (?:all-time high|its 1-year high)/g, 'near @H1')
-    .replace(/(?:ATH|1Y High) Distance/, '@LD')
-    .replace(/snap\.(?:hasATH|hasHigh1y)/g, 'snap.@H')
-    .replace(/snap\.(?:athDist|high1yDist)/g, 'snap.@D')
-    .replace("${_esc(_setupDisplay(item.technical_setup))}", "${_esc(item.technical_setup).replace(/_/g,' ')}"),
-  _dd0FetchAnalysis: s => s.replace(" + ' (' + _setupDisplay(item.technical_setup) + ')'", '')
-};
-function pinsOf(src) {
-  const out = { layer1: null, layer2: {} };
-  const l1 = layer1(src);
-  out.layer1 = l1 === null ? null : sha256(l1);
-  for (const alts of NAMED_FNS) {
-    const r = regionOf(src, alts);
-    out.layer2[alts] = r ? sha256(NORM[alts](src.slice(r[0], r[1]))) : null;
-  }
-  return out;
-}
-
-if (process.env.HL_CAPTURE === '1') {   // capture mode: print the pins of the current index.html and the classify source
-  process.stdout.write(JSON.stringify({ pins: pinsOf(content), classify: fnSrc('classifyTechnicalSetup') }));
-  process.exit(0);
-}
 
 // ---- Sandboxes ----
 // HL-1: both functions take the same snapshot; a key-agnostic table (both key names carry the same value).
@@ -387,12 +315,13 @@ guard('HL-7', () => {
 
 // ---- HL-8 static isolation ----
 guard('HL-8', () => {
-  const got = pinsOf(content);
   check('HL-8 layer 1: every function not named in section 1 (and every enum, threshold, clamp and the Tech Score v1 region) is byte-equal to the baseline',
-    got.layer1 !== null && got.layer1 === PINS.layer1);
+    NAMED_FNS.every(alts => liveNameOf(alts) !== null) &&
+    idxMismatch(content, IDX_CORE.entryNamesExcept(IDX_MAP, LAYER1_EXCLUDED)).length === 0);
   for (const alts of NAMED_FNS) {
-    check('HL-8 layer 2: ' + alts + ' is byte-equal to the baseline apart from its brief-mandated tokens',
-      got.layer2[alts] !== null && got.layer2[alts] === PINS.layer2[alts]);
+    const n = liveNameOf(alts);
+    check('HL-8 layer 2: ' + alts + ' is byte-equal to its pin-map entry',
+      n !== null && idxMismatch(content, ['functions.' + n]).length === 0);
   }
   const ENUMS = ['extended_near_ath', 'healthy_uptrend_near_ath', 'healthy_uptrend', 'pullback_in_uptrend', 'support_test', 'breakdown_risk', 'below_key_mas'];
   const cls = fnSrc('classifyTechnicalSetup') || '';

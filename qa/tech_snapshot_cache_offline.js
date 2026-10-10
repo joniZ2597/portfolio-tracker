@@ -39,53 +39,25 @@ const norm = s => s.replace(/\r\n/g, '\n');
 const crlf = s => norm(s).replace(/\n/g, '\r\n');
 const sha256 = s => crypto.createHash('sha256').update(s).digest('hex');
 
-// ── Pins (sha256) of the 24fabf0 base, LF-normalised ────────────────────────────────────────
-const BASE_PINS = {
-  classifyTechnicalSetup: 'c143eb08d982cff036dd5678def08dc38e7dede6e2a0f4ae11a79d277e3ab3ad',
-  buildTechSnapshotBlock: '2428a64e204b3aced6a31db781ab1b854bc26c41f401718106dcf9dd15210972', // B4 (Entry 34, D-B4-2 = A) re-pin: the verified-only All-time-high line
-  computeSMA: 'c477a33a601bccf0b2e61f12d246c480df4b003f118cd9a61fea6bdae5730230',
-  computePctDiff: 'ec61724ddae439fb5858152c9f050c55f0178d7e3a86a50768847b148f01d2a5',
-  computeRelativePerf: '84f3e7318a95ff8dac20fb485d66458c57cbde92a3f3c290b2c1513137fe2f29',
-  computeVolumeMetrics: '5fc9378eded81ffa26f0f652c4ddb05680e9103620a8f2eddfa198abe1fd39ad',
-  computeHigh1yDistance: 'e42268120acd9618ecc13a0a811c9cbdc6846d51e6a8448a1557a635bcc3b1e3',
-  enforceScoreConsistency: 'e1406d9bfe8358212ada456882bea248cb761cc68734213aa5151b9c02966a00',
-  _ts1FillRow: '306a720ed51792ef3294faba91dd4b5420d1264b9ace81402dc638559edf7b1e',
-  _initTsCard: 'e31f1671b0907ca34686d5bda119327689345a270114eb70cf5a300ef49e311a',
-  runTechScoreV1: 'cbb5b8aef9cdbf4c3a53f8984ffe588e15857eda4fb8341cd909025cfdabb1f4',
-  _ts1RowText: '6df1e8355698b11e89f5f01193184a17f536a57f047cac6eec322159f4f69a06',
-  _ptScoreDial: '22a2c59e47fcda24b61c08221a5e02f66ecd2de57bdf995510fbb52e7906666e',
-  _ptScoreText: '5b22d6c5daa4ed2e70370d4fe479e08dfff2c099bb2839748ad03ce7677f3589',
-  _ptScoreNorm: '4ab627ca0c86aa8012a46c2104cd74640a57addc38bda86d7e1850131e395cb2'
-};
-const BASE_TS1_REGION = '9b267da4c06a7724ccbe13ba83bf376ba1dcd2dd7931d3b40fd73377aa8e6604';
-// renderMainPanel: base (LF-normalised, = TS1 suite TX-3 pin) and base (CRLF form = caliper pin).
+// pin-consolidation (work/pin-consolidation): the "byte-equal to the base" guarantees on live index.html functions and
+// regions are carried by the generated pin map (qa/fixtures/index-pins.json; refresh: node qa/tools/index-pins.js --update).
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
+const idxMismatch = (text, names) => IDX_CORE.entryMismatches(IDX_CORE.normalizeText(text), IDX_MAP, names);
+// R4 (frozen revert chain): TC-10 reverts and re-applies its historical tables on the frozen renderMainPanel text of the task base
+// (qa/fixtures/index-pins-frozen.json), not on the live file; the tables are not extended by later tasks.
+const FROZEN_RM = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins-frozen.json'), 'utf8')).chains.tech_snapshot_cache.renderMainPanel.source;
+
+// renderMainPanel at the pre-task base: LF-normalised and CRLF form (the old caliper pin). Historical operands of the TC-10 revert chain.
 const BASE_RM_LF = 'a8c13d283ad90e4c132e6d68a5570682b39d5c127d1dd5a4ce18795178ab838f';
 const OLD_RM_CALIPER_PIN = 'd11b09a989f19ee1fa09770ac135e8f00ce518558b25cc7bce3ee23cf1b174ac';
-// New pins (task renderMainPanel after I7a-I7i, A9a-A9d, the R-2 table, the R-3 Score-row line and the S1 table): LF-normalised (TS1 suite) and CRLF form (caliper).
-const NEW_RM_LF = 'a248cfabfa0b8d859e2951888a33cdb7d92e008b9de2f2b5e709270c10bed57b';
-const NEW_RM_CALIPER_PIN = 'cb02c39575356609436f2f950d0c4479531de0f6f9388ecd99b9b28cedfb135b';
 
 const BASE_PRICE_LINE = "  let price = item._verifiedPrice ? `$${item._verifiedPrice.toFixed(2)}` : '—';\n";
 const BASE_EXT_OVERRIDE = "  if (_showExt && _extC) {\n    if (typeof _extC.regularPrice    === 'number') price = `$${_extC.regularPrice.toFixed(2)}`;\n    if (typeof _extC.regularChangePct === 'number') chg  = _extC.regularChangePct;\n  }";
 
-const BASE_CALIPER_PINS = {
-  _ptScoreNorm: 'f1e1fb44de603a04909339daa62d598f5e3b9143d05070a3601a0c8503e17e0b',
-  _ptScoreText: '27c3d9d3ad7bb737068c09eeb17088a0982ce87685637fcaecd30b0485918f25',
-  _ptScoreCmp: 'bf237908d383b92446148828d3f9b74609f0e0979a22345056a5ff5418cdd2e5',
-  _ptScoreAvg: '29413b98a5ed8d38bf837173ec61cda500580de294c5dce8b2f9ccddf27a2a6b',
-  _ptScoreStates: '41968b418333e8a95f8fa6c15225351b9b7d73196bd808e7dd4ac6b7e3d83771',
-  _ptScoreFillHtml: 'dfeb1959f3ca9f877d7158db68d5109c64bf36eb4f3f23eb300b735ae69f5a23',
-  _ptScoreDial: '4092f243120f5c6bdf3269a02e599f3ad68afcd4a8afe8d766724879b0ef4bce',
-  _srGroupResults: 'f4ebde1c851d2d2e38ee8a5b8b96812f802612f5faddd17972620138dbdfdc9d', // R-5 (Entry 37) re-pin: Pulse-only ordering (R-3 pin was 71055cd1…)
-  _srRenderGrouped: 'cf7cc5c9dffdcc0ea48d9fdefa7717da4b2017e26a0a6f245b0848e8a6ce132b' // R-5 (Entry 37) + R-6 (Entry 14 s1) re-pin: neutral Analyst cell, ⚠ count (base was 1301f2fa…)
-};
-const BASE_CALIPER_CSS_HASH = 'b4c63e696fe93f7ab693b2d778c4426b58ae3f719bc95e92a97e0a117c4828d5';
-// The TS1 default-exposure suite's other TX-3 pins (CRLF-normalised, no async prefix) at the base.
-const BASE_TS1_TX3 = {
-  runTechScoreV1: 'f36bc4eb5cba98708d126414f9cad74c61faa0e8a66f80d7a6940a894fec504d',
-  _ts1FillRow: '17c8863a09b38ed15b9126906185cfd35bf2107ad30e95523d19a62a6630ac5f',
-  _ts1RowText: '6df1e8355698b11e89f5f01193184a17f536a57f047cac6eec322159f4f69a06'
-};
+// R6 (cross-suite text reads): the caliper and TS1 suites must still guard these functions through the pin map.
+const CALIPER_GUARDED_FNS = ['_ptScoreNorm', '_ptScoreText', '_ptScoreCmp', '_ptScoreAvg', '_ptScoreStates', '_ptScoreFillHtml', '_ptScoreDial', '_srGroupResults', '_srRenderGrouped'];
+const TS1_GUARDED_FNS = ['runTechScoreV1', '_ts1FillRow', '_ts1RowText'];
 
 // ── I7 table (brief §3): the only renderMainPanel changes ───────────────────────────────────
 const I7_INSERT = [
@@ -770,7 +742,7 @@ async function evaluate(S) {
     chk('TC-9', 'no localStorage / sessionStorage / indexedDB / pt_ in new code', !/localStorage|sessionStorage|indexedDB|\bpt_/.test(newSrc));
     for (const n of ['classifyTechnicalSetup', 'buildTechSnapshotBlock', 'computeSMA', 'computePctDiff', 'computeRelativePerf', 'computeVolumeMetrics', 'computeHigh1yDistance', 'enforceScoreConsistency']) {
       const s = extractFn(src, n);
-      chk('TC-9', n + ' byte-equal to the base', !!s && sha256(s) === BASE_PINS[n]);
+      chk('TC-9', n + ' byte-equal to the base', !!s && idxMismatch(src, ['functions.' + n]).length === 0);
     }
     chk('TC-9', 'cache declaration comment documents base/snap/refInput',
       src.indexOf('// key: ticker symbol → { base, computedAt, sectorEtf, snap, refInput }') !== -1);
@@ -780,46 +752,49 @@ async function evaluate(S) {
   // ── TC-10 only main-panel change ────────────────────────────────────────────────────────
   const rm = extractFn(src, 'renderMainPanel') || '';
   await guard('TC-10', async () => {
-    const reverted = revertI7(revertA9(revertR2(revertR3(revertS1(revertS2(revertS3(rm)))))));
+    const rmF = S.frozen;   // R4: the chain runs on the frozen source (a planted negative may mutate it)
+    const reverted = revertI7(revertA9(revertR2(revertR3(revertS1(revertS2(revertS3(rmF)))))));
     chk('TC-10', 'reverting S3, S2, S1, R-3, R-2, A9 and I7a-I7i restores the base (LF-normalised pin)', sha256(reverted) === BASE_RM_LF);
     chk('TC-10', 'reverting S3, S2, S1, R-3, R-2, A9 and I7a-I7i restores the OLD caliper pin d11b09a9', sha256(crlf(reverted)) === OLD_RM_CALIPER_PIN);
     const forward = applyS3(applyS2(applyS1(applyR3(applyR2(applyA9(applyI7(reverted)))))));
-    chk('TC-10', 'line diff is exactly I7a-I7c added, I7d-I7i and A9 replaced, the R-2 line replaced by four, the R-3 Score-row line replaced, the seven S1 lines (RM-1..RM-7), the S2 row block (RM-A, RM-B) and the S3 Consistency block (RM-C, RM-D)', forward === rm);
-    chk('TC-10', 'line count = base + 3 (I7) + 3 (R-2) + 0 (R-3) - 1 (S1: RM-6 +1, RM-7 -2) + 19 (S2: the row block) + 8 (S3: the _nlmLine block)', rm.split('\n').length === reverted.split('\n').length + 32);
-    chk('TC-10', 'task renderMainPanel hashes to the new LF pin', sha256(rm) === NEW_RM_LF);
-    chk('TC-10', 'task renderMainPanel hashes to the new caliper (CRLF) pin', sha256(crlf(rm)) === NEW_RM_CALIPER_PIN);
+    chk('TC-10', 'line diff is exactly I7a-I7c added, I7d-I7i and A9 replaced, the R-2 line replaced by four, the R-3 Score-row line replaced, the seven S1 lines (RM-1..RM-7), the S2 row block (RM-A, RM-B) and the S3 Consistency block (RM-C, RM-D)', forward === rmF);
+    chk('TC-10', 'line count = base + 3 (I7) + 3 (R-2) + 0 (R-3) - 1 (S1: RM-6 +1, RM-7 -2) + 19 (S2: the row block) + 8 (S3: the _nlmLine block)', rmF.split('\n').length === reverted.split('\n').length + 32);
+    chk('TC-10', 'task renderMainPanel equals the pin-map entry (covers both the LF and the CRLF-form pins)', rm !== '' && idxMismatch(src, ['functions.renderMainPanel']).length === 0);
   });
 
   // ── TC-11 caliper ───────────────────────────────────────────────────────────────────────
   await guard('TC-11', async () => {
     const cal = S.caliper;
-    const pinOf = n => { const m = new RegExp('\\b' + n + ": '([0-9a-f]{64})'").exec(cal); return m ? m[1] : null; };
-    chk('TC-11', 'caliper renderMainPanel pin = new CRLF-form hash of the task function', pinOf('renderMainPanel') === sha256(crlf(rm)) && pinOf('renderMainPanel') === NEW_RM_CALIPER_PIN);
+    // R6: the caliper suite no longer carries hashes; it guards each function / the CSS block through the pin map.
+    const guards = n => new RegExp("const PROTECTED_FNS = \\[[^\\]]*'" + n + "'").test(cal);
+    const viaMap = cal.indexOf("'functions.' + fnName") !== -1 && cal.indexOf("fixtures', 'index-pins.json'") !== -1;
+    chk('TC-11', 'caliper guards renderMainPanel through the pin map', viaMap && guards('renderMainPanel'));
     chk('TC-11', 'old caliper pin is gone', cal.indexOf(OLD_RM_CALIPER_PIN) === -1);
-    for (const n of Object.keys(BASE_CALIPER_PINS)) chk('TC-11', 'caliper pin ' + n + ' equals the base', pinOf(n) === BASE_CALIPER_PINS[n]);
-    chk('TC-11', 'caliper protected CSS hash equals the base', cal.indexOf("'" + BASE_CALIPER_CSS_HASH + "'") !== -1);
-    chk('TC-11', 'protected CSS block in index.html still matches the base hash', (() => {
+    for (const n of CALIPER_GUARDED_FNS) chk('TC-11', 'caliper guards ' + n + ' through the pin map', viaMap && guards(n));
+    chk('TC-11', 'caliper protected CSS is guarded through the pin map', cal.indexOf("'regions.caliper_protected_css'") !== -1);
+    chk('TC-11', 'protected CSS block in index.html still matches the pin-map entry', (() => {
       const a = ".sr-score{font-weight:700;font-size:12px;color:var(--text);display:flex;flex-direction:column;align-items:flex-end;gap:3px}";
       const z = '.sr-score-fill.neg{background:var(--red2)}';
       const i = src.indexOf(a); const j = i === -1 ? -1 : src.indexOf(z, i);
-      return i !== -1 && j !== -1 && sha256(crlf(src.slice(i, j + z.length))) === BASE_CALIPER_CSS_HASH;
+      return i !== -1 && j !== -1 && idxMismatch(src, ['regions.caliper_protected_css']).length === 0;
     })());
   });
 
   // ── TC-13 Tech Score untouched ──────────────────────────────────────────────────────────
   await guard('TC-13', async () => {
-    chk('TC-13', 'TS1 region byte-equal to the base', sha256(ts1Region(src) || '') === BASE_TS1_REGION);
+    chk('TC-13', 'TS1 region byte-equal to the base', ts1Region(src) !== null && idxMismatch(src, ['regions.ts1_region']).length === 0);
     for (const n of ['_ts1FillRow', '_initTsCard', 'runTechScoreV1', '_ts1RowText']) {
       const s = extractFn(src, n);
-      chk('TC-13', n + ' byte-equal to the base', !!s && sha256(s) === BASE_PINS[n]);
+      chk('TC-13', n + ' byte-equal to the base', !!s && idxMismatch(src, ['functions.' + n]).length === 0);
     }
     const newSrc = ['_techRefInput', '_techPanelPrice', '_techSnapFor', '_techFetchBase', '_techDeriveSnap', 'computeTechnicalSnapshot', 'refreshTechPanel']
       .map(n => extractFn(src, n) || '').join('\n') + '\n' + I7_INSERT.join('\n') + '\n' + I7_REPLACE.map(r => r.newS).join('\n');
     chk('TC-13', 'new code references no _ts1*, runTechScoreV1 or _techScoreDebug', !/_ts1|runTechScoreV1|_techScoreDebug/.test(newSrc));
     const ts1 = S.ts1;
-    const pinOf = n => { const m = new RegExp('\\b' + n + ": '([0-9a-f]{64})'").exec(ts1); return m ? m[1] : null; };
-    chk('TC-13', 'TS1 suite TX-3 renderMainPanel pin = LF-normalised hash of the task function', pinOf('renderMainPanel') === sha256(rm) && pinOf('renderMainPanel') === NEW_RM_LF);
-    for (const n of Object.keys(BASE_TS1_TX3)) chk('TC-13', 'TS1 suite TX-3 pin ' + n + ' unchanged', pinOf(n) === BASE_TS1_TX3[n]);
+    // R6: the TS1 suite no longer carries hashes; its TX-3 guards the same four functions through the pin map.
+    const tx3Has = n => new RegExp("const TX3_FNS = \\[[^\\]]*'" + n + "'").test(ts1) && ts1.indexOf("fixtures', 'index-pins.json'") !== -1;
+    chk('TC-13', 'TS1 suite TX-3 guards renderMainPanel through the pin map', tx3Has('renderMainPanel') && idxMismatch(src, ['functions.renderMainPanel']).length === 0);
+    for (const n of TS1_GUARDED_FNS) chk('TC-13', 'TS1 suite TX-3 guards ' + n + ' through the pin map', tx3Has(n));
     chk('TC-13', 'TS1 suite keeps its TX-3 negative case', ts1.indexOf("label: 'renderMainPanel byte changed'") !== -1);
     chk('TC-13', 'static: the literal rr-lbl "Score" occurs exactly once in renderMainPanel', countOf(rm, '<span class="rr-lbl">Score</span>') === 1);
   });
@@ -996,6 +971,10 @@ const NEGATIVES = [
     f: s => mut(s, 'const snap = _techSnapFor(sym, item._verifiedPrice);', 'const snap = (_techCache[sym] && _techCache[sym].snap) || {};') },
   { id: 'TC-10', label: 'a second renderMainPanel line changed', target: 'index',
     f: s => mut(s, "const hasCrit = (item.alerts||[]).some(a=>a.type==='critical');", "const hasCrit = (item.alerts||[]).some(a=>a.type==='warn');") },
+  { id: 'TC-10', label: 'frozen chain input: a second renderMainPanel line changed', target: 'frozen',
+    f: s => mut(s, "const hasCrit = (item.alerts||[]).some(a=>a.type==='critical');", "const hasCrit = (item.alerts||[]).some(a=>a.type==='warn');") },
+  { id: 'TC-10', label: 'frozen chain input: an S3 line removed', target: 'frozen',
+    f: s => mut(s, '  // R-6 (Entry 14, slice 1; D9-3): one compact Consistency line under the Actionable Take', '  // R-6 (Entry 14, slice 1; D9-3): one compact Consistency line under the Actionable Take.') },
   { id: 'TC-14', label: 'Setup taken from item.technical_setup', target: 'index',
     f: s => mut(s, "const [phase,phCls]=_panelSetup==='unknown'?['—','neutral-v']:(_tfMap[_panelSetup]||['NEUTRAL','neutral-v']);", "const [phase,phCls]=_tfMap[item.technical_setup]||['NEUTRAL','neutral-v'];") },
   { id: 'TC-14', label: 'assessment taken from item.technical_setup', target: 'index',
@@ -1016,16 +995,18 @@ const NEGATIVES = [
     f: s => mut(s, '<div class="at-dial-val ${_pulseBand}">${item.action ? ' + S1_ACTION + " : ''}</div>", '<div class="at-dial-val ${_pulseBand}">${item.action ? ' + S1_ACTION + ".toUpperCase() : ''}</div>") },
   { id: 'TC-15', label: 'Score label literal replaced', target: 'index',
     f: s => mut(s, '<span class="rr-lbl">Score</span>', '<span class="rr-lbl">Scan score</span>') },
-  { id: 'TC-11', label: 'another caliper pin changed', target: 'caliper',
-    f: s => mut(s, "_ptScoreDial: '4092f243", "_ptScoreDial: '5092f243") },
-  { id: 'TC-11', label: 'caliper still holds the old renderMainPanel pin', target: 'caliper',
-    f: s => s.replace(/(renderMainPanel: ')[0-9a-f]{64}'/, "$1" + OLD_RM_CALIPER_PIN + "'") },
+  { id: 'TC-11', label: 'caliper no longer guards another function (_ptScoreDial dropped from PROTECTED_FNS)', target: 'caliper',
+    f: s => mut(s, "'_ptScoreDial',", '') },
+  { id: 'TC-11', label: 'caliper no longer guards renderMainPanel', target: 'caliper',
+    f: s => mut(s, "'_srRenderGrouped', 'renderMainPanel']", "'_srRenderGrouped']") },
+  { id: 'TC-11', label: 'caliper reintroduces the old renderMainPanel pin', target: 'caliper',
+    f: s => s + "\n// " + OLD_RM_CALIPER_PIN + "\n" },
   { id: 'TC-13', label: 'a TS1 byte changed', target: 'index',
     f: s => mut(s, 'function _initTsCard() {', 'function _initTsCard() { /* x */') },
-  { id: 'TC-13', label: 'TS1 suite: another TX-3 pin changed', target: 'ts1',
-    f: s => mut(s, "_ts1RowText: '6df1e835", "_ts1RowText: '7df1e835") },
-  { id: 'TC-13', label: 'TS1 suite: renderMainPanel pin left at the base', target: 'ts1',
-    f: s => s.replace(/(renderMainPanel: ')[0-9a-f]{64}'/, "$1" + BASE_RM_LF + "'") },
+  { id: 'TC-13', label: 'TS1 suite: another TX-3 function no longer guarded (_ts1RowText dropped from TX3_FNS)', target: 'ts1',
+    f: s => mut(s, "'_ts1FillRow', '_ts1RowText',", "'_ts1FillRow',") },
+  { id: 'TC-13', label: 'TS1 suite: renderMainPanel no longer guarded', target: 'ts1',
+    f: s => mut(s, "'_ts1RowText', 'renderMainPanel']", "'_ts1RowText']") },
   { id: 'TC-9', label: 'localStorage in a new helper', target: 'index',
     f: s => mut(s, 'function _techRefInput(p) {', "function _techRefInput(p) { localStorage.getItem('pt_x');") },
   { id: 'TC-9', label: 'classification threshold changed', target: 'index',
@@ -1043,7 +1024,7 @@ const NEGATIVES = [
   const index = norm(fs.readFileSync(INDEX_PATH, 'utf8'));
   const caliper = fs.readFileSync(CALIPER_PATH, 'utf8');
   const ts1 = fs.readFileSync(TS1_PATH, 'utf8');
-  const sources = { index, caliper, ts1 };
+  const sources = { index, caliper, ts1, frozen: FROZEN_RM };
 
   const real = await evaluate(sources);
   const ids = Object.keys(real).sort();

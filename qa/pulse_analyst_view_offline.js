@@ -31,7 +31,10 @@ const countOf = (hay, needle) => (needle ? hay.split(needle).length - 1 : 0);
 const quiet = { log() {}, warn() {}, error() {} };
 
 // ── Pre-task pins (LF, captured at e8a4bab) ─────────────────────────────────────────────────────
-const PIN_PROMPT_FN_LF = 'be916d0c24c40940d2cb9bc3338aba631292a708041003b15d7b28e1fddd70de'; // fetchAnthropicAnalysis (PA-9)
+// pin-consolidation (work/pin-consolidation): the fetchAnthropicAnalysis pin (PA-9) is the generated pin-map entry
+// functions.fetchAnthropicAnalysis (qa/fixtures/index-pins.json; refresh: node qa/tools/index-pins.js --update).
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
 const RATING_RE_LINE = 'var RATING_SUMMARY_RE = /Rating:\\s*(Buy|Neutral|Sell)/i;';           // PA-9
 const ACTION_ENUM = ['hold_wait', 'add_on_pullback', 'add_on_reclaim', 'add_on_breakout', 'trim', 'avoid', 'hold', 'buy'];
 const PROMPT_ACTION_LINE = '"action":"hold_wait/add_on_pullback/add_on_reclaim/add_on_breakout/trim/avoid/hold"';
@@ -225,7 +228,16 @@ const cellsOf = html => { const out = []; let m; CELL_RE.lastIndex = 0; while ((
 const tickersOf = html => (html.match(/data-ticker="([^"]+)"/g) || []).map(m => m.slice(13, -1));
 
 // ── Evaluate every group on one source text ─────────────────────────────────────────────────────
-function evaluate(src) {
+// R4 (frozen revert chain): PA-12 reverts and re-applies the S1 table on the frozen sources of the five S1 functions
+// (qa/fixtures/index-pins-frozen.json, task base), not on the live file; the S1 table is not extended by later tasks.
+// (The PA-6 / PA-7 behaviour comparisons keep their pre-change variants, reverted from the live functions, unchanged.)
+const FROZEN_S1 = (() => {
+  const c = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins-frozen.json'), 'utf8')).chains.pulse_analyst_view;
+  const o = {};
+  for (const n of Object.keys(c)) o[n] = c[n].source;
+  return o;
+})();
+function evaluate(src, frozenS1) {
   const R = {};
   const chk = (id, name, ok) => { (R[id] = R[id] || []).push({ name, ok: !!ok }); };
   const guard = (id, fn) => { try { fn(); } catch (e) { chk(id, 'group threw: ' + String(e && e.message || e).slice(0, 200), false); } };
@@ -385,7 +397,7 @@ function evaluate(src) {
   // PA-9 prompt and regex untouched
   guard('PA-9', () => {
     const fa = extractTopLevelFn(src, 'fetchAnthropicAnalysis') || '';
-    chk('PA-9', 'fetchAnthropicAnalysis is byte-identical to the baseline (LF pin)', sha256(fa) === PIN_PROMPT_FN_LF);
+    chk('PA-9', 'fetchAnthropicAnalysis is byte-identical to the baseline (pin map)', fa !== '' && IDX_CORE.entryMismatches(IDX_CORE.normalizeText(src), IDX_MAP, ['functions.fetchAnthropicAnalysis']).length === 0);
     chk('PA-9', 'RATING_SUMMARY_RE line is byte-identical and occurs once', countOf(src, RATING_RE_LINE) === 1);
     chk('PA-9', 'the prompt still ends the summary with "Rating: Buy/Neutral/Sell"', fa.indexOf('Rating: Buy/Neutral/Sell') !== -1);
   });
@@ -405,8 +417,12 @@ function evaluate(src) {
 
   // PA-12 (structural) the S1 table round-trips and the static header reads "Analyst"
   guard('PA-12', () => {
+    chk('PA-12', 'the five S1 functions equal their pin-map entries (the live side of the chain)',
+      Object.keys(S1).every(n => fns[n] !== '') && IDX_CORE.entryMismatches(IDX_CORE.normalizeText(src), IDX_MAP, Object.keys(S1).map(n => 'functions.' + n)).length === 0);
     for (const n of Object.keys(S1)) {
-      chk('PA-12', n + ': the S1 table reverts cleanly and re-applies byte-for-byte', pre[n] !== null && applyS1(pre[n], n) === fns[n]);
+      let preF = null;
+      try { preF = revertS1(frozenS1[n], n); } catch (e) { preF = null; }
+      chk('PA-12', n + ': the S1 table reverts cleanly and re-applies byte-for-byte', preF !== null && applyS1(preF, n) === frozenS1[n]);
     }
     chk('PA-12', 'static overlay header: "<th>Analyst</th>" once, "<th>Rating</th>" gone', countOf(src, TH.newS) === 1 && countOf(src, TH.oldS) === 0);
     chk('PA-12', 'no new top-level function: the S1 lines name no function', Object.keys(S1).every(n => S1[n].every(r => !/\bfunction\b/.test(r.newS))));
@@ -435,6 +451,9 @@ const NEGATIVES = [
   { id: 'PA-7', label: 'rRank tie-break restored', f: s => mut(s, S1._srGroupResults[0].newS, S1._srGroupResults[0].oldS) },
   { id: 'PA-9', label: 'prompt rating vocabulary edited', f: s => mut(s, 'Summary MUST end: "Rating: Buy/Neutral/Sell', 'Summary MUST end: "Rating: Buy/Hold/Sell') },
   { id: 'PA-9', label: 'RATING_SUMMARY_RE edited', f: s => mut(s, RATING_RE_LINE, 'var RATING_SUMMARY_RE = /Rating:\\s*(Buy|Hold|Sell)/i;') },
+  { id: 'PA-12', label: 'frozen chain input: an S1 line of _srGroupResults altered', frozenFn: '_srGroupResults', f: s => mut(s, S1._srGroupResults[0].newS, S1._srGroupResults[0].newS.slice(0, -1) + '!') },
+  { id: 'PA-12', label: 'frozen chain input: an S1 line of renderMainPanel altered', frozenFn: 'renderMainPanel', f: s => mut(s, rm('RM-2'), rm('RM-2').slice(0, -1) + '!') },
+  { id: 'PA-12', label: 'a live S1 function changed (pin-map entry differs)', f: s => mut(s, 'NEEDS REVIEW</span>', 'NEEDS A REVIEW</span>') },
   { id: 'PA-10', label: 'NEEDS REVIEW branch changed', f: s => mut(s, 'NEEDS REVIEW</span>', 'NEEDS A REVIEW</span>') },
   { id: 'PA-11', label: 'failed group merged into Watch', f: s => mut(s, 'if (r._aiUnavailable === true)                groups[4].items.push(r);', 'if (r._aiUnavailable === true)                groups[1].items.push(r);') }
   // "no new top-level function anywhere" is owned by qa/no_synthetic_score_offline.js NS-11 (PRE_MASKED_FIVE) and
@@ -447,15 +466,19 @@ const NEGATIVES = [
   let asserts = 0;
   const check = (name, cond) => { asserts += 1; if (!cond) { failures += 1; console.log('  FAIL  ' + name); } };
   const index = norm(fs.readFileSync(INDEX_PATH, 'utf8'));
-  const real = evaluate(index);
+  const real = evaluate(index, FROZEN_S1);
   const order = ['PA-1', 'PA-2', 'PA-3', 'PA-4', 'PA-5', 'PA-6', 'PA-7', 'PA-8', 'PA-9', 'PA-10', 'PA-11', 'PA-12'];
   for (const id of order) for (const c of (real[id] || [])) check(id + ' ' + c.name, c.ok);
   for (const g of order) check(g + ' group ran', Array.isArray(real[g]) && real[g].length > 0);
   const realClean = failures === 0;
   for (const n of NEGATIVES) {
     let mutated = null;
-    try { mutated = n.f(index); } catch (e) { check('negative ' + n.id + ' (' + n.label + '): anchor unique — ' + e.message, false); continue; }
-    const r = evaluate(mutated);
+    let frozenMut = FROZEN_S1;
+    try {
+      if (n.frozenFn) { mutated = index; frozenMut = Object.assign({}, FROZEN_S1, { [n.frozenFn]: n.f(FROZEN_S1[n.frozenFn]) }); }
+      else mutated = n.f(index);
+    } catch (e) { check('negative ' + n.id + ' (' + n.label + '): anchor unique — ' + e.message, false); continue; }
+    const r = evaluate(mutated, frozenMut);
     const bit = Array.isArray(r[n.id]) && r[n.id].some(c => !c.ok);
     check('negative ' + n.id + ' (' + n.label + ') is caught by ' + n.id + (realClean ? '' : ' [unproven: real run not clean]'), bit && realClean);
   }

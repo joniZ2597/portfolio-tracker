@@ -46,25 +46,14 @@ const PRE = {
   _srGroupResults: 'e7d27b3cfc81bff56b8d80142200f2a3fc8ef651f92e27a60956d2c1203f8183',
   renderMainPanel: 'e84c5e61abcb1179add1c5db28d5d5b1e958daa10b0363fdb339d83363fed869'
 };
-// index.html with the five changed functions masked: nothing else in the file changes in this task
-// (hence no new top-level function anywhere). Re-pinned by R-5 (Entry 37, nlm-consistency-1 S1), whose edits to
-// openScanResultsOverlay, _srRenderGrouped, _renderPortfolioPanel and the static overlay header sit outside the mask.
-const PRE_MASKED_FIVE = 'f122f497ecccaf24781e16a0f2ee520f6b6845111c24b08f2b0b7c876dad146d'; // + R-6 (Entry 14 s1, nlm-consistency-1 S3): _nlmConsistencyChecks is the one new top-level function allowed by Master ruling §0.4; the Scan Results ⚠ cells // + B4 (Entry 34, nlm-consistency-1 S2): _athCache / _athInflight, the four _ath* helpers, init(), runAnalysis, selectTicker
+// pin-consolidation (work/pin-consolidation): the per-function isolation pins and the "index.html outside the five changed
+// functions" pin are carried by the generated pin map (qa/fixtures/index-pins.json; refresh: node qa/tools/index-pins.js --update).
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
+const idxMismatch = (text, names) => IDX_CORE.entryMismatches(IDX_CORE.normalizeText(text), IDX_MAP, names);
 // Surfaces the brief says are untouched (section 2.8 / NS-11).
-const ISOLATION_PINS = {
-  enforceScoreConsistency: 'e1406d9bfe8358212ada456882bea248cb761cc68734213aa5151b9c02966a00',
-  _ptScoreNorm: '4ab627ca0c86aa8012a46c2104cd74640a57addc38bda86d7e1850131e395cb2',
-  _ptScoreText: '5b22d6c5daa4ed2e70370d4fe479e08dfff2c099bb2839748ad03ce7677f3589',
-  _ptScoreCmp: 'aa1725886484e9c3aa084f29d00bf43e8e155311de835905c9ca8d275d59611d',
-  _ptScoreAvg: '34885d90dd6379beae0873e9de468884bd3a17600bc2db66e4f052c2b05feb8c',
-  _ptScoreStates: '6a3fc2e35040d654e128748d868caf84d488b82f34decf44ddf08d4402e93f49',
-  _ptScoreFillHtml: '389f2ba8e3993bd835cb9e13bb596124b32df225920b7615f87adc3eec770292',
-  _ptScoreDial: '22a2c59e47fcda24b61c08221a5e02f66ecd2de57bdf995510fbb52e7906666e',
-  applyCapitalReturnsNudge: 'eef0d08a4d9e32053df3241960f6bcbd21f136590da316688549bf16c0216a16',
-  _renderPortfolioPanel: '08286eba02162c12523e0984c6e9bae6639bb6bfe6b737f44ccc6e5816bf78cf', // R-5 (Entry 37) re-pin: neutral "Analyst <RATING>" chip
-  _dd0FetchAnalysis: 'bcec3745e3511b354337220208531e9a04143cd82df626f8348da57f39894a6c',
-  classifyTechnicalSetup: 'c143eb08d982cff036dd5678def08dc38e7dede6e2a0f4ae11a79d277e3ab3ad'
-};
+const ISOLATION_FNS = ['enforceScoreConsistency', '_ptScoreNorm', '_ptScoreText', '_ptScoreCmp', '_ptScoreAvg', '_ptScoreStates', '_ptScoreFillHtml', '_ptScoreDial',
+  'applyCapitalReturnsNudge', '_renderPortfolioPanel', '_dd0FetchAnalysis', 'classifyTechnicalSetup'];
 const CHANGED = ['analyzeChunk', 'orchestrate', '_isValidScanResult', '_srGroupResults', 'renderMainPanel'];
 const FAILED_GROUP = 'Analysis failed — rescan';
 const SUMMARY_NET = 'AI analysis unavailable — market data shown only. Technical panels reflect verified price and candle data. No AI-generated summary is available for this scan.';
@@ -273,11 +262,8 @@ function maskFns(content, names) {
 }
 if (process.env.NS_CAPTURE === '1') {   // capture mode: print the pins of the current index.html (used once, at the pre-task baseline)
   const c = norm(fs.readFileSync(INDEX_PATH, 'utf8'));
-  const out = { PRE: {}, PRE_MASKED_FIVE: null, ISOLATION_PINS: {} };
+  const out = { PRE: {} };   // the masked-file and isolation pins now live in the pin map (node qa/tools/index-pins.js)
   for (const n of CHANGED) out.PRE[n] = sha256(extractFn(c, n) || '');
-  const m = maskFns(c, CHANGED);
-  out.PRE_MASKED_FIVE = m === null ? null : sha256(m);
-  for (const n of Object.keys(ISOLATION_PINS)) out.ISOLATION_PINS[n] = sha256(extractFn(c, n) || '');
   process.stdout.write(JSON.stringify(out, null, 2));
   process.exit(0);
 }
@@ -436,7 +422,15 @@ const normalItem = over => Object.assign({ ticker: 'TST', sentiment_score: 70, s
 const PRE_EXT = { TST: { marketState: 'PRE', regularPrice: 188.5, preMarketPrice: 191, preMarketChangePercent: null, postMarketPrice: null, postMarketChangePercent: null } };
 
 // ── Evaluate every group on one source text ─────────────────────────────────────────────────────
-async function evaluate(src) {
+// R4 (frozen revert chain): NS-12 reverts and re-applies its historical R-3 / S1 / S2 / S3 tables on the frozen sources of the five
+// changed functions (qa/fixtures/index-pins-frozen.json, task base), not on the live file; the tables are not extended by later tasks.
+const FROZEN_TASK = (() => {
+  const c = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins-frozen.json'), 'utf8')).chains.no_synthetic_score;
+  const o = {};
+  for (const n of Object.keys(c)) o[n] = c[n].source;
+  return o;
+})();
+async function evaluate(src, frozenTask) {
   const R = {};
   const chk = (id, name, ok) => { (R[id] = R[id] || []).push({ name, ok: !!ok }); };
   const guard = async (id, fn) => { try { await fn(); } catch (e) { chk(id, 'group threw: ' + String(e && e.message || e).slice(0, 200), false); } };
@@ -450,29 +444,35 @@ async function evaluate(src) {
 
   // NS-12 revert tables
   await guard('NS-12', () => {
+    const taskF = frozenTask;   // R4: the chain runs on the frozen sources (a planted negative may mutate one)
+    const preF = {};
+    for (const n of CHANGED) { try { preF[n] = revertR3(taskF[n], n); } catch (e) { preF[n] = null; } }
+    chk('NS-12', 'the five changed functions equal their pin-map entries (the live side of the former chain pins)',
+      CHANGED.every(n => task[n] !== '') && idxMismatch(src, CHANGED.map(n => 'functions.' + n)).length === 0);
     for (const n of CHANGED) {
-      chk('NS-12', n + ': the R-3 table reverts cleanly (every task line present exactly once)', pre[n] !== null);
-      chk('NS-12', n + ': reverting only the R-3 lines (and, after them, the S3 block of R-6, the S2 block of B4 and the S1 lines of R-5) restores the pre-task source (LF pin)', pre[n] !== null && sha256(revertS1(revertS2(revertS3(pre[n], n), n), n)) === PRE[n]);
-      chk('NS-12', n + ': applying the R-3 table to the reverted source reproduces the task source byte-for-byte', pre[n] !== null && applyR3(pre[n], n) === task[n]);
+      chk('NS-12', n + ': the R-3 table reverts cleanly (every task line present exactly once)', preF[n] !== null);
+      chk('NS-12', n + ': reverting only the R-3 lines (and, after them, the S3 block of R-6, the S2 block of B4 and the S1 lines of R-5) restores the pre-task source (LF pin)', preF[n] !== null && sha256(revertS1(revertS2(revertS3(preF[n], n), n), n)) === PRE[n]);
+      chk('NS-12', n + ': applying the R-3 table to the reverted source reproduces the task source byte-for-byte', preF[n] !== null && applyR3(preF[n], n) === taskF[n]);
     }
     chk('NS-12', 'line counts: analyzeChunk +0, orchestrate +0, _isValidScanResult +0, _srGroupResults +2, renderMainPanel +0',
-      CHANGED.every(n => pre[n] !== null) &&
-      task.analyzeChunk.split('\n').length === pre.analyzeChunk.split('\n').length &&
-      task.orchestrate.split('\n').length === pre.orchestrate.split('\n').length &&
-      task._isValidScanResult.split('\n').length === pre._isValidScanResult.split('\n').length &&
-      task._srGroupResults.split('\n').length === pre._srGroupResults.split('\n').length + 2 &&
-      task.renderMainPanel.split('\n').length === pre.renderMainPanel.split('\n').length);
+      CHANGED.every(n => preF[n] !== null) &&
+      taskF.analyzeChunk.split('\n').length === preF.analyzeChunk.split('\n').length &&
+      taskF.orchestrate.split('\n').length === preF.orchestrate.split('\n').length &&
+      taskF._isValidScanResult.split('\n').length === preF._isValidScanResult.split('\n').length &&
+      taskF._srGroupResults.split('\n').length === preF._srGroupResults.split('\n').length + 2 &&
+      taskF.renderMainPanel.split('\n').length === preF.renderMainPanel.split('\n').length);
   });
 
   // NS-11 isolation
   await guard('NS-11', () => {
-    for (const n of Object.keys(ISOLATION_PINS)) {
+    for (const n of ISOLATION_FNS) {
       const s = extractFn(src, n);
-      chk('NS-11', n + ' is byte-identical to the baseline', !!s && sha256(s) === ISOLATION_PINS[n]);
+      chk('NS-11', n + ' is byte-identical to the baseline', !!s && idxMismatch(src, ['functions.' + n]).length === 0);
     }
     const masked = maskFns(src, CHANGED);
-    chk('NS-11', 'index.html outside the five changed functions is byte-identical to the baseline (no new top-level function, no other edit)',
-      !!masked && sha256(masked) === PRE_MASKED_FIVE);
+    // every pin-map entry except the five changed functions: all other functions, all named regions and the remainder
+    chk('NS-11', 'index.html outside the five changed functions is byte-identical to the baseline (no other edit; a new top-level function is a pin-map change)',
+      !!masked && idxMismatch(src, IDX_CORE.entryNamesExcept(IDX_MAP, CHANGED.map(n => 'functions.' + n))).length === 0);
     chk('NS-11', 'applyCapitalReturnsNudge is still defined once and never called', countOf(src, 'applyCapitalReturnsNudge(') === 1);
     chk('NS-11', 'no `sentiment_score || 50` / `?? 50` anywhere in index.html', !/sentiment_score\s*(\|\||\?\?)\s*50/.test(src));
     chk('NS-11', 'the synthetic literal `sentiment_score: 50` is gone from index.html', countOf(src, 'sentiment_score: 50') === 0);
@@ -743,6 +743,10 @@ const NEGATIVES = [
   { id: 'NS-10', label: 'dial rendered for a failed item', f: s => mut(s, '  const _dialHtml  = (item.action || actionable)', '  const _dialHtml  = (true)') },
   { id: 'NS-11', label: 'a new top-level function added',
     f: s => { const c = extractFn(s, 'classifyTechnicalSetup'); return mut(s, c, c + '\n\nfunction _nsHelper(s) { return s; }'); } },
+  { id: 'NS-12', label: 'frozen chain input: a second renderMainPanel region changed', frozenFn: 'renderMainPanel',
+    f: s => mut(s, "const hasCrit = (item.alerts||[]).some(a=>a.type==='critical');", "const hasCrit = (item.alerts||[]).some(a=>a.type==='warn');") },
+  { id: 'NS-12', label: 'frozen chain input: an R-3 line of _isValidScanResult altered', frozenFn: '_isValidScanResult',
+    f: s => mut(s, R3._isValidScanResult[0].newS, R3._isValidScanResult[0].newS + ' ') },
   { id: 'NS-12', label: 'a second renderMainPanel region changed',
     f: s => mut(s, "const hasCrit = (item.alerts||[]).some(a=>a.type==='critical');", "const hasCrit = (item.alerts||[]).some(a=>a.type==='warn');") }
 ];
@@ -754,7 +758,7 @@ const NEGATIVES = [
   const check = (name, cond) => { asserts += 1; if (!cond) { failures += 1; console.log('  FAIL  ' + name); } };
 
   const index = norm(fs.readFileSync(INDEX_PATH, 'utf8'));
-  const real = await evaluate(index);
+  const real = await evaluate(index, FROZEN_TASK);
   const ids = Object.keys(real).sort((a, b) => Number(a.slice(3)) - Number(b.slice(3)));
   for (const id of ids) for (const c of real[id]) check(id + ' ' + c.name, c.ok);
   const expected = ['NS-1', 'NS-2', 'NS-3', 'NS-4', 'NS-5', 'NS-6', 'NS-7', 'NS-8', 'NS-9', 'NS-10', 'NS-11', 'NS-12'];
@@ -764,8 +768,12 @@ const NEGATIVES = [
   const realClean = failures === 0;
   for (const n of NEGATIVES) {
     let mutated = null;
-    try { mutated = n.f(index); } catch (e) { check('negative ' + n.id + ' (' + n.label + '): anchor unique — ' + e.message, false); continue; }
-    const r = await evaluate(mutated);
+    let frozenMut = FROZEN_TASK;
+    try {
+      if (n.frozenFn) { mutated = index; frozenMut = Object.assign({}, FROZEN_TASK, { [n.frozenFn]: n.f(FROZEN_TASK[n.frozenFn]) }); }
+      else mutated = n.f(index);
+    } catch (e) { check('negative ' + n.id + ' (' + n.label + '): anchor unique — ' + e.message, false); continue; }
+    const r = await evaluate(mutated, frozenMut);
     const bit = Array.isArray(r[n.id]) && r[n.id].some(c => !c.ok);
     check('negative ' + n.id + ' (' + n.label + ') is caught by ' + n.id + (realClean ? '' : ' [unproven: real run not clean]'), bit && realClean);
   }

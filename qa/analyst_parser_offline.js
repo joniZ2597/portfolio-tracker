@@ -66,9 +66,12 @@ const stripRaw = rows => (rows || []).map(r => { const c = Object.assign({}, r);
 const bat = rows => (rows || []).map(r => ({ bank: r.bank, action: r.action, target: r.target }));
 
 // -- Pins captured at Step 0 from the baseline index.html (dd51188), LF-normalised --
-const PIN_MASKED_FILE = '3f907c17c706164ee052ebf73ab6dcd9d5657e0d4231892bd74a6357223d5c9c';
-const PIN_ALLNONE_EXPR = '998a9fc01dfa6386913a75e3757349ecf5234b84eb0cc99e922dbb09f004f3e8';
-const PIN_FETCH_PPLX = '08c0d05765e5f07c138559978312bf6806dae72d5a16194cec2fbc93cb1b8e0d';
+// pin-consolidation (work/pin-consolidation): the index.html pins (masked file, _allNone expression, fetchPerplexityContext) are
+// the generated pin map (qa/fixtures/index-pins.json; refresh: node qa/tools/index-pins.js --update). PIN_FIXTURE is a fixture
+// digest, not an index.html pin, and stays.
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
+const idxMismatch = (text, names) => IDX_CORE.entryMismatches(IDX_CORE.normalizeText(text), IDX_MAP, names);
 const PIN_FIXTURE = 'f01adf53c416547b4e68e63df36a1b701a588225b866cfe1c5daa043b13bf268';
 
 // -- AP-11 literals: baseline-parser bank/action/target for the 25 cases whose legacy output is correct --
@@ -284,7 +287,7 @@ check('AP-8 11a target 5600', A('11a').length === 1 && A('11a')[0].target === 56
   const startAll = ext.source.indexOf('result[currentTicker]._allNone = (');
   const endAll = startAll === -1 ? -1 : ext.source.indexOf(');', startAll);
   const expr = startAll === -1 || endAll === -1 ? '' : ext.source.slice(startAll, endAll + 2);
-  check('AP-13 the _allNone expression is byte-equal to the baseline (sha256 pin)', sha256(expr) === PIN_ALLNONE_EXPR);
+  check('AP-13 the _allNone expression is byte-equal to the baseline (pin-map region)', expr !== '' && idxMismatch(content, ['regions.allnone_expr']).length === 0);
   const filler = 'General commentary line that carries no analyst content at all.\n';
   const rawRo = parsePerplexityContext(filler + 'UBS upgraded to Buy from Neutral (Oct 2)\n').__raw__;
   check('AP-13 __raw__ fallback: rating-only row present, analystActions empty, _allNone true',
@@ -298,10 +301,11 @@ check('AP-8 11a target 5600', A('11a').length === 1 && A('11a')[0].target === 56
 // -- AP-14: static isolation --
 {
   const masked = content.slice(0, ext.start) + '/*MASKED*/' + content.slice(ext.end);
-  check('AP-14 every function other than parsePerplexityContext is byte-equal to the baseline (masked-file sha256 pin)',
-    sha256(masked) === PIN_MASKED_FILE);
+  // every pin-map entry except parsePerplexityContext itself: all other functions, all named regions and the remainder
+  check('AP-14 every function other than parsePerplexityContext is byte-equal to the baseline (pin map; a new top-level function is a pin-map change)',
+    masked.indexOf('/*MASKED*/') !== -1 && idxMismatch(content, IDX_CORE.entryNamesExcept(IDX_MAP, ['functions.parsePerplexityContext'])).length === 0);
   const fp = extractFunctionSource(content, 'fetchPerplexityContext');
-  check('AP-14 fetchPerplexityContext (query literal) is byte-equal to the baseline', !!fp && sha256(fp.source) === PIN_FETCH_PPLX);
+  check('AP-14 fetchPerplexityContext (query literal) is byte-equal to the baseline', !!fp && idxMismatch(content, ['functions.fetchPerplexityContext']).length === 0);
   const hits = ext.source.match(/\b(localStorage|sessionStorage|fetch|document|window)\b/g);
   check('AP-14 parsePerplexityContext contains no localStorage / fetch / document / window', !hits, hits ? hits.join(',') : '');
 }

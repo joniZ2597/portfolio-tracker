@@ -19,7 +19,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
+const IDX_CORE = require('./lib/index-pins-core.js');
+const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
 
 const INDEX_PATH = path.resolve(__dirname, '..', 'index.html');
 const real = fs.readFileSync(INDEX_PATH, 'utf8').replace(/\r\n/g, '\n');
@@ -30,8 +31,6 @@ function check(name, cond) {
   asserts += 1;
   if (!cond) { failures += 1; console.log('  FAIL  ' + name); }
 }
-function sha256(s) { return crypto.createHash('sha256').update(s).digest('hex'); }
-
 function extractFunctionSource(content, name) {
   const start = content.indexOf('function ' + name + '(');
   if (start === -1) return null;
@@ -131,19 +130,15 @@ function checkTx2(src) {
 }
 
 // -- TX-3 --------------------------------------------------------------------
-// sha256 of the CRLF-normalised base sources, captured from the pre-D1 base (function text only).
-const BASE_HASHES = {
-  runTechScoreV1: 'f36bc4eb5cba98708d126414f9cad74c61faa0e8a66f80d7a6940a894fec504d',
-  _ts1FillRow: '17c8863a09b38ed15b9126906185cfd35bf2107ad30e95523d19a62a6630ac5f',
-  _ts1RowText: '6df1e8355698b11e89f5f01193184a17f536a57f047cac6eec322159f4f69a06',
-  renderMainPanel: 'a248cfabfa0b8d859e2951888a33cdb7d92e008b9de2f2b5e709270c10bed57b'
-};
+// The four functions that must stay byte-equal to the pre-D1 base. Their digests live in the generated pin map
+// (qa/fixtures/index-pins.json; refresh: node qa/tools/index-pins.js --update); the map entry includes the `async ` prefix.
+const TX3_FNS = ['runTechScoreV1', '_ts1FillRow', '_ts1RowText', 'renderMainPanel'];
 function checkTx3(src) {
   const r = { ok: false, reason: null };
-  for (const n of Object.keys(BASE_HASHES)) {
+  for (const n of TX3_FNS) {
     const s = extractFunctionSource(src, n);
     if (!s) { r.reason = n + ' not extractable'; return r; }
-    if (sha256(s) !== BASE_HASHES[n]) { r.reason = n + ' differs from base'; return r; }
+    if (IDX_CORE.entryMismatches(src, IDX_MAP, ['functions.' + n]).length) { r.reason = n + ' differs from base'; return r; }
   }
   const eng = extractFunctionSource(src, 'runTechScoreV1');
   const fill = extractFunctionSource(src, '_ts1FillRow');
