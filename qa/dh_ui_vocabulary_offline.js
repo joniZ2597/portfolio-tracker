@@ -89,6 +89,9 @@ const SITES = [
   { id: 'U8', fn: BANNER, anchor: 'STALE_RESULT_THRESHOLD_MS', lhs: '_showStaleBanner(', scope: { label: 'Sep 1 · 09:00 AM' },
     expect: 'Stale — results from Sep 1 · 09:00 AM · re-run scan for latest data', refs: ["_dhLabel('state', 'stale')"],
     before: "'Results from '" },
+  // surface-1b S2 (Entry 30 / D8): the ResearchView "Stale" badge takes its word from the shared state label.
+  { id: 'U9', fn: PANEL, anchor: "resStEl.className = 'pf-res-state ' + (isStale ? 'stale' : 'found');", lhs: 'resStEl.textContent', scope: { isStale: true },
+    expect: 'Stale', refs: ["_dhLabel('state', 'stale')"], before: "'Stale'" },
   // DH-M2b (work/dh-ruled-surfaces/brief.md §3) — three additional render-only sites.
   { id: 'B1', fn: PANEL, anchor: "if (fxState === 'missing') {", lhs: 'fxChipVal.textContent', scope: {},
     expect: 'Unavailable (no rate fetched)', refs: ["DH_DISPLAY.surface['fx-not-fetched']"], before: "'FX unavailable'" },
@@ -150,6 +153,33 @@ for (const site of SITES) {
   const fnSrc = extractFunctionSource(SRC, site.fn);
   const fixture = swap(SRC, fnSrc, fnSrc.replace(expr, "'" + site.before.replace(/'/g, '') + "'"));
   check('UV-1/UV-2 control: fixture keeping the ' + site.id + ' before-literal is rejected', runSiteChecks(fixture).length > 0);
+}
+
+// U9 render check (surface-1b S2): the badge text is still Stale / Research, and the CSS class expression is unchanged.
+const U9 = SITES.filter((s) => s.id === 'U9')[0];
+function u9Failures(content) {
+  const out = [];
+  const ctx = loadDisplay(content);
+  const expr = siteExpr(content, U9);
+  const fn = extractFunctionSource(content, PANEL);
+  if (!ctx || expr === null || !fn) return ['U9 site not extractable'];
+  const run = (isStale) => {
+    try { return vm.runInNewContext('(' + expr + ')', { isStale, DH_DISPLAY: ctx.DH_DISPLAY, _dhLabel: ctx._dhLabel }); } catch (e) { return 'EVAL-ERROR ' + e.message; }
+  };
+  if (run(true) !== 'Stale') out.push('isStale renders ' + JSON.stringify(run(true)));
+  if (run(false) !== 'Research') out.push('not stale renders ' + JSON.stringify(run(false)));
+  if (fn.split("resStEl.className = 'pf-res-state ' + (isStale ? 'stale' : 'found');").length - 1 !== 1) out.push('CSS class expression changed');
+  return out;
+}
+check('U9: the badge renders Stale / Research from the shared label and its CSS class expression is unchanged (' + u9Failures(SRC).join('; ') + ')', u9Failures(SRC).length === 0);
+{
+  const f = extractFunctionSource(SRC, PANEL);
+  const wrongWord = swap(SRC, f, f.replace("isStale ? _dhLabel('state', 'stale') : 'Research'", "isStale ? _dhLabel('state', 'aged-but-valid') : 'Research'"));
+  check('U9 control: a different shared word is detected by the render check', u9Failures(wrongWord).length > 0);
+  const wrongClass = swap(SRC, f, f.replace("(isStale ? 'stale' : 'found')", "(isStale ? 'found' : 'stale')"));
+  check('U9 control: a changed CSS class expression is detected', u9Failures(wrongClass).length > 0);
+  const wrongFallback = swap(SRC, f, f.replace(": 'Research';", ": 'Found';"));
+  check('U9 control: a changed non-stale word is detected', u9Failures(wrongFallback).length > 0);
 }
 
 // ---------------------------------------------------------------------- UV-3

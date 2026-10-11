@@ -10845,7 +10845,7 @@ function _renderPortfolioPanel() {
           var ageMs = _view.ageMs;
           var resStEl = document.createElement('span');
           resStEl.className = 'pf-res-state ' + (isStale ? 'stale' : 'found');
-          resStEl.textContent = isStale ? 'Stale' : 'Research';
+          resStEl.textContent = isStale ? _dhLabel('state', 'stale') : 'Research';
           resRow.appendChild(resStEl);
           var scEl = document.createElement('span');
           if (typeof res.sentiment_score === 'number') {

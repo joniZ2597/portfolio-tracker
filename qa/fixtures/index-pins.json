@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "3e7fd18d2e245ce6858fc5c976bf56cb045086bab28d5f73b45be8d033804b13",
+  "fileSha256": "8a70973f1557c64165b8407cdc5e36730c6016aaba5709601e9ca5902c6cdd01",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -198,7 +198,7 @@
     "_renderCapitalReturnsPanel": "ecf100f3529e414cc5f32dde515e62cfe0ef15b0974466f4f86f6ae1c821aa5d",
     "_renderCloudPreview": "8a258bdcbaab2714c03700483b80ebe1f4cbfccf4c09e57834b13ab2c401fda5",
     "_renderEdgarInsiderPanel": "be26e674086ee003dbcdeefe5fb7d8566b8e4779cee4e8b9cc677915a5e86da6",
-    "_renderPortfolioPanel": "08286eba02162c12523e0984c6e9bae6639bb6bfe6b737f44ccc6e5816bf78cf",
+    "_renderPortfolioPanel": "d328958f246d2771c7ba1f6e5aa19a1e36098b8b26f00c12722ebac3132cdc93",
     "_renderResearchEvidencePanel": "5fb5318637abfcee8dc74230a8f4c2eb2c6bd557170a1624dff89d75519e04da",
     "_renderSecEvidenceStorePanel": "1680bd6cf6a32278236740481b26c36d1f5eb3aab29b373b9006b64f0c8b3329",
     "_researchViewForHolding": "dc7b2c3dfca3f2848fbb9ea297db1c7904958efb425a2e918fd2a501a10d53c5",

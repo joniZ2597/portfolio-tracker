@@ -25,6 +25,9 @@ const BASE_PINS = {
   init: '588e95f019465d9c2a15fd1d5786121a5356ee947a16c32c56d032e759608828',
 };
 const DD_STMT = '    window.PT_ENABLE_DEEP_DIVE = (on === true);\n';
+// Slice 2's only edit inside _renderPortfolioPanel (Entry 30), as after / before text.
+const S2_AFTER = "resStEl.textContent = isStale ? _dhLabel('state', 'stale') : 'Research';";
+const S2_BEFORE = "resStEl.textContent = isStale ? 'Stale' : 'Research';";
 // setLabsFlag exactly as the brief's S1.1 quotes it (LF; the function source ends at its closing brace).
 const SETTER_S11 = [
   "function setLabsFlag(flag, on) {",
@@ -211,7 +214,10 @@ row('LB-8 renderMainPanel, _renderPortfolioPanel, _calcPortfolioAggregates, rend
   for (const name of Object.keys(BASE_PINS)) {
     const hit = fns.filter(f => f.name === name);
     assert.strictEqual(hit.length, 1, name);
-    assert.strictEqual(core.sha256(hit[0].text), BASE_PINS[name], name + ' changed since the base');
+    // Reading used (the brief's LB-8 says "unchanged" while its own Slice 2 edits _renderPortfolioPanel): that one function may
+    // differ from the base only by Slice 2's single line, which is reverted here before hashing; any other change still fails.
+    const text = name === '_renderPortfolioPanel' ? hit[0].text.replace(S2_AFTER, S2_BEFORE) : hit[0].text;
+    assert.strictEqual(core.sha256(text), BASE_PINS[name], name + ' changed since the base');
   }
 });
 row('LB-9 toggleApiStatus syncs on open; renderLabsToggles reflects window[flag] === true only', src => {
@@ -265,6 +271,7 @@ const NEG = [
   ['LB-6 no Deep Dive redraw', 'LB-6', sw('      if (item) renderMainPanel(item);\n    }\n  } else if (flag === ', '    }\n  } else if (flag === ')],
   ['LB-7 redraw during a live run', 'LB-7', sw('_pfIsPortfolioViewActive() && !_pfLiveRunCanceller', '_pfIsPortfolioViewActive()')],
   ['LB-8 init read edited', 'LB-8', sw("localStorage.getItem('pt_enable_portfolio_research') === 'true'", "localStorage.getItem('pt_enable_portfolio_research') !== 'false'")],
+  ['LB-8 _renderPortfolioPanel changed beyond Slice 2 line', 'LB-8', sw("resStEl.className = 'pf-res-state ' + (isStale ? 'stale' : 'found');", "resStEl.className = 'pf-res-state ' + (isStale ? 'found' : 'stale');")],
   ['LB-4 init read duplicated', 'LB-4', s => s + "\n// pt_enable_portfolio_research\n"],
   ['LB-9 no sync on open', 'LB-9', sw('if (!isOpen) { renderApiTable(); renderLabsToggles(); }', 'if (!isOpen) renderApiTable();')],
   ['LB-9 truthy reflection', 'LB-9', sw('el.checked = (window[flag] === true);', 'el.checked = !!window[flag];')],
