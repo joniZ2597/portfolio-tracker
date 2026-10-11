@@ -5135,6 +5135,21 @@ const TICKER_DEFAULTS = {
   CIBR:  { name:'First Trust Cyber ETF', exchange:'NASDAQ', sector:'ETF',               sectorEtf:''     },
   KRE:   { name:'SPDR Regional Banks',   exchange:'NYSE',   sector:'ETF',               sectorEtf:''     },
 };
+// Entry 12 / P2a (12-A, 12-B, 12-F, 12-G): the single asset-type classifier.
+// Known-ETF seed = the 9 default ETFs ∪ every symbol the former _isETF regex covered
+// (incl. the whole XL? family). UNKNOWN behaves as STOCK everywhere and is never ETF.
+// P2b will extend this function to read a stored per-ticker choice first; P2a reads none.
+var PT_KNOWN_ETF_SYMBOLS = ['SPY', 'QQQ', 'XLE', 'SOXX', 'TAN', 'ITA', 'IGV', 'CIBR', 'KRE',
+  'IWM', 'DIA', 'VOO', 'ARKK', 'SMH', 'XBI'];
+var PT_KNOWN_ETF_PATTERN = /^XL[A-Z]$/;
+function ptAssetType(sym) {
+  var s = (typeof sym === 'string') ? sym.trim().toUpperCase() : '';
+  if (!/^[A-Z0-9.\-]{1,12}$/.test(s)) return 'UNKNOWN';
+  if (PT_KNOWN_ETF_SYMBOLS.indexOf(s) !== -1 || PT_KNOWN_ETF_PATTERN.test(s)) return 'ETF';
+  if (Object.prototype.hasOwnProperty.call(TICKER_DEFAULTS, s)) return 'STOCK';
+  return 'UNKNOWN';
+}
+var PT_ETF_FUNDAMENTALS_NA_TEXT = 'Not applicable — ETF. SEC company fundamentals apply to operating companies, not funds.';
 
 function getTickerDefaults(symbol) {
   return TICKER_DEFAULTS[symbol.toUpperCase()] || { name:'', exchange:'', sector:'', sectorEtf:'' };
@@ -12754,8 +12769,7 @@ function deletePosition(sym) {
     buyback:   { label:'buyback/dividend',        q:t=>`${t} recent share buyback authorization or dividend change in the last 30 days, amount and date` },
     risk:      { label:'regulatory/geopolitical', q:t=>`${t} recent regulatory, legal, sanction, tariff, or geopolitical developments in the last 30 days, with dates` }
   };
-  const _isETF = sym => /^(QQQ|SPY|IGV|SOXX|IWM|DIA|VOO|XL[A-Z]|ARKK|SMH|CIBR|XBI)$/i.test(sym);
-  const _selectCats = sym => _isETF(sym) ? ['analyst','risk'] : ['earnings','analyst','insider','contracts','mna','buyback','risk'].slice(0,MAX_CALLS);
+  const _selectCats = sym => ptAssetType(sym) === 'ETF' ? ['analyst','risk'] : ['earnings','analyst','insider','contracts','mna','buyback','risk'].slice(0,MAX_CALLS);
 
   async function _callCategory(sym, key){
     const t0 = Date.now();
@@ -13775,6 +13789,7 @@ async function _runCRResearchCard(sym) {
   const btn   = document.getElementById('cr-res-btn-'   + sym);
   const panel = document.getElementById('cr-res-panel-' + sym);
   if (!btn || !panel) return;
+  if (typeof ptAssetType === 'function' && ptAssetType(sym) === 'ETF') { panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; return; }
   btn.disabled = true;
   btn.textContent = '⟳ Fetching SEC data…';
   let result;
@@ -14172,6 +14187,7 @@ async function _runFundFactsCard(sym) {
   var panel = document.getElementById('ffr-panel-' + sym);
   if (!btn || !input || !panel) return;
   if (btn.disabled) return;
+  if (typeof ptAssetType === 'function' && ptAssetType(sym) === 'ETF') { input.value = ''; panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; return; }
 
   var token = input.value;
   input.value = ''; // cleared before the request ever runs
