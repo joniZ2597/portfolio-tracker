@@ -5950,20 +5950,106 @@ function isStale(symbol, maxAgeMs = 5 * 60 * 1000) {
 
 // ── JSON repair ──────────────────────────────────────────────────────────────
 function repairJSON(str) {
-  str = str.replace(/,\s*([\]}])/g, '$1');
-  let opens = 0, inStr = false, escape = false;
-  for (let i = 0; i < str.length; i++) {
-    const c = str[i];
-    if (escape) { escape = false; continue; }
-    if (c === '\\' && inStr) { escape = true; continue; }
-    if (c === '"') { inStr = !inStr; continue; }
-    if (inStr) continue;
-    if (c === '{' || c === '[') opens++;
-    if (c === '}' || c === ']') opens--;
+  // ai-output-1 S1: repairs for a syntax defect INSIDE a field. The only edits made: remove a structural trailing comma (RP-0),
+  // cut text after the balanced end (RP-1), append the closers the bracket stack implies (RP-2), escape an interior quote
+  // of a string value (RP-3). A candidate is kept only if it passes the safety check (SC); otherwise today's behaviour runs.
+  // Brace characters are built from char codes so that the pin-map extractor, which counts braces, sees the whole function.
+  const LB = String.fromCharCode(123), RB = String.fromCharCode(125);
+  const nextSig = (s, from) => { let j = from; while (j < s.length && /\s/.test(s[j])) j++; return j; };
+  const closesNext = (s, i) => { const n = s[nextSig(s, i + 1)]; return n === RB || n === ']'; };
+  // Today's tail handling (string-aware comma removal, bracket count, cut to the last closing pair) for what the repairs do not cover.
+  const legacy = (s) => {
+    let t = '', opens = 0, inStr = false, esc = false;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (inStr) { t += c; if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === ',' && closesNext(s, i)) continue;
+      t += c;
+      if (c === '"') inStr = true;
+      else if (c === LB || c === '[') opens++;
+      else if (c === RB || c === ']') opens--;
+    }
+    const lastComplete = t.lastIndexOf(RB + ']');
+    return (opens > 0 && lastComplete > 0) ? t.slice(0, lastComplete + 2) + RB : t;
+  };
+  const s = str;
+  const start = s.indexOf(LB);
+  if (start === -1) return legacy(s);
+  // The text is passed unsliced from the first brace so a reply cut off mid-structure is seen as such; today's tail handling gets the same slice it always had.
+  const lastRb = s.lastIndexOf(RB);
+  const sliced = lastRb > start ? s.slice(start, lastRb + 1) : s.slice(start);
+  const out = [], stack = [];
+  let i = start, end = s.length, inStr = false, esc = false, kind = '', done = false, ok = true;
+  while (i < s.length && ok && !done) {
+    const c = s[i];
+    const t = stack[stack.length - 1];
+    if (inStr) {
+      if (esc) { esc = false; out.push(c); }
+      else if (c === '\\') { esc = true; out.push(c); }
+      else if (c === '"') {
+        const j = nextSig(s, i + 1), n = s[j];
+        if (kind === 'key' || j >= s.length || n === ',' || n === RB || n === ']') { out.push(c); inStr = false; t.m = kind === 'key' ? 'colon' : 'after'; }
+        else out.push('\\"');
+      } else out.push(c);
+      i++; continue;
+    }
+    if (/\s/.test(c)) { out.push(c); i++; continue; }
+    if (c === '"') {
+      if (!t || !(t.m === 'val' || (t.m === 'key' && t.o))) { ok = false; break; }
+      kind = t.m === 'key' ? 'key' : 'val'; t.e = false; inStr = true; out.push(c); i++; continue;
+    }
+    if (c === LB || c === '[') {
+      if (t && t.m !== 'val') { ok = false; break; }
+      if (t) t.e = false;
+      stack.push(c === LB ? { o: true, m: 'key', e: true } : { o: false, m: 'val', e: true }); out.push(c); i++; continue;
+    }
+    if (c === RB || c === ']') {
+      if (!t || (c === RB) !== t.o || !(t.m === 'after' || t.e)) { ok = false; break; }
+      stack.pop(); out.push(c); i++;
+      if (stack.length === 0) { done = true; end = i; } else stack[stack.length - 1].m = 'after';
+      continue;
+    }
+    if (c === ',') {
+      if (t && t.m === 'after' && closesNext(s, i)) { i++; continue; }
+      if (!t || t.m !== 'after') { ok = false; break; }
+      out.push(c); t.m = t.o ? 'key' : 'val'; i++; continue;
+    }
+    if (c === ':') {
+      if (!t || !t.o || t.m !== 'colon') { ok = false; break; }
+      out.push(c); t.m = 'val'; i++; continue;
+    }
+    if (!t || t.m !== 'val') { ok = false; break; }
+    let j = i;
+    while (j < s.length && !/[\s,:"\]]/.test(s[j]) && s[j] !== RB) j++;
+    out.push(s.slice(i, j)); t.m = 'after'; t.e = false; i = j;
   }
-  const lastComplete = str.lastIndexOf('}]');
-  if (opens > 0 && lastComplete > 0) str = str.slice(0, lastComplete + 2) + '}';
-  return str;
+  let cand = null;
+  if (ok && done) cand = out.join('');
+  else if (ok && !inStr && stack.length > 0 && stack[stack.length - 1].m === 'after') {
+    let tail = '';
+    for (let k = stack.length - 1; k >= 0; k--) tail += stack[k].o ? RB : ']';
+    cand = out.join('') + tail;
+  }
+  if (cand === null) return legacy(sliced);
+  // Safety check: the candidate must parse, carry exactly the keys (in order) that the unrepaired text shows as keys, and as many ticker objects.
+  let obj;
+  try { obj = JSON.parse(cand); } catch (e) { return legacy(sliced); }
+  const span = s.slice(start, end);
+  const want = [], re = new RegExp('[,' + LB + ']\\s*"((?:[^"\\\\]|\\\\.)*)"\\s*:', 'g');
+  let m;
+  while ((m = re.exec(span)) !== null) { let k = m[1]; try { k = JSON.parse('"' + k + '"'); } catch (e) {} want.push(k); }
+  const have = [];
+  let tickers = 0;
+  const walk = (v) => {
+    if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === 'object') {
+      if (Object.prototype.hasOwnProperty.call(v, 'ticker')) tickers++;
+      for (const k of Object.keys(v)) { have.push(k); walk(v[k]); }
+    }
+  };
+  walk(obj);
+  if (have.length !== want.length || have.some((k, n) => k !== want[n]) || tickers !== (span.match(/"ticker"\s*:/g) || []).length) return legacy(sliced);
+  return cand;
 }
 
 function parseJSON(raw) {
@@ -5977,7 +6063,7 @@ function parseJSON(raw) {
   if (start === -1) { console.warn(`[PT] parseJSON: no { found (rawLen=${_rawLen}, head="${_head}")`); return { results: [] }; }
   let jsonStr = end > start ? clean.slice(start, end + 1) : clean.slice(start);
   try { return JSON.parse(jsonStr); } catch(e1) { console.warn('[PT] parseJSON e1:', e1.message); }
-  try { return JSON.parse(repairJSON(jsonStr)); } catch(e2) {}
+  try { return JSON.parse(repairJSON(clean.slice(start))); } catch(e2) {}
   console.warn('[PT] parseJSON: falling back to per-ticker extraction');
   const items = [];
   const tickerRe = /\{[^{}]*"ticker"\s*:\s*"([^"]+)"[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;

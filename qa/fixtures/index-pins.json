@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "953aaf6a661b115f6d0d4ed81b5d195ff97428dd231437bc44aea10d6701c77f",
+  "fileSha256": "24f29d093c70453822ca9066214836fdb2fef775cd3c66cf6f37afd1dc6652bc",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -335,7 +335,7 @@
     "openScanResultsOverlay": "a3a85c0cd685928e35ab1ac5757e12423aaed318d3b424589c26e7cc3ec763a7",
     "openTickerMenu": "27fd2f524ba0e82c0987402778f1861e0fb8daf202be06771b7abd9b5f776d96",
     "orchestrate": "2e352b3f1d4739e8f98fb079ed3c3865115263e12dcdc53dda70350bebf97dfb",
-    "parseJSON": "91ac59a3db5809a0a59dce984b7f8571c0f9886e70aeb19167f08aede2bdaeeb",
+    "parseJSON": "c02413e78fb8c027bcfc8518fc36615ca8294637b5e8403196e5a2212f94c4e9",
     "parsePerplexityContext": "41b8f490ef3e319cda61281e09813639fdbdcc7a468e882d82d563520c9339b2",
     "refreshTechPanel": "7be7faf49ae1ab2dcd3c3a25ce065ace9a71adc5b83805e9ffd40b300b4e87eb",
     "removeTicker": "99e5b046acd74cda97dd7b04146c89c9d97c2d949d4fbcee813f9a6661d0a9d0",
@@ -347,7 +347,7 @@
     "renderSidebar": "ac7119464fe850870432faeb9a0cd62f1a43fda87a638664dc05406f3ab569f3",
     "renderTickerPlaceholder": "7efd087b1dda2a8e4c9dcb760475ec19ad1a18ad8644cbe5f86b27e91cd7f621",
     "renderWatchlistRows": "5ce0eb6317292b4585a654a3dcc872077edb5c9fe974cdf28b45d280af0ae902",
-    "repairJSON": "5f0c0dee5be63014950a1256f526c234bb768fec9211a83b3b5fab5b7993b863",
+    "repairJSON": "9a8db71f54bd5b191e671a26c9838c44a785c5b6eaa29b06896b6945dd4d9eaa",
     "requestFundFactsRead": "237eba6cea49f50719005c0360a5c1ae7e892cf800755691e3f8b6557a88d5e3",
     "requestResearchEvidence": "bd864799fc81b02c7000969f8c9f9ebd43d903e6ef125bf045b9a835945c5fca",
     "requestSecEvidenceStoreLookup": "0404292b74dd1a63eb05c36a257bf2cda7755a7e76186762cd83f945fc2cded0",
@@ -530,5 +530,5 @@
       "sha256": "79b78d1ed91f3d6f8c2b867378a1a228f83399c8931ddd150eea31143bb3a31e"
     }
   },
-  "remainderSha256": "b1809cccee4b3e455dde0c0f62dcd9a1152edc35a5ef0b185c2cb5e0d10a2da1"
+  "remainderSha256": "a61d48164ac7c3dc0b1e3b00f534d808bcaf5a551c4f56cdba72af1fb53a207e"
 }
