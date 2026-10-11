@@ -213,4 +213,4 @@ Final check: 1 round, 0 findings — PASS on the complete task diff (implementat
 - [covered] Planted negatives with exactly-once anchors and positive controls — already required by `.claude/rules/qa-suites.md`.
 
 ## LAND-EVIDENCE
-Integrity check (record form) and the LAND request results are reported only in the step-13 STOP report, not in this file.
+LAND-EVIDENCE: qa-offline=PASS 78; targeted=PASS; codex-classI-unresolved=0
