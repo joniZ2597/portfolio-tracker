@@ -52,6 +52,12 @@ exports.handler = async function (event) {
     return res(400, { error: 'Invalid symbol format: ' + sym });
   }
 
+  // ── Hourly upstream budget: portfolio-live only, after the server gate and the symbol validation, before any upstream I/O ──
+  // Beyond BUDGET_PER_HOUR (market-data-live-budget) the typed 429 is answered and nothing is requested. Fails closed (takeLiveBudget).
+  if (purpose === 'portfolio-live' && !(await takeLiveBudget(event, range))) {
+    return res(429, ENVELOPE_BUDGET_EXHAUSTED);
+  }
+
   const polygonKey = process.env.POLYGON_API_KEY || '';
   // portfolio-live is Yahoo-only (market-data-1, ruling M-1): the metered Polygon key is never used for it.
   const polygonAllowed = polygonKey !== '' && purpose !== 'portfolio-live';
@@ -471,6 +477,13 @@ const ENVELOPE_AMBIGUOUS_PURPOSE = {
   detail: 'ambiguous request purpose',
   errors: ['AMBIGUOUS_PURPOSE'],
 };
+// Slice 2 (market-data-1): the hourly cap for portfolio-live. HTTP 429, a per-symbol failure for the client (not a terminal envelope).
+const ENVELOPE_BUDGET_EXHAUSTED = {
+  status: 'ERROR',
+  reason: 'BUDGET_EXHAUSTED',
+  detail: 'portfolio live price budget exhausted for this hour; no upstream request made.',
+  errors: ['BUDGET_EXHAUSTED'],
+};
 const ALLOWED_PURPOSES = ['scan', 'portfolio-live'];
 
 // Returns { purpose } for valid input, or { error:'AMBIGUOUS' | 'INVALID' }.
@@ -505,6 +518,34 @@ function ensureProvider(data, provider) {
                  data.chart.result[0] && data.chart.result[0].meta;
     if (meta && !meta._provider) meta._provider = provider;
   } catch (_) { /* provenance is display-only — never fatal */ }
+}
+
+// ── Hourly upstream budget (portfolio-live only) ──────────────────────────────
+// Units = the upstream calls this request will make: one Yahoo call, plus the extended-hours overlay call on daily ranges in PRE / POST.
+// Resolves true when the units were admitted (and counted); false otherwise - including any error: the budget fails closed.
+// The budget lib and the storage package are required here, inside the portfolio-live branch only, so the scan path never loads them.
+async function takeLiveBudget(event, range) {
+  try {
+    const budget = require('./lib/market-data-live-budget');
+    const clock = event && event._testClock;
+    const nowMs = clock && typeof clock.nowMs === 'number' && isFinite(clock.nowMs) ? clock.nowMs : Date.now();
+    let units = 1;
+    if (range === '1d' || range === '5d') {
+      const session = getEtSession(new Date(nowMs));
+      if (session === 'PRE' || session === 'POST') units = 2;
+    }
+    let store = event && event._testStore;
+    if (!store) {
+      // A legacy Lambda-style function receives the Blobs context only through connectLambda(event) (same guarded pattern as
+      // tradingview-webhook.js / portfolio-sync.js); a failure here propagates to the catch below and refuses the request.
+      const blobs = require('@netlify/blobs');
+      if (event && event.blobs) blobs.connectLambda(event);
+      store = blobs.getStore(budget.STORE_NAME);
+    }
+    return await budget.take(store, new Date(nowMs).toISOString(), units);
+  } catch (_) {
+    return false;
+  }
 }
 
 // ── Fetch with timeout ────────────────────────────────────────────────────────
