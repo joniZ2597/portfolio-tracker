@@ -730,6 +730,17 @@ function normalizeNewsResponse(parsedResponse, context) {
       skippedItems.push({ reason: 'INVALID_SUB_TYPE' });
       continue;
     }
+    // S2-M3 (A7a): deterministic formatting only. A non-null subType is
+    // normalised AFTER the validity check; null stays null. A label that
+    // normalises to empty (e.g. "-", "_") is skipped with the EXISTING reason.
+    var subTypeOut = raw.subType;
+    if (subTypeOut !== null) {
+      subTypeOut = normalizeSubType(subTypeOut);
+      if (subTypeOut === '') {
+        skippedItems.push({ reason: 'INVALID_SUB_TYPE' });
+        continue;
+      }
+    }
 
     // Identity tuple (spec §3) — this object literal's key insertion order is
     // NORMATIVE: JSON.stringify serializes string keys in insertion order and
@@ -812,7 +823,7 @@ function normalizeNewsResponse(parsedResponse, context) {
       scoringImpact: 'none',
       eventType: raw.eventType,
       relevanceScope: raw.relevanceScope,
-      subType: raw.subType
+      subType: subTypeOut
     });
   }
 
@@ -824,6 +835,18 @@ function normalizeNewsResponse(parsedResponse, context) {
 // item `type` string, `results`, `annotations`, or any of the three D-M2
 // source names. The Evidence Set traversal that DOES know those things lives
 // entirely inside adaptAgentResponse (brief §1's single-adapter invariant).
+
+// subType formatting (S2-M3 / A7a): trim + lower-case (locale-independent), each
+// run of whitespace or '-' becomes '_', runs of '_' collapse to one, leading and
+// trailing '_' are removed. No other character is removed or changed, and
+// distinct labels stay distinct (no vocabulary, no merging). Idempotent.
+// Not part of the identity tuple.
+function normalizeSubType(value) {
+  return value.trim().toLowerCase()
+    .replace(/[\s-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+}
 
 // A grounding-bearing field is valid when null, absent, or an array.
 function validGroundingField(value) {

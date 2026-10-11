@@ -1852,6 +1852,91 @@ async function runTests() {
     assert.strictEqual(r.evidenceBindings[0].dateProvenance, 'evidence-earlier');
   });
 
+  // ── NP63–NP66: S2-M3 (A7a, catalyst-evidence-2-s1) — deterministic subType formatting ──
+  // Formatting only: no vocabulary, no merge of distinct values, no structural change.
+  // The normaliser is observed through the real normalizeNewsResponse (never re-implemented here).
+  var SUBTYPE_URL = 'https://ir.jfrog.com/news/np63-subtype';
+  function normSubType(subType) {
+    var r = norm([rawItem('2026-07-18', 'other_catalyst', 'positive', SUBTYPE_URL, { subType: subType })], undefined, [{ url: SUBTYPE_URL }]);
+    return r;
+  }
+  var SUBTYPE_TABLE = [
+    // [input, expected] — spaces, hyphens, mixed case, repeated/edge underscores, canonical unchanged, non-ASCII kept as text
+    ['clinical data presentation', 'clinical_data_presentation'],
+    ['Clinical-Data-Presentation', 'clinical_data_presentation'],
+    ['clinical_data_presentation', 'clinical_data_presentation'],
+    ['CLINICAL DATA PRESENTATION', 'clinical_data_presentation'],
+    ['  Product  Webinar ', 'product_webinar'],
+    ['USER-CONFERENCE', 'user_conference'],
+    ['analyst_day', 'analyst_day'],
+    ['a__b', 'a_b'],
+    ['_a_', 'a'],
+    ['__a__', 'a'],
+    ['__a - - b__', 'a_b'],
+    ['a_ _b', 'a_b'],
+    ['a - b', 'a_b'],
+    ['a\tb\nc', 'a_b_c'],
+    ['TITLE', 'title'],
+    ['clinical_data_presentation_acceptance', 'clinical_data_presentation_acceptance'],
+    ['Clinical Data Presentation Acceptance', 'clinical_data_presentation_acceptance'],
+    // non-ASCII and punctuation are kept as text — nothing but case, whitespace, '-' and '_' is touched
+    ['Événement spécial', 'événement_spécial'],
+    ['临床 数据', '临床_数据'],
+    ['Q3 (M&A) / r.d', 'q3_(m&a)_/_r.d']
+  ];
+  await test('NP63 the subType normaliser table: whitespace and hyphen runs become one underscore, case folds, edge underscores strip, canonical values are unchanged, _acceptance stays distinct, non-ASCII and punctuation are kept', function () {
+    SUBTYPE_TABLE.forEach(function (row) {
+      var r = normSubType(row[0]);
+      assert.strictEqual(r.items.length, 1, JSON.stringify(row[0]) + ' must survive');
+      assert.strictEqual(r.items[0].subType, row[1], JSON.stringify(row[0]) + ' -> ' + JSON.stringify(row[1]));
+    });
+    assert.notStrictEqual(normSubType('clinical_data_presentation_acceptance').items[0].subType, normSubType('clinical data presentation').items[0].subType, 'distinct labels stay distinct — no vocabulary, no merge');
+  });
+
+  await test('NP64 the subType normaliser is idempotent: feeding its own output back changes nothing', function () {
+    SUBTYPE_TABLE.forEach(function (row) {
+      var once = normSubType(row[0]).items[0].subType;
+      var twice = normSubType(once).items[0].subType;
+      assert.strictEqual(twice, once, JSON.stringify(row[0]) + ': norm(norm(x)) must equal norm(x)');
+      // a bare identity function is also idempotent — so also pin that the output IS in normal form
+      assert.ok(!/[\s-]/.test(once) && !/__/.test(once) && !/^_|_$/.test(once) && once === once.toLowerCase(), JSON.stringify(row[0]) + ': output ' + JSON.stringify(once) + ' must be in normal form (no whitespace or hyphen, no repeated or edge underscore, lower case)');
+    });
+  });
+
+  await test('NP65 null stays null; an empty result after normalisation is skipped with the existing INVALID_SUB_TYPE and no new reason', function () {
+    ['-', '_', ' - _ ', '--', '__', ' \t '].forEach(function (bad) {
+      var r = normSubType(bad);
+      assert.strictEqual(r.items.length, 0, JSON.stringify(bad) + ' normalises to empty and must be skipped');
+      assert.deepStrictEqual(r.skippedItems, [{ reason: 'INVALID_SUB_TYPE' }], JSON.stringify(bad) + ' must skip with exactly the existing INVALID_SUB_TYPE reason');
+    });
+    // conditional-null rule unchanged
+    var otherNull = normSubType(null);
+    assert.deepStrictEqual(otherNull.skippedItems, [{ reason: 'INVALID_SUB_TYPE' }], 'other_catalyst with null subType is still INVALID_SUB_TYPE');
+    var earningsUrl = 'https://ir.jfrog.com/news/np65-null';
+    var earningsNull = norm([rawItem('2026-07-18', 'earnings_event', 'positive', earningsUrl)], undefined, [{ url: earningsUrl }]);
+    assert.strictEqual(earningsNull.items.length, 1);
+    assert.strictEqual(earningsNull.items[0].subType, null, 'a non-other_catalyst item keeps subType exactly null');
+    var earningsStr = norm([rawItem('2026-07-18', 'earnings_event', 'positive', earningsUrl, { subType: 'Some Label' })], undefined, [{ url: earningsUrl }]);
+    assert.deepStrictEqual(earningsStr.skippedItems, [{ reason: 'INVALID_SUB_TYPE' }], 'a non-null subType on a non-other_catalyst category is still INVALID_SUB_TYPE');
+  });
+
+  await test('NP66 two candidates differing only in subType formatting have the identical identityHash, item key order and every other field', function () {
+    var a = normSubType('clinical data presentation').items[0];
+    var b = normSubType('Clinical-Data-Presentation').items[0];
+    var c = normSubType('clinical_data_presentation').items[0];
+    [a, b, c].forEach(function (it) {
+      assert.deepStrictEqual(Object.keys(it), ITEM_FIELD_ORDER, 'item key order is the frozen 17-field contract');
+    });
+    assert.strictEqual(a.identityHash, b.identityHash, 'identityHash must not depend on subType formatting');
+    assert.strictEqual(a.identityHash, c.identityHash);
+    assert.deepStrictEqual(a, b, 'every field including subType is identical after normalisation');
+    assert.deepStrictEqual(a, c);
+    // subType is not part of the identity tuple at all: a different label with the same source keeps the same hash
+    var other = normSubType('analyst day').items[0];
+    assert.strictEqual(other.identityHash, a.identityHash, 'subType is not in the identity tuple');
+    assert.notStrictEqual(other.subType, a.subType);
+  });
+
   global.fetch = _origFetch;
 
   var result = failed === 0 ? 'ALL PASS' : 'FAILURES: ' + failed;

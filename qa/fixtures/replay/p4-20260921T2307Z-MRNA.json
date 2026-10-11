@@ -57,7 +57,7 @@
         "scoringImpact": "none",
         "eventType": "upcoming_event",
         "relevanceScope": "company",
-        "subType": "clinical data presentation"
+        "subType": "clinical_data_presentation"
       }
     ],
     "skippedItems": [],

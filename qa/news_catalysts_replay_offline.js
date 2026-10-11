@@ -164,8 +164,20 @@ function extractRawCandidates(rawResponseBody) {
 
 // ── order-zip candidate attribution — zero ladder reimplementation. ────────
 var CANDIDATE_FIELDS = ['eventDate', 'category', 'direction', 'sourceUrl', 'eventType', 'relevanceScope', 'subType'];
+// S2-M3 (A7a): the provider now formats subType, so a raw candidate's subType
+// is compared to the projected item's subType after the SAME formatting rule is
+// applied to both (Owner M6/STOP-2 ruling, catalyst-evidence-2-s1). Formatting
+// only — distinct labels stay distinct; null and non-strings compare strictly.
+// Every other field keeps strict equality.
+function formatSubType(value) {
+  if (typeof value !== 'string') { return value; }
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+}
 function candidateMatchesItem(raw, item) {
-  return CANDIDATE_FIELDS.every(function (f) { return raw[f] === item[f]; });
+  return CANDIDATE_FIELDS.every(function (f) {
+    if (f === 'subType') { return formatSubType(raw[f]) === formatSubType(item[f]); }
+    return raw[f] === item[f];
+  });
 }
 var MALFORMED_REASONS = ['MISSING_EVENT_DATE', 'INVALID_EVENT_DATE', 'MISSING_SOURCE_URL', 'UNKNOWN_CATEGORY', 'INVALID_DIRECTION', 'UNKNOWN_EVENT_TYPE', 'INVALID_RELEVANCE_SCOPE', 'INVALID_SUB_TYPE'];
 function attributeCandidates(rawCandidates, items, skippedItems) {
@@ -955,8 +967,14 @@ async function runTests() {
   // (A5) FROG divergence. R-16 below pins that this is the ONLY difference.
   var S2_M1_RELABELED_CASES = ['p3-20260921T2045Z-NVDA', 'p4-20260921T2312Z-NVDA'];
 
-  // ── R-12: exactly three cases differ from the 52c322b baseline — Rule S's FROG case plus S2-M1's two relabeled NVDA cases ──
-  await test('R-12 exactly three cases\' expected {items, skippedItems} differ from the 52c322b baseline: p4-20260921T2312Z-FROG (Rule S) and the two S2-M1 relabeled NVDA cases', function () {
+  // S2-M3 (A7a) additionally normalises subType formatting (catalyst-evidence-2-s1,
+  // brief R6/R7): the one MRNA item whose recorded subType was "clinical data
+  // presentation" now replays as "clinical_data_presentation". R-17 below pins
+  // that this single value is the ONLY difference from the 52c322b baseline.
+  var S2_M3_SUBTYPE_CASE = 'p4-20260921T2307Z-MRNA';
+
+  // ── R-12: exactly four cases differ from the 52c322b baseline — Rule S's FROG case, S2-M1's two relabeled NVDA cases, and S2-M3's subType-formatted MRNA case ──
+  await test('R-12 exactly four cases\' expected {items, skippedItems} differ from the 52c322b baseline: p4-20260921T2312Z-FROG (Rule S), the two S2-M1 relabeled NVDA cases and p4-20260921T2307Z-MRNA (S2-M3 subType formatting)', function () {
     var diverged = [];
     for (var i = 0; i < index.cases.length; i++) {
       var caseId = index.cases[i].caseId;
@@ -966,7 +984,7 @@ async function runTests() {
       var baselineSnapshot = JSON.stringify({ items: baseline.expected.items, skippedItems: baseline.expected.skippedItems });
       if (currentSnapshot !== baselineSnapshot) { diverged.push(caseId); }
     }
-    assert.deepStrictEqual(diverged.slice().sort(), S2_M1_RELABELED_CASES.concat(['p4-20260921T2312Z-FROG']).sort(), 'exactly three cases must diverge from baseline: the FROG hub case and the two S2-M1 relabeled NVDA cases');
+    assert.deepStrictEqual(diverged.slice().sort(), S2_M1_RELABELED_CASES.concat(['p4-20260921T2312Z-FROG', S2_M3_SUBTYPE_CASE]).sort(), 'exactly four cases must diverge from baseline: the FROG hub case, the two S2-M1 relabeled NVDA cases and the S2-M3 subType-formatted MRNA case');
   });
 
   // ── R-13: p4-2312-FROG is 0 items / 5 × GENERIC_SOURCE_URL ─────────────
@@ -981,8 +999,8 @@ async function runTests() {
   });
 
   // ── R-14: the other six fixture files are unchanged from the 52c322b baseline ──
-  await test('R-14 the six non-FROG, non-S2-M1 fixture files are unchanged from the 52c322b baseline (content compared with CRLF normalized to LF, so a checkout line-ending difference is never reported as a divergence)', function () {
-    var EXCLUDED = ['p4-20260921T2312Z-FROG'].concat(S2_M1_RELABELED_CASES);
+  await test('R-14 the five non-FROG, non-S2-M1, non-S2-M3 fixture files are unchanged from the 52c322b baseline (content compared with CRLF normalized to LF, so a checkout line-ending difference is never reported as a divergence)', function () {
+    var EXCLUDED = ['p4-20260921T2312Z-FROG', S2_M3_SUBTYPE_CASE].concat(S2_M1_RELABELED_CASES);
     for (var i = 0; i < index.cases.length; i++) {
       var caseId = index.cases[i].caseId;
       if (EXCLUDED.indexOf(caseId) !== -1) { continue; }
@@ -1016,6 +1034,47 @@ async function runTests() {
         item.reason = 'INVALID_SOURCE_URL'; // mutate the existing object in place — never replace it, or an unexpected extra property on this entry would be silently erased rather than caught below
       });
       assert.deepStrictEqual(reconstructed, baseline, caseId + ': with skippedItems reasons reverted to their baseline value, the fixture must be deep-equal to the 52c322b baseline in EVERY other field, including caseId, expected.kind and expected.providerVersion');
+    });
+  });
+
+  // ── R-17: the S2-M3 MRNA case diverges from the 52c322b baseline in EXACTLY one subType value, nothing else ──
+  // Same shape as R-16: (a) pin the new value, which fails on the pre-change
+  // fixture (it still equals baseline); (b) revert that one value in a clone
+  // and deep-compare the WHOLE fixture object to baseline, so no other key —
+  // captureSha256, rawResponseBody, expected.providerVersion, any other item
+  // field — can drift unseen. providerVersion is deliberately NOT bumped (R-16 precedent).
+  await test('R-17 the S2-M3 MRNA case diverges from the 52c322b baseline in exactly one value — the other_catalyst item\'s subType "clinical data presentation" -> "clinical_data_presentation" — with that value reverted, the WHOLE fixture object is deep-equal to baseline, in every field', function () {
+    var current = loadCase(S2_M3_SUBTYPE_CASE);
+    var baseline = baselineFixture(S2_M3_SUBTYPE_CASE);
+    var hits = [];
+    baseline.expected.items.forEach(function (item, idx) { if (item.subType === 'clinical data presentation') { hits.push(idx); } });
+    assert.strictEqual(hits.length, 1, S2_M3_SUBTYPE_CASE + ': exactly one baseline item carries the un-normalised subType "clinical data presentation"');
+    var k = hits[0];
+    // (a) the current fixture holds the normalised value (fails on the pre-change fixture, which equals baseline)
+    assert.strictEqual(current.expected.items[k].subType, 'clinical_data_presentation', S2_M3_SUBTYPE_CASE + ': expected.items[' + k + '].subType must be exactly "clinical_data_presentation"');
+    // (b) with that one value reverted, the whole fixture is deep-equal to baseline
+    assert.strictEqual(baseline.expected.items[k].subType, 'clinical data presentation', S2_M3_SUBTYPE_CASE + ': baseline value expected "clinical data presentation"');
+    var reconstructed = JSON.parse(JSON.stringify(current));
+    reconstructed.expected.items[k].subType = 'clinical data presentation'; // mutate the existing property in place — never replace the item, or an extra property would be silently erased rather than caught below
+    assert.deepStrictEqual(reconstructed, baseline, S2_M3_SUBTYPE_CASE + ': with that one subType value reverted, the fixture must be deep-equal to the 52c322b baseline in EVERY other field, including captureSha256, input and expected.providerVersion');
+  });
+
+  // ── R-18: planted negative for the S2-M3 candidateMatchesItem subType comparison (Owner M6/STOP-2 ruling) ──
+  // The comparison is formatting-only: it must match a candidate to its own
+  // formatted item, and must NOT match genuinely different subType values or
+  // any other field difference.
+  await test('R-18 candidateMatchesItem matches a raw candidate to its formatted item on subType, but a genuinely different subType, a null/string mismatch or any other field difference does not match', function () {
+    var base = { eventDate: '2026-10-24', category: 'other_catalyst', direction: null, sourceUrl: 'https://example.com/a', eventType: 'upcoming_event', relevanceScope: 'company', subType: 'clinical data presentation' };
+    var item = Object.assign({}, base, { subType: 'clinical_data_presentation' });
+    assert.strictEqual(candidateMatchesItem(base, item), true, 'a candidate matches its own formatted item');
+    assert.strictEqual(candidateMatchesItem(Object.assign({}, base, { subType: 'Clinical-Data-Presentation' }), item), true, 'any formatting variant of the same label matches');
+    assert.strictEqual(candidateMatchesItem(Object.assign({}, base, { subType: 'clinical data presentation acceptance' }), item), false, 'a genuinely different label (_acceptance) must not match');
+    assert.strictEqual(candidateMatchesItem(Object.assign({}, base, { subType: 'analyst day' }), item), false, 'an unrelated label must not match');
+    assert.strictEqual(candidateMatchesItem(Object.assign({}, base, { subType: null }), item), false, 'null vs string must not match');
+    assert.strictEqual(candidateMatchesItem(base, Object.assign({}, item, { subType: null })), false, 'string vs null must not match');
+    ['eventDate', 'category', 'direction', 'sourceUrl', 'eventType', 'relevanceScope'].forEach(function (f) {
+      var changed = Object.assign({}, item); changed[f] = 'x-different';
+      assert.strictEqual(candidateMatchesItem(base, changed), false, f + ' keeps strict equality');
     });
   });
 

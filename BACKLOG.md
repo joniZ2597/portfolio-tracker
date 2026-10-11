@@ -134,8 +134,9 @@ D-S3-1 reader contract (`work/s3-catalyst-evidence-surface/D-S3-1-reader-contrac
 over the S3-M1 envelope; re-derives nothing. **The Ticker Detail card itself remains HOLD** — no UI
 surface has been built, and the card is only non-empty after a live seeding canary.
 
-*Remaining ARC sequence:* `A3b* → A7a → A4*/A7b*`. **DONE:** A5 (`810586d`) · D-A2-2 (`0526458`,
-S2-M1) · A3a (`28c2543`, S2-M2). **A3b is BLOCKED** — enforcement requires its own Owner-approved
+*Remaining ARC sequence:* `A3b* → A4*/A7b*`. **DONE:** A5 (`810586d`) · D-A2-2 (`0526458`,
+S2-M1) · A3a (`28c2543`, S2-M2) · A7a (`work/catalyst-evidence-2-s1/`, deterministic `subType`
+formatting only). **A3b is BLOCKED** — enforcement requires its own Owner-approved
 rule / date-truth manifest (O-4); the A3a evidence it would be ruled from now exists and measures
 **25 equal · 2 differ · 2 no-evidence-date over 29 catalysts**. **A6 HOLD** — reopens only on a
 measured true duplicate within one run.
