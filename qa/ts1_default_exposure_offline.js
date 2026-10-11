@@ -12,6 +12,7 @@
  *   TX-4  the real D1 statement, run on a fixture window, makes the real _ts1RowHtml expression yield the row;
  *         `= false` and the string 'true' yield '';
  *   TX-5  no default exists for any other PT_ENABLE_* gate (only PORTFOLIO_RESEARCH, pre-existing, and TECH_SCORE).
+ *         LB-R1 (2026-10-11): one strict session-only Deep Dive write, exclusively inside setLabsFlag, is not a default.
  * Every row carries planted negatives: each mutates an in-memory COPY of index.html and the SAME checker
  * function must reject it. "Live" scanning skips comments and string literals (the D1 comment and several
  * console.warn strings legitimately contain `= true` / `= false` text).
@@ -180,9 +181,33 @@ const MUST_HAVE_NO_DEFAULT = [
   'PT_ENABLE_DEEP_DIVE', 'PT_ENABLE_RESEARCH_EVIDENCE_CLIENT', 'PT_ENABLE_CAPITAL_RETURNS_CLIENT',
   'PT_ENABLE_SEC_EVIDENCE_STORE_CLIENT', 'PT_ENABLE_FUND_FACTS_READ_CLIENT', 'PT_ENABLE_EDGAR_FORM4'
 ];
+// LB-R1 (Owner, 2026-10-11): a user-initiated, session-only Labs toggle is not a load-time default.
+// Exactly one strict write per listed gate is allowed, and only inside the named setter.
+const LABS_WRITERS = { PT_ENABLE_DEEP_DIVE: { fn: 'setLabsFlag', stmt: 'window.PT_ENABLE_DEEP_DIVE = (on === true);' } };
+function labsWriterSpan(src, fn) {
+  const body = extractFunctionSource(src, fn);
+  if (!body || src.split('function ' + fn + '(').length - 1 !== 1) return null;
+  const at = src.indexOf(body);
+  return [at, at + body.length];
+}
 function checkTx5(src) {
   const r = { ok: false, reason: null };
-  const names = liveGateAssignments(src).map(function (m) { return m[1]; });
+  if (liveMatches(src, /\b(?:globalThis|self|top|parent|frames)\s*\.\s*PT_ENABLE_[A-Z0-9_]+\s*=(?!=)/g).length) { r.reason = 'gate write through a global alias'; return r; }
+  if (liveMatches(src, /\bReflect\s*\.\s*(?:set|defineProperty)\s*\(\s*(?:window|globalThis|self)\b/g).length) { r.reason = 'Reflect write on the global object'; return r; }
+  let all = liveGateAssignments(src);
+  for (const name of Object.keys(LABS_WRITERS)) {
+    const w = LABS_WRITERS[name];
+    const mine = all.filter(function (m) { return m[1] === name; });
+    if (!mine.length) continue;
+    const span = labsWriterSpan(src, w.fn);
+    const form1 = liveMatches(src, new RegExp('\\bwindow\\s*\\.\\s*' + name + '\\s*=(?!=)', 'g'));
+    if (mine.length !== 1 || form1.length !== 1 || !span) { r.reason = name + ': exactly one Labs writer allowed (' + mine.length + ')'; return r; }
+    const at = form1[0].index;
+    if (!(at > span[0] && at < span[1])) { r.reason = name + ': written outside ' + w.fn; return r; }
+    if (src.slice(at, at + w.stmt.length) !== w.stmt) { r.reason = name + ': non-strict Labs write'; return r; }
+    all = all.filter(function (m) { return m[1] !== name; });
+  }
+  const names = all.map(function (m) { return m[1]; });
   const stray = names.filter(function (n) { return ALLOWED_DEFAULTS.indexOf(n) === -1; });
   if (stray.length) { r.reason = 'default assignment for ' + stray[0]; return r; }
   for (const n of MUST_HAVE_NO_DEFAULT) {
@@ -249,6 +274,22 @@ const NEG = [
     return mutate(real, D1_BLOCK, D1_BLOCK + "\n  window['PT_ENABLE_DEEP_DIVE'] = true;"); } },
   { id: 'TX-5', label: 'Deep Dive default hidden behind an inline block comment', make: function () {
     return mutate(real, D1_BLOCK, D1_BLOCK + '\n  /* note */ window.PT_ENABLE_DEEP_DIVE = true;'); } },
+  { id: 'TX-5', label: 'LB-R1: strict Deep Dive write placed in init()', make: function () {
+    return mutate(real, D1_BLOCK, D1_BLOCK + '\n  window.PT_ENABLE_DEEP_DIVE = (on === true);'); } },
+  { id: 'TX-5', label: 'LB-R1: duplicate Deep Dive writer', make: function () {
+    return mutate(real, "    window.PT_ENABLE_DEEP_DIVE = (on === true);\n", "    window.PT_ENABLE_DEEP_DIVE = (on === true);\n    window.PT_ENABLE_DEEP_DIVE = (on === true);\n"); } },
+  { id: 'TX-5', label: 'LB-R1: non-strict Deep Dive write (= on)', make: function () {
+    return mutate(real, "    window.PT_ENABLE_DEEP_DIVE = (on === true);\n", "    window.PT_ENABLE_DEEP_DIVE = on;\n"); } },
+  { id: 'TX-5', label: 'LB-R1: non-strict Deep Dive write (= true)', make: function () {
+    return mutate(real, "    window.PT_ENABLE_DEEP_DIVE = (on === true);\n", "    window.PT_ENABLE_DEEP_DIVE = true;\n"); } },
+  { id: 'TX-2', label: 'LB-R1: computed-key write in setLabsFlag', make: function () {
+    return mutate(real, "    window.PT_ENABLE_DEEP_DIVE = (on === true);\n", "    window[flag] = (on === true);\n"); } },
+  { id: 'TX-5', label: 'LB-R1: globalThis alias write', make: function () {
+    return mutate(real, "    window.PT_ENABLE_DEEP_DIVE = (on === true);\n", "    globalThis.PT_ENABLE_DEEP_DIVE = (on === true);\n"); } },
+  { id: 'TX-5', label: 'LB-R1: Reflect.set write', make: function () {
+    return mutate(real, "    window.PT_ENABLE_DEEP_DIVE = (on === true);\n", "    Reflect.set(window, 'PT_ENABLE_DEEP_DIVE', on === true);\n"); } },
+  { id: 'TX-5', label: 'LB-R1: another forbidden gate written inside setLabsFlag', make: function () {
+    return mutate(real, "    window.PT_ENABLE_DEEP_DIVE = (on === true);\n", "    window.PT_ENABLE_DEEP_DIVE = (on === true);\n    window.PT_ENABLE_FUND_FACTS_READ_CLIENT = (on === true);\n"); } },
   { id: 'TX-5', label: 'unrelated gate default added', make: function () {
     return mutate(real, D1_BLOCK, D1_BLOCK + '\n  window.PT_ENABLE_FUND_FACTS_READ_CLIENT = true;'); } }
 ];

@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "71cf9ad863cb0d97548c3639a0119164ddcec8690aa524bfeae0966a0798ef99",
+  "fileSha256": "3e7fd18d2e245ce6858fc5c976bf56cb045086bab28d5f73b45be8d033804b13",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -342,6 +342,7 @@
     "removeTicker": "99e5b046acd74cda97dd7b04146c89c9d97c2d949d4fbcee813f9a6661d0a9d0",
     "renderApiTable": "6ab781fd896bb61a4120a7b6c3529e93e0adf16fb844fd7ba25e5c5d4b245c12",
     "renderChips": "5419165553a4459a6e14d1e39f200ce24d87229b30914685aeafdd4f327bd167",
+    "renderLabsToggles": "1c1eef23e6bd00d30cd8bda43f9246643deea275b157c32827e5f50d7c89d94d",
     "renderMainPanel": "a248cfabfa0b8d859e2951888a33cdb7d92e008b9de2f2b5e709270c10bed57b",
     "renderResearchSourceMeta": "7925a95484bde4aab61d18b2454c15803b3568c61f6ff19fc130e48cbea4c459",
     "renderResults": "3e5e77b063e3712741ef28fe2a63143eabf882f2f88cb27a0cdb7aeb2ba286b1",
@@ -364,6 +365,7 @@
     "scoreTickerTech": "0502f16dde11e62c2bd9e94eecc9a002abbb63a9104635b2da872091b6c13ba4",
     "selectTicker": "803aafa051f65a3eb47a1bfe70cd722d8ca41950a4eebfe92175a658c7bb19a4",
     "setInScan": "189a0658a45435071b52456a96cadcb8a8b2bebf1aae136aace9d4c88bc8cbf4",
+    "setLabsFlag": "f718cb9f0329a5b71ae15645dfed609044dcc32013980801e1cf78664efef2fd",
     "setProgress": "2ac508a1654540a8d86ff40c0277acf15336b6d7db75ca04b9ce953c78558345",
     "setSrMode": "d8d618202f42f53486cec012e312e4dc44f33c828cfce5891dae67b24bedd354",
     "showError": "86c39d29542781ce20ae3f6086eb6977c78aa44083d284434a935736e5b65a12",
@@ -371,7 +373,7 @@
     "switchMainView": "7edddaa8d68bcb5fe05b3710e31e82601c75ea7374622ecbff64a6e9e71d7b1c",
     "switchTab": "6fe47602a906f54a99759fba134bf8c7e35c249e2de306609ffeeb2153fe6dac",
     "toggleAllVisibleScanInclusion": "ad4e4612c9ff064bdcd1d863e0ca5fe3af533e1f32df72656d5ab8d5c38e5842",
-    "toggleApiStatus": "51edafd4053f3d61a2fcdddf43dda063427cfaf2e7ac49a02e0f7559edefb3a1",
+    "toggleApiStatus": "2d31bb414b6761d9cfc1e89a17cf347d8d0814a0fa6136b4026ec5a5fd5195d8",
     "toggleResultsDensity": "903f1710e13d70a3169e985190fbf36784fec5022ccd067e8cfc30fd6bfc601d",
     "toggleScanInclusion": "c294892998ee9e560153317e272ea4bafb4a73a1e0e265dc01f6a0dc32f35e33",
     "toggleSelectedOnly": "6d188f5e5c5ee37695aaa7e539e1b1dc0313ed484ab4b93849408f99a0640274",
@@ -531,5 +533,5 @@
       "sha256": "79b78d1ed91f3d6f8c2b867378a1a228f83399c8931ddd150eea31143bb3a31e"
     }
   },
-  "remainderSha256": "c34b8ed639249e7fac06aea937f60bfe2ba24d5f8fadff86dea8386816a2d3c5"
+  "remainderSha256": "6eb7fabd21756468e34f4d0f4042bf5ba5775b57705942628f0fa7fe5b1037cf"
 }

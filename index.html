@@ -660,6 +660,11 @@ select.edit-inp{appearance:none;cursor:pointer}
 .api-info-icon{color:var(--blue2);font-size:16px;flex-shrink:0}
 .api-info-title{font-size:13px;font-weight:600;color:var(--blue2);margin-bottom:3px}
 .api-info-text{font-size:12px;color:var(--text2);line-height:1.6}
+.labs-box{padding:14px 20px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:8px}
+.labs-title{font-size:13px;font-weight:600;color:var(--text)}
+.labs-sub{font-size:12px;color:var(--text2)}
+.labs-row{display:flex;gap:10px;align-items:flex-start;font-size:12.5px;color:var(--text2);cursor:pointer}
+.labs-row b{color:var(--text);font-weight:600}
 .all-ok-badge{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9px;font-weight:600;color:var(--green2)}
 .all-ok-dot{width:7px;height:7px;border-radius:50%;background:var(--green2)}
 /* Phase 5C: Pulse v1.1 Card Grid */
@@ -16134,7 +16139,7 @@ function toggleApiStatus() {
   const overlay = document.getElementById('apiOverlay');
   const isOpen = overlay.classList.contains('open');
   overlay.classList.toggle('open');
-  if (!isOpen) renderApiTable();
+  if (!isOpen) { renderApiTable(); renderLabsToggles(); }
 }
 
 function renderApiTable() {
@@ -16168,6 +16173,33 @@ function renderApiTable() {
       </td>
     </tr>`;
   }).join('');
+}
+
+// Entry 22b (Owner ruling 2026-10-03; LB-R1 2026-10-11): session-only Labs switches. Each switch writes
+// its gate by name as a strict boolean, in memory only — no storage write, no fetch, no scan, no
+// computed-key write. Gates keep their strict === true checks; the existing Portfolio Research init
+// read is untouched (its cleanup is separate scope).
+const PT_LABS_FLAGS = ['PT_ENABLE_DEEP_DIVE', 'PT_ENABLE_PORTFOLIO_RESEARCH'];
+function renderLabsToggles() {
+  PT_LABS_FLAGS.forEach(function (flag) {
+    var el = document.getElementById('labs-' + flag);
+    if (el) el.checked = (window[flag] === true);
+  });
+}
+function setLabsFlag(flag, on) {
+  if (flag === 'PT_ENABLE_DEEP_DIVE') {
+    window.PT_ENABLE_DEEP_DIVE = (on === true);
+    if (_activeTicker) {
+      const item = _cockpitResults.find(r => r.ticker === _activeTicker);
+      if (item) renderMainPanel(item);
+    }
+  } else if (flag === 'PT_ENABLE_PORTFOLIO_RESEARCH') {
+    window.PT_ENABLE_PORTFOLIO_RESEARCH = (on === true);
+    if (_pfIsPortfolioViewActive() && !_pfLiveRunCanceller) _renderPortfolioPanel();
+  } else {
+    return;
+  }
+  renderLabsToggles();
 }
 
 async function checkApi(id) {
@@ -16269,6 +16301,14 @@ async function checkAllApis() {
         <div class="api-info-title">About API Status</div>
         <div class="api-info-text">This section lets you verify all data providers are working correctly. Each check sends a minimal test request. All API keys are managed server-side.</div>
       </div>
+    </div>
+    <div class="labs-box" id="labsBox">
+      <div class="labs-title">Labs</div>
+      <div class="labs-sub">Experimental features that already work. Switches reset when you reload the page.</div>
+      <label class="labs-row"><input type="checkbox" id="labs-PT_ENABLE_DEEP_DIVE" onchange="setLabsFlag('PT_ENABLE_DEEP_DIVE', this.checked)">
+        <span><b>Deep Dive</b> — adds the AI Deep Dive card to the ticker view. Each run is one paid AI call, only when you press its button.</span></label>
+      <label class="labs-row"><input type="checkbox" id="labs-PT_ENABLE_PORTFOLIO_RESEARCH" onchange="setLabsFlag('PT_ENABLE_PORTFOLIO_RESEARCH', this.checked)">
+        <span><b>Portfolio research</b> — shows research results you already have in the Portfolio view. Starts no new research.</span></label>
     </div>
   </div>
 </div>
