@@ -1,0 +1,78 @@
+# Review: market-data-1 — live portfolio prices: Yahoo-only provider policy and an hourly server budget (BACKLOG entry 20)
+
+Task branch `task/market-data-1`, recorded task base `eb362b03e0d1a3e36c12c5ee063eab54fc79e518` (brief commit; planning baseline `aff45b286b5a9552beac2c721a57b35c7226e3a3`). Slot B, Mode Manual. Two slices run as one program; checkpoints C1 `a8016c5` and C2 `430749b`.
+
+## Files changed
+- Implementation (4): netlify/functions/market-data.js, netlify/functions/lib/market-data-live-budget.js, qa/market_data_live_offline.js, qa/ath_isolation_offline.js
+- Evidence (tracked): work/market-data-1/brief.md, work/market-data-1/review.md
+
+Task diff against the base (numstat, `qa.log`): market-data.js 48/3, market-data-live-budget.js 46/0 (new), market_data_live_offline.js 591/0 (new), ath_isolation_offline.js 1/1, plus the step-10a `BACKLOG.md` line 1/1 (see Backlog reconciliation): 5 files, 687 insertions, 5 deletions. No other file changed; `index.html`, the client, `package.json`, the hooks, the settings and every E1-gated input are untouched.
+
+## Implementation
+- **S1 — provider policy (`market-data.js`).** `const polygonAllowed = polygonKey !== '' && purpose !== 'portfolio-live';` replaces the two `if (polygonKey)` conditions (daily fallback, historical Polygon-first). For `portfolio-live` the daily branch never calls `fetchPolygon` (Yahoo fails → the existing 502 body) and the historical branch uses Yahoo only; a dedicated `else if` logs that portfolio-live is Yahoo-only, and the historical provider-policy log names "Yahoo only" for portfolio-live. For the scan path (absent purpose or `purpose=scan`) `polygonAllowed` equals the old `polygonKey` truthiness and the scan log lines are byte-identical. `ensureProvider(data, 'yahoo')` is unchanged.
+- **S2 — hourly budget.** New pure lib `netlify/functions/lib/market-data-live-budget.js`: `BUDGET_PER_HOUR = 300`, store name `market-data-live-budget`, key `md:live-budget:<YYYY-MM-DDTHH>` (UTC), `take(store, nowIso, units)` → `true` (counted) or `false` (a read-modify-write counter, the repo's proven pattern: exact for sequential requests, approximate under simultaneous requests — see the DEFER below); a missing counter is 0; an invalid or negative counter (strict `/^\d+$/`), a store error, a missing or malformed store, bad `units` or a bad time all return `false` (fail closed); `used + units > 300` is `false`. Wiring in `market-data.js`, only for `portfolio-live`, after the server gate and the symbol validation and before `polygonKey` / any upstream I/O: `takeLiveBudget(event, range)` (units 1, plus 1 on a daily range in PRE / POST) and, on refusal, `res(429, ENVELOPE_BUDGET_EXHAUSTED)` with the brief's exact body. The lib and `@netlify/blobs` are required inside that branch only; the store is opened through the guarded `connectLambda(event)` + `getStore(name)` pattern of the repo's legacy Lambda-style functions.
+
+## Readings and deviations from the brief's wording (recorded in `plan.md` §4)
+- **R-1 overlay unit.** "plus 1 when the ET session needs the extended-hours overlay" is charged where the overlay request exists — the daily branch (`1d`, `5d`) — so `units` equals the number of upstream calls; a historical range is always 1 unit. Codex confirmed this is faithful to "at most 300 upstream calls per hour".
+- **R-2 seams.** `event._testStore`, `event._testClock = { nowMs }` (the precedent in the ATH ensure core) and the global `fetch` spy; Netlify never builds those event properties from a request.
+- **R-3 strict counter.** A stored counter must match `/^\d+$/` (so `'12abc'` is invalid, unlike `parseInt`); `units` must be a positive integer. Stricter than the precedent, in the direction the brief requires.
+- **R-4 laziness.** Failing to load the lib or the storage package, or to open the store, refuses the request (429); it never admits it.
+- **R-5 placement.** The scan-path lines are not edited (`getEtSession()` in the daily branch still reads the real clock); the budget uses `getEtSession(new Date(nowMs))`.
+- **R-6 `connectLambda` (added during S2 on my own review).** The first S2 wiring called `getStore` directly. The repo's legacy Lambda functions (`tradingview-webhook.js`, `portfolio-sync.js`, `lib/evidence-cache.js`) connect the Blobs context first, guarded by `event.blobs`; without it an activated feature would fail closed forever. Fixed before the Codex review and pinned by MB-9 / MB-N7 (a stand-in for the storage package records the call order).
+- **Test-file fixture note.** Once S2 landed, the S1 rows needed a store for portfolio-live calls (the budget fails closed without one); `callHandler` injects a fresh in-memory store by default, with `noStore` for the one row that tests an unavailable store.
+
+## QA
+- **Step 0** (before any edit; digest-gated, no force, overrides unset): `npm run qa:offline` **PASS, 79 suites**, runner total 206989 ms (wall 210 s), the four `E1 … SKIP` lines with the pinned digests; line 1 of `qa.log`.
+- **S1 RED** (tests first, handler unchanged): `qa/market_data_live_offline.js` FAIL 3/8 — ML-3, ML-4 and ML-N1 failed (Polygon requested for portfolio-live); ML-1, ML-2, ML-5, ML-6 and ML-N2 passed because they pin existing behaviour.
+- **S1 GREEN:** 8/8, then 9/9 with ML-7 (all eight ranges × Polygon key set / unset × Yahoo ok / failed for portfolio-live; scan without a key stays Yahoo-only) added on a Codex observation. `ath_isolation` PASS 23 after the pin update; `fund_facts_route` PASS 14.
+- **S2 RED** (lib drafted, handler unwired): MB-1, MB-2, MB-3, MB-4, MB-5 and MB-7 failed and every negative reported that the real source did not satisfy its scenario (or that the anchor was absent). The lib rows LB-1…LB-5 passed because the small pure lib existed first; their bite is shown by the lib negatives MB-N2, MB-N4 and MB-N5 (the lib, mutated, flips the handler scenarios) — recorded here honestly as a departure from strict tests-first for the lib.
+- **S2 GREEN:** `qa/market_data_live_offline.js` **PASS 30/30** — ML-1…ML-7; LB-1…LB-5 (300th unit allowed and 301st refused with no write, multi-unit boundary, key and store name, new hour, missing and leading-zero counters, malformed counters / store errors / bad store / bad units / bad time, lib purity); MB-1…MB-9 (the 300/301 boundary on daily and historical ranges, hour rollover, overlay units by session, fail-closed incl. an unavailable store, scan path isolation with a module-load spy, gate and validation before the budget, call order store.get → store.set → fetch, client compatibility, the production store path); planted negatives ML-N1, ML-N2, MB-N1…MB-N7 (Polygon re-enabled; scan order changed; guard after the fetch; counter not checked; scan counted; fail-open on a store error; lenient counter; overlay not counted; connect dropped), each mutating the production source or lib on a temp copy with every anchor proven to occur exactly once and each preceded by a positive control. `ath_isolation` PASS 23; `fund_facts_route` PASS 14.
+- **Step 10** (full `npm run qa:offline` at C2; digest-gated, no force, overrides unset): **PASS, 80 suites** (= step 0 + 1), 96 PASS lines (step 0: 95), 0 FAIL lines, runner total 214630 ms (wall 219 s), the four `E1 … SKIP` lines unchanged. The step-10a `BACKLOG.md` edit came after this run; no suite reads that file as text.
+
+### `ath_isolation` pin — old → new → revert proof (brief S1.4: exactly one pin, once per slice)
+| Slice | Old pin | New pin | Revert proof |
+|---|---|---|---|
+| S1 | `f9b70977eade3a9ec967b87111a54a5a85d634f0824e448ab2ed746989c61125` | `7a982e680f73ac0023797ba5efb365a9282e90f8829da91753c03fd0e49f8bad` | the working-tree diff against the base HEAD is exactly the listed S1 hunks (numstat 7/3); the HEAD blob's LF sha256 equals the old pin |
+| S2 | `7a982e680f73ac0023797ba5efb365a9282e90f8829da91753c03fd0e49f8bad` | `955e7396536f4ea567a390b678be3db67a6978975e97c7b9f8782711768a0f17` | the diff against C1 is exactly the listed S2 hunks (numstat 41/0); the C1 blob's LF sha256 equals the S1 pin |
+The only change in `qa/ath_isolation_offline.js` is that one `BASELINE_PINS` value; no other pin or assertion changed. The new lib and the edited handler contain none of the AR-7g forbidden tokens (the suite passes).
+
+## Events
+- At the start the Owner interrupted three read-only checks (rejected tool prompts) and asked for fewer prompts, in-workspace operation and batched read-only checks; the checks were re-done as one git command plus read-tool calls. The lane check before step 0 and step 10 used a read-only process listing (no `run-offline.js`, `qa:offline` or `qa/*_offline.js` process).
+- No hook denial occurred in this task.
+
+## Fresh-context self-review
+Re-read the brief and the complete diff against the requirement → test map. Changes that resulted: the budget wiring gained the guarded `connectLambda(event)` (R-6, found by reading the repo's legacy Lambda precedents); the S1 fixture gained a default in-memory store for portfolio-live calls once S2 made the budget mandatory; MB-N5 gained its missing positive control; ML-7 was added for the unset-key and other-range cases.
+
+## Codex (raw output in `codex.md`)
+- **S1 (step 8, real diff):** overall HOLD on two findings, both REJECTed after verification — see the ledger. Checks 1, 3, 4 and 5 had no finding.
+- **Whole program (step 8, real diff incl. S2):** overall HOLD on one Class I finding, DEFERred — see the ledger. Its seven checks (S2.1 spec; wiring and placement; the `connectLambda` pattern against three precedents and the strong-consistency get argument; reading R-1; the test seams; test meaning; scope, pins and forbidden tokens) were otherwise "no finding".
+
+### FIX / DEFER / REJECT ledger
+- **REJECT — Class I, "an untracked `.claude/settings.local.json` outside the land-scope" (S1 review).** The file is ignored by the user's global ignore rule (`**/.claude/settings.local.json`, verified with `git check-ignore -v`), predates the task (modified 2026-10-06), does not appear in `git status` in the Worker environment and was never staged; Codex's sandbox evidently lacked the global git configuration.
+- **REJECT — Class II, "the planted negatives could not run (EPERM on mkdtemp)" (S1 review).** Environmental: Codex's sandbox is read-only. The suite is GREEN in the Worker environment (9/9 at S1, 30/30 at S2).
+- **DEFER — Class I, "the counter is a non-atomic read-modify-write; simultaneous requests can admit units beyond 300" (`market-data-live-budget.js` `take`).** Correct, but outside the approved scope: the brief specifies this proven pattern (`takeBudget`, read-modify-write) and its precedent documents it as approximate under concurrency and acceptable for a cost backstop; an atomic / conditional-write counter changes the storage semantics (a contract change beyond S2.1) and the overshoot is bounded by the number of in-flight requests within an hour. Belongs in a later hardening task (a conditional-write counter); recorded in Lessons. Surfaced for the Owner at LAND.
+- **FIX — Class I (step-12 final check), the step-10a `BACKLOG.md` status text and `review.md` said "capped at 300" without qualifying the read-modify-write counter.** Codex judged the DEFER above defensible and `codex-classI-unresolved=0` supported, but the wording overstated the guarantee, and an incorrect backlog reconciliation is Class I. Fixed (wording only, no implementation file): "capped at about 300 upstream calls per UTC hour (a read-modify-write counter: exact for sequential requests, simultaneous requests can briefly overshoot …)" in `BACKLOG.md` entry 20, the before → after quotation below and the S2 implementation bullet. No QA re-run was required (no implementation file changed; no suite reads `BACKLOG.md` as text). One scoped Codex re-pass of the changed hunks: **PASS**, no new Class I.
+- **REJECT — Class II (step-12 final check), "`review.md` is labelled tracked but is untracked".** "Evidence (tracked)" is the fixed two-row shape that AGENTS mandates for `## Files changed`; `review.md` is committed in the step-13 commit.
+- No FIX in an implementation file. Observations adopted: ML-7 (above). Observation not adopted: the daily portfolio-live Yahoo-failure log still says "falling back to Polygon" although none follows (log text only; the scan log lines must stay byte-identical) — recorded in Lessons.
+
+### Final check (step 12, raw output in `codex.md` under `## Final check`)
+Round 1 (complete task diff incl. `review.md` and the `BACKLOG.md` reconciliation): overall HOLD — one Class I (the unqualified cap wording; the DEFER itself was judged defensible and `codex-classI-unresolved=0` supported) and one Class II ("tracked" label), both dispositioned in the ledger above. Round 2 (the single scoped re-pass of the changed hunks): overall **PASS**, no new Class I.
+Final check: 2 rounds, 1 class-I findings — 1 FIX, 0 DEFER, 0 REJECT, 0 unresolved; QA/re-pass performed where required; 1 class-II finding REJECTed with a reason (the AGENTS-mandated "Evidence (tracked)" row label).
+
+## Backlog reconciliation
+- Brief's Backlog row: entry **20** (Live prices activation), expected effect **`partial`**.
+- Action taken: **updated**.
+- Entry 20 heading is unchanged (`| 20 | Live prices activation | Market Data |`). Status text, before → after: `**Still missing the server-side cost backstop**; enabling without it exposes unbounded API cost` → `**The server-side cost backstop has landed** (`work/market-data-1/`): portfolio-live is Yahoo-only and capped at about 300 upstream calls per UTC hour (a read-modify-write counter: exact for sequential requests, simultaneous requests can briefly overshoot; typed HTTP 429 `BUDGET_EXHAUSTED` beyond the cap, fail closed); **activation remains an Owner env action** (`PT_ENABLE_PORTFOLIO_LIVE_PRICES_SERVER`)`.
+- The new BACKLOG text matches the diff, the QA results above and the work being landed. The entry stays open (activation is a separate Owner env action), so no DONE / HISTORY line is added.
+- Not touched: the snapshot-table row for entry 20, the counts and every other entry.
+
+## Lessons
+- [rule] A legacy Lambda-style function (`exports.handler`) that opens a Netlify Blobs store must connect the Blobs context first. Destination-ready text for AGENTS.md or `.claude/rules/qa-suites.md`: "A change that opens a Blobs store from an `exports.handler` function guards `connectLambda(event)` with `event.blobs` before `getStore()`, and its offline suite pins that order with a stand-in for the storage package — an injected `_testStore` cannot show the omission."
+- [backlog] The hourly budget counter is a non-atomic read-modify-write (the repo's proven pattern); a conditional-write (etag) counter would make the cap exact under concurrency — pending routing
+- [backlog] In `market-data.js` the daily-branch log line after a failed Yahoo request still says "falling back to Polygon" for portfolio-live, where no fallback exists; a portfolio-live-only wording would need a re-pin and was left to keep scan logs byte-identical — pending routing
+- [local] New files written by the Write tool are LF in the working tree while the repo's files are CRLF (`i/lf` in the index either way); no digest or pin depends on it for the two new files.
+- [local] Codex's read-only sandbox cannot create temp directories, so the planted-negative rows cannot run there; the Worker's evidence is the run in the Worker environment.
+- [covered] Planted negatives and mutation proofs on production source, with positive controls — already required by `.claude/rules/qa-suites.md`.
+
+## LAND-EVIDENCE
+LAND-EVIDENCE: qa-offline=PASS 80; targeted=PASS; codex-classI-unresolved=0
