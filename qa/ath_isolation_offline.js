@@ -216,7 +216,7 @@ const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'ind
 const BASELINE_PINS = {
   'netlify/functions/lib/fund-facts-preflight.js': '2a9a4d3682d68904745b9ec14cbc6fa19fb18e81ad3cd29fa7848eb5455101c2',
   'netlify/functions/lib/fund-facts-read-preflight.js': '1ce8c4c5bead5ddd0f0b52e24f012266f1ff06e44daf77721e9a34131c431990',
-  'netlify/functions/market-data.js': 'f9b70977eade3a9ec967b87111a54a5a85d634f0824e448ab2ed746989c61125'
+  'netlify/functions/market-data.js': '7a982e680f73ac0023797ba5efb365a9282e90f8829da91753c03fd0e49f8bad'
 };
 
 function sha256Lf(text) { return crypto.createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex'); }

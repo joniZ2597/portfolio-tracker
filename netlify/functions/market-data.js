@@ -53,6 +53,8 @@ exports.handler = async function (event) {
   }
 
   const polygonKey = process.env.POLYGON_API_KEY || '';
+  // portfolio-live is Yahoo-only (market-data-1, ruling M-1): the metered Polygon key is never used for it.
+  const polygonAllowed = polygonKey !== '' && purpose !== 'portfolio-live';
 
   // ── 2. Provider policy ───────────────────────────────────────────────────
   // Daily price ranges (5d / 1d): Yahoo first — Polygon aggregates are end-of-day
@@ -103,7 +105,7 @@ exports.handler = async function (event) {
       console.warn('[market-data] yahoo failed for', sym + ':', _mainRes.reason?.message, '— falling back to Polygon');
     }
 
-    if (polygonKey) {
+    if (polygonAllowed) {
       try {
         const data = await fetchPolygon(sym, interval, range, polygonKey);
         if (data) {
@@ -119,10 +121,10 @@ exports.handler = async function (event) {
     return res(502, { error: 'All providers failed for ' + sym + ' range=' + range });
 
   } else {
-    console.log('[market-data] provider policy: historical range -> Polygon first for', sym, 'range=' + range);
+    console.log('[market-data] provider policy: historical range -> ' + (purpose === 'portfolio-live' ? 'Yahoo only' : 'Polygon first') + ' for', sym, 'range=' + range);
 
     // ── Historical: Polygon → Yahoo fallback ────────────────────────────────
-    if (polygonKey) {
+    if (polygonAllowed) {
       try {
         const data = await fetchPolygon(sym, interval, range, polygonKey);
         if (data) {
@@ -133,6 +135,8 @@ exports.handler = async function (event) {
       } catch (polyErr) {
         console.warn('[market-data] polygon failed for', sym + ':', polyErr.message, '— falling back to Yahoo');
       }
+    } else if (purpose === 'portfolio-live') {
+      console.log('[market-data] portfolio-live is Yahoo-only — using Yahoo for', sym);
     } else {
       console.log('[market-data] POLYGON_API_KEY not set — using Yahoo for', sym);
     }
