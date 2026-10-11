@@ -208,8 +208,9 @@ evidence.
 
 Replace `_isETF` (`index.html:11881`) with one `ptAssetType`; stop showing stock-only XBRL
 fields as missing on ETFs. Widens ETF treatment to TAN/ITA/KRE. **Gates entry 19.**
-*Master:* COVERED BY `surface-1` S1 (P2a) — partial; P2b (Edit-ticker choice + persistence, Manual) belongs to the
-future `surface-2` Master.
+*Master:* `surface-1` S1 (P2a) — **partial: P2a landed** (`work/surface-1/`, 2026-10-11: one `ptAssetType`; TAN / ITA / KRE
+recognised; the Capital Returns and Fund Facts cards say "not applicable" for ETFs); P2b (Edit-ticker choice + persistence,
+Manual) remains for the future `surface-2` Master.
 *Legacy refs:* `WP-P2 Slice B`, `BC-3b`.
 
 ### 22 · Gate exposure & surfacing policy
