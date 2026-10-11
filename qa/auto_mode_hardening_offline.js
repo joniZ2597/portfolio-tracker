@@ -81,6 +81,455 @@ function expectAll(label, rows, cwd, expected, tool) {
   }
 }
 
+// ═══════════════ E1: the digest gate (work/qa-e1-digest-gate/brief.md) ═══════════════
+// Every row of this suite that starts a process (real Git, Node, the hook CLI) is HEAVY: it is registered through heavy() and is skipped only
+// when the source digest equals AH_CONTRACT_PIN.source AND the environment key is one of AH_CONTRACT_PIN.environments (the GC-4 / FT-0 pattern; digestParts of
+// qa/lib/exec-env-fingerprint.js). Every other case runs it: a changed input runs it and then FAILS "re-pin required"; an unproven environment
+// runs it and passes with a notice; an override variable or PT_QA_FORCE_HEAVY=1 is a full replay. A pin is set only from a forced replay's printed digests.
+const FPLIB = require('./lib/exec-env-fingerprint');
+const e1crypto = require('crypto');
+const AH_CONTRACT_PIN = {
+  source: 'bda8013612f9d8e145ffd7c781076a863cadc14c98f1ad1403abba458208ec38',
+  environments: ['5257c227140204f038c0ec7eb724abb44dbf4e31a2c6d3c5e8a6f07727f1aeb0']
+};
+const E1_LABEL = 'auto-mode-hardening';
+const E1_PART_NAMES = [
+  '.claude/hooks/pretooluse-guard.js',
+  '.claude/settings.json',
+  'qa/guard_integrity_check.js',
+  'qa/lib/exec-env-fingerprint.js'
+];
+const E1_OVERRIDE_VARS = ['PT_LAND_TOOL_PATH', 'AH_HOOK_PATH', 'AH_SETTINGS_PATH', 'TB_ONLY', 'NODE_OPTIONS'];
+const E1_HEX64 = /^[0-9a-f]{64}$/;
+const E1_OWN_NAME = 'qa/' + path.basename(__filename);
+function e1Assert(cond, message) { if (!cond) throw new Error(message); }
+function e1Normalise(text) { return String(text).replace(/\r\n/g, '\n'); }
+// A pin cannot be part of its own digest: the pin statement is neutralised in this file's own source part.
+function e1OwnNeutral(text) { return e1Normalise(text).replace(/const AH_CONTRACT_PIN = \{[\s\S]*?\n\};/, 'const AH_CONTRACT_PIN = PIN;'); }
+function e1PinValid(pin) {
+  return !!pin && typeof pin.source === 'string' && E1_HEX64.test(pin.source) && Array.isArray(pin.environments) && pin.environments.length > 0 &&
+    pin.environments.every((x) => typeof x === 'string' && E1_HEX64.test(x)) && new Set(pin.environments).size === pin.environments.length;
+}
+// R4, a pure function. G0 force set to anything but exactly "1"; G6 pin malformed; G4 an override variable set (defined and non-empty);
+// G3 source differs from the pin; G5 force "1"; G2 environment not in the pin; G1 skip.
+function e1Decide(o) {
+  const vars = o.vars || {};
+  const force = vars.PT_QA_FORCE_HEAVY;
+  if (force !== undefined && force !== '1') return 'invalid-force';
+  if (!e1PinValid(o.pin)) return 'pin-invalid';
+  const over = E1_OVERRIDE_VARS.filter((v) => vars[v] !== undefined && vars[v] !== '');
+  if (over.length > 0) return 'override:' + over[0];
+  if (o.pin.source !== o.src) return 'replay-fail';
+  if (force === '1') return 'forced';
+  if (o.pin.environments.indexOf(o.env) === -1) return 'replay-notice';
+  return 'skip';
+}
+// The source parts (R2), always read from the repo paths under ROOT (never from an override path), LF-normalised, plus this file's own source.
+function e1Parts(ownText) {
+  const parts = [];
+  for (const rel of E1_PART_NAMES) parts.push({ name: rel, bytes: Buffer.from(e1Normalise(fs.readFileSync(path.join(ROOT, rel), 'utf8')), 'utf8') });
+  parts.push({ name: E1_OWN_NAME, bytes: Buffer.from(e1OwnNeutral(ownText), 'utf8') });
+  return parts;
+}
+const E1_OWN_TEXT = fs.readFileSync(__filename, 'utf8');
+const E1_PARTS = e1Parts(E1_OWN_TEXT);
+const E1_SRC = FPLIB.digestParts(E1_PARTS);
+// R3: the environment key = the GC-4 / FT environment digest plus the FULL Node version (E1-D5); qa/lib/exec-env-fingerprint.js is unchanged.
+const E1_ENV = e1crypto.createHash('sha256').update('e1-env-v1\n' + FPLIB.collect().digest + '\nnode ' + process.version).digest('hex');
+const E1_VARS = {};
+for (const k of ['PT_QA_FORCE_HEAVY'].concat(E1_OVERRIDE_VARS)) if (process.env[k] !== undefined) E1_VARS[k] = process.env[k];
+const E1_GATE = e1Decide({ src: E1_SRC, env: E1_ENV, pin: AH_CONTRACT_PIN, vars: E1_VARS });
+const E1_SKIP = E1_GATE === 'skip';
+let e1Reached = 0;
+let e1Skipped = 0;
+let e1HeavyRun = 0;
+// A heavy block: skipped (and counted) under a matching pin, otherwise run in place, synchronously.
+function heavy(id, fn) {
+  e1Reached += 1;
+  if (E1_SKIP) { e1Skipped += 1; return; }
+  e1HeavyRun += 1;
+  fn();
+}
+function e1Row(name, fn) {
+  let ok = false;
+  try { fn(); ok = true; } catch (e) { console.log('  E1 detail: ' + (e && e.message ? e.message : String(e))); }
+  check(name, ok);
+}
+
+// ── source scanning (E1-1 / E1-2): comments, strings and regex literals are blanked so a scan sees only code ──
+function e1Blank(src) {
+  const out = src.split('');
+  const n = src.length;
+  const blankRange = (a, b) => { for (let k = a; k < b; k += 1) if (out[k] !== '\n') out[k] = ' '; };
+  let i = 0;
+  let prev = '';
+  let prevWord = '';
+  while (i < n) {
+    const c = src[i];
+    const d2 = src[i + 1];
+    if (c === '/' && d2 === '/') { let j = i; while (j < n && src[j] !== '\n') j += 1; blankRange(i, j); i = j; continue; }
+    if (c === '/' && d2 === '*') { let j = src.indexOf('*/', i + 2); j = j === -1 ? n : j + 2; blankRange(i, j); i = j; continue; }
+    if (c === '\'' || c === '"') {
+      let j = i + 1;
+      while (j < n && src[j] !== c && src[j] !== '\n') j += src[j] === '\\' ? 2 : 1;
+      blankRange(i + 1, j); i = j + 1; prev = c; prevWord = ''; continue;
+    }
+    if (c === '`') {
+      let j = i + 1;
+      while (j < n && src[j] !== '`') j += src[j] === '\\' ? 2 : 1;
+      blankRange(i + 1, j); i = j + 1; prev = c; prevWord = ''; continue;
+    }
+    if (/[A-Za-z0-9_$]/.test(c)) {
+      let j = i;
+      while (j < n && /[A-Za-z0-9_$]/.test(src[j])) j += 1;
+      prevWord = src.slice(i, j); prev = src[j - 1]; i = j; continue;
+    }
+    if (/\s/.test(c)) { i += 1; continue; }
+    if (c === '/') {
+      const regexOk = prev === '' || '(,=:[!&|?{};+-*%<>~^'.indexOf(prev) !== -1 || /^(?:return|typeof|case|in|of|delete|void|throw|new|else|do)$/.test(prevWord);
+      if (regexOk) {
+        let j = i + 1;
+        let cls = false;
+        while (j < n && src[j] !== '\n') {
+          const e = src[j];
+          if (e === '\\') { j += 2; continue; }
+          if (e === '[') cls = true; else if (e === ']') cls = false; else if (e === '/' && !cls) break;
+          j += 1;
+        }
+        blankRange(i + 1, j); i = j + 1;
+        while (i < n && /[a-z]/.test(src[i])) i += 1;
+        prev = ')'; prevWord = ''; continue;
+      }
+    }
+    prev = c; prevWord = ''; i += 1;
+  }
+  return out.join('');
+}
+// Index of the bracket that closes the one at blank[open], or -1.
+function e1Match(blank, open) {
+  const closeOf = { '(': ')', '[': ']', '{': '}' };
+  const stack = [];
+  for (let k = open; k < blank.length; k += 1) {
+    const c = blank[k];
+    if (c === '(' || c === '[' || c === '{') stack.push(closeOf[c]);
+    else if (c === ')' || c === ']' || c === '}') {
+      if (stack.pop() !== c) return -1;
+      if (stack.length === 0) return k;
+    }
+  }
+  return -1;
+}
+function e1Functions(blank) {
+  const fns = [];
+  const re = /\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g;
+  let m;
+  while ((m = re.exec(blank)) !== null) {
+    const close = e1Match(blank, m.index + m[0].length - 1);
+    if (close === -1) continue;
+    let b = close + 1;
+    while (b < blank.length && /\s/.test(blank[b])) b += 1;
+    if (blank[b] !== '{') continue;
+    const end = e1Match(blank, b);
+    if (end === -1) continue;
+    let a = m.index - 1;
+    while (a >= 0 && /\s/.test(blank[a])) a -= 1;
+    // a declaration is a statement (runs only when called); a named function expression (an IIFE, a callback) runs where it stands
+    fns.push({ name: m[1], start: b, end, decl: a < 0 || ';{})'.indexOf(blank[a]) !== -1 });
+  }
+  return fns;
+}
+// E1-2: every process start (spawnSync / execFileSync / execSync / spawn as code) and every use of a helper that starts one lies inside a heavy
+// callback, or inside a helper that does. A function that registers heavy rows is a registrar: its call arguments run inside them. The one structural
+// exception is a lambda table consumed only by a `for ... of` loop whose heavy rows are the only users of the lambdas (see tableOk below).
+function e1Scan(text) {
+  const blank = e1Blank(text);
+  const lineNo = (p) => text.slice(0, p).split('\n').length;
+  const notDef = (p) => blank.slice(Math.max(0, p - 9), p) !== 'function ';
+  const decls = e1Functions(blank).filter((f) => f.decl);
+  let m;
+  const procs = [];
+  const procRe = /\b(?:spawnSync|execFileSync|execSync|spawn)\(/g;
+  while ((m = procRe.exec(blank)) !== null) if (notDef(m.index)) procs.push(m.index);
+  const regs = [];
+  let firstHeavyCall = -1;
+  const regRe = /\b(?:heavy|heavyFn)\(/g;
+  while ((m = regRe.exec(blank)) !== null) {
+    if (!notDef(m.index)) continue;
+    const close = e1Match(blank, m.index + m[0].length - 1);
+    if (close === -1) continue;
+    if (m[0] === 'heavy(' && firstHeavyCall === -1) firstHeavyCall = m.index;
+    regs.push([m.index, close]);
+  }
+  const uses = (name) => {
+    const found = [];
+    const re = new RegExp('(?<![.\\w$])' + name + '(?![\\w$])', 'g');
+    let mm;
+    while ((mm = re.exec(blank)) !== null) if (notDef(mm.index)) found.push(mm.index);
+    return found;
+  };
+  const callsOf = (name) => uses(name).filter((p) => /^\s*\(/.test(blank.slice(p + name.length, p + name.length + 4)));
+  for (const f of decls.filter((d) => regs.some((r) => r[0] > d.start && r[0] < d.end))) {
+    for (const p of callsOf(f.name)) { const close = e1Match(blank, blank.indexOf('(', p + f.name.length)); if (close !== -1) regs.push([p, close]); }
+  }
+  const inReg = (p) => regs.some((r) => p > r[0] && p < r[1]);
+  const inner = (p) => decls.filter((f) => p > f.start && p < f.end).sort((x, y) => (x.end - x.start) - (y.end - y.start))[0];
+  const live = decls.filter((f) => uses(f.name).length > 0);
+  const deadNames = new Set(decls.filter((f) => live.indexOf(f) === -1).map((f) => f.name));
+  const heavyNames = new Set();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const f of live) {
+      if (heavyNames.has(f.name)) continue;
+      const inBody = (p) => p > f.start && p < f.end && !inReg(p);
+      const direct = procs.some(inBody);
+      const via = !direct && Array.from(heavyNames).some((nm) => callsOf(nm).some(inBody));
+      if (direct || via) { heavyNames.add(f.name); grew = true; }
+    }
+  }
+  const allFns = e1Functions(blank);
+  // A lambda table: `const T = [ ... lambdas ... ];` used exactly once, as the iterable of `for (const [a, b, ...] of T) {`, whose body registers a
+  // heavy row, and whose destructured names are used only inside heavy callbacks. Then the lambdas can only run inside a heavy row. Anything
+  // else (a second use of T, a destructured name used outside a heavy callback, no heavy registration in the loop) is NOT accepted.
+  const tableOk = (p) => {
+    const tre = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*\[/g;
+    let t;
+    while ((t = tre.exec(blank)) !== null) {
+      const open = t.index + t[0].length - 1;
+      const close = e1Match(blank, open);
+      if (close === -1 || !(p > open && p < close)) continue;
+      const name = t[1];
+      const nameAt = t.index + t[0].indexOf(name, 5);
+      const scope = allFns.filter((f) => open > f.start && open < f.end).sort((x, y) => (x.end - x.start) - (y.end - y.start))[0];
+      const lo = scope ? scope.start : 0;
+      const hi = scope ? scope.end : blank.length;
+      const refs = uses(name).filter((q) => q > lo && q < hi && q !== nameAt);
+      if (refs.length !== 1) return false;
+      const head = /for\s*\(\s*const\s*\[([^\]]*)\]\s+of\s*$/.exec(blank.slice(Math.max(0, refs[0] - 120), refs[0]));
+      if (!head || !/^\s*\)\s*\{/.test(blank.slice(refs[0] + name.length))) return false;
+      const bodyOpen = blank.indexOf('{', refs[0]);
+      const bodyClose = e1Match(blank, bodyOpen);
+      if (bodyClose === -1 || !regs.some((r) => r[0] > bodyOpen && r[1] < bodyClose)) return false;
+      const bound = head[1].split(',').map((s) => s.trim()).filter(Boolean);
+      if (bound.length === 0 || bound.some((n) => !/^[A-Za-z_$][\w$]*$/.test(n))) return false;
+      for (const n of bound) for (const q of uses(n)) if (q > bodyOpen && q < bodyClose && !inReg(q)) return false;
+      return true;
+    }
+    return false;
+  };
+  const okHere = (p) => { if (inReg(p)) return true; const f = inner(p); return (!!f && (heavyNames.has(f.name) || deadNames.has(f.name))) || tableOk(p); };
+  const violations = [];
+  for (const p of procs) if (!okHere(p)) violations.push('unwrapped heavy code: process start at line ' + lineNo(p));
+  for (const nm of heavyNames) for (const p of uses(nm)) if (!okHere(p)) violations.push('unwrapped heavy code: ' + nm + ' used at line ' + lineNo(p));
+  return { violations, heavyCallSites: regs.length, processTokens: procs.length, firstHeavyCall, helpers: Array.from(heavyNames).sort() };
+}
+// E1-1: every require('./...') (transitively, through each declared JS part), every path.join(ROOT, '...') and every __dirname use names a declared part.
+function e1Closure(ownText, names) {
+  const problems = [];
+  const declared = new Set(names);
+  const builtin = new Set(require('module').builtinModules);
+  const scanOne = (text, fromRel, own) => {
+    const blank = e1Blank(text);
+    let m;
+    const reqRe = /\brequire\(/g;
+    while ((m = reqRe.exec(blank)) !== null) {
+      const lit = /^\(\s*(['"])([^'"\n]+)\1\s*\)/.exec(text.slice(m.index + 7));
+      if (!lit) continue;
+      const spec = lit[2];
+      if (spec.charAt(0) === '.') {
+        let rel = path.posix.normalize(path.posix.join(path.posix.dirname(fromRel), spec));
+        if (!/\.[a-z]+$/.test(rel)) rel += '.js';
+        if (!declared.has(rel)) problems.push('undeclared input: require(' + spec + ') -> ' + rel + ' in ' + fromRel);
+      } else if (!builtin.has(spec) && !builtin.has(spec.replace(/^node:/, ''))) {
+        problems.push('undeclared input: non-builtin require(' + spec + ') in ' + fromRel);
+      }
+    }
+    if (!own) return;
+    const joinRe = /\bpath\.join\(\s*ROOT\b/g;
+    while ((m = joinRe.exec(blank)) !== null) {
+      const open = blank.indexOf('(', m.index);
+      const close = e1Match(blank, open);
+      if (close === -1) continue;
+      const args = /^\(\s*ROOT\s*((?:,\s*(['"])[^'"\n]*\2\s*)+)\)$/.exec(text.slice(open, close + 1));
+      if (!args) continue;
+      const rel = args[1].split(',').map((s) => s.trim()).filter(Boolean).map((s) => s.slice(1, -1)).join('/');
+      if (!declared.has(rel)) problems.push('undeclared input: path.join(ROOT, ...) -> ' + rel);
+    }
+    const rest = e1Blank(text.replace(/path\.resolve\(__dirname, '\.\.'\)/g, 'ROOT_EXPR'));
+    if (/__dirname/.test(rest)) problems.push('undeclared input: a __dirname-relative path');
+  };
+  scanOne(ownText, E1_OWN_NAME, true);
+  for (const p of E1_PARTS) if (/\.js$/.test(p.name) && p.name !== E1_OWN_NAME) scanOne(p.bytes.toString('utf8'), p.name, false);
+  return problems;
+}
+// E1-4 helper: runs the R4 cases through a decision function and returns the cases it gets wrong.
+function e1Table(fn) {
+  const S = 'a'.repeat(64);
+  const S2 = 'c'.repeat(64);
+  const E = 'b'.repeat(64);
+  const E2 = 'd'.repeat(64);
+  const pin = { source: S, environments: [E] };
+  const cases = [];
+  const add = (label, o, want) => cases.push([label, o, want]);
+  add('G1 matching pin', { src: S, env: E, pin, vars: {} }, 'skip');
+  add('G2 unproven environment', { src: S, env: E2, pin, vars: {} }, 'replay-notice');
+  add('G3 changed source', { src: S2, env: E, pin, vars: {} }, 'replay-fail');
+  add('G3 changed source, forced', { src: S2, env: E, pin, vars: { PT_QA_FORCE_HEAVY: '1' } }, 'replay-fail');
+  add('G3 changed source, unproven environment', { src: S2, env: E2, pin, vars: {} }, 'replay-fail');
+  add('G5 forced', { src: S, env: E, pin, vars: { PT_QA_FORCE_HEAVY: '1' } }, 'forced');
+  add('G5 forced, unproven environment', { src: S, env: E2, pin, vars: { PT_QA_FORCE_HEAVY: '1' } }, 'forced');
+  for (const v of E1_OVERRIDE_VARS) {
+    add('G4 ' + v + ' set', { src: S, env: E, pin, vars: { [v]: 'x' } }, 'override:' + v);
+    add('G4 ' + v + ' empty is unset', { src: S, env: E, pin, vars: { [v]: '' } }, 'skip');
+    add('G4 ' + v + ' set and forced', { src: S, env: E, pin, vars: { [v]: 'x', PT_QA_FORCE_HEAVY: '1' } }, 'override:' + v);
+    add('G4 ' + v + ' set, changed source', { src: S2, env: E, pin, vars: { [v]: 'x' } }, 'override:' + v);
+  }
+  add('G6 null source', { src: S, env: E, pin: { source: null, environments: [] }, vars: {} }, 'pin-invalid');
+  add('G6 empty environments', { src: S, env: E, pin: { source: S, environments: [] }, vars: {} }, 'pin-invalid');
+  add('G6 non-hex environment', { src: S, env: E, pin: { source: S, environments: ['z'.repeat(64)] }, vars: {} }, 'pin-invalid');
+  add('G6 duplicate environments', { src: S, env: E, pin: { source: S, environments: [E, E] }, vars: {} }, 'pin-invalid');
+  add('G6 upper-case hex', { src: S, env: E, pin: { source: 'A'.repeat(64), environments: [E] }, vars: {} }, 'pin-invalid');
+  add('G6 short source', { src: S, env: E, pin: { source: 'a'.repeat(63), environments: [E] }, vars: {} }, 'pin-invalid');
+  add('G6 environments not an array', { src: S, env: E, pin: { source: S, environments: E }, vars: {} }, 'pin-invalid');
+  add('G6 no pin at all', { src: S, env: E, pin: undefined, vars: {} }, 'pin-invalid');
+  add('G6 beats force', { src: S, env: E, pin: { source: null, environments: [] }, vars: { PT_QA_FORCE_HEAVY: '1' } }, 'pin-invalid');
+  add('G6 beats an override', { src: S, env: E, pin: { source: null, environments: [] }, vars: { NODE_OPTIONS: 'x' } }, 'pin-invalid');
+  for (const f of ['true', '0', ' 1', '1 ', '', 'yes']) add('G0 force=' + JSON.stringify(f), { src: S, env: E, pin, vars: { PT_QA_FORCE_HEAVY: f } }, 'invalid-force');
+  add('G0 beats an invalid pin', { src: S, env: E, pin: { source: null, environments: [] }, vars: { PT_QA_FORCE_HEAVY: 'true' } }, 'invalid-force');
+  const bad = [];
+  for (const [label, o, want] of cases) {
+    const got = fn(o);
+    if (got !== want) bad.push(label + ' -> ' + got + ' (want ' + want + ')');
+  }
+  return bad;
+}
+// R7: the verdict, a pure function of the run state -> { failure, line }.
+function e1Verdict(st) {
+  const s12 = String(st.src).slice(0, 12);
+  const e12 = String(st.env).slice(0, 12);
+  const gate = st.gate;
+  const blocks = true;
+  const counts = (replay) => (replay
+    ? (blocks ? st.heavyRun + ' heavy block(s) / ' + st.light + ' assertion(s) run' : st.heavyRun + ' heavy + ' + st.light + ' light row(s) run')
+    : (blocks ? st.skipped + ' heavy block(s) not run, ' + st.light + ' assertion(s) PASS' : st.skipped + ' heavy row(s) not run, ' + st.light + ' light row(s) PASS'));
+  const replayLine = (reason) => '@@QA-SURFACE@@ E1 ' + E1_LABEL + ': REPLAY PASS (' + reason + ') src ' + st.src + ' env ' + st.env + ', ' + counts(true) + ', 0 heavy skipped';
+  if (gate === 'invalid-force') return { failure: 'E1 ' + E1_LABEL + ': invalid PT_QA_FORCE_HEAVY (only 1 is accepted)', line: null };
+  if (gate === 'pin-invalid') return { failure: 'E1 ' + E1_LABEL + ': pin invalid: source ' + st.src + ' environment ' + st.env, line: null };
+  if (gate === 'replay-fail') return { failure: 'E1 ' + E1_LABEL + ': re-pin required: source ' + st.src + ' environment ' + st.env, line: null };
+  if (gate === 'skip') {
+    if (st.skipped !== st.reached) return { failure: 'E1 ' + E1_LABEL + ': ' + st.skipped + ' heavy unit(s) skipped but ' + st.reached + ' reached', line: null };
+    return { failure: null, line: '@@QA-SURFACE@@ E1 ' + E1_LABEL + ': SKIP (contract pinned: ' + s12 + '/' + e12 + ') ' + counts(false) };
+  }
+  if (st.skipped !== 0) return { failure: 'E1 ' + E1_LABEL + ': ' + st.skipped + ' heavy unit(s) skipped under a replay', line: null };
+  if (gate === 'forced') return { failure: null, line: replayLine('forced') };
+  if (gate === 'replay-notice') return { failure: null, line: replayLine('environment not proven') };
+  if (gate.indexOf('override:') === 0) return { failure: null, line: replayLine('override ' + gate.slice(9)) };
+  return { failure: 'E1 ' + E1_LABEL + ': unknown gate ' + gate, line: null };
+}
+// The verdict is reported by e1Finish(), called once after the last row (the summary section below).
+function e1Finish() {
+  const v = e1Verdict({ gate: E1_GATE, src: E1_SRC, env: E1_ENV, skipped: e1Skipped, reached: e1Reached, heavyRun: e1HeavyRun, light: asserts });
+  if (v.failure) { failures += 1; console.log('  FAIL  ' + v.failure); } else if (failures === 0 && v.line) console.log(v.line);
+}
+
+e1Row('E1-1 closure: every require, path.join(ROOT, ...) and __dirname-relative path in this suite and in its declared JS parts names a declared part (planted: an added require, an added repo read, a removed part)', () => {
+  const names = E1_PART_NAMES.concat([E1_OWN_NAME]);
+  e1Assert(new Set(names).size === names.length, 'the parts list has a duplicate');
+  const base = e1Closure(E1_OWN_TEXT, names);
+  e1Assert(base.length === 0, base.join('; '));
+  const added = e1Closure(E1_OWN_TEXT + '\nconst e1Planted = require(\'./lib/e1-planted\');\n', names);
+  e1Assert(added.length === 1 && /undeclared input/.test(added[0]), 'an added require was not caught: ' + added.join('; '));
+  const read = e1Closure(E1_OWN_TEXT + '\nfs.readFileSync(path.join(ROOT, \'e1-planted.txt\'));\n', names);
+  e1Assert(read.length === 1 && /undeclared input/.test(read[0]), 'an added repo read was not caught: ' + read.join('; '));
+  const removed = e1Closure(E1_OWN_TEXT, names.filter((n) => n !== E1_PART_NAMES[0]));
+  e1Assert(removed.length > 0 && /undeclared input/.test(removed[0]), 'a removed part was not caught');
+});
+e1Row('E1-2 heavy rule: every process start and fixture-builder call lies inside a heavy callback or a helper whose every call site does (planted: one heavy registration turned back into a plain row)', () => {
+  const scan = e1Scan(E1_OWN_TEXT);
+  e1Assert(scan.violations.length === 0, scan.violations.join('; '));
+  e1Assert(scan.heavyCallSites > 0 && scan.processTokens > 0 && scan.firstHeavyCall > 0, 'the scan found no heavy registration or no process start (a broken scanner)');
+  const mutated = E1_OWN_TEXT.slice(0, scan.firstHeavyCall) + 'light' + E1_OWN_TEXT.slice(scan.firstHeavyCall + 5);
+  const caught = e1Scan(mutated);
+  e1Assert(caught.violations.length > 0 && /unwrapped heavy code/.test(caught.violations[0]), 'an unwrapped heavy registration was not caught');
+  // the lambda-table rule, on a synthetic source: accepted only in its exact structure; each planted deviation is rejected (fail closed)
+  const syn = [
+    'function G(a) { return spawnSync(\'git\', a); }',
+    'function heavy(n, f) { f(); }',
+    '(function blk() {',
+    '  const cases = [[\'x\', (fx) => { G([\'add\']); }]];',
+    '  for (const [label, mutate] of cases) {',
+    '    heavy(\'row \' + label, () => { mutate(1); });',
+    '  }',
+    '})();'
+  ].join('\n');
+  e1Assert(e1Scan(syn).violations.length === 0, 'the lambda-table structure was not accepted: ' + e1Scan(syn).violations.join('; '));
+  const planted = [
+    ['a second use of the table', syn.replace('})();', '  console.log(cases.length);\n})();')],
+    ['an alias of the table', syn.replace('})();', '  const alias = cases;\n})();')],
+    ['a destructured name used outside a heavy callback', syn.replace('    heavy(', '    mutate(2);\n    heavy(')],
+    ['no heavy registration in the loop', syn.replace('heavy(\'row \'', 'light(\'row \'')],
+    ['the lambda called after the loop', syn.replace('})();', '  [].forEach(cases[0][1]);\n})();')],
+    ['a table that is not iterated with a destructuring for-of', syn.replace('for (const [label, mutate] of cases) {', 'for (const label of cases) { const mutate = label[1];')]
+  ];
+  for (const [what, text2] of planted) e1Assert(e1Scan(text2).violations.length > 0, 'the lambda-table rule accepted ' + what);
+});
+e1Row('E1-3 digest sensitivity: a one-byte change to each part (and to this file outside its pin statement) changes the source digest, a removed part changes it, a change only inside the pin statement does not', () => {
+  const names = E1_PARTS.map((p) => p.name);
+  for (const needed of E1_PART_NAMES.concat([E1_OWN_NAME])) e1Assert(names.indexOf(needed) !== -1, needed + ' is part of the digest');
+  e1Assert(E1_PARTS.length === E1_PART_NAMES.length + 1, 'unexpected part count');
+  for (let i = 0; i < E1_PARTS.length; i += 1) {
+    const flipped = E1_PARTS.map((p, j) => (j === i ? { name: p.name, bytes: Buffer.concat([p.bytes, Buffer.from(' ')]) } : p));
+    e1Assert(FPLIB.digestParts(flipped) !== E1_SRC, 'one byte appended to ' + E1_PARTS[i].name + ' did not change the digest');
+  }
+  e1Assert(FPLIB.digestParts(E1_PARTS.slice(1)) !== E1_SRC, 'a removed part did not change the digest');
+  const pinEdited = E1_OWN_TEXT.replace(/const AH_CONTRACT_PIN = \{[\s\S]*?\n\};/, 'const AH_CONTRACT_PIN = {\n  source: \'' + 'a'.repeat(64) + '\',\n  environments: [\'' + 'b'.repeat(64) + '\']\n};');
+  e1Assert(pinEdited !== E1_OWN_TEXT || /source: '[0-9a-f]{64}'/.test(E1_OWN_TEXT), 'the pin statement was not found');
+  e1Assert(FPLIB.digestParts(e1Parts(pinEdited)) === E1_SRC, 'a change inside the pin statement changed the digest');
+  e1Assert(FPLIB.digestParts(e1Parts(E1_OWN_TEXT + '\n// outside the pin\n')) !== E1_SRC, 'a change outside the pin statement did not change the digest');
+});
+e1Row('E1-4 decision table: e1Decide returns R4\'s result for G0..G6, every override variable and the force cases (planted: ignore overrides, force skips the G3 failure, skip on an unproven environment, an empty pin treated as valid)', () => {
+  e1Assert(e1Table(e1Decide).length === 0, e1Table(e1Decide).join('; '));
+  const noOverrides = (o) => e1Decide(Object.assign({}, o, { vars: Object.assign({}, o.vars, { PT_LAND_TOOL_PATH: '', AH_HOOK_PATH: '', AH_SETTINGS_PATH: '', TB_ONLY: '', NODE_OPTIONS: '' }) }));
+  const forceSkipsG3 = (o) => ((o.vars || {}).PT_QA_FORCE_HEAVY === '1' && e1PinValid(o.pin) && o.pin.source !== o.src ? 'forced' : e1Decide(o));
+  const skipUnproven = (o) => (e1Decide(o) === 'replay-notice' ? 'skip' : e1Decide(o));
+  const emptyPinValid = (o) => (!e1PinValid(o.pin) ? e1Decide(Object.assign({}, o, { pin: { source: o.src, environments: [o.env] } })) : e1Decide(o));
+  e1Assert(e1Table(noOverrides).length > 0, 'a variant that ignores overrides passed the table');
+  e1Assert(e1Table(forceSkipsG3).length > 0, 'a variant that lets force skip the G3 failure passed the table');
+  e1Assert(e1Table(skipUnproven).length > 0, 'a variant that skips on an unproven environment passed the table');
+  e1Assert(e1Table(emptyPinValid).length > 0, 'a variant that treats an empty pin as valid passed the table');
+});
+e1Row('E1-5 verdict: the SKIP / REPLAY PASS lines and the fail-closed verdicts have R7\'s shape, k equals the heavy units reached, and the verdict runs after the last heavy registration (planted: a verdict moved before the rows)', () => {
+  const st = { src: 'a'.repeat(64), env: 'b'.repeat(64), skipped: 3, reached: 3, heavyRun: 0, light: 5 };
+  const s = e1Verdict(Object.assign({ gate: 'skip' }, st));
+  e1Assert(s.failure === null && s.line.indexOf('@@QA-SURFACE@@ E1 ' + E1_LABEL + ': SKIP (contract pinned: aaaaaaaaaaaa/bbbbbbbbbbbb) 3 heavy ') === 0, 'SKIP line: ' + s.line);
+  e1Assert(e1Verdict(Object.assign({ gate: 'skip' }, st, { reached: 4 })).failure !== null, 'a skip count that differs from the units reached passed');
+  const f = e1Verdict(Object.assign({ gate: 'forced' }, st, { skipped: 0, reached: 3, heavyRun: 3 }));
+  e1Assert(f.failure === null && f.line.indexOf('REPLAY PASS (forced) src ' + st.src + ' env ' + st.env + ', 3 heavy ') !== -1 && /, 0 heavy skipped$/.test(f.line), 'forced line: ' + f.line);
+  e1Assert(e1Verdict(Object.assign({ gate: 'forced' }, st)).failure !== null, 'a replay that skipped heavy units passed');
+  e1Assert(/REPLAY PASS \(environment not proven\)/.test(e1Verdict(Object.assign({ gate: 'replay-notice' }, st, { skipped: 0 })).line), 'notice line');
+  e1Assert(/REPLAY PASS \(override NODE_OPTIONS\)/.test(e1Verdict(Object.assign({ gate: 'override:NODE_OPTIONS' }, st, { skipped: 0 })).line), 'override line');
+  e1Assert(e1Verdict(Object.assign({ gate: 'replay-fail' }, st, { skipped: 0 })).failure === 'E1 ' + E1_LABEL + ': re-pin required: source ' + st.src + ' environment ' + st.env, 're-pin required text');
+  e1Assert(e1Verdict(Object.assign({ gate: 'pin-invalid' }, st, { skipped: 0 })).failure === 'E1 ' + E1_LABEL + ': pin invalid: source ' + st.src + ' environment ' + st.env, 'pin invalid text');
+  e1Assert(/invalid PT_QA_FORCE_HEAVY/.test(e1Verdict(Object.assign({ gate: 'invalid-force' }, st)).failure), 'invalid force text');
+  const own = e1Normalise(E1_OWN_TEXT);
+  const blank = e1Blank(own);
+  const callAt = blank.lastIndexOf('e1Finish()');
+  let lastHeavy = -1;
+  const regRe = /\b(?:heavy|heavyFn)\(/g;
+  let m;
+  while ((m = regRe.exec(blank)) !== null) if (blank.slice(Math.max(0, m.index - 9), m.index) !== 'function ') lastHeavy = m.index;
+  e1Assert(callAt > lastHeavy && lastHeavy > 0, 'the verdict call is not after the last heavy registration');
+  const firstRow = own.indexOf('\ne1Row(\'E1-1');
+  e1Assert(firstRow > 0 && own.indexOf('\ne1Finish();\n', firstRow) > firstRow, 'the verdict call line was not found where expected');
+  const early = own.slice(0, firstRow) + '\ne1Finish();\n' + own.slice(firstRow).replace(/\ne1Finish\(\);\n/g, '\n');
+  e1Assert(early.split('\ne1Finish();\n').length === 2, 'the planted early verdict was not built (one call line expected)');
+  const blankEarly = e1Blank(early);
+  const earlyAt = blankEarly.lastIndexOf('e1Finish()');
+  let earlyLast = -1;
+  while ((m = regRe.exec(blankEarly)) !== null) if (blankEarly.slice(Math.max(0, m.index - 9), m.index) !== 'function ') earlyLast = m.index;
+  e1Assert(!(earlyAt > earlyLast), 'a verdict placed before the rows was not caught');
+});
+// E1 end
+
 // ── AH-1 allowed ─────────────────────────────────────────────────────────────────────────
 const ALLOWED = [
   'npm run qa:offline',
@@ -434,11 +883,11 @@ for (const cwd of [SLOT_A, MAIN]) {
 check('AH-11 control: merge/rebase are deny in slot and main (R3m)',
   d('git merge x', SLOT_A).decision === 'deny' && d('git rebase y', SLOT_A).decision === 'deny' &&
   d('git merge x', MAIN).decision === 'deny' && d('git rebase y', MAIN).decision === 'deny');
-{
+heavy('AH-11 CLI', () => {
   const pushCli = spawnCli(payload('git push --dry-run', MAIN));
   check('AH-11 CLI: canonical git push --dry-run -> exit 2, reason on stderr, empty stdout',
     pushCli && pushCli.status === 2 && pushCli.stdout === '' && /push manually/.test(pushCli.stderr));
-}
+});
 
 // ── AH-12 code-from-stdin: a shell / interpreter fed a heredoc, here-string, `<` redirect, `<(...)` or a pipe ──
 // The scanner treats heredoc bodies as data, so an interpreter reading them executes unscanned code. Deny it (every
@@ -480,13 +929,13 @@ check('AH-12 unbalanced heredoc delimiter into bash still fails closed', d('bash
 check('AH-12 R1 / R3g preserved: canonical push deny, slot push R1 suffix, slot PowerShell blanket deny, main commit deny (R3c)',
   d('git push --dry-run', MAIN).decision === 'deny' && /R1/.test(d('git push', SLOT_A).reason) &&
   d('Get-ChildItem', SLOT_A, 'PowerShell').decision === 'deny' && d('git commit -m x', MAIN).decision === 'deny');
-{
+heavy('AH-12 CLI', () => {
   const heredocCli = spawnCli(payload('bash <<EOF\ngit push\nEOF', MAIN));
   check('AH-12 CLI: heredoc into bash -> exit 2, reason on stderr, empty stdout',
     heredocCli.status === 2 && heredocCli.stdout === '' && /heredoc/.test(heredocCli.stderr));
   const benignCli = spawnCli(payload('cat <<EOF\nx\nEOF', MAIN));
   check('AH-12 CLI: benign cat heredoc -> exit 0, no output', benignCli.status === 0 && benignCli.stdout === '' && benignCli.stderr === '');
-}
+});
 
 // ── AH-13 stdin-fed state through groups / subshells / substitutions / compound commands / wrappers ──
 // A pipe or a stdin redirect feeds the WHOLE group or compound; a shell / interpreter inside it reads that text.
@@ -525,13 +974,13 @@ expectAll('AH-13 commit text mentioning the forms is data: main deny (R3c)', COM
 check('AH-13 PowerShell main: group into powershell denied, plain pipeline allowed',
   d('echo x | (powershell)', MAIN, 'PowerShell').decision === 'deny' && d('Get-ChildItem | Sort-Object', MAIN, 'PowerShell').decision === 'allow');
 check('AH-13 unbalanced group into bash still fails closed', d('echo x | (bash', MAIN).decision === 'deny' && d('echo x | { bash', MAIN).decision === 'deny');
-{
+heavy('AH-13 CLI', () => {
   const groupCli = spawnCli(payload("printf 'git push\\n' | (bash)", MAIN));
   check('AH-13 CLI: printf | (bash) -> exit 2, reason on stderr, empty stdout',
     groupCli.status === 2 && groupCli.stdout === '' && /heredoc|stdin|pipe/.test(groupCli.stderr));
   const benignGroupCli = spawnCli(payload('echo x | (cat)', MAIN));
   check('AH-13 CLI: benign group pipeline -> exit 0, no output', benignGroupCli.status === 0 && benignGroupCli.stdout === '' && benignGroupCli.stderr === '');
-}
+});
 
 // ── AH-14 `case ... in PATTERN) command;; esac`: the command shares a raw segment with the header / arm pattern ──
 // Each row was classified as `case` / `PATTERN)` (so allowed) before the prefix stripping; the wrapped command must now
@@ -574,12 +1023,12 @@ expectAll('AH-14 commit text containing case syntax is data: main deny (R3c)', C
 check('AH-14 fed state reaches a case body (pipe into a group holding a case)',
   d('echo x | case x in x) bash;; esac', MAIN).decision === 'deny' && d('echo x | (case x in x) bash;; esac)', MAIN).decision === 'deny');
 check('AH-14 unbalanced case still fails closed', d('case x in x) git push;; "esac', MAIN).decision === 'deny' && d('(case x in x) git push', MAIN).decision === 'deny');
-{
+heavy('AH-14 CLI', () => {
   const caseCli = spawnCli(payload('case x in a|b) git push;; esac', MAIN));
   check('AH-14 CLI: single-line case push -> exit 2, reason on stderr, empty stdout', caseCli.status === 2 && caseCli.stdout === '' && /push manually/.test(caseCli.stderr));
   const benignCaseCli = spawnCli(payload('case x in x) echo hi;; esac', MAIN));
   check('AH-14 CLI: benign case -> exit 0, no output', benignCaseCli.status === 0 && benignCaseCli.stdout === '' && benignCaseCli.stderr === '');
-}
+});
 
 // ── AH-15 merge / rebase / pull are denied in EVERY Claude Code session (R3m; RM1 / RM2, hook r8) ──
 // permissions.ask and a hook "ask" were observed not to prompt, so integration is a deterministic exit-2 deny in the slot AND the
@@ -661,7 +1110,7 @@ function spawnCliEnv(stdin, projectDir) {
   if (projectDir !== undefined) env.CLAUDE_PROJECT_DIR = projectDir;
   return spawnSync(process.execPath, [HOOK_PATH], { input: stdin, encoding: 'utf8', timeout: 15000, env });
 }
-for (const cmd of ['git merge x', 'git rebase y', 'git pull', 'git -C x pull --rebase']) {
+heavy('AH-15 CLI spawn', () => { for (const cmd of ['git merge x', 'git rebase y', 'git pull', 'git -C x pull --rebase']) {
   const cases = [['slot', payload(cmd, SLOT_A), undefined], ['main', payload(cmd, MAIN), undefined], ['empty cwd, no project dir', payload(cmd, ''), undefined],
     ['missing cwd, no project dir', payload(cmd), undefined], ['missing cwd, project dir = main', payload(cmd), MAIN], ['missing cwd, project dir = slot', payload(cmd), SLOT_A]];
   for (const c of cases) {
@@ -669,8 +1118,8 @@ for (const cmd of ['git merge x', 'git rebase y', 'git pull', 'git -C x pull --r
     check('AH-15 CLI [' + c[0] + '] ' + cmd + ' -> exit 2, empty stdout, R3m + manual path on stderr',
       r.status === 2 && r.stdout === '' && /R3m/.test(r.stderr) && /manually/.test(r.stderr));
   }
-}
-{
+} });
+heavy('AH-15 CLI controls', () => {
   const roMain = spawnCliEnv(payload('git status --short --branch', MAIN));
   check('AH-15 CLI control: read-only git -> exit 0, no output', roMain.status === 0 && roMain.stdout === '' && roMain.stderr === '');
   const commitMain = spawnCliEnv(payload('git commit -m x', MAIN));
@@ -678,7 +1127,7 @@ for (const cmd of ['git merge x', 'git rebase y', 'git pull', 'git -C x pull --r
     commitMain.status === 2 && commitMain.stdout === '' && /R3c/.test(commitMain.stderr) && !/R3m/.test(commitMain.stderr));
   const pushMain = spawnCliEnv(payload('git push', MAIN));
   check('AH-15 CLI control: git push -> exit 2 with the push reason (R3g wording unchanged)', pushMain.status === 2 && /push manually/.test(pushMain.stderr) && !/R3m/.test(pushMain.stderr));
-}
+});
 
 // ── AH-16 slot-scoped commit gate (hook r9; RC1-RC4) ─────────────────────────────────────────────────────────────
 // Model D (brief RC1): a Worker may commit only on its OWN task/* branch, in its OWN slot, in plain form, with a clean staged set; everything
@@ -878,17 +1327,17 @@ if (guard) {
 } else {
   check('AH-16 CLI rows need the hook module', false);
 }
-for (const cwd of [MAIN, '']) {
+heavy('AH-16 CLI spawn commit', () => { for (const cwd of [MAIN, '']) {
   const r = spawnCliEnv(payload('git commit -m x', cwd));
   check('AH-16 CLI spawn [' + (cwd === '' ? 'empty cwd' : 'main') + '] git commit -> exit 2, empty stdout, R3c on stderr', r.status === 2 && r.stdout === '' && /R3c/.test(r.stderr));
-}
-{
+} });
+heavy('AH-16 CLI spawn RC4', () => {
   const r = spawnCliEnv(payload('git update-ref refs/heads/branch-dev HEAD', SLOT_A));
   check('AH-16 CLI spawn RC4 -> exit 2, RC4 on stderr', r.status === 2 && r.stdout === '' && /RC4/.test(r.stderr));
-}
+});
 // Real readers against a temp repo laid out like the Worker slots: <tmp>/portfolio-tracker (main checkout), <tmp>/pt-wt-worker-a (a `git worktree`, so
 // .git is a FILE with `gitdir:`), <tmp>/pt-wt-worker-b (a standalone repo, so .git is a DIRECTORY). Offline; git runs only inside os.tmpdir().
-{
+heavy('AH-16 temp repo', () => {
   const gitVersion = spawnSync('git', ['--version'], { encoding: 'utf8' });
   check('AH-16 temp-repo: git is available on PATH', gitVersion.status === 0);
   if (gitVersion.status === 0) {
@@ -1023,7 +1472,7 @@ for (const cwd of [MAIN, '']) {
       fs.rmSync(base, { recursive: true, force: true });
     }
   }
-}
+});
 
 // ── AH-9 CLI (real spawn) ───────────────────────────────────────────────────────────────
 function spawnCli(stdin, hookPath) {
@@ -1032,7 +1481,7 @@ function spawnCli(stdin, hookPath) {
 function payload(command, cwd, tool) {
   return JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool || 'Bash', tool_input: { command }, cwd });
 }
-{
+heavy('AH-9 CLI', () => {
   const allow = spawnCli(payload('git status --short --branch', SLOT_A));
   check('AH-9 allow -> exit 0, empty stdout', allow.status === 0 && allow.stdout === '');
   const ask = spawnCli(payload('echo x > package.json', MAIN)); // r9: commit no longer asks; a main-checkout protected write still does
@@ -1065,7 +1514,7 @@ function payload(command, cwd, tool) {
   } else {
     check('AH-9 runCli exported for planted-throw check', false);
   }
-}
+});
 
 // ── planted negatives: mutate the PRODUCTION source, the suite must notice ───────────────
 function mutantCatches(label, find, replace, probe) {
@@ -1701,21 +2150,21 @@ check('AH-17 R10-7 spawnBudgetMs shrinks near deadline', guard && (() => { const
 check('AH-17 R10-7 spawnBudgetMs throws when exhausted', guard && (() => { try { guard.spawnBudgetMs(Date.now() - 1); return false; } catch (e) { return true; } })());
 
 // ── AH-17 CLI (real spawn) sample -> exit 2 ──
-for (const cmd of ['g\\it push', 'git p', 'git config core.hooksPath /tmp/h', 'git update-ref HEAD abc', 'git worktree add ../w branch-dev', 'git cherry-pick abc', 'git remote add --mirror m .', 'echo x > .git/config']) {
+heavy('AH-17 CLI spawn', () => { for (const cmd of ['g\\it push', 'git p', 'git config core.hooksPath /tmp/h', 'git update-ref HEAD abc', 'git worktree add ../w branch-dev', 'git cherry-pick abc', 'git remote add --mirror m .', 'echo x > .git/config']) {
   const r = spawnCli(payload(cmd, SLOT_A));
   check('AH-17 CLI [slot] ' + JSON.stringify(cmd) + ' -> exit 2', r.status === 2 && r.stdout === '');
-}
-{
+} });
+heavy('AH-17 CLI write', () => {
   const denyFt = spawnCli(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: 'C:/x/.git/config' }, cwd: SLOT_A }));
   check('AH-17 CLI Write .git target -> exit 2', denyFt.status === 2 && denyFt.stdout === '');
   const okFt = spawnCli(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(SLOT_A, 'qa', 'ah17_probe.js') }, cwd: SLOT_A }));
   check('AH-17 CLI Write ordinary (existing parent) -> exit 0', okFt.status === 0 && okFt.stdout === '');
-}
+});
 
 // ══════════════════════════════════════════════════════════════════════════════════════════
 // AH-18 — R10-8 integrity check: clean PASS, 7 induced FAILs, report-only, usage error (temp repo).
 // ══════════════════════════════════════════════════════════════════════════════════════════
-{
+heavy('AH-18 temp repo', () => {
   const gv = spawnSync('git', ['--version'], { encoding: 'utf8' });
   check('AH-18 git available on PATH', gv.status === 0);
   if (gv.status === 0) {
@@ -1889,7 +2338,7 @@ for (const cmd of ['g\\it push', 'git p', 'git config core.hooksPath /tmp/h', 'g
       fs.rmSync(base, { recursive: true, force: true });
     }
   }
-}
+});
 
 // ── R10 mutants: production-source mutation, ≥1 per R10-1..R10-8 ──
 mutantCatches('R10-1 escape differential disabled', 'const stripped = stripShellEscapes(command, tool);', 'const stripped = command;',
@@ -1948,7 +2397,7 @@ function integrityMutantCatches(label, find, replace, probe) {
   } catch (e) { check('MUT ' + label + ': mutant loads (' + e.message + ')', false); }
   finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
-if (guard && integrity && spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0) {
+heavy('AH-18 integrity mutants', () => { if (guard && integrity && spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0) {
   // shared fixture for integrity mutants
   const mbase = fs.mkdtempSync(path.join(os.tmpdir(), 'ah18-mf-'));
   const mcanon = path.join(mbase, 'portfolio-tracker');
@@ -1979,7 +2428,7 @@ if (guard && integrity && spawnSync('git', ['--version'], { encoding: 'utf8' }).
     integrityMutantCatches('R10-8 C2 emptied/missing reflog fails open (Codex FIX)', "if (requireReflog && lines.length === 0) { failures.push('C2 protected ref '", "if (false) { failures.push('C2 protected ref '",
       (mod) => { const future = new Date(Date.now() + 86400000).toISOString(); const rl = path.join(mcanon, '.git', 'logs', 'refs', 'heads', 'branch-dev'); const saved = fs.readFileSync(rl); fs.rmSync(rl, { force: true }); const r = mod.runIntegrity({ root: mcanon, gitExec: 'git', baseMain: bMain, baseDev: bDev, task: 'task/x', since: future }).failures.some((f) => /^C2/.test(f)); fs.mkdirSync(path.dirname(rl), { recursive: true }); fs.writeFileSync(rl, saved); return r; });
   } finally { try { G(mcanon, 'worktree', 'prune'); } catch (e) { /* ignore */ } fs.rmSync(mbase, { recursive: true, force: true }); }
-}
+} });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════
 // AH-19 — R11 Owner-approved brief-only commit gate for the canonical checkout
@@ -2173,7 +2622,7 @@ if (guard) {
 }
 
 // AH-19-13: REAL readers against a temp canonical repo (offline; git runs only inside os.tmpdir()).
-{
+heavy('AH-19-13 real git', () => {
   const gitVersion = spawnSync('git', ['--version'], { encoding: 'utf8' });
   check('AH-19-13: git is available on PATH', gitVersion.status === 0);
   if (guard && gitVersion.status === 0) {
@@ -2262,7 +2711,7 @@ if (guard) {
   } else {
     check('AH-19-13 real-git rows need the hook module and git', false);
   }
-}
+});
 
 // AH-19-14: every existing AH-16 row (including the RC2 reasons/zero-reads rows) is exercised unmodified
 // above this point in the file and passed; a slot commit staging work/x/brief.md is still denied by
@@ -2288,7 +2737,7 @@ mutantCatches('R11 parent-OID binding dropped (stale record accepted)', "if (sta
   (m) => r11DecideOn(m, R11_VALID_MSG, { briefApproval: () => r11Record({ oid: 'c'.repeat(40) }) }).decision === 'deny');
 mutantCatches('R11 hash check dropped', "if (typeof blobHash !== 'string' || blobHash.toLowerCase() !== record.hash.toLowerCase()) {", 'if (false) {',
   (m) => r11DecideOn(m, R11_VALID_MSG, { indexBlobSha256: () => 'f'.repeat(64) }).decision === 'deny');
-{
+heavy('AH-19 identity mutant', () => {
   // A real directory with a real .git DIRECTORY (not a worktree file), distinct from R11_CANON, so the
   // probe below isolates the canonical-identity string comparison from the separate dotGitStat defense.
   const identityFixture = fs.mkdtempSync(path.join(os.tmpdir(), 'ah19-identity-'));
@@ -2300,7 +2749,7 @@ mutantCatches('R11 hash check dropped', "if (typeof blobHash !== 'string' || blo
   } finally {
     fs.rmSync(identityFixture, { recursive: true, force: true });
   }
-}
+});
 mutantCatches('R11 R10-3 config/hooks readers skipped', "if (!cfg || cfg.ok !== true) return r11Deny('protected git config is active');", 'if (false) { /* dropped */ }',
   (m) => r11DecideOn(m, R11_VALID_MSG, { protectedConfigState: () => ({ ok: false, bad: ['core.hooksPath=x'] }) }).decision === 'deny');
 mutantCatches('R11 staged-entry path match dropped (wrong file accepted)', "if (entry.path !== record.path) return r11Deny('the staged entry does not match the approved brief path');",
@@ -2610,14 +3059,14 @@ for (const [label, cmd] of OAG_DENY_FORMS) {
 
 // AH-24 CLI (brief §6 "G1-G3 hook spawns"): a real hook-process spawn for each new form - allow from
 // a slot cwd (exit 0, silent) - and the wrapped / compound variants deny with R12 on stderr.
-for (const form of OAG_FORMS) {
+heavy('AH-24 CLI allow', () => { for (const form of OAG_FORMS) {
   const r = spawnCliEnv(payload(form, SLOT_A), undefined);
   check('AH-24 CLI allow [slot] ' + form + ' -> exit 0, empty stdout/stderr', r.status === 0 && r.stdout === '' && r.stderr === '');
-}
-for (const [label, cmd] of OAG_DENY_FORMS.filter((row) => /wrapper|compound/.test(row[0]))) {
+} });
+heavy('AH-24 CLI deny', () => { for (const [label, cmd] of OAG_DENY_FORMS.filter((row) => /wrapper|compound/.test(row[0]))) {
   const r = spawnCliEnv(payload(cmd, SLOT_A), undefined);
   check('AH-24 CLI deny (' + label + ') -> exit 2, empty stdout, R12 on stderr', r.status === 2 && r.stdout === '' && /R12/.test(r.stderr));
-}
+} });
 
 // AH-20 unchanged: direct git merge/push and a Claude write of the approval record stay denied
 // with their existing R3m/R3g/R10 reasons - R12 never opens a new path for these.
@@ -2761,14 +3210,14 @@ check('AH-25 unchanged: git -C ../pt-wt-worker-b rebase branch-dev still denied'
 }
 
 // AH-25 CLI: a real hook-process spawn - allow from a slot cwd (exit 0, silent); wrapped / compound variants deny with R12.
-for (const form of RESYNC_FORMS) {
+heavy('AH-25 CLI allow', () => { for (const form of RESYNC_FORMS) {
   const r = spawnCliEnv(payload(form, SLOT_A), undefined);
   check('AH-25 CLI allow [slot] ' + form + ' -> exit 0, empty stdout/stderr', r.status === 0 && r.stdout === '' && r.stderr === '');
-}
-for (const [label, cmd] of RESYNC_DENY_FORMS.filter((row) => /wrapper|compound|pipe/.test(row[0]))) {
+} });
+heavy('AH-25 CLI deny', () => { for (const [label, cmd] of RESYNC_DENY_FORMS.filter((row) => /wrapper|compound|pipe/.test(row[0]))) {
   const r = spawnCliEnv(payload(cmd, SLOT_A), undefined);
   check('AH-25 CLI deny (' + label + ') -> exit 2, empty stdout, R12 on stderr', r.status === 2 && r.stdout === '' && /R12/.test(r.stderr));
-}
+} });
 
 // AH-25 settings (brief §3): settings.json is unchanged - the verb is not allowlisted, so it prompts in Manual.
 check('AH-25: the real allow list has no resync entry (the verb stays prompting)',
@@ -2884,14 +3333,14 @@ check('AH-26 deny: cwd outside the slots and canonical',
 }
 
 // AH-26 CLI: a real hook-process spawn - allow from a slot cwd (exit 0, silent); wrapped / compound variants deny with R12.
-for (const form of ATB_FORMS) {
+heavy('AH-26 CLI allow', () => { for (const form of ATB_FORMS) {
   const r = spawnCliEnv(payload(form, SLOT_A), undefined);
   check('AH-26 CLI allow [slot] ' + form + ' -> exit 0, empty stdout/stderr', r.status === 0 && r.stdout === '' && r.stderr === '');
-}
-for (const [label, cmd] of ATB_DENY_FORMS.filter((row) => /wrapper|compound|pipe/.test(row[0]))) {
+} });
+heavy('AH-26 CLI deny', () => { for (const [label, cmd] of ATB_DENY_FORMS.filter((row) => /wrapper|compound|pipe/.test(row[0]))) {
   const r = spawnCliEnv(payload(cmd, SLOT_A), undefined);
   check('AH-26 CLI deny (' + label + ') -> exit 2, empty stdout, R12 on stderr', r.status === 2 && r.stdout === '' && /R12/.test(r.stderr));
-}
+} });
 
 // AH-26 settings (brief §5): settings.json is unchanged - the verbs are not allowlisted, so they prompt in Manual.
 check('AH-26: the real allow list has no task-start / adopt entry (the verbs stay prompting)',
@@ -2920,6 +3369,7 @@ mutantCatches('R12 adopt alternative widened (any argument accepted)',
   (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js adopt task/x --force', { cwd: SLOT_A }).decision === 'deny');
 
 fs.rmSync(R11_CANON, { recursive: true, force: true });
+e1Finish();
 
 if (failures) {
   console.log('Auto-mode hardening: FAIL (' + failures + ' of ' + asserts + ' assertions)');
