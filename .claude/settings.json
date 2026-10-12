@@ -98,7 +98,18 @@
       "Bash(npm install*)",
       "Bash(npm i *)",
       "Bash(npm uninstall*)",
-      "Bash(npm update*)"
+      "Bash(npm update*)",
+      "Bash(node .claude/hooks/pt-land.js land *)",
+      "Bash(node .claude/hooks/pt-land.js push)",
+      "Bash(netlify env:get*)",
+      "Bash(netlify env:list*)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "PowerShell(Invoke-WebRequest *)",
+      "PowerShell(Invoke-RestMethod *)",
+      "PowerShell(iwr *)",
+      "PowerShell(irm *)",
+      "WebFetch"
     ],
     "allow": [
       "Bash(npm run test:*)",
@@ -116,8 +127,6 @@
       "Bash(git commit *)",
       "Bash(netlify status*)",
       "Bash(netlify sites:list*)",
-      "Bash(netlify env:list*)",
-      "Bash(netlify env:get*)",
       "Bash(netlify logs*)",
       "mcp__claude_ai_Netlify__netlify-deploy-services-reader",
       "mcp__claude_ai_Netlify__netlify-extension-services-reader",
@@ -142,6 +151,13 @@
       "Bash(git ls-files *)",
       "Bash(node qa/*_test.js)",
       "Bash(node qa/guard_integrity_check.js *)",
+      "Bash(node qa/tools/index-pins.js --check)",
+      "Bash(node qa/tools/index-pins.js --update)",
+      "Bash(node qa/tools/index-pins.js --diff *)",
+      "Bash(sha256sum *)",
+      "Bash(ls *)",
+      "Bash(diff *)",
+      "Bash(cmp *)",
       "Bash(codex exec --sandbox read-only *)",
       "Bash(mkdir -p /tmp/pt-*)",
       "Bash(node .claude/hooks/pt-land.js land-request *)",
@@ -151,6 +167,7 @@
       "Bash(node .claude/hooks/pt-land.js protected-request *)",
       "Edit(//tmp/pt-*/**)"
     ],
-    "defaultMode": "default"
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable"
   }
 }

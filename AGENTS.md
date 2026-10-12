@@ -34,6 +34,37 @@ read a file it never imports.)*
 
 **Protected-scope block (governance briefs).** A brief that changes a protected path lists each target in a `<!-- protected-scope:begin --> … <!-- protected-scope:end -->` block and also in its `land-scope` block. Only listed targets can pass the PROTECTED gate (step 13a). `work/*/brief.md`, `CHECKPOINT.md`, `.env*`, `.claude/settings.local.json` and anything under `.git` are never approvable.
 
+**Execution preflight block (required).** Every brief lists, per slice and for step 0, step 10, §L
+and closure, the commands, tools, scratch files and paths it needs, each classified as: **A**
+auto-approved by `.claude/settings.json` · **B** a Claude Code permission prompt · **C** a governance
+gate (R11 / R12 records, PROTECTED gate, heavy-lane go-ahead, Owner ruling) · **D** hook-denied (must
+not appear). B items are minimised: checks run as allow-listed suites or with the Read / Grep tools;
+a one-time proof is one scratch script under `/tmp/pt-<task-id>/` run once per checkpoint; the brief
+is self-contained so the Worker reads nothing outside its slot. The only scratch location is
+`/tmp/pt-<task-id>/`, except the step-13a protected candidates, which `pt-land.js` reads from
+`<os.tmpdir()>/pt-<id>/protected/`. The block states that slice-to-slice continuation needs no Owner input when
+the gates PASS, and lists the expected prompts separately from the C gates.
+
+**Execution readiness block (required).** Every brief states `ATTENDED-ONLY` or `UNATTENDED-READY`.
+`UNATTENDED-READY` requires that every Owner gate on the brief's path is enforced by a technical
+control (hook, `deny` / `ask` rule, remote-side rule, sandbox, separate credentials) — never by
+written instructions or by the Auto-mode safety classifier. While indirect script execution (T6),
+approval-record forgery, external network transfer or secret access remains technically unmitigated
+on the brief's path, the brief is `ATTENDED-ONLY`.
+
+**Multi-slice Master briefs.** One brief may hold several ordered slices (Owner rulings M-1…M-5).
+It adds placement conditions; an open-decisions list that is empty at approval; an entry condition
+per slice; one checkpoint commit per completed slice on `task/<id>` through the r9 gate
+(`wip(<id>): slice <k> <name> — checkpoint`, never amended); and the pre-authorised "close at the
+last passed slice" option (M-4). Each slice runs RED → implement → targeted QA → Codex on the slice
+diff → checkpoint. The Worker continues to the next slice without returning only when the slice's
+targeted tests and re-pins pass, no Class I finding is unresolved, the next entry condition holds
+and the repository still matches the brief's anchors; anything else is handled by the STOP list.
+The Master closes once: the step-10 full `qa:offline` on the final synchronised tree, `review.md`
+with one section per slice, the final Codex check on the whole diff, the step-13 commit, the
+integrity check, and LAND / push / cleanup under R12. A gap found inside a running Master follows
+M-5: it is recorded as a `[backlog]` / `[design]` lesson; a new slice needs a new brief.
+
 ## Worker execution contract
 
 Once a tracked, Owner-approved `brief.md` exists, the Worker executes the whole task inside
@@ -50,6 +81,27 @@ commit) or on a STOP condition below.
    Definition of Done is measured against. A red pre-edit baseline is an **M4** transition
    (diagnose first), not a STOP. A harness permission prompt for any of these steps is answered
    under this authorization; it is not an Owner decision.
+   **Baseline reuse (instead of that run).** The Worker may reuse one earlier full `qa:offline`
+   PASS only when all four conditions hold, each shown by the command named and recorded verbatim
+   under line 1 of `qa.log`:
+   - **Tree:** `git diff --name-only <reused tree> HEAD` lists only QA-inert paths (`work/**`,
+     `BACKLOG.md`). For a previous task's step-10 run, the reused tree is that task's LAND tip,
+     and its `review.md` must record that only QA-inert files changed after that run.
+   - **Suites:** the same diff limited to `qa package.json package-lock.json` is empty, and the
+     reused suite count is the expected step-0 count.
+   - **Environment:** `node --version` is recorded; `node_modules` has not been refreshed since the
+     run; and `node qa/git_contract_offline.js` and `node qa/fixture_template_offline.js` both still
+     print `SKIP (contract pinned: …)` with the pinned environment digest, and the four E1-gated
+     suites print their `E1 … SKIP (contract pinned: …)` lines.
+   - **Same slot:** the run was made in this slot; `git reflog` shows nothing since but commits and
+     the switch onto this task; and every tracked file that switch rewrote has the same
+     `sha256sum` as at the run.
+   The reused run must be the most recent full `qa:offline` run in this slot, and a PASS. Line 1
+   then reads `STEP-0 REUSED: PASS <n> suites · source <slot>/<task> · tested tree <oid> · HEAD
+   <oid> · node <version>`. If any condition fails or cannot be shown, run the full step 0. If the
+   step-10 run later fails in a suite the task did not touch (**M4**), the Worker first establishes
+   whether that failure pre-exists on the base before treating it as the task's. Reuse never
+   replaces the step-10 full run, nor a full run required after a resync.
 1. **Requirement → test map.** Every requirement in the brief maps to at least one named
    assertion, and every assertion maps back to a requirement. Write it to `work/<id>/plan.md`.
    An orphan test is drift; an unmapped requirement is an untested requirement.
@@ -174,6 +226,12 @@ Every brief sets `Mode: Manual` or `Mode: Auto`.
   GitHub ruleset blocking direct pushes to main, or Worker sessions without push-capable credentials).
   The command-text hook cannot stop a Worker-written script from invoking git (T6), and the integrity
   check is detection, not prevention.
+- **Attended Auto readiness** and **unattended readiness** are separate. Attended Auto needs a
+  `Mode: Auto` brief, the Owner present, and the always-prompt rules below in force. The Owner's
+  presence, the integrity check and the audit log are what cover T6 and approval-record forgery
+  there. Unattended runs additionally need technical mitigation of each of: indirect script
+  execution, approval-record forgery, external network transfer and secret access. Written rules
+  and the Auto-mode safety classifier are never counted as security boundaries.
 
 **`Mode: Auto` eligibility — all must hold:**
 - an approved, committed brief with explicit files and STOP conditions;
@@ -197,7 +255,7 @@ Every brief sets `Mode: Manual` or `Mode: Auto`.
 
 PLAN, IMPLEMENT and MANUAL remain **postures** inside any mode.
 
-**Auto-approved commands (settings allowlist).** Read-only inspection (`grep`, `cat`, `head`, `tail`, `wc`, and `git status|log|diff|show|rev-parse|ls-files`), offline QA (`npm run qa:offline`, `npm run test:*`, `node qa/*_offline.js`, `node qa/*_test.js`, `node qa/guard_integrity_check.js …`), Codex read-only review (`codex exec --sandbox read-only …`), scratch under `/tmp/pt-<task-id>/`, and the `pt-land.js` request and cleanup verbs run without a prompt. Everything else prompts in Manual. The hook remains the only enforced boundary. `sed` is deliberately not auto-approved; use the Read tool for line ranges.
+**Auto-approved commands (settings allowlist).** Read-only inspection (`grep`, `cat`, `head`, `tail`, `wc`, `ls`, `diff`, `cmp`, `sha256sum`, and `git status|log|diff|show|rev-parse|ls-files`), offline QA (`npm run qa:offline`, `npm run test:*`, `node qa/*_offline.js`, `node qa/*_test.js`, `node qa/guard_integrity_check.js …`, `node qa/tools/index-pins.js --check|--update|--diff …`), Codex read-only review (`codex exec --sandbox read-only …`), scratch under `/tmp/pt-<task-id>/`, and the `pt-land.js` request and cleanup verbs run without a prompt. Everything else prompts in Manual. **Always prompt, in every mode including Auto** (`ask` rules): `pt-land.js land` and `push`, `netlify env:get|list`, `curl`, `wget`, `Invoke-WebRequest`, `Invoke-RestMethod`. Bypass-permissions mode is disabled. A Worker session never accepts an "always allow" for a non-read-only command. The hook and the `deny` rules block; `ask` rules force an Owner prompt in every mode; written rules and the Auto-mode safety classifier are not boundaries. `sed` is deliberately not auto-approved; use the Read tool for line ranges.
 
 ### Protection tiers — the enforced layer
 
@@ -258,6 +316,13 @@ The Worker stops and returns to the Owner **only** when one of these is true:
    mis-measures a condition the implementation plainly meets is not this condition. Record the
    reading used and continue; the Owner sees it at LAND review. STOP-2 is reserved for a
    brief whose **intent** cannot be met.
+   **Owner-ruled resolution.** When the Worker stops under STOP-2 and the Owner rules that the
+   blocking condition is a measurement or wording defect - the implementation meets the brief's
+   approved objective, and its file set, `land-scope`, `protected-scope` and land-tests stay
+   unchanged - the Worker resumes the same task. The ruling is recorded verbatim in `review.md`
+   and given to Codex with the diff. A ruling that changes the scope or the objective is not this
+   resolution: it needs a new brief. STOP-6, the integrity check, the hooks and the protected gates
+   are unaffected.
 3. A **security assumption in the brief conflicts with repository or vendor evidence**.
 4. A required test or action needs a **live, production, deployment, or other protected
    mutation**.
