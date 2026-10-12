@@ -15,6 +15,9 @@
  *   NC-5  K5 holder / exit language while not held         NC-11 _aiUnavailable -> no checks, no ⚠, no line
  *   NC-6  K6 narrative score vs product score              NC-12 K7 absent (only K1–K6)
  *   NC-13 K3 ignores a day-change statement (level ~ the price)  NC-14 K4 reads $-prefixed levels only (ai-output-2 C1)
+ *   NC-15 K2 precision (nearest direction word, no sentence-end "." in the level)   NC-16 K3 precision (dual denominator, gap,
+ *   NC-17 K4 first non-upside invalidation level                                    magnitude suffix, ranges)
+ *   NC-18 whole-scan regression: the brief §F table (captured 2026-10-12 DEV text) -> exactly its "after" column
  *   Planted negatives NEG-1..NEG-11 mutate the production source (never the test).
  */
 const fs = require('fs');
@@ -307,6 +310,34 @@ function evaluate(src) {
     chk('NC-14', 'e: the existing K4 fixtures keep their verdicts (R5 / C2 fire, R5ok / C2ok / TRIM pass)', ids(run(F.R5)) === 'K4' && ids(run(F.C2)) === 'K4' && ids(run(F.R5ok)) === '' && ids(run(F.C2ok)) === '' && ids(run(F.TRIM)) === '');
     chk('NC-14', 'e: trim / avoid stay excluded even with $ levels', ids(run(base({ action: 'avoid', entry_zone: '$425–$432', invalidation: 'Close below $428' }))) === '');
   });
+  // narrative-consistency-2 (K2 / K3 / K4 precision). Every fixture below is CAPTURED DEV text (2026-10-12 live scan, stored
+  // results; brief §F), not reconstructed. `at(price, summary)` mirrors the scan: price = _verifiedPrice = ctx.price.
+  const at = (price, summary, over) => base(Object.assign({ _verifiedPrice: price, summary }, over || {}));
+  const FROG_C4A = 'Reduce any extended positions above $103. Invalidation: break below $94 (MA20 support) ends healthy uptrend.';
+  const QQQ_C4B = 'Near-term risk: hot CPI print → 50bps of yield upside → 3–5% downside to $705–$715 support zone (MA100 approx).';
+  const FROG_C1 = 'Stock is -7.79% below 1Y high, but +30.71% above MA150 ($74.61) and +3.30% above MA20 ($94.41).';
+  const MSFT_C1 = 'MA20 at $510.10 (+5.88%), MA50 at $500.45 (+7.92%), MA150 at $432.75 (+24.80%) all supporting structure.';
+  const QQQ_C1 = 'MA20 at $737.54 (+1.17%), MA50 at $724.52 (+2.99%), and MA150 at $691.15 (+7.96%) confirm healthy uptrend structure intact.';
+  const NVDA_C2 = 'MA20 at $226.73 is exactly current price (0.00% distance), MA50 at $222.08 (+2.10%), MA150 at $207.54 (+9.25%).';
+  const FROG_C3 = 'Q2 earnings beat ($0.27 EPS vs $0.24 consensus, +28.7% YoY revenue, $148.0M) in August.';
+  const QQQ_C3B = 'hot CPI print → 3–5% downside to $705–$715 support zone.';
+  const QQQ_C5 = { action: 'hold_wait', entry_zone: 'Add on pullback to $735–$740 (MA20 support) only after CPI/PPI confirmation that inflation is cooling; avoid chasing current price near 1Y high.',
+    invalidation: 'Break above intraday high $749.79 + close above $750 on >0.8x volume = early breakout signal, shift to add_on_breakout; conversely, close below MA50 $724.52 on heavy volume = thesis deterioration, exit to cash.' };
+  const FROG_G1 = { action: 'add_on_pullback', entry_zone: '$94.00–$96.00 (near MA20, 3–5% dip); confirm on volume >1.2M. Breakout buy zone: $100.50+ with volume expansion.',
+    invalidation: 'Break below MA20 ($94.41) closes healthy uptrend; pivot to avoid if daily close below $93.50.' };
+  const MSFT_K4 = { action: 'hold_wait', entry_zone: '$525–$530 on pullback to MA20; add_on_breakout above $542.74 only if volume >1.2x 20D avg',
+    invalidation: 'Close below MA20 ($510.10) on volume >1.0x 20D avg signals breakdown risk to MA50 retest.' };
+  const NVDA_K4 = { action: 'add_on_pullback', entry_zone: 'MA50 at $222.08 (2% pullback from current); confirmation required: volume >1.2x 20D avg and hold above MA50 close.',
+    invalidation: 'Break below MA150 ($207.54) without recovery closes the uptrend structure and signals deeper pullback risk. Close below $220 on volume >2x 20D avg would signal capitulation and require reassessment.' };
+  guard('NC-15', () => {
+    const fn = extractFn(src, '_nlmConsistencyChecks') || '';
+    chk('NC-15', 'SETUP: _nlmConsistencyChecks extracts completely (balanced braces incl. regex quantifiers, ends with "return out;" + "}")', fn.length > 0 && countOf(fn, '{') === countOf(fn, '}') && /\n {2}return out;\n\}$/.test(fn));
+    chk('NC-15', 'a: FROG C-4a "above $103. … (MA20 support)" -> no K2 (a sentence-ending "." never extends the clause)', ids(run(at(97.52, FROG_C4A))).indexOf('K2') === -1);
+    chk('NC-15', 'b: QQQ C-4b "yield upside → 3–5% downside to $705–$715 support zone" -> no K2 (the word nearest the level binds)', ids(run(at(746.165, QQQ_C4B))).indexOf('K2') === -1);
+    chk('NC-15', 'c: a true support-above-price / resistance-below-price in one clause still fires', ids(run(at(97.52, 'Support at $103 holds the trend.'))) === 'K2' && ids(run(at(97.52, 'Resistance near $90 limits the rally.'))) === 'K2' && (run(at(97.52, 'Support at $103.50 holds.')) || [{}])[0].text === 'downside/support level $103.5 is above the price 97.52');
+    chk('NC-15', 'c: the nearest word still detects when an earlier word is in the window ("upside → downside to $310" at 300)', ids(run(at(300, 'Rate upside → downside to $310 support zone.'))) === 'K2');
+    chk('NC-15', 'd: the existing NC-2 fixtures keep their verdict and text', ids(run(F.C1)) === 'K2' && (run(F.C1) || [{}])[0].text === 'downside/support level $293.38 is above the price 271.26' && ids(run(F.C1ok)) === '' && ids(run(at(300, 'Upside to $280 looks capped.'))) === 'K2');
+  });
   return R;
 }
 
@@ -319,7 +350,9 @@ function mut(text, from, to) {
 const NEGATIVES = [
   { id: 'NC-1', label: 'date comparison removed (K1 fires on a same-day catalyst)', f: s => mut(s, "    if (dates.length && dates.every(d => d < today)) out.push({ id: 'K1'", "    if (dates.length) out.push({ id: 'K1'") },
   { id: 'NC-2', label: 'direction inverted', f: s => mut(s, "if ((word === 'downside' || word === 'support') && level > price)", "if ((word === 'downside' || word === 'support') && level < price)") },
-  { id: 'NC-2', label: 'the $ level bound to any direction word in the sentence (window removed)', f: s => mut(s, "[^$;.,\\n]{0,40}\\$\\s?(\\d[\\d,]*\\.?\\d*)|", "[^$\\n]{0,400}\\$\\s?(\\d[\\d,]*\\.?\\d*)|") },
+  // narrative-consistency-2: the K2 gap is now a tempered window and the number pattern no longer eats a trailing ".", so this
+  // anchor was re-pointed to the new text with the SAME mutation intent (window removed, new number pattern kept).
+  { id: 'NC-2', label: 'the $ level bound to any direction word in the sentence (window removed)', f: s => mut(s, String.raw`(?:(?!\b(?:downside|support|upside|resistance)\b)[^$;.,\n]){0,40}\$\s?(\d[\d,]*(?:\.\d+)?)|`, String.raw`[^$\n]{0,400}\$\s?(\d[\d,]*(?:\.\d+)?)|`) },
   { id: 'NC-1', label: 'impossible calendar dates accepted (round-trip check dropped)', f: s => mut(s, "return (dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d) ? y + '-'", "return (dt.getUTCFullYear() === y) ? y + '-'") },
   { id: 'NC-3', label: 'tolerance widened to 1 pp', f: s => mut(s, 'if (Math.abs(actual - pct) > 0.5)', 'if (Math.abs(actual - pct) > 1)') },
   { id: 'NC-4', label: 'comparison flipped', f: s => mut(s, "      if (floor <= inv) out.push({ id: 'K4'", "      if (floor > inv) out.push({ id: 'K4'") },
@@ -336,7 +369,11 @@ const NEGATIVES = [
   { id: 'NC-13', label: 'K3-a skip ends the loop (break instead of continue)', f: s => mut(s, '<= 0.0005)) continue;', '<= 0.0005)) break;') },
   { id: 'NC-13', label: 'K3-a threshold widened to 0.5 %', f: s => mut(s, '<= 0.0005)) continue;', '<= 0.005)) continue;') },
   { id: 'NC-14', label: 'K4-a bare-number read restored on the entry side', f: s => mut(s, '    const floors = dollars(item.entry_zone);', "    const floors = (String(item.entry_zone).match(/\\d[\\d,]*\\.?\\d*/g) || []).map(num).filter(v => v !== null);") },
-  { id: 'NC-14', label: 'K4-a $-only on the entry side but the bare number read on the invalidation side', f: s => mut(s, '    const inv = dollars(item.invalidation)[0];', "    const inv = num((String(item.invalidation).match(/\\d[\\d,]*\\.?\\d*/g) || [])[0]);") }
+  // narrative-consistency-2: the `inv` line now calls invLevel(); the anchor follows it, the bare-number replacement is unchanged.
+  { id: 'NC-14', label: 'K4-a $-only on the entry side but the bare number read on the invalidation side', f: s => mut(s, '    const inv = dollars(item.invalidation)[0];', "    const inv = num((String(item.invalidation).match(/\\d[\\d,]*\\.?\\d*/g) || [])[0]);") },
+  // narrative-consistency-2 (K2 / K3 / K4 precision)
+  { id: 'NC-15', label: 'K2 trailing-"." number pattern restored (a sentence-ending period consumed)', f: s => mut(s, String.raw`\$\s?(\d[\d,]*(?:\.\d+)?)[^;.,\n]{0,40}?\b(downside`, String.raw`\$\s?(\d[\d,]*\.?\d*)[^;.,\n]{0,40}?\b(downside`) },
+  { id: 'NC-15', label: 'K2 first-word binding restored (the first direction word in the window binds, not the nearest)', f: s => mut(s, String.raw`\b(downside|support|upside|resistance)\b(?:(?!\b(?:downside|support|upside|resistance)\b)[^$;.,\n]){0,40}\$`, String.raw`\b(downside|support|upside|resistance)\b[^$;.,\n]{0,40}\$`) },
 ];
 
 // ── Main ─────────────────────────────────────────────────────────────────────────────────────────
@@ -346,7 +383,7 @@ const NEGATIVES = [
   const check = (name, cond) => { asserts += 1; if (!cond) { failures += 1; console.log('  FAIL  ' + name); } };
   const index = norm(fs.readFileSync(INDEX_PATH, 'utf8'));
   const real = evaluate(index);
-  const order = ['NC-1', 'NC-2', 'NC-3', 'NC-4', 'NC-5', 'NC-6', 'NC-7', 'NC-8', 'NC-9', 'NC-10', 'NC-11', 'NC-12', 'NC-13', 'NC-14'];
+  const order = ['NC-1', 'NC-2', 'NC-3', 'NC-4', 'NC-5', 'NC-6', 'NC-7', 'NC-8', 'NC-9', 'NC-10', 'NC-11', 'NC-12', 'NC-13', 'NC-14', 'NC-15'];
   for (const id of order) for (const c of (real[id] || [])) check(id + ' ' + c.name, c.ok);
   for (const g of order) check(g + ' group ran', Array.isArray(real[g]) && real[g].length > 0);
   const realClean = failures === 0;

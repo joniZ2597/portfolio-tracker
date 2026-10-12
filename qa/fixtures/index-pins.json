@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "d503947a42ead13e56656abe4f88534828d9e4529a8da0c8b6472837a2766d69",
+  "fileSha256": "bc64f967c4e3897e542b9808c4893978ce248e3379a07a061071a4814d1527ba",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -69,7 +69,7 @@
     "_initSigCard": "e4f2088babd8e7dd5435f3b1eb8e7257e47d75f199c72559ccb4e64aaf8eaa58",
     "_initTsCard": "e31f1671b0907ca34686d5bda119327689345a270114eb70cf5a300ef49e311a",
     "_isValidScanResult": "cfc5cc185a43087c7156dc68faf8b3b9219cc2124b77d49cd906c3c9012098d5",
-    "_nlmConsistencyChecks": "093156a4d7a97dafbe73d5f07989d3ea5b549aab1ead6ef1c61e78c1f093da9a",
+    "_nlmConsistencyChecks": "e18d67f8dfb35c64ebfb0c7b66c27c7c22e3816b8e3ff4cd4e32e8d8971cd18e",
     "_normalizePosition": "072744485ffa8cca6ee4088f1a1a560e271fa62187f229e4de2f72be0d6673d4",
     "_onAddPositionEscape": "d66d227f18f5a12d9a4063baa8108a5a00a2b1256650f3900532c9b2c6daa619",
     "_onEditCashEscape": "12e0c3355f1d894cf62b8326676f93cb17bf7923119329b357da0e4e9a32dc2a",

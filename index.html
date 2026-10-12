@@ -7208,8 +7208,10 @@ function _nlmConsistencyChecks(item, ctx) {
   }
   // K2 — a downside / support level above the price, or an upside / resistance level below it. The direction word and the
   // $ level must sit within one short clause of each other (≤ 40 chars, no clause break), so unrelated wording never binds.
+  // The direction word nearest the level binds (the gap cannot contain another direction word), and the level never
+  // consumes a sentence-ending "." (so the window cannot run into the next sentence).
   if (price !== null) {
-    const reK2 = /\b(downside|support|upside|resistance)\b[^$;.,\n]{0,40}\$\s?(\d[\d,]*\.?\d*)|\$\s?(\d[\d,]*\.?\d*)[^;.,\n]{0,40}?\b(downside|support|upside|resistance)\b/gi;
+    const reK2 = /\b(downside|support|upside|resistance)\b(?:(?!\b(?:downside|support|upside|resistance)\b)[^$;.,\n]){0,40}\$\s?(\d[\d,]*(?:\.\d+)?)|\$\s?(\d[\d,]*(?:\.\d+)?)[^;.,\n]{0,40}?\b(downside|support|upside|resistance)\b/gi;
     let m2;
     while ((m2 = reK2.exec(text))) {
       const word = String(m2[1] || m2[4]).toLowerCase();
