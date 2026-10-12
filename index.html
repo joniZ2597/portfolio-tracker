@@ -8245,6 +8245,31 @@ function hasVerifiedMarketData(item) {
   );
 }
 
+// market-status-pill-1: pure fallback pill for a US ticker with no fresh Yahoo marketState.
+// Injected clock (ISO string); calendar, DST and shortened sessions come from TS1_POLICY_V1.calendar.US
+// via the existing _ts1* helpers. Display only - no storage, DOM or network.
+function _ptUsMarketPill(nowIso) {
+  var NA = { cls: 'closed', label: 'Market status unavailable' };
+  var cal = TS1_POLICY_V1.calendar.US;
+  var loc = _ts1ExchangeLocalParts(nowIso, cal.timeZone);
+  if (!loc) return NA;
+  var isSession = _ts1IsTradingSession(loc.dateStr, cal);
+  if (isSession === null) return NA;
+  if (isSession === false) return { cls: 'closed', label: 'Market closed' };
+  var closeMin = _ts1SessionCloseMinutes(loc.dateStr, cal);
+  if (closeMin === null) return NA;
+  var m = loc.minutes;
+  if (m >= 570 && m < closeMin) {
+    var h = Math.floor(closeMin / 60);
+    var mm = closeMin % 60;
+    var closeLbl = ((h % 12) || 12) + ':' + (mm < 10 ? '0' : '') + mm + ' ' + (h >= 12 ? 'PM' : 'AM') + ' ET';
+    return { cls: 'open', label: 'Market open · closes ' + closeLbl };
+  }
+  if (m >= 240 && m < 570) return { cls: 'closed', label: 'Pre-market' };
+  if (m >= closeMin && m < 1200) return { cls: 'closed', label: 'After-hours' };
+  return { cls: 'closed', label: 'Market closed' };
+}
+
 function renderMainPanel(item) {
   const panel = document.getElementById('mainPanel');
   if (!panel) return;
@@ -8463,15 +8488,16 @@ function renderMainPanel(item) {
   const _ms        = _extC ? _extC.marketState : null;
 
   // Market status — prefer fresh Yahoo marketState; fall back to time heuristic
-  const _now     = new Date();
-  const _etHour  = (_now.getUTCHours() - 4 + 24) % 24; // rough ET offset
-  const _isOpen  = _etHour >= 9.5 && _etHour < 16 && _now.getUTCDay() >= 1 && _now.getUTCDay() <= 5;
+  const _fbPill  = _ms ? null
+                 : /\.TA$/i.test(item.ticker || '') ? { cls: 'closed', label: 'Market status unavailable' }
+                 : (typeof _ptUsMarketPill === 'function' ? _ptUsMarketPill(new Date().toISOString())
+                                                          : { cls: 'closed', label: 'Market status unavailable' });
   const mktLabel = _ms === 'REGULAR' ? 'Market open · closes 4:00 PM ET'
                  : _ms === 'PRE'     ? 'Pre-market'
                  : _ms === 'POST'    ? 'After-hours'
                  : _ms === 'CLOSED'  ? 'Market closed'
-                 : (_isOpen ? 'Market open · closes 4:00 PM ET' : 'Market closed');
-  const mktCls   = _ms === 'REGULAR' ? 'open' : _ms ? 'closed' : (_isOpen ? 'open' : 'closed');
+                 : (_fbPill ? _fbPill.label : 'Market closed');
+  const mktCls   = _ms === 'REGULAR' ? 'open' : _ms ? 'closed' : _fbPill.cls;
   // EG-18: display-only pill qualification — mirrors Change A classification exactly
   const _scanAgeSuspicious   = !!_ts && (_scanAgeMs === null || _scanAgeMs <= 0);
   const _scanAgeVeryStale    = !!_ts && _scanAgeMs !== null && _scanAgeMs > 72 * 3600000;

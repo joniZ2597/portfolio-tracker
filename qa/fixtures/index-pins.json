@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "995e7478a3f38b5d0df4d3c70b6083b967197414daa21ae9464c5bf30483ed35",
+  "fileSha256": "16fbd40f5fa293b7947726e61b3e1c3762e1e3d1cc53d7ec6341a60c3d117c60",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -184,6 +184,7 @@
     "_ptScoreStates": "6a3fc2e35040d654e128748d868caf84d488b82f34decf44ddf08d4402e93f49",
     "_ptScoreText": "5b22d6c5daa4ed2e70370d4fe479e08dfff2c099bb2839748ad03ce7677f3589",
     "_ptTimestamp": "c8a7d37ad38e39617fa3e89f23a2988861e5492e6b22e92eef4d66223e5a3256",
+    "_ptUsMarketPill": "402a959e04b138d86cd9f304b54f8f6ed321c0063088c835b54341a5ceebf562",
     "_rangeToCutoff": "88fe0829796601dde6ddd28958d1b567c456ab138dcdc692f2ba277b96a49225",
     "_reCacheBadge": "e593f3702e9dbaca1334c4540f256159ecd3dc9983b39e2dfc0ac5726b31b098",
     "_reSelectedCategories": "2154cccc691ea39d525a4c310dd050b8e1650c85198d2dd8b059bd9409f7872f",
@@ -343,7 +344,7 @@
     "renderApiTable": "6ab781fd896bb61a4120a7b6c3529e93e0adf16fb844fd7ba25e5c5d4b245c12",
     "renderChips": "5419165553a4459a6e14d1e39f200ce24d87229b30914685aeafdd4f327bd167",
     "renderLabsToggles": "1c1eef23e6bd00d30cd8bda43f9246643deea275b157c32827e5f50d7c89d94d",
-    "renderMainPanel": "a248cfabfa0b8d859e2951888a33cdb7d92e008b9de2f2b5e709270c10bed57b",
+    "renderMainPanel": "afce25945eea3cbdfb4ff76047ee41e374ec472fc1da060c37e1e5d348d56668",
     "renderResearchSourceMeta": "7925a95484bde4aab61d18b2454c15803b3568c61f6ff19fc130e48cbea4c459",
     "renderResults": "3e5e77b063e3712741ef28fe2a63143eabf882f2f88cb27a0cdb7aeb2ba286b1",
     "renderSidebar": "ac7119464fe850870432faeb9a0cd62f1a43fda87a638664dc05406f3ab569f3",
@@ -533,5 +534,5 @@
       "sha256": "79b78d1ed91f3d6f8c2b867378a1a228f83399c8931ddd150eea31143bb3a31e"
     }
   },
-  "remainderSha256": "6eb7fabd21756468e34f4d0f4042bf5ba5775b57705942628f0fa7fe5b1037cf"
+  "remainderSha256": "e8083658dc48f20c1353c874ea9831607a9261005b2dd8d66f370199d81df1be"
 }
