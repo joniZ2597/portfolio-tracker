@@ -462,6 +462,328 @@ test('PN MS-T10 letting a bar without an ATR confirm a swing turns the flat seri
   ok(mutant.zigzagSwings(flat).pivots.length > 0, 'mutant invents swings from nothing');
 });
 
+// ---------- slice 3 ----------
+
+function mkLegs(dir, pcts, sessions) {
+  return pcts.map(function (p, i) { return { direction: dir, pct: p, sessions: sessions[i] }; });
+}
+
+// MS-T11 — profile percentiles, Hyndman-Fan type 7, rounded 0.1 % / 1 session
+test('MS-T11 profile percentiles equal hand-computed type-7 values; down legs are magnitudes reported negative', function () {
+  const up = mkLegs('UP', [10, 20, 30, 40, 50, 60, 70, 80, 90, 100], [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]);
+  const down = mkLegs('DOWN', [-5, -10, -15, -20, -25, -30, -35, -40, -45], [2, 4, 6, 8, 10, 12, 14, 16, 18]);
+  // shuffle: the profile must not depend on input order
+  const p = MS.moveProfile(down.slice().reverse().concat(up.slice(5), up.slice(0, 5)));
+  eq(p.up, { status: 'OK', n: 10, pct: { p25: 32.5, p50: 55, p75: 77.5, p90: 91 }, sessions: { p25: 16, p50: 28, p75: 39, p90: 46 } });
+  eq(p.down, { status: 'OK', n: 9, pct: { p25: -15, p50: -25, p75: -35, p90: -41 }, sessions: { p25: 6, p50: 10, p75: 14, p90: 16 } });
+  eq(MS.percentile([1, 2, 3, 4], 0.5), 2.5);
+  eq(MS.percentile([], 0.5), null);
+  const quarter = MS.moveProfile(mkLegs('UP', new Array(8).fill(0.25), new Array(8).fill(3)).concat(mkLegs('DOWN', new Array(8).fill(-0.25), new Array(8).fill(3))));
+  eq([quarter.up.pct.p25, quarter.down.pct.p25], [0.3, -0.3], 'rounding is symmetric about zero');
+});
+test('PN MS-T11 nearest-rank instead of interpolation, and an unsigned down profile, both change the output', function () {
+  const up = mkLegs('UP', [10, 20, 30, 40, 50, 60, 70, 80, 90, 100], [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]);
+  const down = mkLegs('DOWN', [-5, -10, -15, -20, -25, -30, -35, -40, -45, -50], [2, 4, 6, 8, 10, 12, 14, 16, 18, 20]);
+  eq(MS.moveProfile(up.concat(down)).up.pct.p25, 32.5, 'positive control');
+  const m1 = mutate('return sortedAsc[lo] + (h - lo) * (sortedAsc[hi] - sortedAsc[lo]);', 'return sortedAsc[lo];');
+  eq(m1.moveProfile(up.concat(down)).up.pct.p25, 30, 'mutant is nearest-rank');
+  const m2 = mutate('scale * percentile(', '1 * percentile(');
+  ok(m2.moveProfile(up.concat(down)).down.pct.p25 > 0, 'mutant loses the sign');
+});
+
+// MS-T12 — minimum sample
+test('MS-T12 7 legs -> INSUFFICIENT_SAMPLE with n and no percentiles; 8 legs -> percentiles', function () {
+  const mk = function (n) { return mkLegs('UP', new Array(n).fill(0).map(function (_, i) { return 10 + i; }), new Array(n).fill(5)); };
+  eq(MS.moveProfile(mk(7)).up, { status: 'INSUFFICIENT_SAMPLE', n: 7, pct: null, sessions: null });
+  const eight = MS.moveProfile(mk(8)).up;
+  eq([eight.status, eight.n], ['OK', 8]);
+  ok(eight.pct !== null && eight.sessions !== null, 'percentiles present');
+  eq(MS.moveProfile(mk(0)).down, { status: 'INSUFFICIENT_SAMPLE', n: 0, pct: null, sessions: null });
+  eq(MS.moveProfile([]).up.status, 'INSUFFICIENT_SAMPLE');
+});
+test('PN MS-T12 a minimum of 7 accepts 7 legs', function () {
+  const seven = mkLegs('UP', [1, 2, 3, 4, 5, 6, 7], [1, 2, 3, 4, 5, 6, 7]);
+  eq(MS.moveProfile(seven).up.status, 'INSUFFICIENT_SAMPLE', 'positive control');
+  const mutant = mutate('var MIN_SAMPLE = 8;', 'var MIN_SAMPLE = 7;');
+  eq(mutant.moveProfile(seven).up.status, 'OK', 'mutant accepts 7');
+});
+
+// MS-T13 — current leg: pct / sessions / rank / the three context keys at their boundaries
+const CL = flatCandles(consecutiveDates(40));
+const clDate = function (i) { return CL[i].date; };
+function upSwings(openPrice) {
+  return { pivots: [{ date: clDate(10), type: 'LOW', price: 100 }], open: { date: clDate(20), type: 'HIGH', price: openPrice } };
+}
+function downSwings(openPrice) {
+  return { pivots: [{ date: clDate(10), type: 'HIGH', price: 100 }], open: { date: clDate(20), type: 'LOW', price: openPrice } };
+}
+const UP_LEGS = mkLegs('UP', [10, 20, 30, 40, 50, 60, 70, 80, 90, 100], new Array(10).fill(5));          // P75 77.5, P90 91
+const DOWN_LEGS = mkLegs('DOWN', [-5, -10, -15, -20, -25, -30, -35, -40, -45], new Array(9).fill(5));   // P75 35, P90 41
+test('MS-T13 current UP leg: % / sessions / rank and the context boundaries (<= P75, <= P90, beyond)', function () {
+  const at = function (x) { return MS.currentLeg(CL, upSwings(x), UP_LEGS.concat(DOWN_LEGS)); };
+  eq(at(177.5), { direction: 'UP', pct: 77.5, sessions: 10, rank1y: 70, context: 'WITHIN_TYPICAL' });
+  eq(at(177.6), { direction: 'UP', pct: 77.6, sessions: 10, rank1y: 70, context: 'EXTENDED' });
+  eq(at(191), { direction: 'UP', pct: 91, sessions: 10, rank1y: 90, context: 'EXTENDED' });
+  eq(at(191.1), { direction: 'UP', pct: 91.1, sessions: 10, rank1y: 90, context: 'BEYOND_P90' });
+  eq(at(200).rank1y, 100);
+  eq(at(105).rank1y, 0, 'below every historical leg');
+});
+test('MS-T13 current DOWN leg uses the down profile by magnitude; insufficient profile / no leg -> explicit UNKNOWN / NONE', function () {
+  const at = function (x) { return MS.currentLeg(CL, downSwings(x), UP_LEGS.concat(DOWN_LEGS)); };
+  eq(at(66), { direction: 'DOWN', pct: -34, sessions: 10, rank1y: 66.7, context: 'WITHIN_TYPICAL' });
+  eq(at(64).context, 'EXTENDED');
+  eq(at(59).context, 'EXTENDED');
+  eq(at(58).context, 'BEYOND_P90');
+  eq(MS.currentLeg(CL, upSwings(150), UP_LEGS.slice(0, 7).concat(DOWN_LEGS)), { direction: 'UP', pct: 50, sessions: 10, rank1y: null, context: 'UNKNOWN' });
+  eq(MS.currentLeg(CL, upSwings(150), null), { direction: 'UP', pct: 50, sessions: 10, rank1y: null, context: 'UNKNOWN' });
+  const none = { direction: 'NONE', pct: null, sessions: null, rank1y: null, context: 'UNKNOWN' };
+  eq(MS.currentLeg(CL, { pivots: [], open: null }, UP_LEGS), none);
+  eq(MS.currentLeg([], { pivots: [], open: null }, null), none);
+});
+test('PN MS-T13 a strict < at the P75 edge flips the boundary case', function () {
+  const sw = upSwings(177.5);
+  eq(MS.currentLeg(CL, sw, UP_LEGS).context, 'WITHIN_TYPICAL', 'positive control');
+  const mutant = mutate('if (shown <= p75)', 'if (shown < p75)');
+  eq(mutant.currentLeg(CL, sw, UP_LEGS).context, 'EXTENDED', 'mutant flips');
+});
+
+// MS-T14 — public output shape
+const SHAPE = {
+  top: ['schema', 'basis', 'asOf', 'input', 'sufficiency', 'volatility', 'swings', 'levels', 'profile', 'current'],
+  input: ['sessions', 'firstDate', 'lastDate', 'dropped'],
+  dropped: ['invalid', 'duplicate', 'future'],
+  sufficiency: ['h1y', 'h3y', 'sessions1y', 'sessions3y'],
+  volatility: ['atr14', 'atrPct', 'regime'],
+  swings: ['k', 'pivots'],
+  pivot: ['date', 'type', 'price'],
+  levels: ['support', 'resistance'],
+  level: ['price', 'touches', 'lastTouch'],
+  profile: ['h1y', 'h3y'],
+  horizon: ['up', 'down'],
+  leaf: ['status', 'n', 'pct', 'sessions'],
+  quant: ['p25', 'p50', 'p75', 'p90'],
+  current: ['direction', 'pct', 'sessions', 'rank1y', 'context']
+};
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function shapeErrors(o) {
+  const errs = [];
+  function keys(obj, expected, where) {
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) { errs.push(where + ' is not an object'); return false; }
+    if (JSON.stringify(Object.keys(obj)) !== JSON.stringify(expected)) { errs.push(where + ' keys ' + JSON.stringify(Object.keys(obj)) + ' != ' + JSON.stringify(expected)); return false; }
+    return true;
+  }
+  const num = function (v, where) { if (typeof v !== 'number' || !isFinite(v)) errs.push(where + ' not a finite number'); };
+  const numN = function (v, where) { if (v !== null) num(v, where); };
+  const dateS = function (v, where) { if (typeof v !== 'string' || !DATE_RE.test(v)) errs.push(where + ' not a date'); };
+  const oneOf = function (v, list, where) { if (list.indexOf(v) === -1) errs.push(where + ' = ' + v + ' not in ' + list.join('|')); };
+  if (!keys(o, SHAPE.top, 'output')) return errs;
+  eq(o.schema, 'market-structure/v1'); eq(o.basis, 'HISTORICAL_DESCRIPTIVE'); dateS(o.asOf, 'asOf');
+  if (keys(o.input, SHAPE.input, 'input')) {
+    num(o.input.sessions, 'sessions');
+    if (o.input.sessions > 0) { dateS(o.input.firstDate, 'firstDate'); dateS(o.input.lastDate, 'lastDate'); } else eq([o.input.firstDate, o.input.lastDate], [null, null]);
+    if (keys(o.input.dropped, SHAPE.dropped, 'dropped')) SHAPE.dropped.forEach(function (k) { num(o.input.dropped[k], 'dropped.' + k); });
+  }
+  if (keys(o.sufficiency, SHAPE.sufficiency, 'sufficiency')) {
+    oneOf(o.sufficiency.h1y, ['OK', 'INSUFFICIENT', 'GAPPED'], 'h1y'); oneOf(o.sufficiency.h3y, ['OK', 'INSUFFICIENT', 'GAPPED'], 'h3y');
+    num(o.sufficiency.sessions1y, 's1y'); num(o.sufficiency.sessions3y, 's3y');
+  }
+  if (keys(o.volatility, SHAPE.volatility, 'volatility')) {
+    numN(o.volatility.atr14, 'atr14'); numN(o.volatility.atrPct, 'atrPct'); oneOf(o.volatility.regime, ['LOW', 'NORMAL', 'HIGH', 'UNKNOWN'], 'regime');
+  }
+  if (keys(o.swings, SHAPE.swings, 'swings')) {
+    num(o.swings.k, 'k');
+    if (!Array.isArray(o.swings.pivots)) errs.push('pivots not an array');
+    else o.swings.pivots.forEach(function (p, i) { if (keys(p, SHAPE.pivot, 'pivot' + i)) { dateS(p.date, 'pivot.date'); oneOf(p.type, ['HIGH', 'LOW'], 'pivot.type'); num(p.price, 'pivot.price'); } });
+  }
+  if (keys(o.levels, SHAPE.levels, 'levels')) {
+    ['support', 'resistance'].forEach(function (side) {
+      if (!Array.isArray(o.levels[side])) errs.push(side + ' not an array');
+      else o.levels[side].forEach(function (l, i) { if (keys(l, SHAPE.level, side + i)) { num(l.price, 'level.price'); num(l.touches, 'level.touches'); dateS(l.lastTouch, 'level.lastTouch'); } });
+    });
+  }
+  if (keys(o.profile, SHAPE.profile, 'profile')) {
+    ['h1y', 'h3y'].forEach(function (h) {
+      if (!keys(o.profile[h], SHAPE.horizon, h)) return;
+      ['up', 'down'].forEach(function (d) {
+        const leaf = o.profile[h][d];
+        if (!keys(leaf, SHAPE.leaf, h + '.' + d)) return;
+        oneOf(leaf.status, ['OK', 'INSUFFICIENT_SAMPLE', 'INSUFFICIENT'], h + '.' + d + '.status');
+        if (leaf.status === 'OK') {
+          num(leaf.n, 'n');
+          if (keys(leaf.pct, SHAPE.quant, 'pct')) SHAPE.quant.forEach(function (q) { num(leaf.pct[q], 'pct.' + q); });
+          if (keys(leaf.sessions, SHAPE.quant, 'sessions')) SHAPE.quant.forEach(function (q) { num(leaf.sessions[q], 'sessions.' + q); });
+        } else {
+          if (leaf.status === 'INSUFFICIENT_SAMPLE') num(leaf.n, 'n'); else eq(leaf.n, null);
+          eq([leaf.pct, leaf.sessions], [null, null]);
+        }
+      });
+    });
+  }
+  if (keys(o.current, SHAPE.current, 'current')) {
+    oneOf(o.current.direction, ['UP', 'DOWN', 'NONE'], 'direction'); numN(o.current.pct, 'cur.pct'); numN(o.current.sessions, 'cur.sessions');
+    numN(o.current.rank1y, 'rank1y'); oneOf(o.current.context, ['WITHIN_TYPICAL', 'EXTENDED', 'BEYOND_P90', 'UNKNOWN'], 'context');
+  }
+  return errs;
+}
+
+// A sine wave with noise: many confirmed swings, so the profile and current leg are exercised.
+function genWave(n, period, amp, seed) {
+  const rnd = makeLcg(seed);
+  const dates = consecutiveDates(n);
+  const out = [];
+  let prev = 100;
+  for (let i = 0; i < n; i += 1) {
+    const close = 100 + amp * Math.sin((2 * Math.PI * i) / period) + (rnd() - 0.5);
+    out.push({ date: dates[i], open: prev, high: Math.max(prev, close) + 0.3, low: Math.min(prev, close) - 0.3, close: close, volume: 1000 });
+    prev = close;
+  }
+  return out;
+}
+const WAVE = genWave(900, 25, 15, 61);
+const WALK = genWalk(1300, 51);
+const ASOF_WAVE = WAVE[WAVE.length - 1].date;
+const ASOF_WALK = WALK[WALK.length - 1].date;
+
+test('MS-T14 public output equals the DoD shape exactly (key set, order, types) on walks, waves, short and empty input', function () {
+  const cases = [
+    [WALK, ASOF_WALK], [WAVE, ASOF_WAVE], [genWalk(60, 5), consecutiveDates(60)[59]], [genWalk(20, 6), consecutiveDates(20)[19]],
+    [[], '2024-01-31'], [flatCandles(consecutiveDates(300)), consecutiveDates(300)[299]]
+  ];
+  cases.forEach(function (c, i) {
+    const out = MS.analyzeMarketStructure(c[0], { asOf: c[1] });
+    eq(shapeErrors(out), [], 'case ' + i);
+  });
+  eq(Object.keys(MS).sort(), ['analyzeMarketStructure', 'assessSufficiency', 'atr14', 'atrSeries', 'buildLegs', 'classifyRegime',
+    'currentLeg', 'levels', 'moveProfile', 'normalizeCandles', 'percentile', 'volatilityRegime', 'zigzagSwings'], 'frozen export list');
+  let threw = false;
+  try { MS.analyzeMarketStructure(WAVE, {}); } catch (e) { threw = e instanceof TypeError; }
+  ok(threw, 'missing asOf throws TypeError');
+});
+test('PN MS-T14 an unknown key, a reordered key and a missing key are all rejected by the shape check', function () {
+  const out = MS.analyzeMarketStructure(WAVE, { asOf: ASOF_WAVE });
+  eq(shapeErrors(out), [], 'positive control');
+  ok(shapeErrors(Object.assign({}, out, { extra: 1 })).length > 0, 'unknown top key');
+  ok(shapeErrors(Object.assign({}, out, { current: Object.assign({}, out.current, { z: 1 }) })).length > 0, 'unknown nested key');
+  ok(shapeErrors({ basis: out.basis, schema: out.schema, asOf: out.asOf, input: out.input, sufficiency: out.sufficiency, volatility: out.volatility, swings: out.swings, levels: out.levels, profile: out.profile, current: out.current }).length > 0, 'reordered');
+  const noCur = Object.assign({}, out); delete noCur.current;
+  ok(shapeErrors(noCur).length > 0, 'missing key');
+  const m = mutate('schema: SCHEMA,', 'zzz: 1, schema: SCHEMA,');
+  ok(shapeErrors(m.analyzeMarketStructure(WAVE, { asOf: ASOF_WAVE })).length > 0, 'production mutant with an extra key');
+});
+
+test('MS-T14 end to end on the wave: sufficiency, swings, profile and current leg agree with each other', function () {
+  const out = MS.analyzeMarketStructure(WAVE, { asOf: ASOF_WAVE });
+  eq(out.sufficiency, { h1y: 'OK', h3y: 'OK', sessions1y: 252, sessions3y: 756 });
+  eq(out.input, { sessions: 900, firstDate: WAVE[0].date, lastDate: WAVE[899].date, dropped: { invalid: 0, duplicate: 0, future: 0 } });
+  ok(alternates(out.swings.pivots) && out.swings.pivots.length > 20, 'alternating pivots');
+  const start1y = WAVE[900 - 252].date;
+  const inWin = out.swings.pivots.filter(function (p) { return p.date >= start1y; });
+  let ups = 0, downs = 0;
+  for (let i = 1; i < inWin.length; i += 1) {
+    if (inWin[i - 1].type === 'LOW') ups += 1; else downs += 1;
+  }
+  eq([out.profile.h1y.up.n, out.profile.h1y.down.n], [ups, downs], 'leg counts follow the in-window pivots');
+  eq([out.profile.h1y.up.status, out.profile.h1y.down.status], ['OK', 'OK']);
+  ['up', 'down'].forEach(function (d) {
+    const q = out.profile.h1y[d].pct;
+    ok(Math.abs(q.p25) <= Math.abs(q.p50) && Math.abs(q.p50) <= Math.abs(q.p75) && Math.abs(q.p75) <= Math.abs(q.p90), d + ' percentiles ordered by magnitude');
+  });
+  ok(out.profile.h1y.up.pct.p50 > 0 && out.profile.h1y.down.pct.p50 < 0, 'signs');
+  ok(out.current.direction !== 'NONE' && out.current.rank1y >= 0 && out.current.rank1y <= 100 && out.current.context !== 'UNKNOWN', 'current leg described');
+  ok(out.levels.support.length + out.levels.resistance.length > 0, 'levels found');
+  const short = MS.analyzeMarketStructure(genWalk(60, 5), { asOf: consecutiveDates(60)[59] });
+  eq([short.sufficiency.h1y, short.levels, short.profile.h1y.up, short.volatility.regime], ['INSUFFICIENT', { support: [], resistance: [] },
+    { status: 'INSUFFICIENT', n: null, pct: null, sessions: null }, 'UNKNOWN']);
+  const gapped = flatSeries(300, 100, 10);
+  eq(MS.analyzeMarketStructure(gapped.candles, { asOf: gapped.asOf }).sufficiency.h1y, 'GAPPED');
+});
+
+// MS-T15 — determinism
+test('MS-T15 two runs are byte-identical, and so is a shuffled copy of the input', function () {
+  const a = JSON.stringify(MS.analyzeMarketStructure(WAVE, { asOf: ASOF_WAVE }));
+  const b = JSON.stringify(MS.analyzeMarketStructure(WAVE, { asOf: ASOF_WAVE }));
+  ok(a === b, 'two runs');
+  const rnd = makeLcg(99);
+  const shuffled = WAVE.slice();
+  for (let i = shuffled.length - 1; i > 0; i -= 1) { const j = Math.floor(rnd() * (i + 1)); const t = shuffled[i]; shuffled[i] = shuffled[j]; shuffled[j] = t; }
+  ok(JSON.stringify(MS.analyzeMarketStructure(shuffled, { asOf: ASOF_WAVE })) === a, 'shuffled input');
+  const before = JSON.stringify(WAVE);
+  MS.analyzeMarketStructure(WAVE, { asOf: ASOF_WAVE });
+  ok(JSON.stringify(WAVE) === before, 'input is not mutated');
+});
+test('PN MS-T15 a run-counter injected into the output breaks byte identity', function () {
+  const mutant = mutate('basis: BASIS,', 'basis: BASIS + String(globalThis.__ms1_n = (globalThis.__ms1_n || 0) + 1),');
+  const x = JSON.stringify(mutant.analyzeMarketStructure(WAVE, { asOf: ASOF_WAVE }));
+  const y = JSON.stringify(mutant.analyzeMarketStructure(WAVE, { asOf: ASOF_WAVE }));
+  delete globalThis.__ms1_n;
+  ok(x !== y, 'mutant differs between runs');
+});
+
+// MS-T16 — isolation: the three files are byte-identical to the base. The base is the parent of the
+// commit that introduced the module (stable after later tasks edit index.html). Git is queried once
+// at load; the assertions only read the stored result.
+const ISOLATED = ['index.html', 'netlify/functions/market-data.js', 'qa/run-offline.js'];
+function gitOnce(args) {
+  const r = spawnSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+  if (r.error || r.status !== 0) throw new Error('git ' + args.join(' ') + ' failed: ' + (r.error ? r.error.message : r.stderr));
+  return r.stdout.split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+}
+const GIT = (function () {
+  try {
+    const intro = gitOnce(['log', '--diff-filter=A', '--format=%H', '--', MODULE_REL]);
+    const baseRef = intro.length ? intro[intro.length - 1] + '^' : 'HEAD';
+    const headRef = intro.length ? intro[intro.length - 1] : 'HEAD';
+    // Module not committed yet: compare the working tree with HEAD (only true while this task is open).
+    const diffArgs = intro.length ? ['diff', '--name-only', baseRef, headRef, '--'] : ['diff', '--name-only', 'HEAD', '--'];
+    return { error: null, changed: gitOnce(diffArgs.concat(ISOLATED)) };
+  } catch (e) {
+    return { error: e.message, changed: [] };
+  }
+})();
+function isolationViolations(g) {
+  return g.changed.map(function (f) { return 'changed vs base: ' + f; });
+}
+function wiringHits(text) { return /market-structure|analyzeMarketStructure/.test(text); }
+test('MS-T16 index.html, market-data.js and run-offline.js are byte-identical to the base and do not reference the module', function () {
+  eq(GIT.error, null, 'git readable');
+  eq(isolationViolations(GIT), []);
+  ISOLATED.forEach(function (rel) {
+    ok(!wiringHits(fs.readFileSync(path.join(ROOT, rel), 'utf8')), rel + ' references the module');
+  });
+});
+test('PN MS-T16 a changed isolated file, or a reference to the module, is reported', function () {
+  eq(isolationViolations({ changed: [] }), [], 'positive control');
+  ok(isolationViolations({ changed: ['index.html'] }).length === 1, 'changed');
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  ok(!wiringHits(html) && wiringHits(html + "\nrequire('./services/market-structure.js');"), 'wiring scan bites');
+});
+
+// MS-T17 — non-forecast rule
+const NF_RE = /target|expected|forecast|probability|likely/i;
+function nfHits(value, trail, out) {
+  if (Array.isArray(value)) value.forEach(function (v, i) { nfHits(v, trail + '[' + i + ']', out); });
+  else if (value !== null && typeof value === 'object') {
+    Object.keys(value).forEach(function (k) { if (NF_RE.test(k)) out.push(trail + '.' + k); nfHits(value[k], trail + '.' + k, out); });
+  } else if (typeof value === 'string' && NF_RE.test(value)) out.push(trail + ' = ' + value);
+  return out;
+}
+test('MS-T17 non-forecast: basis present, no target / expected / forecast / probability / likely in any key or string', function () {
+  [[WAVE, ASOF_WAVE], [WALK, ASOF_WALK], [[], '2024-01-31']].forEach(function (c) {
+    const out = MS.analyzeMarketStructure(c[0], { asOf: c[1] });
+    eq(out.basis, 'HISTORICAL_DESCRIPTIVE');
+    eq(nfHits(out, 'out', []), []);
+  });
+});
+test('PN MS-T17 a stub adding expectedMove, and a string value containing likely, are both rejected', function () {
+  const stub = mutate('basis: BASIS,', 'basis: BASIS, expectedMove: 0,');
+  ok(nfHits(stub.analyzeMarketStructure(WAVE, { asOf: ASOF_WAVE }), 'out', []).length === 1, 'key flagged');
+  const stub2 = mutate('basis: BASIS,', "basis: 'LIKELY_UP',");
+  ok(nfHits(stub2.analyzeMarketStructure(WAVE, { asOf: ASOF_WAVE }), 'out', []).length === 1, 'value flagged');
+  ['target', 'forecast', 'probability'].forEach(function (w) {
+    ok(nfHits({ a: { [w + 'Price']: 1 } }, 'o', []).length === 1, w + ' key flagged');
+  });
+});
+
 // ---- ROWS-END ----
 
 const result = failed === 0 ? 'ALL PASS' : 'FAILURES: ' + failed;

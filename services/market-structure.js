@@ -298,6 +298,143 @@ function levels(candles, pivots) {
   return { support: support.slice(0, LEVELS_PER_SIDE), resistance: resistance.slice(0, LEVELS_PER_SIDE) };
 }
 
+// ---------- S3: move profile, current leg, public entry ----------
+
+// MS-2 minimum comparable moves per type and horizon.
+var MIN_SAMPLE = 8;
+var QUANTILES = [['p25', 0.25], ['p50', 0.5], ['p75', 0.75], ['p90', 0.9]];
+
+// MS-4 rounding: 0.1 for percentages, symmetric about zero (-0 is normalised to 0).
+function roundTenth(x) {
+  var m = Math.round(Math.abs(x) * 10) / 10;
+  return (x < 0 ? -m : m) + 0;
+}
+
+function roundSessions(x) {
+  return Math.round(x);
+}
+
+function quantiles(sortedAsc, scale, roundFn) {
+  var out = {};
+  for (var i = 0; i < QUANTILES.length; i++) {
+    out[QUANTILES[i][0]] = roundFn(scale * percentile(sortedAsc, QUANTILES[i][1]));
+  }
+  return out;
+}
+
+// Legs from consecutive confirmed pivots: LOW -> HIGH is an UP leg, HIGH -> LOW a DOWN leg. pct is
+// (end / start - 1) x 100 (negative for DOWN); sessions is the candle-index distance.
+function buildLegs(candles, pivots) {
+  var cs = asArray(candles);
+  var pos = {};
+  for (var i = 0; i < cs.length; i++) pos[cs[i].date] = i;
+  var ps = asArray(pivots);
+  var legs = [];
+  for (var j = 1; j < ps.length; j++) {
+    var a = ps[j - 1], b = ps[j];
+    if (a.type === b.type || pos[a.date] === undefined || pos[b.date] === undefined) continue;
+    legs.push({
+      direction: a.type === 'LOW' ? 'UP' : 'DOWN',
+      pct: (b.price / a.price - 1) * 100,
+      sessions: pos[b.date] - pos[a.date]
+    });
+  }
+  return legs;
+}
+
+function legsOf(legs, direction) {
+  return asArray(legs).filter(function (l) { return l.direction === direction; });
+}
+
+// One direction's profile. DOWN percentiles are taken over drawdown magnitude and reported with a
+// negative sign, so p90 is the most severe correction.
+function profileLeaf(dirLegs, scale) {
+  if (dirLegs.length < MIN_SAMPLE) return { status: 'INSUFFICIENT_SAMPLE', n: dirLegs.length, pct: null, sessions: null };
+  var mags = dirLegs.map(function (l) { return Math.abs(l.pct); }).sort(numericAsc);
+  var durs = dirLegs.map(function (l) { return l.sessions; }).sort(numericAsc);
+  return { status: 'OK', n: dirLegs.length, pct: quantiles(mags, scale, roundTenth), sessions: quantiles(durs, 1, roundSessions) };
+}
+
+function moveProfile(legs) {
+  return { up: profileLeaf(legsOf(legs, 'UP'), 1), down: profileLeaf(legsOf(legs, 'DOWN'), -1) };
+}
+
+function insufficientHorizon() {
+  var leaf = { status: 'INSUFFICIENT', n: null, pct: null, sessions: null };
+  return { up: leaf, down: { status: 'INSUFFICIENT', n: null, pct: null, sessions: null } };
+}
+
+// The open leg runs from the last confirmed pivot to the running (unconfirmed) extreme. Its rank is
+// the share of matching historical 1y legs of equal or smaller magnitude; context compares the
+// reported magnitude with the reported P75 / P90. legs1y is null when the 1y horizon is insufficient.
+function currentLeg(candles, swings, legs1y) {
+  var none = { direction: 'NONE', pct: null, sessions: null, rank1y: null, context: 'UNKNOWN' };
+  var cs = asArray(candles);
+  if (!swings || !swings.open || !Array.isArray(swings.pivots) || swings.pivots.length === 0) return none;
+  var last = swings.pivots[swings.pivots.length - 1];
+  var open = swings.open;
+  var pos = {};
+  for (var i = 0; i < cs.length; i++) pos[cs[i].date] = i;
+  if (pos[open.date] === undefined || pos[last.date] === undefined) return none;
+  var direction = open.type === 'HIGH' ? 'UP' : 'DOWN';
+  var rawPct = (open.price / last.price - 1) * 100;
+  var out = { direction: direction, pct: roundTenth(rawPct), sessions: pos[open.date] - pos[last.date], rank1y: null, context: 'UNKNOWN' };
+  if (legs1y === null || legs1y === undefined) return out;
+  var matching = legsOf(legs1y, direction);
+  if (matching.length < MIN_SAMPLE) return out;
+  var mags = matching.map(function (l) { return Math.abs(l.pct); }).sort(numericAsc);
+  var current = Math.abs(rawPct);
+  var atOrBelow = 0;
+  for (var k = 0; k < mags.length; k++) if (mags[k] <= current) atOrBelow += 1;
+  out.rank1y = roundTenth((100 * atOrBelow) / mags.length);
+  var shown = Math.abs(out.pct);
+  var p75 = roundTenth(percentile(mags, 0.75));
+  var p90 = roundTenth(percentile(mags, 0.9));
+  if (shown <= p75) out.context = 'WITHIN_TYPICAL';
+  else if (shown <= p90) out.context = 'EXTENDED';
+  else out.context = 'BEYOND_P90';
+  return out;
+}
+
+// Legs inside the last `window` sessions (both pivots dated within it), or null when that horizon
+// has too few sessions.
+function horizonLegs(cs, pivots, status, window) {
+  if (status === 'INSUFFICIENT') return null;
+  var start = cs[cs.length > window ? cs.length - window : 0].date;
+  return buildLegs(cs, pivots.filter(function (p) { return p.date >= start; }));
+}
+
+function analyzeMarketStructure(candles, options) {
+  var asOf = options && options.asOf;
+  assertAsOf(asOf);
+  var norm = normalizeCandles(candles, asOf);
+  var cs = norm.candles;
+  var suff = assessSufficiency(cs, asOf);
+  var swings = zigzagSwings(cs);
+  var legs1y = horizonLegs(cs, swings.pivots, suff.h1y, WINDOW_1Y);
+  var legs3y = horizonLegs(cs, swings.pivots, suff.h3y, WINDOW_3Y);
+  return {
+    schema: SCHEMA,
+    basis: BASIS,
+    asOf: asOf,
+    input: {
+      sessions: cs.length,
+      firstDate: cs.length ? cs[0].date : null,
+      lastDate: cs.length ? cs[cs.length - 1].date : null,
+      dropped: norm.dropped
+    },
+    sufficiency: suff,
+    volatility: volatilityRegime(cs),
+    swings: { k: swings.k, pivots: swings.pivots },
+    levels: suff.h1y === 'INSUFFICIENT' ? { support: [], resistance: [] } : levels(cs, swings.pivots),
+    profile: {
+      h1y: legs1y === null ? insufficientHorizon() : moveProfile(legs1y),
+      h3y: legs3y === null ? insufficientHorizon() : moveProfile(legs3y)
+    },
+    current: currentLeg(cs, swings, legs1y)
+  };
+}
+
 // Dual export guard: CommonJS for offline Node tests; skipped when the file is inlined as a plain
 // script (matching services/research-evidence-client.js).
 if (typeof module !== 'undefined' && module.exports) {
@@ -310,6 +447,10 @@ if (typeof module !== 'undefined' && module.exports) {
     classifyRegime: classifyRegime,
     volatilityRegime: volatilityRegime,
     zigzagSwings: zigzagSwings,
-    levels: levels
+    levels: levels,
+    buildLegs: buildLegs,
+    moveProfile: moveProfile,
+    currentLeg: currentLeg,
+    analyzeMarketStructure: analyzeMarketStructure
   };
 }
