@@ -338,6 +338,19 @@ function evaluate(src) {
     chk('NC-15', 'c: the nearest word still detects when an earlier word is in the window ("upside → downside to $310" at 300)', ids(run(at(300, 'Rate upside → downside to $310 support zone.'))) === 'K2');
     chk('NC-15', 'd: the existing NC-2 fixtures keep their verdict and text', ids(run(F.C1)) === 'K2' && (run(F.C1) || [{}])[0].text === 'downside/support level $293.38 is above the price 271.26' && ids(run(F.C1ok)) === '' && ids(run(at(300, 'Upside to $280 looks capped.'))) === 'K2');
   });
+  guard('NC-16', () => {
+    chk('NC-16', 'a: FROG / MSFT / QQQ C-1 (price ÷ level − 1 stated correctly) -> no K3', ids(run(at(97.52, FROG_C1))) === '' && ids(run(at(540.093, MSFT_C1))) === '' && ids(run(at(746.165, QQQ_C1))) === '');
+    chk('NC-16', 'b: NVDA C-2 "(0.00% distance), MA50 at $222.08" -> no K3 (a % never pairs with the next clause\'s level)', ids(run(at(226.73, NVDA_C2))) === '');
+    chk('NC-16', 'c: FROG C-3 captured ("…, $148.0M) in August") -> no K3', ids(run(at(102.23, FROG_C3))) === '');
+    chk('NC-16', 'c: no-comma variant "Revenue rose 28.7% to $148.0M in Q2." -> no K3 (magnitude suffix); billion / mn forms too', ids(run(at(102.23, 'Revenue rose 28.7% to $148.0M in Q2.'))) === '' && ids(run(at(102.23, 'Revenue rose 28.7% to $2.1 billion in Q2.'))) === '' && ids(run(at(102.23, 'Revenue rose 28.7% to $148mn in Q2.'))) === '');
+    chk('NC-16', 'c: a price level followed by an ordinary word is still a level ("17% to $130 but")', ids(run(at(100, 'A 17% move to $130 but not soon.'))) === 'K3');
+    chk('NC-16', 'd: QQQ C-3b "3–5% downside to $705–$715" -> no K3 (range endpoints are not point claims)', ids(run(at(746.165, QQQ_C3B))) === '');
+    chk('NC-16', 'd: a % range alone, and a $ range alone, are skipped', ids(run(at(100, 'A 3–5% move to $130 is plausible.'))) === '' && ids(run(at(100, 'A 17% move to $115–$120 is plausible.'))) === '');
+    chk('NC-16', 'd: a spaced ASCII hyphen after a digit is a separator, not a range ("MA20 - 12% below … $90" still K3; Codex S2 finding, REJECT)', ids(run(base({ summary: 'Support at MA20 - 12% below $90 matters.' }))) === 'K3');
+    chk('NC-16', 'e: CBOE C3 still K3 with the identical text', ids(run(F.C3)) === 'K3' && (run(F.C3) || [{}])[0].text === '17% to $117.97 is 17.97% from the price 100.00');
+    chk('NC-16', 'f: "Support at $90 (-12%)" still K3, "(-10%)" passes', ids(run(base({ summary: 'Support at $90 (-12%) matters.' }))) === 'K3' && ids(run(base({ summary: 'Support at $90 (-10%) matters.' }))) === '');
+    chk('NC-16', 'f: the message keeps the price-relative figure', (run(base({ summary: 'Support at $90 (-12%) matters.' })) || [{}])[0].text === '12% to $90 is 10.00% from the price 100.00');
+  });
   return R;
 }
 
@@ -374,6 +387,10 @@ const NEGATIVES = [
   // narrative-consistency-2 (K2 / K3 / K4 precision)
   { id: 'NC-15', label: 'K2 trailing-"." number pattern restored (a sentence-ending period consumed)', f: s => mut(s, String.raw`\$\s?(\d[\d,]*(?:\.\d+)?)[^;.,\n]{0,40}?\b(downside`, String.raw`\$\s?(\d[\d,]*\.?\d*)[^;.,\n]{0,40}?\b(downside`) },
   { id: 'NC-15', label: 'K2 first-word binding restored (the first direction word in the window binds, not the nearest)', f: s => mut(s, String.raw`\b(downside|support|upside|resistance)\b(?:(?!\b(?:downside|support|upside|resistance)\b)[^$;.,\n]){0,40}\$`, String.raw`\b(downside|support|upside|resistance)\b[^$;.,\n]{0,40}\$`) },
+  { id: 'NC-16', label: 'K3 single denominator restored (price-relative distance only)', f: s => mut(s, '      if (Math.abs(Math.abs(price - level) / level * 100 - pct) <= 0.5) continue;', '') },
+  { id: 'NC-16', label: 'K3 ")" and "," allowed in the %-to-$ gap again', f: s => mut(s, String.raw`%[^.;,)\n]{0,60}?\$`, String.raw`%[^.;\n]{0,60}?\$`) },
+  { id: 'NC-16', label: 'K3 magnitude-suffix skip removed ("$148.0M" read as a price level)', f: s => mut(s, '      if (/^\\s?(?:million|billion|thousand|mn|bn|[MBK])\\b/i.test(text.slice(lvEnd))) continue;', '') },
+  { id: 'NC-16', label: 'K3 range skip removed ("3–5%", "$705–$715" read as point claims)', f: s => mut(s, '      if ((m[1] !== undefined && isRange(text, m.index, m.index + m[0].indexOf(\'%\') + 1)) || isRange(text, lvAt, lvEnd)) continue;', '') },
 ];
 
 // ── Main ─────────────────────────────────────────────────────────────────────────────────────────
@@ -383,7 +400,7 @@ const NEGATIVES = [
   const check = (name, cond) => { asserts += 1; if (!cond) { failures += 1; console.log('  FAIL  ' + name); } };
   const index = norm(fs.readFileSync(INDEX_PATH, 'utf8'));
   const real = evaluate(index);
-  const order = ['NC-1', 'NC-2', 'NC-3', 'NC-4', 'NC-5', 'NC-6', 'NC-7', 'NC-8', 'NC-9', 'NC-10', 'NC-11', 'NC-12', 'NC-13', 'NC-14', 'NC-15'];
+  const order = ['NC-1', 'NC-2', 'NC-3', 'NC-4', 'NC-5', 'NC-6', 'NC-7', 'NC-8', 'NC-9', 'NC-10', 'NC-11', 'NC-12', 'NC-13', 'NC-14', 'NC-15', 'NC-16'];
   for (const id of order) for (const c of (real[id] || [])) check(id + ' ' + c.name, c.ok);
   for (const g of order) check(g + ' group ran', Array.isArray(real[g]) && real[g].length > 0);
   const realClean = failures === 0;

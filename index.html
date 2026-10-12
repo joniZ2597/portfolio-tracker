@@ -7223,15 +7223,22 @@ function _nlmConsistencyChecks(item, ctx) {
   }
   // K3 — a stated % to a stated $ level vs the distance computed from the price (tolerance 0.5 pp)
   if (price !== null) {
-    const re = /(\d+(?:\.\d+)?)\s?%[^.;\n]{0,60}?\$\s?(\d[\d,]*\.?\d*)|\$\s?(\d[\d,]*\.?\d*)[^.;\n]{0,60}?\((?:[+\-−~]\s?)?(\d+(?:\.\d+)?)\s?%\)/g;
+    // The %-to-$ gap stops at ")" and "," so a % never pairs with the next clause's level.
+    const re = /(\d+(?:\.\d+)?)\s?%[^.;,)\n]{0,60}?\$\s?(\d[\d,]*\.?\d*)|\$\s?(\d[\d,]*\.?\d*)[^.;\n]{0,60}?\((?:[+\-−~]\s?)?(\d+(?:\.\d+)?)\s?%\)/g;
+    const isRange = (s, a, b) => /\d(?:[–—-]|\s[–—]\s)$/.test(s.slice(Math.max(0, a - 4), a)) || /^(?:[–—-]|\s[–—]\s)\$?\d/.test(s.slice(b, b + 5)); // the token at [a, b) is one end of a range ("3–5%", "$705–$715")
     let m;
     const refs = [price]; if (typeof item._verifiedPrice === 'number' && isFinite(item._verifiedPrice) && item._verifiedPrice > 0) refs.push(item._verifiedPrice);
     while ((m = re.exec(text))) {
       const pct = num(m[1] !== undefined ? m[1] : m[4]);
       const level = num(m[2] !== undefined ? m[2] : m[3]);
       if (pct === null || level === null) continue;
+      const lvAt = m[1] !== undefined ? m.index + m[0].lastIndexOf('$') : m.index; // the $ level's span in the text
+      const lvEnd = m[1] !== undefined ? m.index + m[0].length : m.index + m[0].indexOf(m[3]) + m[3].length;
+      if (/^\s?(?:million|billion|thousand|mn|bn|[MBK])\b/i.test(text.slice(lvEnd))) continue; // a business figure ("$148.0M"), not a price level
+      if ((m[1] !== undefined && isRange(text, m.index, m.index + m[0].indexOf('%') + 1)) || isRange(text, lvAt, lvEnd)) continue; // one end of a range is not a point claim
       if (refs.some(ref => Math.abs(level - ref) / ref <= 0.0005)) continue; // a day-change statement ("rose 0.52% to $229.28"), not a distance claim
       const actual = Math.abs(level - price) / price * 100;
+      if (Math.abs(Math.abs(price - level) / level * 100 - pct) <= 0.5) continue; // the narrative may state price ÷ level − 1 (e.g. "+7.92% above MA50 ($500.45)"): either convention within 0.5 pp passes
       if (Math.abs(actual - pct) > 0.5) { out.push({ id: 'K3', text: pct + '% to $' + level + ' is ' + actual.toFixed(2) + '% from the price ' + price.toFixed(2) }); break; }
     }
   }
