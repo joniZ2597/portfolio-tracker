@@ -289,7 +289,22 @@ row('TR-8', async function (src) {
   const reused = f.calls.length === 2;
   const g = makeFill(src, function () { return Promise.resolve(FULL); }, { win: w.win, extra: { Date: w.FD, TS1_FAILCLOSED_INTEGRITY_CODES: w.codes, _cockpitResults: [] } });
   await g.fill('ZZZ'); await g.fill('ZZZ'); // ticker absent from the scan results: plain memo
-  return same && changed && reused && g.calls.length === 1;
+  // A fill superseded by a newer scan must not overwrite the newer fill's cell when it settles late.
+  const res2 = [{ ticker: 'SLOW', _runId: 'r1' }];
+  let release;
+  const slow = new Promise(function (resolve) { release = resolve; });
+  let n = 0;
+  const h = makeFill(src, function () { n += 1; return n === 1 ? slow : Promise.resolve({ score: 90, coveragePct: 100, reasonCodes: [] }); },
+    { win: w.win, extra: { Date: w.FD, TS1_FAILCLOSED_INTEGRITY_CODES: w.codes, _cockpitResults: res2 } });
+  h.elements['ts1-val-SLOW'] = { textContent: '' };
+  const first = h.fill('SLOW');
+  res2[0]._runId = 'r2';
+  // Bounded: a broken implementation that reuses the unresolved memo would otherwise wait on `slow` forever.
+  await Promise.race([h.fill('SLOW'), new Promise(function (resolve) { setTimeout(resolve, 25); })]);
+  release({ score: 10, coveragePct: 100, reasonCodes: [] });
+  await first;
+  const newest = h.elements['ts1-val-SLOW'].textContent === '90 / 100 · 100% coverage' && h.calls.length === 2;
+  return same && changed && reused && g.calls.length === 1 && newest;
 });
 row('TR-9', async function (src) {
   const f = makeFill(src, function () { return Promise.resolve(FULL); }, { win: { PT_ENABLE_TECH_SCORE: true } });
@@ -299,7 +314,17 @@ row('TR-9', async function (src) {
   const u = makeFill(src, function () { return Promise.resolve(UNAV); }, { win: { PT_ENABLE_TECH_SCORE: true } });
   await u.fill('BBB'); await u.fill('BBB');
   await f.fill('CCC');
-  return f.calls.length === 2 && f.calls[0] === 'AAA' && f.calls[1] === 'CCC' && u.calls.length === 1 &&
+  // A lone rejected engine call renders the em dash, never throws, drops its memo entry and may be retried (T6 behaviour).
+  let rejects = 0;
+  const rj = makeFill(src, function () { rejects += 1; return rejects === 1 ? Promise.reject(new Error('network down')) : Promise.resolve(FULL); },
+    { win: { PT_ENABLE_TECH_SCORE: true } });
+  rj.elements['ts1-val-REJ'] = { textContent: '…' };
+  let threw = false;
+  try { await rj.fill('REJ'); } catch (e) { threw = true; }
+  const dash = rj.elements['ts1-val-REJ'].textContent === '—' && Object.keys(rj.memo).length === 0 && !threw;
+  await rj.fill('REJ');
+  const retried = rj.calls.length === 2 && rj.elements['ts1-val-REJ'].textContent === '72 / 100 · 100% coverage';
+  return dash && retried && f.calls.length === 2 && f.calls[0] === 'AAA' && f.calls[1] === 'CCC' && u.calls.length === 1 &&
     Object.keys(f.memo).sort().join(',') === 'AAA,CCC' && f.elements['ts1-val-AAA'].textContent === '72 / 100 · 100% coverage';
 });
 row('TR-10', async function (src) {
@@ -397,8 +422,14 @@ const NEGATIVES = [
   { row: 'TR-11', label: 'scores cached instead of raw series (builder skipped)', edits: [
     ['var _ts1RawCache = {};', 'var _ts1RawCache = {}; var _tsScoreCache = {};'],
     ['  var raw = await _ts1FetchRawSeries(symbol);', '  if (_tsScoreCache[symbol]) return _tsScoreCache[symbol];\n  var raw = await _ts1FetchRawSeries(symbol);'],
-    ['  return scored;\n}\n\n// ═══ end SCORE-V1-S1', '  _tsScoreCache[symbol] = scored;\n  return scored;\n}\n\n// ═══ end SCORE-V1-S1']] }
-  // S3 negatives (ignored _runId, degraded kept forever) are added with S3.
+    ['  return scored;\n}\n\n// ═══ end SCORE-V1-S1', '  _tsScoreCache[symbol] = scored;\n  return scored;\n}\n\n// ═══ end SCORE-V1-S1']] },
+  // S3
+  { row: 'TR-8', label: '_runId ignored', edits: [
+    ['aged.rowRunId !== runId || (aged.rowExpiresAt', '(aged.rowExpiresAt']] },
+  { row: 'TR-7', label: 'degraded result kept forever (no 120 s expiry)', edits: [
+    ['    if (degraded && !pending.rowExpiresAt) pending.rowExpiresAt = Date.now() + 120000;\n', '']] },
+  { row: 'TR-8', label: 'superseded fill overwrites the newer cell', edits: [
+    ['  if (current && current !== pending) return; // superseded by a newer fill (new scan / expiry): it owns the cell\n', '']] }
 ];
 
 async function main() {
@@ -437,6 +468,16 @@ async function main() {
   console.log(failures === 0
     ? 'TS1 RELIABILITY: PASS (' + asserts + ' asserts)'
     : 'TS1 RELIABILITY: FAIL (' + failures + ' of ' + asserts + ' asserts failed)');
+  completed = true;
   process.exit(failures === 0 ? 0 : 1);
 }
-main().catch(function (e) { console.log('TS1 RELIABILITY: ERROR ' + (e && e.stack ? e.stack : e)); process.exit(1); });
+// A promise that never settles drains the event loop and Node exits 0: never let that read as a pass.
+let completed = false;
+process.on('exit', function () {
+  if (!completed) { console.log('TS1 RELIABILITY: ERROR event loop drained before the suite completed'); process.exitCode = 1; }
+});
+main().then(function () { completed = true; }, function (e) {
+  completed = true;
+  console.log('TS1 RELIABILITY: ERROR ' + (e && e.stack ? e.stack : e));
+  process.exit(1);
+});

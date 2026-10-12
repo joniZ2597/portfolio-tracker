@@ -8198,14 +8198,31 @@ function _ts1RowText(result) {
 
 async function _ts1FillRow(symbol) {
   if (window.PT_ENABLE_TECH_SCORE !== true) return;
-  if (!_ts1RowMemo[symbol]) _ts1RowMemo[symbol] = runTechScoreV1(symbol);
+  // tech-score-reliability-1 (TSR-2): a memo entry carries the ticker's scan _runId (read from _cockpitResults
+  // when it exists; undefined otherwise) and, for a degraded result, a 120 s expiry. A new scan or an expired
+  // entry drops it so the engine runs again. The stamps live on the promise: no new identifier, keys stay symbols.
+  const scanRow = (typeof _cockpitResults !== 'undefined' && Array.isArray(_cockpitResults))
+    ? _cockpitResults.find(r => r && r.ticker === symbol) : null;
+  const runId = scanRow ? scanRow._runId : undefined;
+  const aged = _ts1RowMemo[symbol];
+  if (aged && (aged.rowRunId !== runId || (aged.rowExpiresAt && Date.now() >= aged.rowExpiresAt))) delete _ts1RowMemo[symbol];
+  if (!_ts1RowMemo[symbol]) {
+    _ts1RowMemo[symbol] = runTechScoreV1(symbol);
+    _ts1RowMemo[symbol].rowRunId = runId;
+  }
   const pending = _ts1RowMemo[symbol];
   let result = null;
   try {
     result = await pending;
+    const failClosed = typeof TS1_FAILCLOSED_INTEGRITY_CODES !== 'undefined' ? TS1_FAILCLOSED_INTEGRITY_CODES : [];
+    const degraded = !!result && (result.status === 'UNAVAILABLE' ||
+      (Array.isArray(result.reasonCodes) && result.reasonCodes.some(c => failClosed.indexOf(c) !== -1)));
+    if (degraded && !pending.rowExpiresAt) pending.rowExpiresAt = Date.now() + 120000;
   } catch (e) {
     if (_ts1RowMemo[symbol] === pending) delete _ts1RowMemo[symbol];
   }
+  const current = _ts1RowMemo[symbol];
+  if (current && current !== pending) return; // superseded by a newer fill (new scan / expiry): it owns the cell
   const el = document.getElementById('ts1-val-' + symbol);
   if (el) el.textContent = _ts1RowText(result);
 }
