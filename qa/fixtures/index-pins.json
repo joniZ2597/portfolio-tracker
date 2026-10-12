@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "8a70973f1557c64165b8407cdc5e36730c6016aaba5709601e9ca5902c6cdd01",
+  "fileSha256": "85f5395d587fdbc9eea7733248cc01e9d58b2d5f3f629426394fd388e4a3c71c",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -69,7 +69,7 @@
     "_initSigCard": "e4f2088babd8e7dd5435f3b1eb8e7257e47d75f199c72559ccb4e64aaf8eaa58",
     "_initTsCard": "e31f1671b0907ca34686d5bda119327689345a270114eb70cf5a300ef49e311a",
     "_isValidScanResult": "cfc5cc185a43087c7156dc68faf8b3b9219cc2124b77d49cd906c3c9012098d5",
-    "_nlmConsistencyChecks": "f9eab8fca178b9a8237f9c71ff76d5e76dd20b8a1088ad11a0f0e0c0a05fa855",
+    "_nlmConsistencyChecks": "093156a4d7a97dafbe73d5f07989d3ea5b549aab1ead6ef1c61e78c1f093da9a",
     "_normalizePosition": "072744485ffa8cca6ee4088f1a1a560e271fa62187f229e4de2f72be0d6673d4",
     "_onAddPositionEscape": "d66d227f18f5a12d9a4063baa8108a5a00a2b1256650f3900532c9b2c6daa619",
     "_onEditCashEscape": "12e0c3355f1d894cf62b8326676f93cb17bf7923119329b357da0e4e9a32dc2a",
@@ -244,7 +244,7 @@
     "_ts1Median": "56b4bb8156c665606748cd8c751be5dd79cfa5456e3cc8eafc51a540380b62c5",
     "_ts1NormalizeCandles": "4bb1ac55f017f353939bcb2d7bd5869debfd09d5c509b6fdf4f598e26d370ed5",
     "_ts1ResolveMarket": "88daede9f4b83a35bba2c5b674814a6df7dbed4854af98d2058fd9c9f270083f",
-    "_ts1RowText": "6df1e8355698b11e89f5f01193184a17f536a57f047cac6eec322159f4f69a06",
+    "_ts1RowText": "d81334a810a156f40f748ef96523109aa16243a819c77bd33e8583d627d638ff",
     "_ts1RsValue": "39b5318bdcb4b277210735909b05338173fe0eafb3f41b0e75766fed39bdf691",
     "_ts1RuleFor": "dd62a58b61a09de395243d1b18169289ea4ba443eb74e119eed40093d3fe1ef6",
     "_ts1SectorEtfFor": "1f41b7f34679a901b555a20d7930c66bf8a1aebd2ead5143b69e55a2a234f5db",

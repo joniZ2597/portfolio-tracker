@@ -7198,19 +7198,22 @@ function _nlmConsistencyChecks(item, ctx) {
   if (price !== null) {
     const re = /(\d+(?:\.\d+)?)\s?%[^.;\n]{0,60}?\$\s?(\d[\d,]*\.?\d*)|\$\s?(\d[\d,]*\.?\d*)[^.;\n]{0,60}?\((?:[+\-−~]\s?)?(\d+(?:\.\d+)?)\s?%\)/g;
     let m;
+    const refs = [price]; if (typeof item._verifiedPrice === 'number' && isFinite(item._verifiedPrice) && item._verifiedPrice > 0) refs.push(item._verifiedPrice);
     while ((m = re.exec(text))) {
       const pct = num(m[1] !== undefined ? m[1] : m[4]);
       const level = num(m[2] !== undefined ? m[2] : m[3]);
       if (pct === null || level === null) continue;
+      if (refs.some(ref => Math.abs(level - ref) / ref <= 0.0005)) continue; // a day-change statement ("rose 0.52% to $229.28"), not a distance claim
       const actual = Math.abs(level - price) / price * 100;
       if (Math.abs(actual - pct) > 0.5) { out.push({ id: 'K3', text: pct + '% to $' + level + ' is ' + actual.toFixed(2) + '% from the price ' + price.toFixed(2) }); break; }
     }
   }
   // K4 — the entry-zone floor at or below the invalidation level (long setups)
   if (item.entry_zone && item.invalidation && item.action !== 'trim' && item.action !== 'avoid') {
-    const floors = (String(item.entry_zone).match(/\d[\d,]*\.?\d*/g) || []).map(num).filter(v => v !== null);
-    const inv = num((String(item.invalidation).match(/\d[\d,]*\.?\d*/g) || [])[0]);
-    if (floors.length && inv !== null) {
+    const dollars = s => { const vals = []; const re4 = /\$\s?(\d[\d,]*\.?\d*)/g; let d; while ((d = re4.exec(String(s)))) vals.push(num(d[1])); return vals.filter(v => v !== null); }; // $ levels only: MA names, multipliers and position sizes are never read
+    const floors = dollars(item.entry_zone);
+    const inv = dollars(item.invalidation)[0];
+    if (floors.length && inv !== undefined) {
       const floor = Math.min.apply(null, floors);
       if (floor <= inv) out.push({ id: 'K4', text: 'entry-zone floor ' + floor + ' is at or below the invalidation ' + inv });
     }
@@ -8163,8 +8166,8 @@ const _ts1RowMemo = {};
 
 function _ts1RowText(result) {
   if (!result || result.status === 'GATE_OFF' || result.status === 'UNAVAILABLE') return '—';
-  const score = typeof result.score === 'number' && isFinite(result.score) ? result.score + ' / 100' : '—';
-  const cov   = typeof result.coveragePct === 'number' && isFinite(result.coveragePct) ? result.coveragePct + '% coverage' : '';
+  const score = typeof result.score === 'number' && isFinite(result.score) ? Math.round(result.score) + ' / 100' : '—';
+  const cov   = typeof result.coveragePct === 'number' && isFinite(result.coveragePct) ? Math.round(result.coveragePct) + '% coverage' : '';
   return cov ? score + ' · ' + cov : score;
 }
 

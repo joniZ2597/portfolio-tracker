@@ -14,6 +14,7 @@
  *   NC-4  K4 entry floor <= invalidation                   NC-10 score / action / groups / order / stored result unaffected
  *   NC-5  K5 holder / exit language while not held         NC-11 _aiUnavailable -> no checks, no ⚠, no line
  *   NC-6  K6 narrative score vs product score              NC-12 K7 absent (only K1–K6)
+ *   NC-13 K3 ignores a day-change statement (level ~ the price)  NC-14 K4 reads $-prefixed levels only (ai-output-2 C1)
  *   Planted negatives NEG-1..NEG-11 mutate the production source (never the test).
  */
 const fs = require('fs');
@@ -276,6 +277,36 @@ function evaluate(src) {
     chk('NC-12', 'the checker is the only new top-level function referenced by renderMainPanel (§0.4 exception)', countOf(rm, '_nlmConsistencyChecks(') === 1 && (rm.match(/\b_nlm\w*\(/g) || []).length === 1);
     chk('NC-12', 'the two Scan Results renderers call the checker with the same expression', (() => { const a = extractFn(src, '_srRenderGrouped') || ''; const b = extractFn(src, 'openScanResultsOverlay') || ''; const ea = /\$\{\(\(\) => \{ const _ks = _nlmConsistencyChecks\(r,[\s\S]*?\}\)\(\)\}/.exec(a); const eb = /\$\{\(\(\) => \{ const _ks = _nlmConsistencyChecks\(r,[\s\S]*?\}\)\(\)\}/.exec(b); return !!ea && !!eb && ea[0] === eb[0]; })());
   });
+  // ai-output-2 C1. The 2026-10-10 pilot replies were not stored: every fixture below is a RECONSTRUCTION from the quoted
+  // fragments (never captured reply text).
+  guard('NC-13', () => {
+    const dayChange = base({ summary: 'Shares rose 0.52% to $229.28 on heavy volume. Rating: Neutral | PT: $240', _verifiedPrice: 229.28 });
+    chk('NC-13', 'a: NVDA-like day-change statement ("rose 0.52% to $229.28") at price 229.28 -> no K3', ids(run(dayChange)) === '');
+    const scanRef = base({ summary: 'Shares rose 1.52% to $229.28 on heavy volume. Rating: Neutral | PT: $240', _verifiedPrice: 229.28 });
+    chk('NC-13', 'b: the displayed price 231.10 differs from the scan price 229.28 -> still no K3 (scan-price reference)', ids(run(scanRef, { price: 231.10 })) === '');
+    chk('NC-13', 'b: the reference is the scan price, not a loosened distance claim (the same text without _verifiedPrice still fires)', ids(run(Object.assign({}, scanRef, { _verifiedPrice: undefined }), { price: 231.10 })) === 'K3');
+    chk('NC-13', 'c: a level 0.04 % from the price is skipped', ids(run(base({ summary: 'A 5% move to $100.04 is plausible.' }))) === '');
+    chk('NC-13', 'c: a level 0.06 % from the price is evaluated', ids(run(base({ summary: 'A 5% move to $100.06 is plausible.' }))) === 'K3');
+    const mixed = run(base({ summary: 'Shares rose 2.5% to $100.02. A 17% move to $130 would retest the highs.' }));
+    chk('NC-13', 'd: a skipped day-change pair followed by a wrong distance pair -> K3 still fires, on the second pair', ids(mixed) === 'K3' && mixed[0].text.indexOf('$130') !== -1 && mixed[0].text.indexOf('$100.02') === -1);
+    chk('NC-13', 'K3 message text and the 0.5 pp tolerance are unchanged (CBOE C3 text)', (run(F.C3) || [{}])[0].text === '17% to $117.97 is 17.97% from the price 100.00' && ids(run(F.R10)) === '');
+  });
+  guard('NC-14', () => {
+    const long = over => base(Object.assign({ action: 'add_on_pullback' }, over));
+    chk('NC-14', 'a: MA names only on both sides -> no K4', ids(run(long({ entry_zone: 'MA20–MA50 support zone', invalidation: 'Close below MA150' }))) === '');
+    chk('NC-14', 'a: MA names in the entry zone, a $ invalidation -> no K4 (bare MA numbers are never floors)', ids(run(long({ entry_zone: 'MA20–MA50 zone', invalidation: 'Close below $272' }))) === '');
+    const ma = run(long({ entry_zone: 'MA50 $221.39 – MA20 $226.10', invalidation: 'Daily close below MA50 $221.39' }));
+    chk('NC-14', 'b: MA names with $ levels -> K4 fires with 221.39 / 221.39', ids(ma) === 'K4' && ma[0].text === 'entry-zone floor 221.39 is at or below the invalidation 221.39');
+    const cb = run(long({ entry_zone: 'Pullback to MA20 $270–$275 (1.2x volume)', invalidation: 'Close below $272 on an MA20 break' }));
+    chk('NC-14', 'b: CBOE-like case -> K4 fires with $ values only (270 / 272)', ids(cb) === 'K4' && cb[0].text === 'entry-zone floor 270 is at or below the invalidation 272');
+    chk('NC-14', 'b: thousands separators are read ($1,234.50)', ids(run(long({ entry_zone: '$1,200.50–$1,250', invalidation: 'Close below $1,210' }))) === 'K4');
+    chk('NC-14', 'c: "1.2x volume" is never read', ids(run(long({ entry_zone: '$280–$285 on 1.2x volume', invalidation: 'Close below $270' }))) === '');
+    chk('NC-14', 'c: "Add 25 %" is never read (CRWD-like)', ids(run(long({ entry_zone: 'Add 25 % near $300', invalidation: 'Close below $280' }))) === '' && ids(run(long({ entry_zone: '$300–$305', invalidation: 'Close below $280 (Add 25 % on dip)' }))) === '');
+    chk('NC-14', 'd: no $ on the entry side -> silent', ids(run(long({ entry_zone: 'MA20 area', invalidation: '$272' }))) === '');
+    chk('NC-14', 'd: no $ on the invalidation side -> silent', ids(run(long({ entry_zone: '$30–$35 pullback', invalidation: 'Close below the MA50 line' }))) === '');
+    chk('NC-14', 'e: the existing K4 fixtures keep their verdicts (R5 / C2 fire, R5ok / C2ok / TRIM pass)', ids(run(F.R5)) === 'K4' && ids(run(F.C2)) === 'K4' && ids(run(F.R5ok)) === '' && ids(run(F.C2ok)) === '' && ids(run(F.TRIM)) === '');
+    chk('NC-14', 'e: trim / avoid stay excluded even with $ levels', ids(run(base({ action: 'avoid', entry_zone: '$425–$432', invalidation: 'Close below $428' }))) === '');
+  });
   return R;
 }
 
@@ -298,7 +329,14 @@ const NEGATIVES = [
   { id: 'NC-8', label: 'the AI text rewritten by the checker', f: s => mut(s, "  const text = String(item.summary || '');\n  const price =", "  const text = String(item.summary || ''); if (item.summary) item.summary = text.replace(/\\btoday\\b/gi, 'recently');\n  const price =") },
   { id: 'NC-9', label: 'the Consistency line shown with 0 failures', f: s => mut(s, "    return (Array.isArray(_ks) && _ks.length) ? `\\n        <div class=\"mp-act-row mp-nlm\">", "    return (Array.isArray(_ks)) ? `\\n        <div class=\"mp-act-row mp-nlm\">") },
   { id: 'NC-10', label: '⚠ count used in the Daily Review sort', f: s => mut(s, '  const items = source.slice().sort(_ptScoreCmp); // R-5 (Entry 37, ruling B1)', '  const items = source.slice().sort((a, b) => (_nlmConsistencyChecks(b, { price: b._verifiedPrice }).length - _nlmConsistencyChecks(a, { price: a._verifiedPrice }).length) || _ptScoreCmp(a, b)); // R-5 (Entry 37, ruling B1)') },
-  { id: 'NC-11', label: 'checks run on a failed item', f: s => mut(s, "  if (!item || typeof item !== 'object' || item._aiUnavailable === true) return out;", "  if (!item || typeof item !== 'object') return out;") }
+  { id: 'NC-11', label: 'checks run on a failed item', f: s => mut(s, "  if (!item || typeof item !== 'object' || item._aiUnavailable === true) return out;", "  if (!item || typeof item !== 'object') return out;") },
+  // ai-output-2 C1
+  { id: 'NC-13', label: 'K3-a skip removed (day-change statements read as distance claims)', f: s => mut(s, '      if (refs.some(ref => Math.abs(level - ref) / ref <= 0.0005)) continue;', '') },
+  { id: 'NC-13', label: 'K3-a reference = ctx.price only (the scan price is not a reference)', f: s => mut(s, 'refs.push(item._verifiedPrice);', '0;') },
+  { id: 'NC-13', label: 'K3-a skip ends the loop (break instead of continue)', f: s => mut(s, '<= 0.0005)) continue;', '<= 0.0005)) break;') },
+  { id: 'NC-13', label: 'K3-a threshold widened to 0.5 %', f: s => mut(s, '<= 0.0005)) continue;', '<= 0.005)) continue;') },
+  { id: 'NC-14', label: 'K4-a bare-number read restored on the entry side', f: s => mut(s, '    const floors = dollars(item.entry_zone);', "    const floors = (String(item.entry_zone).match(/\\d[\\d,]*\\.?\\d*/g) || []).map(num).filter(v => v !== null);") },
+  { id: 'NC-14', label: 'K4-a $-only on the entry side but the bare number read on the invalidation side', f: s => mut(s, '    const inv = dollars(item.invalidation)[0];', "    const inv = num((String(item.invalidation).match(/\\d[\\d,]*\\.?\\d*/g) || [])[0]);") }
 ];
 
 // ── Main ─────────────────────────────────────────────────────────────────────────────────────────
@@ -308,7 +346,7 @@ const NEGATIVES = [
   const check = (name, cond) => { asserts += 1; if (!cond) { failures += 1; console.log('  FAIL  ' + name); } };
   const index = norm(fs.readFileSync(INDEX_PATH, 'utf8'));
   const real = evaluate(index);
-  const order = ['NC-1', 'NC-2', 'NC-3', 'NC-4', 'NC-5', 'NC-6', 'NC-7', 'NC-8', 'NC-9', 'NC-10', 'NC-11', 'NC-12'];
+  const order = ['NC-1', 'NC-2', 'NC-3', 'NC-4', 'NC-5', 'NC-6', 'NC-7', 'NC-8', 'NC-9', 'NC-10', 'NC-11', 'NC-12', 'NC-13', 'NC-14'];
   for (const id of order) for (const c of (real[id] || [])) check(id + ' ' + c.name, c.ok);
   for (const g of order) check(g + ' group ran', Array.isArray(real[g]) && real[g].length > 0);
   const realClean = failures === 0;

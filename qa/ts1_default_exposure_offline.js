@@ -13,6 +13,7 @@
  *         `= false` and the string 'true' yield '';
  *   TX-5  no default exists for any other PT_ENABLE_* gate (only PORTFOLIO_RESEARCH, pre-existing, and TECH_SCORE).
  *         LB-R1 (2026-10-11): one strict session-only Deep Dive write, exclusively inside setLabsFlag, is not a default.
+ *   TX-R1..R3 (ai-output-2 RND-1): _ts1RowText shows whole numbers (score and coverage), display only, no mutation.
  * Every row carries planted negatives: each mutates an in-memory COPY of index.html and the SAME checker
  * function must reject it. "Live" scanning skips comments and string literals (the D1 comment and several
  * console.warn strings legitimately contain `= true` / `= false` text).
@@ -218,7 +219,58 @@ function checkTx5(src) {
   return r;
 }
 
-const CHECKERS = { 'TX-1': checkTx1, 'TX-2': checkTx2, 'TX-3': checkTx3, 'TX-4': checkTx4, 'TX-5': checkTx5 };
+// -- TX-R1..R3 (ai-output-2 RND-1): the row shows whole numbers; display only. They EXECUTE the real extracted _ts1RowText.
+function buildRowText(src) {
+  const s = extractFunctionSource(src, '_ts1RowText');
+  if (!s) return null;
+  try { return new Function(s + '\nreturn _ts1RowText;')(); } catch (e) { return null; }
+}
+function checkTxR1(src) {
+  const r = { ok: false, reason: null };
+  const f = buildRowText(src);
+  if (!f) { r.reason = '_ts1RowText not executable'; return r; }
+  const cases = [[88.23529411764706, '88 / 100 · 100% coverage'], [76.875, '77 / 100 · 100% coverage'], [61.08108108108108, '61 / 100 · 100% coverage'], [72, '72 / 100 · 100% coverage']];
+  for (const [score, want] of cases) {
+    const got = f({ status: 'OK', score: score, coveragePct: 100 });
+    if (got !== want) { r.reason = score + ' -> "' + got + '" (want "' + want + '")'; return r; }
+  }
+  r.ok = true;
+  return r;
+}
+function checkTxR2(src) {
+  const r = { ok: false, reason: null };
+  const f = buildRowText(src);
+  if (!f) { r.reason = '_ts1RowText not executable'; return r; }
+  const got = [
+    f({ status: 'OK', score: 61.08108108108108, coveragePct: 87.5 }),
+    f({ status: 'OK', score: null, coveragePct: 35 }),
+    f({ status: 'GATE_OFF', score: 80, coveragePct: 100 }),
+    f({ status: 'UNAVAILABLE', score: 80, coveragePct: 100 }),
+    f({ status: 'OK', score: 72 }),
+    f(null)
+  ];
+  const want = ['61 / 100 · 88% coverage', '— · 35% coverage', '—', '—', '72 / 100', '—'];
+  for (let i = 0; i < want.length; i += 1) if (got[i] !== want[i]) { r.reason = 'case ' + i + ' -> "' + got[i] + '" (want "' + want[i] + '")'; return r; }
+  r.ok = true;
+  return r;
+}
+function checkTxR3(src) {
+  const r = { ok: false, reason: null };
+  const f = buildRowText(src);
+  if (!f) { r.reason = '_ts1RowText not executable'; return r; }
+  const input = { status: 'OK', score: 88.23529411764706, coveragePct: 87.5, extra: { k: [1, 2] } };
+  const before = JSON.stringify(input);
+  const out = f(input);
+  if (JSON.stringify(input) !== before) { r.reason = 'the result object was mutated'; return r; }
+  const frozen = Object.freeze({ status: 'OK', score: 76.875, coveragePct: 87.5 });
+  let again = null;
+  try { again = (function () { 'use strict'; return f(frozen); })(); } catch (e) { r.reason = 'a frozen result threw: ' + e.message; return r; }
+  if (again !== '77 / 100 · 88% coverage' || typeof out !== 'string') { r.reason = 'unexpected output on the frozen input'; return r; }
+  r.ok = true;
+  return r;
+}
+
+const CHECKERS = { 'TX-1': checkTx1, 'TX-2': checkTx2, 'TX-3': checkTx3, 'TX-4': checkTx4, 'TX-5': checkTx5, 'TX-R1': checkTxR1, 'TX-R2': checkTxR2, 'TX-R3': checkTxR3 };
 
 // -- Real file: every row must PASS ------------------------------------------
 for (const id of Object.keys(CHECKERS)) {
@@ -291,7 +343,15 @@ const NEG = [
   { id: 'TX-5', label: 'LB-R1: another forbidden gate written inside setLabsFlag', make: function () {
     return mutate(real, "    window.PT_ENABLE_DEEP_DIVE = (on === true);\n", "    window.PT_ENABLE_DEEP_DIVE = (on === true);\n    window.PT_ENABLE_FUND_FACTS_READ_CLIENT = (on === true);\n"); } },
   { id: 'TX-5', label: 'unrelated gate default added', make: function () {
-    return mutate(real, D1_BLOCK, D1_BLOCK + '\n  window.PT_ENABLE_FUND_FACTS_READ_CLIENT = true;'); } }
+    return mutate(real, D1_BLOCK, D1_BLOCK + '\n  window.PT_ENABLE_FUND_FACTS_READ_CLIENT = true;'); } },
+  { id: 'TX-R1', label: 'RND-1: the score is not rounded', make: function () {
+    return mutate(real, 'Math.round(result.score) + ', 'result.score + '); } },
+  { id: 'TX-R1', label: 'RND-1: the score is shown with toFixed(2)', make: function () {
+    return mutate(real, 'Math.round(result.score) + ', 'result.score.toFixed(2) + '); } },
+  { id: 'TX-R2', label: 'RND-1: the coverage is not rounded', make: function () {
+    return mutate(real, 'Math.round(result.coveragePct) + ', 'result.coveragePct + '); } },
+  { id: 'TX-R3', label: 'RND-1: the score is rounded by mutating result.score', make: function () {
+    return mutate(real, 'Math.round(result.score) + ', '(result.score = Math.round(result.score)) + '); } }
 ];
 for (const n of NEG) {
   let mutant = null;
