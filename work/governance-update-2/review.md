@@ -38,3 +38,6 @@ Brief Backlog row: `none` (BACKLOG 29 is a separate prerequisite, not closed her
 - [rule] The R1 hook blocks `cp`/writes onto any file whose basename is `AGENTS.md` or `settings.json`, even in `/tmp/pt-<id>/protected/`; step-13a flat candidates need other names (e.g. `agents-candidate.md`), mapped by the manifest `source`. - pending routing
 - [rule] `git commit` must be one standalone top-level command (R3c): no `&&`, no heredoc message, no `$(...)`; use `-m` twice for the trailer. - pending routing
 - [rule] A Codex review run in `--sandbox read-only` can fail real-repo rows (AH-16) that pass outside it; judge such a failure against a run outside the sandbox before classifying. - pending routing
+
+## LAND-EVIDENCE
+LAND-EVIDENCE: qa-offline=PASS 81; targeted=PASS; codex-classI-unresolved=0
