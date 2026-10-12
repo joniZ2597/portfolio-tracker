@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "85f5395d587fdbc9eea7733248cc01e9d58b2d5f3f629426394fd388e4a3c71c",
+  "fileSha256": "97fa5380ae174d750fc0ade2afd789cf801f0507cf77b5d60eaf92123440f4d8",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -235,7 +235,7 @@
     "_ts1BuildSnapshot": "051f29a57127012e152b43c94d24a9066fc1c56bf0fa1e3772dfea1a69009553",
     "_ts1CanonicalString": "265f3f90d678e305d71a028b86b08872a0035a1a1cf8a0db3e5d66bc74209482",
     "_ts1ExchangeLocalParts": "f38e324cb412a233add7493f6551064b596bbd8da328a52db54216745ad89f60",
-    "_ts1FetchRawSeries": "001ab301628ac0e63c6d95693fc65b9e8c1dfcbb6433b7942549ee3e6f9b695e",
+    "_ts1FetchRawSeries": "e5351509587d07dd21efe0d251dda776658bbf031f8dd60115e3b8c2a5b85c7c",
     "_ts1FillRow": "306a720ed51792ef3294faba91dd4b5420d1264b9ace81402dc638559edf7b1e",
     "_ts1FiniteNum": "084f91eeaddb984cee0dcf9ee13deeed5bd4ee7fa194b32154d16fa6c2a4eaf8",
     "_ts1Fnv1a": "2bbcf6a3e548c0f9880cd86820e51fd9a75bea6f70601dd9c4c4579a2d5f4b5b",
@@ -524,7 +524,7 @@
       "start": "// ═══ SCORE-V1-S1 — TECHNICAL SCORE",
       "end": "// ═══ end SCORE-V1-S1 technical score ══════════════════════════════════",
       "occurrence": 1,
-      "sha256": "9b267da4c06a7724ccbe13ba83bf376ba1dcd2dd7931d3b40fd73377aa8e6604"
+      "sha256": "20f35b345e382a6bfc64b56533618a96bfd4c7e149857af1a03c7991ba0560b8"
     },
     "tsassessmap": {
       "start": "const _tsAssessMap = {",

@@ -2175,9 +2175,23 @@ function _ts1ResolveMarket(tz, sym) {
   return { market: market, marketBasis: marketBasis };
 }
 
+// tech-score-reliability-1 (TSR-2): memory-only raw-series cache for _ts1FetchRawSeries. An entry is
+// { pending } while a request is in flight (per-symbol dedupe) and { value, at } after a POLYGON-provenanced
+// success (reused for 15 min). Yahoo, error, timeout and empty results are returned to the caller and never
+// stored, so a fail-closed result is never upgraded or masked. Raw series only - never scores or snapshots:
+// every run still normalises, builds the snapshot and scores afresh. Never persisted.
+var _ts1RawCache = {};
+
 async function _ts1FetchRawSeries(symbol) {
   var sym = String(symbol || '').trim().toUpperCase();
   if (!sym) return { error: 'BAD_SYMBOL' };
+  var hit = _ts1RawCache[sym];
+  if (hit && hit.pending) return hit.pending;
+  if (hit && hit.value && (Date.now() - hit.at) < 900000) return hit.value;
+  var entry = { pending: null };
+  _ts1RawCache[sym] = entry;
+  // The fetch / parse / provenance body below is unchanged; it now runs once per symbol per miss.
+  entry.pending = Promise.resolve().then(async function () {
   var url = '/.netlify/functions/market-data?symbol=' + encodeURIComponent(sym) + '&interval=1d&range=1y';
   var res;
   try {
@@ -2207,6 +2221,17 @@ async function _ts1FetchRawSeries(symbol) {
     });
   }
   return { symbol: sym, market: market, marketBasis: marketBasis, currency: meta.currency === undefined ? null : meta.currency, provider: provider, adjustedBasis: adjustedBasis, bars: bars };
+  });
+  var out;
+  try {
+    out = await entry.pending;
+  } catch (err3) {
+    if (_ts1RawCache[sym] === entry) delete _ts1RawCache[sym];
+    throw err3;
+  }
+  if (!out.error && out.provider === 'polygon' && out.bars.length > 0) _ts1RawCache[sym] = { value: out, at: Date.now() };
+  else if (_ts1RawCache[sym] === entry) delete _ts1RawCache[sym];
+  return out;
 }
 
 function _ts1SectorEtfFor(symbol) {

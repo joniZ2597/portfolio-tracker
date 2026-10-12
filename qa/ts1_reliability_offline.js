@@ -152,6 +152,14 @@ function makeWorld(src) {
     const sym = m ? decodeURIComponent(m[1]) : '?';
     calls[sym] = (calls[sym] || 0) + 1;
     const mode = modes[sym] || 'polygon';
+    if (world.reenter && world.reenter === sym) { // a synchronous re-entrant call from inside fetch()
+      world.reenter = null;
+      world.nested = world.fetchRaw(sym);
+    }
+    if (mode === 'polygon-empty') {
+      const e = { timestamp: [], open: [], high: [], low: [], close: [], volume: [] };
+      return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve(chartJson('polygon', e)); } });
+    }
     if (mode === 'reject') return Promise.reject(new Error('net down'));
     if (mode === 'http500') return Promise.resolve({ ok: false, status: 500 });
     const body = chartJson(mode, genBars(sym));
@@ -226,7 +234,11 @@ row('TR-4', async function (src) {
 row('TR-5', async function (src) {
   const w = makeWorld(src);
   const both = await Promise.all([w.fetchRaw('SPY'), w.fetchRaw('SPY')]);
-  return w.calls.SPY === 1 && both[0].provider === 'polygon' && both[1].provider === 'polygon';
+  const shared = w.calls.SPY === 1 && both[0].provider === 'polygon' && both[1].provider === 'polygon';
+  w.reenter = 'IWM'; // the stub calls fetchRaw('IWM') synchronously from inside fetch(): still one request
+  const outer = await w.fetchRaw('IWM');
+  const inner = await w.nested;
+  return shared && w.calls.IWM === 1 && outer.provider === 'polygon' && inner.provider === 'polygon';
 });
 row('TR-5b', async function (src) {
   const w = makeWorld(src);
@@ -237,9 +249,9 @@ row('TR-5b', async function (src) {
 });
 row('TR-6', async function (src) {
   const w = makeWorld(src);
-  w.modes.AAA = 'yahoo'; w.modes.BBB = 'http500'; w.modes.CCC = 'reject';
-  for (const s of ['AAA', 'BBB', 'CCC']) { await w.fetchRaw(s); await w.fetchRaw(s); }
-  const neverCached = w.calls.AAA === 2 && w.calls.BBB === 2 && w.calls.CCC === 2;
+  w.modes.AAA = 'yahoo'; w.modes.BBB = 'http500'; w.modes.CCC = 'reject'; w.modes.EEE = 'polygon-empty';
+  for (const s of ['AAA', 'BBB', 'CCC', 'EEE']) { try { await w.fetchRaw(s); await w.fetchRaw(s); } catch (e) { /* a rejected fetch may throw; it must still not be cached */ } }
+  const neverCached = w.calls.AAA === 2 && w.calls.BBB === 2 && w.calls.CCC === 2 && w.calls.EEE === 2;
   w.modes.AAA = 'polygon'; // a later Polygon answer is returned, not masked by the earlier Yahoo one
   const later = await w.fetchRaw('AAA');
   await w.fetchRaw('DDD'); await w.fetchRaw('DDD'); // positive control: a Polygon success IS cached
@@ -362,18 +374,32 @@ async function evaluate(src, ids) {
 
 // -- planted negatives -----------------------------------------------------------------------------------------
 // Each: anchor occurs exactly once in the production source; the mutated COPY must fail the named row; the real source passes it.
+// A negative is a list of [anchor, replacement] edits applied in order to the copy.
 const NEGATIVES = [
-  { row: 'TR-2', label: 'Yahoo treated as explicit',
-    anchor: "var adjustedBasis = provider === 'polygon' ? 'explicit' : 'unknown';",
-    repl: "var adjustedBasis = 'explicit';" },
-  { row: 'TR-10', label: 'third runTechScoreV1( literal',
-    anchor: "// ═══ end SCORE-V1-S1 technical score",
-    repl: "// runTechScoreV1( extra literal\n// ═══ end SCORE-V1-S1 technical score" },
-  { row: 'TR-10', label: '_ts1ResolveMarket byte changed',
-    anchor: "if (tz === 'America/New_York') { market = 'US'; marketBasis = 'provider-meta'; }",
-    repl: "if (tz === 'America/New_York') { market = 'US'; marketBasis = 'provider-meta '; }" }
+  { row: 'TR-2', label: 'Yahoo treated as explicit', edits: [
+    ["var adjustedBasis = provider === 'polygon' ? 'explicit' : 'unknown';", "var adjustedBasis = 'explicit';"]] },
+  { row: 'TR-10', label: 'third runTechScoreV1( literal', edits: [
+    ['// ═══ end SCORE-V1-S1 technical score', '// runTechScoreV1( extra literal\n// ═══ end SCORE-V1-S1 technical score']] },
+  { row: 'TR-10', label: '_ts1ResolveMarket byte changed', edits: [
+    ["if (tz === 'America/New_York') { market = 'US'; marketBasis = 'provider-meta'; }", "if (tz === 'America/New_York') { market = 'US'; marketBasis = 'provider-meta '; }"]] },
+  // S2
+  { row: 'TR-6', label: 'Yahoo / any non-error result cached', edits: [
+    ["if (!out.error && out.provider === 'polygon' && out.bars.length > 0) _ts1RawCache[sym]", "if (!out.error) _ts1RawCache[sym]"]] },
+  { row: 'TR-5', label: 'in-flight dedupe removed', edits: [
+    ['  if (hit && hit.pending) return hit.pending;\n', '']] },
+  { row: 'TR-6', label: 'empty Polygon series cached', edits: [
+    [" && out.bars.length > 0) _ts1RawCache[sym]", ") _ts1RawCache[sym]"]] },
+  { row: 'TR-5', label: 'request starts before the pending entry is published (re-entrancy window)', edits: [
+    ['entry.pending = Promise.resolve().then(async function () {', 'entry.pending = (async function () {'],
+    ['  });\n  var out;', '  })();\n  var out;']] },
+  { row: 'TR-12', label: 'cache TTL ignored', edits: [
+    ['if (hit && hit.value && (Date.now() - hit.at) < 900000) return hit.value;', 'if (hit && hit.value) return hit.value;']] },
+  { row: 'TR-11', label: 'scores cached instead of raw series (builder skipped)', edits: [
+    ['var _ts1RawCache = {};', 'var _ts1RawCache = {}; var _tsScoreCache = {};'],
+    ['  var raw = await _ts1FetchRawSeries(symbol);', '  if (_tsScoreCache[symbol]) return _tsScoreCache[symbol];\n  var raw = await _ts1FetchRawSeries(symbol);'],
+    ['  return scored;\n}\n\n// ═══ end SCORE-V1-S1', '  _tsScoreCache[symbol] = scored;\n  return scored;\n}\n\n// ═══ end SCORE-V1-S1']] }
+  // S3 negatives (ignored _runId, degraded kept forever) are added with S3.
 ];
-// Slice-specific negatives are added with their slice (anchors exist only after S2 / S3).
 
 async function main() {
   if (process.argv.indexOf('--print-pins') !== -1) {
@@ -392,12 +418,17 @@ async function main() {
       check(r.id + (base[r.id].why ? ' [' + base[r.id].why + ']' : ''), base[r.id].ok);
     }
     for (const n of NEGATIVES) {
-      const hits = countOf(real, n.anchor);
-      check('negative anchor unique: ' + n.row + ' / ' + n.label, hits === 1);
-      if (hits !== 1) continue;
-      const mutated = real.replace(n.anchor, function () { return n.repl; });
+      let mutated = real;
+      let unique = true;
+      for (const e of n.edits) {
+        if (countOf(mutated, e[0]) !== 1) { unique = false; break; }
+        mutated = mutated.replace(e[0], function () { return e[1]; });
+      }
+      check('negative anchors unique: ' + n.row + ' / ' + n.label, unique);
+      check('negative positive control (unmutated source passes the row): ' + n.row + ' / ' + n.label, base[n.row].ok === true);
+      if (!unique) continue;
       const res = await evaluate(mutated, [n.row]);
-      check('planted negative bites: ' + n.row + ' / ' + n.label, res[n.row].ok === false);
+      check('planted negative bites: ' + n.row + ' / ' + n.label, res[n.row].ok === false && res[n.row].why === null);
     }
     check('no leaked real network call', leaked === 0);
   } finally {
