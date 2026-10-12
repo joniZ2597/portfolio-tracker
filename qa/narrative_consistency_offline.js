@@ -351,6 +351,28 @@ function evaluate(src) {
     chk('NC-16', 'f: "Support at $90 (-12%)" still K3, "(-10%)" passes', ids(run(base({ summary: 'Support at $90 (-12%) matters.' }))) === 'K3' && ids(run(base({ summary: 'Support at $90 (-10%) matters.' }))) === '');
     chk('NC-16', 'f: the message keeps the price-relative figure', (run(base({ summary: 'Support at $90 (-12%) matters.' })) || [{}])[0].text === '12% to $90 is 10.00% from the price 100.00');
   });
+  guard('NC-17', () => {
+    chk('NC-17', 'a: QQQ C-5 (first $ in the invalidation is a breakout trigger) -> no K4', ids(run(at(746.165, S, QQQ_C5))) === '');
+    const g1 = run(at(97.52, S, FROG_G1));
+    chk('NC-17', 'b: FROG G-1 -> K4 "entry-zone floor 94 is at or below the invalidation 94.41"', ids(g1) === 'K4' && g1[0].text === 'entry-zone floor 94 is at or below the invalidation 94.41');
+    chk('NC-17', 'c: every NC-4 / NC-14 fixture keeps its verdict', ids(run(F.R5)) === 'K4' && ids(run(F.C2)) === 'K4' && ids(run(F.R5ok)) === '' && ids(run(F.C2ok)) === '' && ids(run(F.TRIM)) === '' &&
+      ids(run(base({ action: 'add_on_pullback', entry_zone: 'MA50 $221.39 – MA20 $226.10', invalidation: 'Daily close below MA50 $221.39' }))) === 'K4' &&
+      ids(run(base({ action: 'add_on_pullback', entry_zone: 'Pullback to MA20 $270–$275 (1.2x volume)', invalidation: 'Close below $272 on an MA20 break' }))) === 'K4' &&
+      ids(run(base({ action: 'add_on_pullback', entry_zone: '$1,200.50–$1,250', invalidation: 'Close below $1,210' }))) === 'K4');
+    chk('NC-17', 'd: an invalidation with only upside levels -> silent', ids(run(base({ action: 'add_on_pullback', entry_zone: '$735–$740', invalidation: 'Break above $750 on volume; close above $755 confirms the breakout' }))) === '');
+    chk('NC-17', 'd: a downside level first, a breakout level later -> the downside level is used (K4 fires)', ids(run(base({ action: 'add_on_pullback', entry_zone: '$735–$740', invalidation: 'Close below $740; breakout above $750 resets the setup' }))) === 'K4');
+  });
+  guard('NC-18', () => {
+    const k = (id, text) => id + ': ' + text;
+    const rows = [
+      ['FROG C-4a', at(97.52, FROG_C4A), ''], ['QQQ C-4b', at(746.165, QQQ_C4B), ''], ['FROG C-1', at(97.52, FROG_C1), ''], ['MSFT C-1', at(540.093, MSFT_C1), ''],
+      ['QQQ C-1', at(746.165, QQQ_C1), ''], ['NVDA C-2', at(226.73, NVDA_C2), ''], ['FROG C-3', at(102.23, FROG_C3), ''], ['QQQ C-3b', at(746.165, QQQ_C3B), ''],
+      ['QQQ C-5', at(746.165, S, QQQ_C5), ''], ['FROG G-1', at(97.52, S, FROG_G1), k('K4', 'entry-zone floor 94 is at or below the invalidation 94.41')],
+      ['MSFT K4', at(540.093, S, MSFT_K4), ''], ['NVDA K4', at(226.73, S, NVDA_K4), ''], ['C3 control', F.C3, k('K3', '17% to $117.97 is 17.97% from the price 100.00')]
+    ];
+    chk('NC-18', 'the §F table has 13 rows', rows.length === 13);
+    for (const [name, item, want] of rows) chk('NC-18', name + ' -> ' + (want || 'no K2 / K3 / K4'), (run(item) || []).map(x => k(x.id, x.text)).join(' | ') === want);
+  });
   return R;
 }
 
@@ -383,7 +405,7 @@ const NEGATIVES = [
   { id: 'NC-13', label: 'K3-a threshold widened to 0.5 %', f: s => mut(s, '<= 0.0005)) continue;', '<= 0.005)) continue;') },
   { id: 'NC-14', label: 'K4-a bare-number read restored on the entry side', f: s => mut(s, '    const floors = dollars(item.entry_zone);', "    const floors = (String(item.entry_zone).match(/\\d[\\d,]*\\.?\\d*/g) || []).map(num).filter(v => v !== null);") },
   // narrative-consistency-2: the `inv` line now calls invLevel(); the anchor follows it, the bare-number replacement is unchanged.
-  { id: 'NC-14', label: 'K4-a $-only on the entry side but the bare number read on the invalidation side', f: s => mut(s, '    const inv = dollars(item.invalidation)[0];', "    const inv = num((String(item.invalidation).match(/\\d[\\d,]*\\.?\\d*/g) || [])[0]);") },
+  { id: 'NC-14', label: 'K4-a $-only on the entry side but the bare number read on the invalidation side', f: s => mut(s, '    const inv = invLevel(item.invalidation);', "    const inv = num((String(item.invalidation).match(/\\d[\\d,]*\\.?\\d*/g) || [])[0]);") },
   // narrative-consistency-2 (K2 / K3 / K4 precision)
   { id: 'NC-15', label: 'K2 trailing-"." number pattern restored (a sentence-ending period consumed)', f: s => mut(s, String.raw`\$\s?(\d[\d,]*(?:\.\d+)?)[^;.,\n]{0,40}?\b(downside`, String.raw`\$\s?(\d[\d,]*\.?\d*)[^;.,\n]{0,40}?\b(downside`) },
   { id: 'NC-15', label: 'K2 first-word binding restored (the first direction word in the window binds, not the nearest)', f: s => mut(s, String.raw`\b(downside|support|upside|resistance)\b(?:(?!\b(?:downside|support|upside|resistance)\b)[^$;.,\n]){0,40}\$`, String.raw`\b(downside|support|upside|resistance)\b[^$;.,\n]{0,40}\$`) },
@@ -391,6 +413,8 @@ const NEGATIVES = [
   { id: 'NC-16', label: 'K3 ")" and "," allowed in the %-to-$ gap again', f: s => mut(s, String.raw`%[^.;,)\n]{0,60}?\$`, String.raw`%[^.;\n]{0,60}?\$`) },
   { id: 'NC-16', label: 'K3 magnitude-suffix skip removed ("$148.0M" read as a price level)', f: s => mut(s, '      if (/^\\s?(?:million|billion|thousand|mn|bn|[MBK])\\b/i.test(text.slice(lvEnd))) continue;', '') },
   { id: 'NC-16', label: 'K3 range skip removed ("3–5%", "$705–$715" read as point claims)', f: s => mut(s, '      if ((m[1] !== undefined && isRange(text, m.index, m.index + m[0].indexOf(\'%\') + 1)) || isRange(text, lvAt, lvEnd)) continue;', '') },
+  { id: 'NC-17', label: 'K4 first-$ invalidation level restored (a breakout trigger read as the invalidation)', f: s => mut(s, '    const inv = invLevel(item.invalidation);', '    const inv = dollars(item.invalidation)[0];') },
+  { id: 'NC-17', label: 'K4 skips downside levels too ("below" counted as upside context)', f: s => mut(s, String.raw`/\b(?:above|breakout|`, String.raw`/\b(?:below|above|breakout|`) }
 ];
 
 // ── Main ─────────────────────────────────────────────────────────────────────────────────────────
@@ -400,7 +424,7 @@ const NEGATIVES = [
   const check = (name, cond) => { asserts += 1; if (!cond) { failures += 1; console.log('  FAIL  ' + name); } };
   const index = norm(fs.readFileSync(INDEX_PATH, 'utf8'));
   const real = evaluate(index);
-  const order = ['NC-1', 'NC-2', 'NC-3', 'NC-4', 'NC-5', 'NC-6', 'NC-7', 'NC-8', 'NC-9', 'NC-10', 'NC-11', 'NC-12', 'NC-13', 'NC-14', 'NC-15', 'NC-16'];
+  const order = ['NC-1', 'NC-2', 'NC-3', 'NC-4', 'NC-5', 'NC-6', 'NC-7', 'NC-8', 'NC-9', 'NC-10', 'NC-11', 'NC-12', 'NC-13', 'NC-14', 'NC-15', 'NC-16', 'NC-17', 'NC-18'];
   for (const id of order) for (const c of (real[id] || [])) check(id + ' ' + c.name, c.ok);
   for (const g of order) check(g + ' group ran', Array.isArray(real[g]) && real[g].length > 0);
   const realClean = failures === 0;

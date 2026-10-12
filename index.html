@@ -7245,8 +7245,9 @@ function _nlmConsistencyChecks(item, ctx) {
   // K4 — the entry-zone floor at or below the invalidation level (long setups)
   if (item.entry_zone && item.invalidation && item.action !== 'trim' && item.action !== 'avoid') {
     const dollars = s => { const vals = []; const re4 = /\$\s?(\d[\d,]*\.?\d*)/g; let d; while ((d = re4.exec(String(s)))) vals.push(num(d[1])); return vals.filter(v => v !== null); }; // $ levels only: MA names, multipliers and position sizes are never read
+    const invLevel = s => { for (const part of String(s).split(/;|,\s|\.(?=\s|$)/)) { if (/\b(?:above|breakout|break\s?out|upside|rall(?:y|ies)|surge)\b/i.test(part)) continue; const v = dollars(part)[0]; if (v !== undefined) return v; } return undefined; }; // the first $ level whose own clause is not upside / breakout context (a breakout trigger is not an invalidation)
     const floors = dollars(item.entry_zone);
-    const inv = dollars(item.invalidation)[0];
+    const inv = invLevel(item.invalidation);
     if (floors.length && inv !== undefined) {
       const floor = Math.min.apply(null, floors);
       if (floor <= inv) out.push({ id: 'K4', text: 'entry-zone floor ' + floor + ' is at or below the invalidation ' + inv });
