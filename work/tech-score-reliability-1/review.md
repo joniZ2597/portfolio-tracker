@@ -98,6 +98,8 @@ Re-read the brief and the complete diff against the requirement → test map: no
 
 Final check: 1 rounds, 2 class-II findings fixed, self-checked; no implementation change, no QA re-run.
 
+LAND-EVIDENCE: qa-offline=PASS 83; targeted=PASS; codex-classI-unresolved=0
+
 Class-II detail: (1) the summary line above was not yet written when Codex read this file — added; (2) `review.md` is untracked until the step-13 commit tracks it together with the implementation — the two-row "Files changed" shape is prescribed and unchanged. Self-check: every `work/tech-score-reliability-1/` path named exists and is one of the five canonical files (brief.md, review.md, codex.md; plan.md and qa.log exist); the counts 82 and 83 match qa.log; no section reads "Pending" or "TBD". Class I findings: none.
 
 ## Lessons
