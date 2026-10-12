@@ -116,4 +116,4 @@ COWORK completes the table after cleanup from `.git/pt-task`, `pt-land-log` and 
 - [backlog] Brief fixture NC-13b (0.52 % at displayed price 231.10) cannot make its own planted negative bite; the brief fixture should use a percent that is outside the 0.5 pp tolerance — pending routing
 - [covered] Whole-file map suites (HL-8, MS-8, NS-11, TX-3) fail until `--update`; the brief's R-3 ordering (`--update` before the full run) already covers this.
 
-LAND-EVIDENCE: the integrity-check result is LAND evidence (AGENTS.md step 13) and is reported at the step-13 STOP, never written here.
+LAND-EVIDENCE: qa-offline=PASS 81; targeted=PASS; codex-classI-unresolved=0
