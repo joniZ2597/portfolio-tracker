@@ -1830,7 +1830,20 @@ const WCF_ALLOW_ADDED = [
   'Bash(node .claude/hooks/pt-land.js land-request *)', 'Bash(node .claude/hooks/pt-land.js push-request)',
   'Bash(node .claude/hooks/pt-land.js cleanup *)', 'Edit(//tmp/pt-*/**)'
 ];
-const EXPECT_ALLOW = [...BASE_ALLOW, ...RC5_ALLOW_ADDED, ...WCF_ALLOW_ADDED, ...OAG_ALLOW_ADDED];
+// work/governance-update-2/brief.md §1 (GU-2): the two netlify env reads move allow -> ask, seven read-only entries join allow,
+// eleven entries join ask (the R12 land/push verbs, network fetchers, WebFetch) and permissions.disableBypassPermissionsMode is "disable".
+const GU2_ALLOW_REMOVED = ['Bash(netlify env:list*)', 'Bash(netlify env:get*)'];
+const GU2_ALLOW_ADDED = [
+  'Bash(node qa/tools/index-pins.js --check)', 'Bash(node qa/tools/index-pins.js --update)', 'Bash(node qa/tools/index-pins.js --diff *)',
+  'Bash(sha256sum *)', 'Bash(ls *)', 'Bash(diff *)', 'Bash(cmp *)'
+];
+const GU2_ASK_ADDED = [
+  'Bash(node .claude/hooks/pt-land.js land *)', 'Bash(node .claude/hooks/pt-land.js push)',
+  'Bash(netlify env:get*)', 'Bash(netlify env:list*)', 'Bash(curl *)', 'Bash(wget *)',
+  'PowerShell(Invoke-WebRequest *)', 'PowerShell(Invoke-RestMethod *)', 'PowerShell(iwr *)', 'PowerShell(irm *)', 'WebFetch'
+];
+const EXPECT_ALLOW = [...BASE_ALLOW, ...RC5_ALLOW_ADDED, ...WCF_ALLOW_ADDED, ...OAG_ALLOW_ADDED]
+  .filter((x) => GU2_ALLOW_REMOVED.indexOf(x) === -1).concat(GU2_ALLOW_ADDED);
 const HOOK_COMMAND = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/pretooluse-guard.js"';
 // r10 R10-6: the Owner-applied matcher extends coverage to the file tools.
 const R10_MATCHER = 'Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit';
@@ -1850,7 +1863,7 @@ const R11_WRITE_REMOVED_TIER = {
   'Write(./package.json)': 'ask', 'Write(./package-lock.json)': 'ask'
 };
 const EXPECT_DENY_R11 = [...BASE_DENY, ...ADD_DENY].filter((x) => R11_WRITE_REMOVED.indexOf(x) === -1);
-const EXPECT_ASK_R11 = EXPECT_ASK.filter((x) => R11_WRITE_REMOVED.indexOf(x) === -1);
+const EXPECT_ASK_R11 = EXPECT_ASK.filter((x) => R11_WRITE_REMOVED.indexOf(x) === -1).concat(GU2_ASK_ADDED);
 
 function sameSet(a, b) {
   const sa = new Set(a);
@@ -1869,6 +1882,7 @@ function settingsProblems(s) {
   if (!sameSet(allow, EXPECT_ALLOW)) p.push('allow set is not base + RC5 (Bash(git commit) and Bash(git commit *))');
   if (allow.some((r) => /^Bash\(npm run \*\)$|node -e|python3? -c/.test(r))) p.push('broad allow (npm run * / node -e / python3 -c) present');
   if (perms.defaultMode !== 'default') p.push('defaultMode is not default (Manual)');
+  if (perms.disableBypassPermissionsMode !== 'disable') p.push('disableBypassPermissionsMode is not "disable" (GU-2)');
   if (/bypassPermissions|"auto"/.test(JSON.stringify(s))) p.push('bypassPermissions/auto present');
   if ([...deny, ...ask, ...allow].some((r) => /^Write\(/.test(r))) p.push('a Write(...) rule is present (R11 A1-1: none may remain)');
   for (const [entry, tier] of Object.entries(R11_WRITE_REMOVED_TIER)) {
@@ -1889,7 +1903,8 @@ function appliedSettings() {
       deny: EXPECT_DENY_R11.slice(),
       ask: EXPECT_ASK_R11.slice(),
       allow: EXPECT_ALLOW.slice(),
-      defaultMode: 'default'
+      defaultMode: 'default',
+      disableBypassPermissionsMode: 'disable'
     }
   };
 }
@@ -1919,6 +1934,38 @@ check('AH-8 control: §5-applied fixture has no problems', settingsProblems(appl
       ask: [...EXPECT_ASK, ...RC5_ASK_REMOVED], allow: BASE_ALLOW.slice() }) })).length > 0);
   check('AH-8 planted negative: pre-§5 baseline settings are rejected',
     settingsProblems({ permissions: { deny: BASE_DENY, ask: BASE_ASK, allow: BASE_ALLOW, defaultMode: 'acceptEdits' } }).length > 0);
+}
+// GU-2 planted negatives (work/governance-update-2/brief.md S1); the positive control is the AH-8 control row above.
+{
+  const gu2Neg = (label, mutants) => check('AH-8 planted negative (GU-2) ' + label + ': every mutated fixture is rejected',
+    mutants.length > 0 && mutants.every((m) => settingsProblems(m).length > 0));
+  gu2Neg('1 any one GU2_ASK_ADDED entry missing (' + GU2_ASK_ADDED.length + ')', GU2_ASK_ADDED.map((entry) => {
+    const m = clone(appliedSettings()); m.permissions.ask = m.permissions.ask.filter((x) => x !== entry); return m;
+  }));
+  gu2Neg('2 Bash(netlify env:get*) back in allow', [(() => {
+    const m = clone(appliedSettings()); m.permissions.allow.push('Bash(netlify env:get*)'); return m;
+  })()]);
+  gu2Neg('3 bypass key absent or "enable"', [(() => {
+    const m = clone(appliedSettings()); delete m.permissions.disableBypassPermissionsMode; return m;
+  })(), (() => {
+    const m = clone(appliedSettings()); m.permissions.disableBypassPermissionsMode = 'enable'; return m;
+  })()]);
+  gu2Neg('4 pt-land.js land * moved to allow', [(() => {
+    const m = clone(appliedSettings());
+    m.permissions.ask = m.permissions.ask.filter((x) => x !== 'Bash(node .claude/hooks/pt-land.js land *)');
+    m.permissions.allow.push('Bash(node .claude/hooks/pt-land.js land *)'); return m;
+  })()]);
+  gu2Neg('5 WebFetch missing from ask', [(() => {
+    const m = clone(appliedSettings()); m.permissions.ask = m.permissions.ask.filter((x) => x !== 'WebFetch'); return m;
+  })()]);
+  gu2Neg('6 any GU2_ALLOW_ADDED entry in ask (' + GU2_ALLOW_ADDED.length + ')', GU2_ALLOW_ADDED.map((entry) => {
+    const m = clone(appliedSettings()); m.permissions.ask.push(entry); return m;
+  }));
+  check('AH-8 GU-2 anchors: the added/removed lists have 7 / 2 / 11 entries with no duplicates and EXPECT_* counts follow',
+    GU2_ALLOW_ADDED.length === 7 && GU2_ALLOW_REMOVED.length === 2 && GU2_ASK_ADDED.length === 11 &&
+    new Set(GU2_ASK_ADDED).size === 11 && new Set(GU2_ALLOW_ADDED).size === 7 &&
+    EXPECT_ALLOW.length === BASE_ALLOW.length + RC5_ALLOW_ADDED.length + WCF_ALLOW_ADDED.length + OAG_ALLOW_ADDED.length - 2 + 7 &&
+    GU2_ALLOW_REMOVED.every((x) => BASE_ALLOW.indexOf(x) !== -1));
 }
 // AH-8-W (R11 Amendment 1, A1-1): the twelve Write(...) rules are gone, their Edit(...) twins stay in tier, and
 // no re-added Write(...), dropped Edit(...), tier-moved Edit(...) or allow-listed one of the 12 paths is accepted.
