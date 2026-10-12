@@ -21,8 +21,10 @@ function check(id, cond, detail) {
 const ptLandText = fs.readFileSync(PT_LAND_PATH, 'utf8');
 const toolSrc = fs.readFileSync(TOOL_PATH, 'utf8');
 
-function loadFromSource(src) {
-  const body = src.replace(/^#!.*\n/, '');
+// land-evidence-check-2: the shebang line ends in CRLF on Windows checkouts.
+const SHEBANG_RE = /^#!.*\r?\n/;
+function loadFromSource(src, stripRe) {
+  const body = src.replace(stripRe || SHEBANG_RE, '');
   const m = { exports: {} };
   // `module` here is not require.main, so the CLI guard stays inert.
   new Function('require', 'module', 'exports', '__dirname', body)(require, m, m.exports, __dirname);
@@ -176,6 +178,21 @@ check('LE-8a tool source has no write / network / pt-land require / git write ve
 check('LE-8b tool reads pt-land.js as text', /readFileSync/.test(toolSrc) && /pt-land\.js/.test(toolSrc));
 check('LE-8c Git child env drops GIT_CONFIG_PARAMETERS and sets GIT_OPTIONAL_LOCKS=0', /GIT_OPTIONAL_LOCKS/.test(toolSrc) && /delete env\.GIT_CONFIG_PARAMETERS/.test(toolSrc));
 
+// ── LE-9 ─────────────────────────────────────────────────────────────────────────────
+console.log('LE-9 CRLF tool source (Windows checkout)');
+const crlfSrc = toolSrc.replace(/\r?\n/g, '\r\n');
+function loadsAndWorks(re) {
+  try {
+    const t = loadFromSource(crlfSrc, re);
+    const c = t.extractContract(ptLandText);
+    return c instanceof RegExp && c.source === RE.source && typeof t.checkReviewText === 'function';
+  } catch (e) {
+    return false;
+  }
+}
+check('LE-9a CRLF-converted tool source starts with a CRLF shebang line', /^#![^\n]*\r\n/.test(crlfSrc));
+check('LE-9b CRLF tool source loads with SHEBANG_RE and still extracts the contract', loadsAndWorks(SHEBANG_RE) === true);
+
 // ── planted negatives (in-memory mutants of the tool) ────────────────────────────────
 console.log('Planted negatives');
 const hardCoded = loadFromSource(toolSrc + '\nmodule.exports.extractContract = function () { return /^LAND-EVIDENCE: qa-offline=PASS \\d+; targeted=PASS; codex-classI-unresolved=0$/; };\n');
@@ -192,6 +209,8 @@ check('PN-3 skipping the integrity scan is caught by LE-5', !(ni.ready === false
 
 const reqMutant = toolSrc + "\nrequire('../.claude/hooks/pt-land.js');\n";
 check('PN-4 require-ing pt-land.js is caught by LE-8', staticViolations(reqMutant).indexOf('require of pt-land.js') !== -1);
+
+check('PN-5 reverting the strip to /^#!.*\\n/ is caught by LE-9b', loadsAndWorks(/^#!.*\n/) === false);
 
 console.log('\n' + (failed === 0 ? 'LAND-EVIDENCE CHECK OFFLINE: PASS' : 'LAND-EVIDENCE CHECK OFFLINE: FAIL') + ' (' + passed + ' passed, ' + failed + ' failed)');
 process.exit(failed === 0 ? 0 : 1);
