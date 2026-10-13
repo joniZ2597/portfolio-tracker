@@ -73,7 +73,9 @@ Reading used: the :1423 predicate asserts `out[0] === item` as the brief specifi
 ## QA
 - Step-0 baseline (pre-edit): `qa:offline` PASS, 86 spawned suites.
 - Targeted after the change: `score_boost_removal` PASS (SB-1..6, PN-1..4); `index-pins --check` OK; `index_pins`, `no_synthetic_score` (160), `narrative_consistency` (153), `ath_client` (123), `high1y_label` (103), `deep_dive_v0` (74), `vis_score_caliper` (307), `scan_results_enrichment` (67) all PASS.
-- Full `qa:offline` runs once, after the step-13a protected commit (the five §PS rows assert the old boost until then); expected suite count 87.
+- Step 10 full `qa:offline` after the step-13a protected commit: first run at `8a97bd6` FAILED (1 hard failure: `tase_units_offline` TU-8, resolved by the Owner-ruled exception above); rerun at `28677dc`: `OFFLINE VALIDATION: PASS`, 87 spawned suites (baseline 86 + 1). All ten land-tests re-run individually and PASS.
+
+LAND-EVIDENCE: qa-offline=PASS 87; targeted=PASS; codex-classI-unresolved=0
 
 ## Codex
 - Step 8 implementation-diff review: NO FINDINGS, VERDICT: PASS (see codex.md). Ledger: 0 FIX, 0 DEFER, 0 REJECT.
