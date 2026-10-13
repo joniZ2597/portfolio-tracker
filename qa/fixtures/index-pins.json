@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "93e23d19d1a8605f9d4aa97396585d26ebfd857af7f3dac1e4d14afa90fe4f3c",
+  "fileSha256": "efab802fe6a49f2607bf2eeeeab5ca77b3e0e93dadd271bebff71de6c01db296",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -265,7 +265,7 @@
     "analyzeChunk": "e9303a0690a6fad433918ee02772dcc63e0ad9d65f431f4dd7ee007b3c9ea703",
     "applyCapitalReturnsNudge": "eef0d08a4d9e32053df3241960f6bcbd21f136590da316688549bf16c0216a16",
     "buildResearchSourceMeta": "da0057c01bccc04195d0aafaf5c6f3dddbbb0ee39b266385959b66996204892a",
-    "buildTechSnapshotBlock": "2428a64e204b3aced6a31db781ab1b854bc26c41f401718106dcf9dd15210972",
+    "buildTechSnapshotBlock": "ee1528756a40c24ed1647b889ff13c06002c87e12ee4eb0c7c01cef5000289a1",
     "cancelScan": "fae29b78ab51c55e5b6eac0c78ef2b50c875117c9b3980eb12703910e393a555",
     "checkAllApis": "105ae6277941372045f9b2868bd3cd7d18fcefcc89f76f6c1516faa4a923f6ba",
     "checkAndShowKeyWarn": "d417436427d44f0ab84cef33e45d7853d3588efcdffbfe9ff45bcbe1702c922a",
@@ -307,7 +307,7 @@
     "filterWatchlistRows": "c3128340651197b8960f12f14f6057975bf50809456b1f6a9be565313953ecfd",
     "findTicker": "0294e91f60b66051b7f84a023b0b1cb30a18bc5eb06a7bfd07c3f52ad1c9f5f1",
     "formatNewsContext": "c80da5b0321576101bcc47495cb3ef3a32c9b948f0beb9d10efbdf5587901eda",
-    "formatStockContext": "e29ee0bee41f59242d7be2148d5926856d44e4e104b09355ba337a362643d0d3",
+    "formatStockContext": "586df52b56abec183d235cc5a770e341e53c4146d9cd0673ecc8d05a6317b9a8",
     "getHistoricalCacheStats": "d92d5c22c01f73e0b20f3c191c9abdcc01f82dea3b701e4ae65d6224e9428b47",
     "getScanSymbols": "3d319e463e2d78d8748d0c17da5a2cc6ba99fd24a4fc5d47a0f5dbb604bf6755",
     "getSymbols": "c76492ad2ae04fb621a29999995bfb698374e3a082af4aded898b4b3a382f03c",
