@@ -5926,7 +5926,7 @@ function parsePerplexityContext(raw, sources = []) {
 
   for (const line of lines) {
     // 7B-1: broader ticker-header fallback — TICKER:, ## NVDA, ## $NVDA, **NVDA**, **Ticker: NVDA**, ### $NVDA …
-    const tickerMatch = line.match(/^\s*(?:TICKER:|Ticker:|#{1,4}\s*\$?|\*\*\s*(?:Ticker:\s*)?\$?)\s*([A-Z]{1,6})(?=\b|\*\*|\s|$)/);
+    const tickerMatch = line.match(/^\s*(?:TICKER:|Ticker:|#{1,4}\s*\$?|\*\*\s*(?:Ticker:\s*)?\$?)\s*([A-Z]{1,6}(?:[.\-][A-Z]{1,2})?)(?=\b|\*\*|\s|$)/);
     if (tickerMatch) { flushTicker(); currentTicker = tickerMatch[1]; currentLines = []; }
     else if (currentTicker) currentLines.push(line);
   }

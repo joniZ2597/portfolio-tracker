@@ -241,5 +241,26 @@ for (const r of ROWS) {
   if (live[r.id] === null) console.log('  PASS  ' + r.id + ' ' + r.label);
   else { failed += 1; console.log('  FAIL  ' + r.id + ' ' + r.label + '\n        ' + String(live[r.id]).split('\n').join('\n        ')); }
 }
+
+// ── planted negatives (brief §3): each mutates an in-memory COPY of the production source; the named row must then FAIL ──
+const mut = (s, a, b) => { if (countOf(s, a) !== 1) throw new Error('negative anchor not unique: ' + a.slice(0, 60)); return s.replace(a, () => b); };
+const NEGS = [
+  { id: 'NEG-1', row: 'TU-8', label: 'conversion at fetch time (fetchYahoo returns ILS)', f: s => mut(s, '    symbol,\n    price,\n    change_percent,\n    high:', '    symbol,\n    price: price / 100,\n    change_percent,\n    high:') },
+  { id: 'NEG-2', row: 'TU-1', label: '$ kept for .TA', f: s => mut(s, "const _pxSym = _pxDiv === 100 ? '₪' : '$';", "const _pxSym = '$';") },
+  { id: 'NEG-3', row: 'TU-1', label: '÷100 applied to US', f: s => mut(s, "/\\.TA$/.test(item.ticker || '') ? 100 : 1;", "/\\.TA$/.test(item.ticker || '') ? 100 : 100;") },
+  { id: 'NEG-4', row: 'TU-2', label: 'MA rows not converted', f: s => mut(s, 'return _pxSym + (sma / _pxDiv).toFixed(2);', 'return _pxSym + sma.toFixed(2);') },
+  { id: 'NEG-5', row: 'TU-3', label: 'change amount not converted', f: s => mut(s, 'Math.abs(chg * _displayPriceBase/100 / _pxDiv).toFixed(2)', 'Math.abs(chg * _displayPriceBase/100).toFixed(2)') },
+  { id: 'NEG-6', row: 'TU-4', label: 'extended price not converted', f: s => mut(s, '${_pxSym}${(_extPrice / _pxDiv).toFixed(2)}', '${_pxSym}${_extPrice.toFixed(2)}') },
+  { id: 'NEG-7', row: 'TU-5', label: 'prompt left in agorot', f: s => mut(s, "(v / 100).toFixed(2) + ' ILS' : `$${v}`", "v + ' ILS' : `$${v}`") },
+  { id: 'NEG-8', row: 'TU-6', label: 'MA prompt levels left in agorot', f: s => mut(s, "(v / 100).toFixed(2) + ' ILS' : '$' + v.toFixed(2)", "v.toFixed(2) + ' ILS' : '$' + v.toFixed(2)") },
+  { id: 'NEG-9', row: 'TU-7', label: 'old ticker-header regex', f: s => mut(s, '([A-Z]{1,6}(?:[.\\-][A-Z]{1,2})?)(?=\\b|\\*\\*|\\s|$)/);', '([A-Z]{1,6})(?=\\b|\\*\\*|\\s|$)/);') },
+  { id: 'NEG-10', row: 'TU-7', label: 'regex accepting 3+ letter suffixes (AAPL.COM)', f: s => mut(s, '(?:[.\\-][A-Z]{1,2})?)', '(?:[.\\-][A-Z]{1,3})?)') }
+];
+for (const n of NEGS) {
+  let bit = null;
+  try { bit = evaluate(n.f(SRC))[n.row]; } catch (e) { bit = 'setup: ' + e.message; }
+  if (bit !== null && String(bit).indexOf('setup:') !== 0) console.log('  PASS  negative caught: ' + n.id + ' ' + n.label + ' → ' + n.row + ' fails (' + String(bit).split('\n')[0].slice(0, 90) + ')');
+  else { failed += 1; console.log('  FAIL  negative NOT caught: ' + n.id + ' ' + n.label + ' (' + n.row + ': ' + (bit === null ? 'still passes' : bit) + ')'); }
+}
 console.log(failed === 0 ? '  PASS  ' + ROWS.length + ' tase-units assertion(s) passed' : '  FAIL  ' + failed + ' of ' + ROWS.length + ' tase-units assertion(s) failed');
 process.exit(failed === 0 ? 0 : 1);

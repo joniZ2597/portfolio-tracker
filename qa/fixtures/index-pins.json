@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "efab802fe6a49f2607bf2eeeeab5ca77b3e0e93dadd271bebff71de6c01db296",
+  "fileSha256": "b500cd91338407463a54889668bd6d14fc8f105e0e4dca4750e9fd256a5eab53",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -337,7 +337,7 @@
     "openTickerMenu": "27fd2f524ba0e82c0987402778f1861e0fb8daf202be06771b7abd9b5f776d96",
     "orchestrate": "2e352b3f1d4739e8f98fb079ed3c3865115263e12dcdc53dda70350bebf97dfb",
     "parseJSON": "c02413e78fb8c027bcfc8518fc36615ca8294637b5e8403196e5a2212f94c4e9",
-    "parsePerplexityContext": "41b8f490ef3e319cda61281e09813639fdbdcc7a468e882d82d563520c9339b2",
+    "parsePerplexityContext": "32c4590b13c13798588c94846291d0e652faff146cae71dde07e372fdfa8ee62",
     "ptAssetType": "ae0b8eadba6c457c80943ff507db7f20c4bac33aed242a9c14fb66cc46d5161b",
     "refreshTechPanel": "7be7faf49ae1ab2dcd3c3a25ce065ace9a71adc5b83805e9ffd40b300b4e87eb",
     "removeTicker": "99e5b046acd74cda97dd7b04146c89c9d97c2d949d4fbcee813f9a6661d0a9d0",
