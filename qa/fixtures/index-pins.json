@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "b500cd91338407463a54889668bd6d14fc8f105e0e4dca4750e9fd256a5eab53",
+  "fileSha256": "aab5cb94c092b9eb1bd1c3372b5596fa01a0dba238297f49445223cbec86a826",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -292,7 +292,7 @@
     "confirmDeleteTicker": "93d32319a7d3ac8e78d89466080097f16b53fcc78f19b3f88c8274096e6c4693",
     "confirmRemoveTicker": "ad1cd358cc7ffc01fbdc666192e3538b4f4846617c568a77a193a77b0fb02a0e",
     "deletePosition": "244c422ab9eb033b12a7a3176acc4a1b1cea36da806a33ba23fb155e43c1f245",
-    "enforceScoreConsistency": "e1406d9bfe8358212ada456882bea248cb761cc68734213aa5151b9c02966a00",
+    "enforceScoreConsistency": "28a3a5cac29be9a0b61e854182caaa7cac2ed241fe847fd5b65e8e05a8cbfc60",
     "exportJSON": "6bc77494345c43b216f21df9500512f5c45f82de42eac89ecb0db36a08b0b273",
     "exportPortfolioBackup": "b5b5906c443ec83d941d902d3ea5638729e446c0d164d46396b3ec66a376b3c1",
     "fetchAlphaVantage": "506fc899c5f89a7d4150e04c316f80c2539afb1a0692d3ca388f8bd1ca446c2b",
