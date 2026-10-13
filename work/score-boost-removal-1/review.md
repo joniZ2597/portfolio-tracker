@@ -3,7 +3,7 @@
 Mode: Manual, attended. Base `7888fa5`. Brief commit `8ec192c` (sha256 `f2b6501d…`).
 
 ## Files changed
-- Implementation (4): index.html, qa/score_boost_removal_offline.js, qa/run-offline.js, qa/fixtures/index-pins.json
+- Implementation (5): index.html, qa/score_boost_removal_offline.js, qa/run-offline.js, qa/fixtures/index-pins.json, qa/tase_units_offline.js (the fifth is the Owner-ruled STOP-1 exception below: one digest value; the brief's Implementation scope lists four)
 - Evidence (tracked): work/score-boost-removal-1/brief.md, work/score-boost-removal-1/review.md
 
 ## What changed
@@ -78,6 +78,7 @@ Reading used: the :1423 predicate asserts `out[0] === item` as the brief specifi
 ## Codex
 - Step 8 implementation-diff review: NO FINDINGS, VERDICT: PASS (see codex.md). Ledger: 0 FIX, 0 DEFER, 0 REJECT.
 - Step 12 final check on the task diff: one Class II finding (stale "final check" status in the evidence), fixed. Final check: 1 rounds, 1 class-II findings fixed, self-checked; no implementation change, no QA re-run.
+- STOP-1 exception review (exact diff + ruling, after the step-10 failure): NO FINDINGS, VERDICT: PASS (codex.md). Ledger: 0 FIX, 0 DEFER, 0 REJECT.
 
 ## Owner ruling (STOP-2, wording defect — recorded verbatim)
 > I approve Bootstrap's incident-specific STOP-2 ruling.
@@ -95,6 +96,24 @@ Reading used: the :1423 predicate asserts `out[0] === item` as the brief specifi
 > The extra `const item = baseItem();` declaration in the protected candidate at line 1422 is approved as within the §PS scope.
 >
 > No other changes to the brief's scope, protected files, land-tests or approvals are authorized.
+
+## Owner ruling (STOP-1 exception, one-line re-pin — recorded verbatim)
+Trigger: the step-10 full `qa:offline` after protected commit `8a97bd6` failed with one hard failure, `qa/tase_units_offline.js` TU-8 `enforceScoreConsistency changed since the base` (`BASE_DIGESTS.enforceScoreConsistency` hard-coded at the pre-task digest `e1406d9b…`; suite added by the landed predecessor `tase-units-1`, not named in the brief). All other suites passed. Ruling:
+> I approve Bootstrap's Option A recovery, subject to the existing governance gates.
+>
+> The one-line re-pin of BASE_DIGESTS.enforceScoreConsistency in qa/tase_units_offline.js to the current index-pins value is an approved STOP-1 exception.
+>
+> Scope is limited to that single digest value. No other functional or test changes.
+>
+> The earlier Owner ruling permitting a separate LAND-EVIDENCE commit remains valid.
+>
+> Owner-terminal LAND is authorized as the recovery path, but not for immediate execution. No audit record may be fabricated.
+>
+> Freeze all other task-starts, R11 placements and branch-dev changes until this task has landed, passed EOL-3, pushed and completed cleanup.
+
+Change made: `qa/tase_units_offline.js` line 112 `enforceScoreConsistency: 'e1406d9b…'` -> `'28a3a5ca…'` (= `functions.enforceScoreConsistency` in `qa/fixtures/index-pins.json`). Nothing else in that file changed. Targeted after the change: `tase_units_offline` PASS (9 assertions incl. TU-8), `index-pins --check` OK, `index_pins_offline` PASS; no other file under `qa/` contains the old digest.
+
+Planned audit gap: because LAND is to be done from the Owner's terminal (not `pt-land.js land`), no R12 land-log record is produced by the tool for this task; none is fabricated or back-filled by the Worker.
 
 ## Backlog reconciliation
 - Brief's Backlog row: none (audit finding PA-04). Action taken: none. No `BACKLOG.md` edit; no affected entries. The finished work's effect matches the brief's row.

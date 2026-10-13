@@ -109,7 +109,7 @@ const BASE_DIGESTS = {
   _nlmConsistencyChecks: '6716b144c8d3edde40a38b0fad8822493b022fc9b28d0b0b2ab43f76c4a4312b',
   analyzeChunk: 'e9303a0690a6fad433918ee02772dcc63e0ad9d65f431f4dd7ee007b3c9ea703',
   orchestrate: '2e352b3f1d4739e8f98fb079ed3c3865115263e12dcdc53dda70350bebf97dfb',
-  enforceScoreConsistency: 'e1406d9bfe8358212ada456882bea248cb761cc68734213aa5151b9c02966a00',
+  enforceScoreConsistency: '28a3a5cac29be9a0b61e854182caaa7cac2ed241fe847fd5b65e8e05a8cbfc60',
   fetchAnthropicAnalysis: 'be916d0c24c40940d2cb9bc3338aba631292a708041003b15d7b28e1fddd70de',
   fetchHistoricalCandles: '94b245c8700ed0e84fed41782f6fc1ee00e24f468f014fc20e26809ce114d17d',
   computeTechnicalSnapshot: '373e9290a82129cb1ec2ec053ceb5263e81159fc7acc8a589a91defad8d2fc9d'
