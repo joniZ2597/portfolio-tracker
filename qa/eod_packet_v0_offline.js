@@ -74,7 +74,13 @@ function extractVarSource(content, name) {
   return content.slice(start, semi + 1);
 }
 
-const content = fs.readFileSync(INDEX_PATH, 'utf8');
+function loadIndexText(raw) { return raw; }
+const RAW_INDEX = fs.readFileSync(INDEX_PATH, 'utf8');
+const content = loadIndexText(RAW_INDEX);
+const AC16_MARKER = '  var holdings = preload.holdings;\r\n';
+const AC10_BLOCK_MARKER = "  lines.push('## Limitations');\r\n  packet.limitations.forEach(function(l) { lines.push('- ' + l.text); });\r\n  lines.push('');\r\n";
+const FL1_RAW_AFTER_SRC = "addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' +\r\n" +
+  "      _dhLabel('state', reporting.fxState) + (reporting.fxState === 'aged-but-valid' ? ' [aged-but-valid]' : '') + '.');";
 const FNS = ['_pfIsFiniteNum', '_pfFxRateValid', '_pfFxState', '_pfNormalizeHoldingEntry',
   '_normalizePosition', 'loadHoldings', '_pfCashLoad', '_pfFxLoadCache', '_pfEodLoadCache',
   '_pfEodIsStale', '_pfEffectiveCostIls', '_pfHoldingPl', '_pfHoldingIlsValue',
@@ -498,7 +504,7 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
   // index.html is CRLF-terminated end to end, so the extracted production
   // source carries \r\n, not \n — markers must match those literal bytes.
   (function () {
-    const marker = '  var holdings = preload.holdings;\r\n';
+    const marker = AC16_MARKER;
     check('sanity: AC16 mutation anchor present in extracted source', src._eodBuildPacket.indexOf(marker) !== -1);
     const mutated = buildApi(FULL_SEED, Object.assign({}, fixtureOpts, {
       patchSrc: { _eodBuildPacket: function (fnSrc) { return fnSrc.replace(marker, marker + "  localStorage.setItem('pt_eod_last_export', asOf);\r\n"); } }
@@ -573,7 +579,7 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
   // ── AC10: move the Limitations block to the end of _eodPacketToMarkdown;
   // the "before Holdings" ordering assertion flips. ────────────────────────
   (function () {
-    const blockMarker = "  lines.push('## Limitations');\r\n  packet.limitations.forEach(function(l) { lines.push('- ' + l.text); });\r\n  lines.push('');\r\n";
+    const blockMarker = AC10_BLOCK_MARKER;
     check('sanity: AC10 mutation anchor present in extracted source', src._eodPacketToMarkdown.indexOf(blockMarker) !== -1);
     const mutated = buildApi(FULL_SEED, Object.assign({}, fixtureOpts, {
       patchSrc: { _eodPacketToMarkdown: function (fnSrc) {
@@ -1059,8 +1065,7 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
 
   // ── RD-FL1 planted negative: reverting to the pre-E1 raw-code literal
   // breaks the fresh/aged-but-valid assertions above ──────────────────────
-  const FL1_RAW_AFTER = "addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' +\r\n" +
-    "      _dhLabel('state', reporting.fxState) + (reporting.fxState === 'aged-but-valid' ? ' [aged-but-valid]' : '') + '.');";
+  const FL1_RAW_AFTER = FL1_RAW_AFTER_SRC;
   const FL1_RAW_BEFORE = "addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' + reporting.fxState + '.');";
   const fl1Mutated = build(ctlSeed(), { patchSrc: { _eodBuildPacket: function (fnSrc) {
     if (fnSrc.indexOf(FL1_RAW_AFTER) === -1) throw new Error('RD-FL1 planted-negative anchor missing (E1 not applied yet)');
@@ -1362,6 +1367,37 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
     (content.match(/tz === 'America\/New_York'/g) || []).length === 1 && fetchRawSrc.indexOf('America/New_York') === -1);
   check('RD-F2: the pre-change TS1 return shape is preserved (market / marketBasis still destructured into the returned series)',
     /market:\s*market/.test(fetchRawSrc) || /market,/.test(fetchRawSrc) || fetchRawSrc.indexOf('marketBasis') !== -1);
+})();
+
+// ── EOL-row (qa-eol-neutral-1, EOL-1 S-2): the loader must give the same text and
+// keep every mutation anchor exactly once for an LF and a CRLF copy of the real index.html.
+(function EOL_ROW() {
+  const lfRaw = RAW_INDEX.replace(/\r?\n/g, '\n');
+  const crlfRaw = RAW_INDEX.replace(/\r?\n/g, '\r\n');
+  function occurrences(hay, needle) {
+    if (hay === null || hay === undefined) return 0;
+    return hay.split(needle).length - 1;
+  }
+  function anchorsOnce(t, ac16) {
+    const build = extractFunctionSource(t, '_eodBuildPacket');
+    const md = extractFunctionSource(t, '_eodPacketToMarkdown');
+    return occurrences(build, ac16) === 1 && occurrences(build, FL1_RAW_AFTER_SRC) === 1 &&
+      occurrences(md, AC10_BLOCK_MARKER) === 1;
+  }
+  function eolRow(loader, ac16) {
+    return {
+      same: loader(lfRaw) === loader(crlfRaw),
+      anchors: anchorsOnce(loader(lfRaw), ac16) && anchorsOnce(loader(crlfRaw), ac16)
+    };
+  }
+  check('EOL-1a: loadIndexText gives identical text for LF and CRLF copies of index.html',
+    eolRow(loadIndexText, AC16_MARKER).same === true);
+  check('EOL-1b: every mutation anchor occurs exactly once on both LF and CRLF copies',
+    eolRow(loadIndexText, AC16_MARKER).anchors === true);
+  check('planted negative (PN-EOL-1): an identity loader (no normalisation) is caught by EOL-1a',
+    eolRow(function (raw) { return raw; }, AC16_MARKER).same === false);
+  check('planted negative (PN-EOL-2): a CRLF-literal anchor is caught by EOL-1b',
+    eolRow(loadIndexText, '  var holdings = preload.holdings;\r\n').anchors === false);
 })();
 
 console.log(failures === 0
