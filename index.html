@@ -8277,7 +8277,9 @@ function renderMainPanel(item) {
   const score = _ptScoreNorm(item.sentiment_score); // null = missing (never 50, never 0)
   const sent  = item.sentiment==='positive'?'positive':item.sentiment==='negative'?'negative':'neutral';
   let chg   = typeof item._verifiedChangePct==='number' ? item._verifiedChangePct : null;
-  let price = item._verifiedPrice ? `$${item._verifiedPrice.toFixed(2)}` : '—';
+  const _pxDiv = /\.TA$/.test(item.ticker || '') ? 100 : 1; // tase-units-1: TASE prices are stored raw in agorot; shown in ILS (display layer only)
+  const _pxSym = _pxDiv === 100 ? '₪' : '$';
+  let price = item._verifiedPrice ? `${_pxSym}${(item._verifiedPrice / _pxDiv).toFixed(2)}` : '—';
   const sum   = item.summary || '';
   const sl    = sum.toLowerCase();
 
@@ -8419,7 +8421,7 @@ function renderMainPanel(item) {
 
   function fmtMA(sma) {
     if (sma === null || sma === undefined) return '—';
-    return '$' + sma.toFixed(2);
+    return _pxSym + (sma / _pxDiv).toFixed(2);
   }
   function maState(pct) {
     if (pct === null || pct === undefined) return null; // unknown
@@ -8521,7 +8523,7 @@ function renderMainPanel(item) {
   // After a ↻ refresh during PRE/POST, show the live regular-market price/change in the
   // primary row so it matches the base used to calculate the extended-hours row
   if (_showExt && _extC) {
-    if (typeof _extC.regularPrice    === 'number') price = `$${_extC.regularPrice.toFixed(2)}`;
+    if (typeof _extC.regularPrice    === 'number') price = `${_pxSym}${(_extC.regularPrice / _pxDiv).toFixed(2)}`;
     if (typeof _extC.regularChangePct === 'number') chg  = _extC.regularChangePct;
   }
 
@@ -8708,7 +8710,7 @@ function renderMainPanel(item) {
       <div class="ph-row2">
         <div class="ph-price-block">
           <span class="ph-price">${hasData ? price : '—'}</span>
-          <span class="ph-chg ${hasData ? chgCls2 : 'neu'}">${hasData ? (chgDir + (chg !== null ? Math.abs(chg * _displayPriceBase/100).toFixed(2) : '—') + ' ' + chgPctStr) : '—'}</span>
+          <span class="ph-chg ${hasData ? chgCls2 : 'neu'}">${hasData ? (chgDir + (chg !== null ? Math.abs(chg * _displayPriceBase/100 / _pxDiv).toFixed(2) : '—') + ' ' + chgPctStr) : '—'}</span>
           <span class="ph-today">${_todayLbl}</span>
         </div>
         ${hasData && (typeof snap.spyChangePct === 'number' || typeof snap.qqqChangePct === 'number') ? `<div class="ph-divider"></div>` : ''}
@@ -8730,7 +8732,7 @@ function renderMainPanel(item) {
         <div class="ph-mkt-pill ${_mktDspCls}"><div class="ph-mkt-dot"></div>${_mktLbl}</div>
         <button class="ph-refresh" title="Refresh" onclick="_refreshPriceRow('${item.ticker}')">↻</button>
       </div>
-      ${hasData && _showExt && _extPrice !== null ? `<div class="ph-ext-row"><span class="ph-ext-price">$${_extPrice.toFixed(2)}</span>${_extChgPct !== null ? `<span class="ph-ext-chg ${_extChgPct >= 0 ? 'pos' : 'neg'}">${_extChgPct >= 0 ? '+' : ''}${_extChgPct.toFixed(2)}%</span>` : ''}<span class="ph-ext-lbl">${_ms === 'PRE' ? 'Pre-market' : 'After-hours'}</span></div>` : ''}
+      ${hasData && _showExt && _extPrice !== null ? `<div class="ph-ext-row"><span class="ph-ext-price">${_pxSym}${(_extPrice / _pxDiv).toFixed(2)}</span>${_extChgPct !== null ? `<span class="ph-ext-chg ${_extChgPct >= 0 ? 'pos' : 'neg'}">${_extChgPct >= 0 ? '+' : ''}${_extChgPct.toFixed(2)}%</span>` : ''}<span class="ph-ext-lbl">${_ms === 'PRE' ? 'Pre-market' : 'After-hours'}</span></div>` : ''}
     </div>
 
     ${!hasData && item._aiUnavailable ? `

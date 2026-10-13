@@ -52,8 +52,8 @@ const FROZEN_RM = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'i
 const BASE_RM_LF = 'a8c13d283ad90e4c132e6d68a5570682b39d5c127d1dd5a4ce18795178ab838f';
 const OLD_RM_CALIPER_PIN = 'd11b09a989f19ee1fa09770ac135e8f00ce518558b25cc7bce3ee23cf1b174ac';
 
-const BASE_PRICE_LINE = "  let price = item._verifiedPrice ? `$${item._verifiedPrice.toFixed(2)}` : '—';\n";
-const BASE_EXT_OVERRIDE = "  if (_showExt && _extC) {\n    if (typeof _extC.regularPrice    === 'number') price = `$${_extC.regularPrice.toFixed(2)}`;\n    if (typeof _extC.regularChangePct === 'number') chg  = _extC.regularChangePct;\n  }";
+const BASE_PRICE_LINE = "  const _pxDiv = /\\.TA$/.test(item.ticker || '') ? 100 : 1; // tase-units-1: TASE prices are stored raw in agorot; shown in ILS (display layer only)\n  const _pxSym = _pxDiv === 100 ? '₪' : '$';\n  let price = item._verifiedPrice ? `${_pxSym}${(item._verifiedPrice / _pxDiv).toFixed(2)}` : '—';\n"; // tase-units-1: replaces the pre-task single line (known constant edit)
+const BASE_EXT_OVERRIDE = "  if (_showExt && _extC) {\n    if (typeof _extC.regularPrice    === 'number') price = `${_pxSym}${(_extC.regularPrice / _pxDiv).toFixed(2)}`;\n    if (typeof _extC.regularChangePct === 'number') chg  = _extC.regularChangePct;\n  }";
 
 // R6 (cross-suite text reads): the caliper and TS1 suites must still guard these functions through the pin map.
 const CALIPER_GUARDED_FNS = ['_ptScoreNorm', '_ptScoreText', '_ptScoreCmp', '_ptScoreAvg', '_ptScoreStates', '_ptScoreFillHtml', '_ptScoreDial', '_srGroupResults', '_srRenderGrouped'];

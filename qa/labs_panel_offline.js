@@ -18,7 +18,7 @@ const countOf = (h, n) => h.split(n).length - 1;
 const FLAGS = ['PT_ENABLE_DEEP_DIVE', 'PT_ENABLE_PORTFOLIO_RESEARCH'];
 // Function digests at the task base (LF-normalised, pin-map method) — S1 must leave these byte-identical (LB-8).
 const BASE_PINS = {
-  renderMainPanel: 'afce25945eea3cbdfb4ff76047ee41e374ec472fc1da060c37e1e5d348d56668', // market-status-pill-1
+  renderMainPanel: '9ae8e8b04e0d21fd6f39c922397736521291904b8ce3f21b296ac881b2971493', // tase-units-1 (was afce25945eea… market-status-pill-1)
   _renderPortfolioPanel: '08286eba02162c12523e0984c6e9bae6639bb6bfe6b737f44ccc6e5816bf78cf',
   _calcPortfolioAggregates: '8e480394b86711f35a77e0b4cd7e38864c0ef653bb1e4ab47ff148025c16914b',
   renderApiTable: '6ab781fd896bb61a4120a7b6c3529e93e0adf16fb844fd7ba25e5c5d4b245c12',
