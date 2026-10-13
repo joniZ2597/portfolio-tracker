@@ -1419,17 +1419,17 @@ function phaseTerminalChainIntegrity() {
   // Qualifying real item: verified data present, real analysis, score<65,
   // bullish context -> boost fires exactly as before.
   (function () {
-    const out = enforceScoreConsistency([baseItem()], BULLISH_CTX);
-    check('qualifying item: boost fires (score->72, sentiment positive)',
-      out[0].sentiment_score === 72 && out[0].sentiment === 'positive');
+    const item = baseItem(); const out = enforceScoreConsistency([item], BULLISH_CTX);
+    check('bullish context -> item unchanged (no research-keyword boost, DQ-1)',
+      out[0] === item && out[0].sentiment_score === 50 && out[0].sentiment === 'neutral');
   })();
 
   // Genuinely verified 0.00% day must NOT be confused with missing data —
   // boost still fires normally.
   (function () {
     const out = enforceScoreConsistency([baseItem({ _verifiedChangePct: 0 })], BULLISH_CTX);
-    check('verified 0.00% day is eligible for the boost (not treated as missing data)',
-      out[0].sentiment_score === 72 && out[0].sentiment === 'positive');
+    check('verified 0.00% day + bullish context -> item unchanged',
+      out[0].sentiment_score === 50 && out[0].sentiment === 'neutral');
   })();
 
   // Synthetic/AI-failure item must never be rewritten, even with bullish context.
@@ -1437,7 +1437,7 @@ function phaseTerminalChainIntegrity() {
     const synthetic = baseItem({ _aiUnavailable: true, sentiment_score: 50, sentiment: 'neutral' });
     delete synthetic._verifiedChangePct; // a failed-AI item may also lack verified data
     const out = enforceScoreConsistency([synthetic], BULLISH_CTX);
-    check('synthetic/_aiUnavailable item immune to the boost',
+    check('synthetic/_aiUnavailable item unchanged',
       out[0].sentiment_score === 50 && out[0].sentiment === 'neutral');
   })();
 
@@ -1455,22 +1455,22 @@ function phaseTerminalChainIntegrity() {
     const noData = baseItem();
     delete noData._verifiedChangePct;
     const out = enforceScoreConsistency([noData], BULLISH_CTX);
-    check('no verified market data -> boost skipped',
+    check('no verified market data -> unchanged',
       out[0].sentiment_score === noData.sentiment_score && out[0].sentiment === noData.sentiment);
   })();
 
   // Pre-existing guards remain intact: down day, extended_near_ath, below_key_mas.
   (function () {
     const out = enforceScoreConsistency([baseItem({ _changePct: -5 })], BULLISH_CTX);
-    check('pre-existing down-day guard unchanged (boost skipped)', out[0].sentiment_score === 50);
+    check('pre-existing down-day guard unchanged (item unchanged)', out[0].sentiment_score === 50);
   })();
   (function () {
     const out = enforceScoreConsistency([baseItem({ technical_setup: 'extended_near_ath' })], BULLISH_CTX);
-    check('pre-existing extended_near_ath guard unchanged (boost skipped)', out[0].sentiment_score === 50);
+    check('pre-existing extended_near_ath guard unchanged (item unchanged)', out[0].sentiment_score === 50);
   })();
   (function () {
     const out = enforceScoreConsistency([baseItem({ technical_setup: 'below_key_mas' })], BULLISH_CTX);
-    check('pre-existing below_key_mas guard unchanged (boost skipped)', out[0].sentiment_score === 50);
+    check('pre-existing below_key_mas guard unchanged (item unchanged)', out[0].sentiment_score === 50);
   })();
 
   // Non-qualifying (no bullish signal) -> unchanged, verified data present.
@@ -3870,7 +3870,7 @@ function phaseScoreContract() {
     check('SLICE-B (flipped pin): that item is rejected by _isValidScanResult', api._isValidScanResult(outNoScore) === false);
     // valid 0
     const z = run(base({ sentiment_score: 0 }));
-    check('valid 0 + bullish qualifying context -> existing boost rule still fires (0 -> 72, positive)', z.sentiment_score === 72 && z.sentiment === 'positive');
+    check('valid 0 + bullish context -> stays 0 (no boost, DQ-1)', z.sentiment_score === 0 && z.sentiment === 'neutral');
     check('valid 0 + neutral context -> stays 0', run(base({ sentiment_score: 0 }), NEUTRAL_CTX).sentiment_score === 0);
     check('valid 0 + down day -> stays 0', run(base({ sentiment_score: 0, _changePct: -5 })).sentiment_score === 0);
     check('valid 0 + extended_near_ath -> stays 0', run(base({ sentiment_score: 0, technical_setup: 'extended_near_ath' })).sentiment_score === 0);
@@ -3878,7 +3878,7 @@ function phaseScoreContract() {
     const zNoData = base({ sentiment_score: 0 }); delete zNoData._verifiedChangePct;
     check('valid 0 + no verified market data -> stays 0', run(zNoData).sentiment_score === 0);
     // valid range
-    check('valid 1 / 64 / 62.5 remain boost-eligible under the existing rule', [1, 64, 62.5].every(function (s) { return run(base({ sentiment_score: s })).sentiment_score === 72; }));
+    check('valid 1 / 64 / 62.5 -> same reference, unchanged', [1, 64, 62.5].every(function (s) { const it = base({ sentiment_score: s }); const o = run(it); return o === it && o.sentiment_score === s; }));
     check('valid 65 / 72 / 100 remain unchanged (not < 65)', [65, 72, 100].every(function (s) { const it = base({ sentiment_score: s }); const o = run(it); return o === it && o.sentiment_score === s; }));
     // invalid / missing matrix
     const INVALID = [null, undefined, NaN, '', '50', '72', 'null', true, false, {}, [], -5, 101, 999, Infinity, -Infinity];
@@ -3892,7 +3892,7 @@ function phaseScoreContract() {
     check('absent property -> same reference, still absent, gate rejects', oAbsent === absent && !('sentiment_score' in oAbsent) && api._isValidScanResult(oAbsent) === false);
     // _aiUnavailable
     const syn = base({ _aiUnavailable: true, sentiment_score: 50 }); const oSyn = run(syn);
-    check('_aiUnavailable synthetic 50 -> unchanged and immune to the boost', oSyn === syn && oSyn.sentiment_score === 50 && oSyn.sentiment === 'neutral');
+    check('_aiUnavailable synthetic 50 -> unchanged', oSyn === syn && oSyn.sentiment_score === 50 && oSyn.sentiment === 'neutral');
     const synBad = base({ _aiUnavailable: true, sentiment_score: undefined }); const oSynBad = run(synBad);
     check('_aiUnavailable with invalid/missing score -> unchanged by this function', oSynBad === synBad && oSynBad.sentiment_score === undefined);
     // persistence boundary
@@ -3912,7 +3912,7 @@ function phaseScoreContract() {
     const survivors = (content.match(/sentiment_score\s*\|\|\s*50/g) || []).length;
     check('no `sentiment_score || 50` remains anywhere in index.html (Slice B closed)', survivors === 0);
     check('enforceScoreConsistency has no _ptScore* dependency (no display/scoring coupling)', pieces.enforceScoreConsistency.indexOf('_ptScore') === -1);
-    check('enforceScoreConsistency reads item.sentiment_score directly (no fallback operator on it)', /const score = item\.sentiment_score;/.test(pieces.enforceScoreConsistency) && !/sentiment_score\s*(\|\||\?\?)/.test(pieces.enforceScoreConsistency));
+    check('enforceScoreConsistency writes no score / sentiment (DQ-1)', !/sentiment_score\s*:|sentiment\s*:|sentiment_score\s*=[^=]/.test(pieces.enforceScoreConsistency));
     const HELPER_SHA_PRE_SLICE_B = 'bae7dc6369e4282e3ec44a48902060edec60c9c16eadaeb6c450f70ebf0aaae5';
     check('the seven Slice A helper sources are byte-identical to the pre-Slice-B working tree', require('crypto').createHash('sha256').update(HELPERS.map(function (n) { return pieces[n]; }).join('\n').replace(/\r/g, '')).digest('hex') === HELPER_SHA_PRE_SLICE_B);
     const helperSrc = HELPERS.map(function (n) { return pieces[n]; }).join('\n');
