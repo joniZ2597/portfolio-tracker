@@ -74,12 +74,14 @@ function extractVarSource(content, name) {
   return content.slice(start, semi + 1);
 }
 
-function loadIndexText(raw) { return raw; }
+// qa-eol-neutral-1: one EOL-neutral read of index.html (LF via the pin-map normaliser),
+// so the mutation anchors hold on LF and CRLF checkouts alike.
+function loadIndexText(raw) { return IDX_CORE.normalizeText(raw); }
 const RAW_INDEX = fs.readFileSync(INDEX_PATH, 'utf8');
 const content = loadIndexText(RAW_INDEX);
-const AC16_MARKER = '  var holdings = preload.holdings;\r\n';
-const AC10_BLOCK_MARKER = "  lines.push('## Limitations');\r\n  packet.limitations.forEach(function(l) { lines.push('- ' + l.text); });\r\n  lines.push('');\r\n";
-const FL1_RAW_AFTER_SRC = "addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' +\r\n" +
+const AC16_MARKER = '  var holdings = preload.holdings;\n';
+const AC10_BLOCK_MARKER = "  lines.push('## Limitations');\n  packet.limitations.forEach(function(l) { lines.push('- ' + l.text); });\n  lines.push('');\n";
+const FL1_RAW_AFTER_SRC = "addLimitation('fx', 'FX: rate ' + preload.fxCache.rate + ', USD/ILS, as of ' + preload.fxCache.effectiveAt + ', ' +\n" +
   "      _dhLabel('state', reporting.fxState) + (reporting.fxState === 'aged-but-valid' ? ' [aged-but-valid]' : '') + '.');";
 const FNS = ['_pfIsFiniteNum', '_pfFxRateValid', '_pfFxState', '_pfNormalizeHoldingEntry',
   '_normalizePosition', 'loadHoldings', '_pfCashLoad', '_pfFxLoadCache', '_pfEodLoadCache',
@@ -501,13 +503,12 @@ let AAA_PACKET, BBB_PACKET, MAIN_PACKET;
   const fixtureOpts = { displayed: { AAA: AAA_PACKET, BBB: BBB_PACKET } };
 
   // ── AC16: plant a pt_* write inside the extracted _eodBuildPacket source ──
-  // index.html is CRLF-terminated end to end, so the extracted production
-  // source carries \r\n, not \n — markers must match those literal bytes.
+  // index.html is read through loadIndexText (LF-normalised), so markers use \n on every checkout.
   (function () {
     const marker = AC16_MARKER;
     check('sanity: AC16 mutation anchor present in extracted source', src._eodBuildPacket.indexOf(marker) !== -1);
     const mutated = buildApi(FULL_SEED, Object.assign({}, fixtureOpts, {
-      patchSrc: { _eodBuildPacket: function (fnSrc) { return fnSrc.replace(marker, marker + "  localStorage.setItem('pt_eod_last_export', asOf);\r\n"); } }
+      patchSrc: { _eodBuildPacket: function (fnSrc) { return fnSrc.replace(marker, marker + "  localStorage.setItem('pt_eod_last_export', asOf);\n"); } }
     }));
     buildPacket(mutated.api);
     check('planted negative (AC16): mutated build performs exactly one pt_* write', mutated.ls._writes.length === 1);
