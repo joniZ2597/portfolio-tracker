@@ -44,12 +44,13 @@ const GATE_KEY = 'PT_ENABLE_NEWS_CATALYSTS_SERVER';
 const TOKEN_KEY = 'PT_NEWS_CATALYSTS_TOKEN';
 const ALLOW_KEY = 'PT_NEWS_CATALYSTS_ALLOWED_TICKERS';
 
-// The news-catalysts token must be distinct from exactly the five domain tokens
-// below. Declared as a literal list with no sixth member and no name absent — the
+// The news-catalysts token must be distinct from exactly the six tokens
+// below. Declared as a literal list with no seventh member and no name absent — the
 // module performs no enumeration, iteration or pattern match over the environment
 // object to discover collision candidates. Absent/empty comparison tokens are NOT
 // a collision.
 const COLLISION_KEYS = [
+  'PT_NEWS_CATALYSTS_READ_TOKEN',
   'PT_FUND_FACTS_TOKEN',
   'PT_FUND_FACTS_READ_TOKEN',
   'PT_OWNER_TOKEN',
@@ -80,7 +81,7 @@ function evaluateNewsCatalystsPreflight(input) {
   }
 
   // 3) Token collision — the news-catalysts token must differ from exactly the
-  //    five tokens in COLLISION_KEYS; a shared secret collapses the separation
+  //    six tokens in COLLISION_KEYS; a shared secret collapses the separation
   //    between domains. Absent/empty comparison token is not a collision.
   for (let i = 0; i < COLLISION_KEYS.length; i++) {
     const other = env[COLLISION_KEYS[i]];
