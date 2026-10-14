@@ -130,16 +130,20 @@ exports.handler = async function (event) {
     console.log('[market-data] provider policy: historical range -> ' + (purpose === 'portfolio-live' ? 'Yahoo only' : 'Polygon first') + ' for', sym, 'range=' + range);
 
     // ── Historical: Polygon → Yahoo fallback ────────────────────────────────
+    // polygonFallbackClass is set only when Polygon was tried and failed; it types the X-PT-Polygon-Fallback header on the Yahoo response.
+    let polygonFallbackClass = '';
     if (polygonAllowed) {
       try {
-        const data = await fetchPolygon(sym, interval, range, polygonKey);
+        const data = await fetchPolygonWithRetry(event, sym, interval, range, polygonKey);
         if (data) {
           console.log('[market-data] polygon OK for', sym, 'range=' + range);
           return res(200, data);
         }
-        console.warn('[market-data] polygon returned no data for', sym, '— falling back to Yahoo');
+        polygonFallbackClass = 'empty';
+        console.warn('[market-data] polygon returned no data for', sym, '— falling back to Yahoo', '[' + polygonFallbackClass + ']');
       } catch (polyErr) {
-        console.warn('[market-data] polygon failed for', sym + ':', polyErr.message, '— falling back to Yahoo');
+        polygonFallbackClass = classifyPolygonFailure(polyErr);
+        console.warn('[market-data] polygon failed for', sym + ':', polyErr.message, '— falling back to Yahoo', '[' + polygonFallbackClass + ']');
       }
     } else if (purpose === 'portfolio-live') {
       console.log('[market-data] portfolio-live is Yahoo-only — using Yahoo for', sym);
@@ -147,17 +151,18 @@ exports.handler = async function (event) {
       console.log('[market-data] POLYGON_API_KEY not set — using Yahoo for', sym);
     }
 
+    const fallbackHeaders = polygonFallbackClass ? { 'X-PT-Polygon-Fallback': polygonFallbackClass } : undefined;
     try {
       const data = await fetchYahoo(sym, interval, range);
       if (data) {
         console.log('[market-data] yahoo OK for', sym, 'range=' + range);
         if (purpose === 'portfolio-live') ensureProvider(data, 'yahoo');
-        return res(200, data);
+        return res(200, data, fallbackHeaders);
       }
-      return res(404, { error: 'No chart data available for ' + sym });
+      return res(404, { error: 'No chart data available for ' + sym }, fallbackHeaders);
     } catch (yahooErr) {
       console.error('[market-data] yahoo failed for', sym + ':', yahooErr.message);
-      return res(502, { error: 'All providers failed for ' + sym + ': ' + yahooErr.message });
+      return res(502, { error: 'All providers failed for ' + sym + ': ' + yahooErr.message }, fallbackHeaders);
     }
   }
 };
@@ -167,7 +172,7 @@ exports.handler = async function (event) {
 // Maps Polygon aggregate bars to the Yahoo chart JSON shape that the
 // frontend _parseYahooChart() already knows how to consume.
 //
-async function fetchPolygon(sym, interval, range, apiKey) {
+async function fetchPolygon(sym, interval, range, apiKey, timeoutMs) {
   // Convert Yahoo-style range to a from/to date window
   const { from, to } = rangeToDateWindow(range);
   const multiplier   = 1;
@@ -183,16 +188,22 @@ async function fetchPolygon(sym, interval, range, apiKey) {
 
   const raw = await timedFetch(url, {
     headers: { Authorization: 'Bearer ' + apiKey },
-  }, TIMEOUT_MS);
+  }, timeoutMs || TIMEOUT_MS);
 
+  // The failure class comes from these structured fields (httpStatus, bodyStatus, retryAfter), never from message text.
   if (!raw.ok) {
-    throw new Error('Polygon HTTP ' + raw.status);
+    const httpErr = new Error('Polygon HTTP ' + raw.status);
+    httpErr.httpStatus = raw.status;
+    httpErr.retryAfter = raw.headers && typeof raw.headers.get === 'function' ? raw.headers.get('retry-after') : null;
+    throw httpErr;
   }
 
   const json = await raw.json();
 
   if (json.status === 'ERROR' || json.status === 'NOT_AUTHORIZED') {
-    throw new Error('Polygon error: ' + (json.error || json.status));
+    const bodyErr = new Error('Polygon error: ' + (json.error || json.status));
+    bodyErr.bodyStatus = json.status;
+    throw bodyErr;
   }
 
   const results = json.results;
@@ -202,6 +213,55 @@ async function fetchPolygon(sym, interval, range, apiKey) {
   }
 
   return polygonToYahooShape(sym, results, range);
+}
+
+// ── Polygon bounded retry (scan historical path only) ─────────────────────────
+// One retry, only on an HTTP 429 observed within POLYGON_FAST_429_MS of the request being issued: wait
+// min(Retry-After seconds x 1000, POLYGON_RETRY_WAIT_MAX_MS) ms (POLYGON_RETRY_WAIT_DEFAULT_MS when absent or invalid), then
+// one more request with a POLYGON_RETRY_TIMEOUT_MS timeout. Never more than two Polygon requests per handler call.
+// Test hooks follow the _testClock pattern: event._testClock.nowMs (a number) and event._testSleep(ms) (a function); ignored when invalid.
+const POLYGON_FAST_429_MS          = 2000;
+const POLYGON_RETRY_WAIT_MAX_MS    = 1500;
+const POLYGON_RETRY_WAIT_DEFAULT_MS = 1000;
+const POLYGON_RETRY_TIMEOUT_MS     = 3000;
+
+function polygonNowMs(event) {
+  const clock = event && event._testClock;
+  return clock && typeof clock.nowMs === 'number' && isFinite(clock.nowMs) ? clock.nowMs : Date.now();
+}
+
+function polygonSleep(event, ms) {
+  if (event && typeof event._testSleep === 'function') return Promise.resolve(event._testSleep(ms));
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+function polygonRetryWaitMs(retryAfter) {
+  if (typeof retryAfter === 'string' && /^\d+$/.test(retryAfter)) {
+    return Math.min(Number(retryAfter) * 1000, POLYGON_RETRY_WAIT_MAX_MS);
+  }
+  return POLYGON_RETRY_WAIT_DEFAULT_MS;
+}
+
+async function fetchPolygonWithRetry(event, sym, interval, range, apiKey) {
+  for (let attempt = 1; ; attempt += 1) {
+    const issuedMs = polygonNowMs(event);
+    try {
+      return await fetchPolygon(sym, interval, range, apiKey, attempt === 1 ? TIMEOUT_MS : POLYGON_RETRY_TIMEOUT_MS);
+    } catch (err) {
+      if (attempt >= 2 || !(err && err.httpStatus === 429) || polygonNowMs(event) - issuedMs > POLYGON_FAST_429_MS) throw err;
+      await polygonSleep(event, polygonRetryWaitMs(err.retryAfter));
+    }
+  }
+}
+
+// One class per failure, from structured fields only: HTTP status, the response body's status field, the abort error name.
+function classifyPolygonFailure(err) {
+  if (err && err.name === 'AbortError') return 'timeout';
+  if (err && err.httpStatus === 429) return 'http-429';
+  if (err && Number.isInteger(err.httpStatus)) return 'http-' + err.httpStatus;
+  if (err && err.bodyStatus === 'NOT_AUTHORIZED') return 'auth';
+  if (err && err.bodyStatus === 'ERROR') return 'error';
+  return 'network';
 }
 
 // ── Yahoo Finance provider (fallback) ─────────────────────────────────────────
@@ -561,14 +621,15 @@ async function timedFetch(url, options, timeoutMs) {
 }
 
 // ── Standard response builder ─────────────────────────────────────────────────
-function res(statusCode, body) {
+// extraHeaders (optional): added after the three standard headers; absent -> the response is exactly as before.
+function res(statusCode, body, extraHeaders) {
   return {
     statusCode,
-    headers: {
+    headers: Object.assign({
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Headers': 'Content-Type',
-    },
+    }, extraHeaders),
     body: JSON.stringify(body),
   };
 }
