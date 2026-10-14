@@ -9,7 +9,9 @@ The news-catalysts write preflight now refuses a write token equal to `PT_NEWS_C
 - Step 10: full `qa:offline` PASS, 92 suites (= step 0 + 1), 0 FAIL, the same 1 pre-existing advisory warning.
 - Planted negative: TC-N1 removes the new key from a temp copy of the production source (anchor occurs exactly once) and shows the TC-1 check then fails because the request is let through (`{ ok: true, ticker: 'AAPL' }`), while the five original collisions still hold.
 
-LAND-EVIDENCE: qa-offline=PASS 92; targeted=PASS; codex-classI-unresolved=0
+- Post-resync (base `28beb5f`, tip `4592fce`): full `qa:offline` PASS, 93 suites (the resync brought in one more suite from `branch-dev`; this task's +1 is unchanged), 0 FAIL; targeted 6/6, 21/21, 30/30, 20/20. The 92-suite result above was the pre-resync run (raw in `qa.log`).
+
+LAND-EVIDENCE: qa-offline=PASS 93; targeted=PASS; codex-classI-unresolved=0
 
 ## RED record (S1)
 Against the unmodified source the new suite gave 3 passed / 3 failed: TC-1 failed with `{ ok: true, ticker: 'AAPL' }` instead of `TOKEN_COLLISION`; TC-4 failed on its collision-beats-allowlist row (got `ALLOWLIST_INVALID`); TC-N1 failed its anchor assertion (`0 !== 1`). TC-2, TC-3 and TC-5 passed on the old source, as they pin unchanged behaviour. After the change all six pass. Raw output in `qa.log`.
