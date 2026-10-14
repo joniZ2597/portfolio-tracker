@@ -5679,7 +5679,9 @@ function parsePerplexityContext(raw, sources = []) {
   let currentTicker = null, currentLines = [];
 
   // 7B-1 helpers
-  const NONE_RE = /^(NONE|N\/?A|-|—|unknown)\b/i;
+  // NONE / N/A at the start mean none; "unknown" and bare dashes mean none only as the whole value,
+  // so a catalyst like "-5% guidance cut" or "Unknown impact of tariffs" is kept.
+  const NONE_RE = /^(?:(?:NONE|N\/?A)\b|unknown\.?$|[-—–]+\.?$)/i;
   const _isNoneVal = v => !v || NONE_RE.test(String(v).trim());
   // Read a labeled template line's value (after the colon); '' if absent/NONE
   const _readField = (label, ls) => {
@@ -5760,6 +5762,7 @@ function parsePerplexityContext(raw, sources = []) {
   const _AA_TO_RATING_AT = new RegExp('^\\s+to\\s+' + _AA_RATING + '\\b', 'i');
   const _AA_RULE_A = new RegExp('\\bfrom\\s+' + _AA_AMT + '\\s+to\\s+' + _AA_AMT, 'i');
   const _AA_RULE_B = new RegExp('\\bto\\s+' + _AA_AMT + ',?\\s*from\\s+' + _AA_AMT, 'i');
+  const _AA_RULE_A2 = new RegExp('(?<!\\bby\\s{0,3})' + _AA_AMT + '\\s+to\\s+' + _AA_AMT, 'i');
   const _AA_RULE_C = new RegExp(_AA_TW + '\\s*(?::|(unchanged\\s+at|of|at|to|is|was)\\b)?\\s*' + _AA_AMT, 'i');
   const _AA_RULE_D = new RegExp(_AA_AMT + '\\s*-?\\s*' + _AA_TW, 'i');
   const _AA_RULE_E = new RegExp('\\b(?:' + _aaFormsOf('coverage') + ')\\s+(?:coverage\\s+)?(?:(?:at|with|on)\\s+)?(?:a\\s+)?' + _AA_RATING + '\\s+(?:at|with(?:\\s+a)?)\\s+' + _AA_AMT, 'i');
@@ -5820,6 +5823,7 @@ function parsePerplexityContext(raw, sources = []) {
     let target = null, ptFrom = null, unchanged = false, m;
     if (hasTW && (m = _AA_RULE_A.exec(item))) { target = _aaNum(m[2]); ptFrom = _aaNum(m[1]); }
     else if (hasTW && (m = _AA_RULE_B.exec(item))) { target = _aaNum(m[1]); ptFrom = _aaNum(m[2]); }
+    else if (hasTW && (m = _AA_RULE_A2.exec(item))) { target = _aaNum(m[2]); ptFrom = _aaNum(m[1]); }
     else if ((m = _AA_RULE_C.exec(item))) { target = _aaNum(m[2]); unchanged = /^unchanged/i.test(m[1] || ''); }
     else if ((m = _AA_RULE_D.exec(item))) target = _aaNum(m[1]);
     else if ((m = _AA_RULE_E.exec(item))) target = _aaNum(m[1]);
