@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "9fe656edcd663521a362e42f8dbcfa06e27725dda7001320d0003e9b973e7fdb",
+  "fileSha256": "2e5454c23afcac816a6ffc9af4239290065e618456ea3d05a97e71cf222602b7",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -259,7 +259,7 @@
     "_validateCloudDoc": "81d0b344800c49abb31556ab1dd866f5e0068d304236c7398cc761a07b3fd0bb",
     "_validateInput": "9e87a0af8d9ecc2fdfa8a49210863af59887e9490693c1bda140ee48a1320fe4",
     "_validateLocalForUpload": "3b8619b54c080e6185b622bc71bb59e428d57a0d5375681818d0e6c425ede45a",
-    "_validatePortfolioBackup": "db5c19a5b10ce28073f4999badb1c026e93a45fc9fb2dd9e5bf89eea5a9ffea9",
+    "_validatePortfolioBackup": "896299cbc80cbb50e520ec7d43df0d961303d679ffafac812387c1df65ae6b95",
     "_vscCellHtml": "20d2d729eafe26db33c5ba272da14ea68cbf63e9cda9d25eee30fcf67574797b",
     "addTicker": "b71445295d6bec1dd62cf3e1106f188c8471c82b17a0e7af24cc09bdc60e8a79",
     "analyzeChunk": "e9303a0690a6fad433918ee02772dcc63e0ad9d65f431f4dd7ee007b3c9ea703",

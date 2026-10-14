@@ -14847,7 +14847,7 @@ function _validatePortfolioBackup(obj) {
       return { error: 'tickers[' + j + ']: invalid symbol: ' + JSON.stringify(t.symbol) };
     if (seenSyms.has(tsym)) continue;
     seenSyms.add(tsym);
-    normalizedTickers.push({
+    var nt = {
       symbol:       tsym,
       name:         typeof t.name === 'string' ? t.name.trim() : '',
       exchange:     typeof t.exchange === 'string' ? t.exchange.trim() : '',
@@ -14855,7 +14855,12 @@ function _validatePortfolioBackup(obj) {
       sectorEtf:    typeof t.sectorEtf === 'string' ? t.sectorEtf.trim().toUpperCase() : '',
       personalNote: typeof t.personalNote === 'string' ? t.personalNote.trim() : '',
       position:     _normalizePosition(t.position)
-    });
+    };
+    // S2D-1: assetType is an additive v4 field. A backup without it (an older build, or no choice made)
+    // restores the entry as Automatic, so restoring one over a watchlist with manual ETF / Stock choices
+    // resets them to Automatic. Accepted by design (Owner ruling S2D-1); no UI text.
+    if (t.assetType === 'ETF' || t.assetType === 'STOCK') nt.assetType = t.assetType;
+    normalizedTickers.push(nt);
   }
   // P-2B/P-3: cash/fx — schemaVersion 1 predates this feature and
   // structurally cannot express cash/fx intent, so both stay `undefined`

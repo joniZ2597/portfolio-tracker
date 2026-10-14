@@ -66,11 +66,13 @@ function model(src, modelSrc) {
     colFn(modelSrc, 'migrateWatchlist'),
     'let watchlist = [];',
     colFn(modelSrc, 'saveWatchlist'),
+    colFn(src, 'loadWatchlist'),
     'return { ptAssetType, ptEffectiveAssetType: typeof ptEffectiveAssetType === "function" ? ptEffectiveAssetType : undefined,',
-    '  migrateWatchlist, saveWatchlist, setWL: v => { watchlist = v; }, getWL: () => watchlist };'
+    '  migrateWatchlist, saveWatchlist, loadWatchlist, setWL: v => { watchlist = v; }, getWL: () => watchlist };'
   ].join('\n');
   const api = new Function('localStorage', body)(ls);
   api.store = store;
+  api.ls = ls;
   return api;
 }
 // Wrapper alone, with `watchlist` optionally undefined (isolated sandboxes).
@@ -338,6 +340,133 @@ row('AC-7 save: ETF / Stock set the field; Automatic removes it from storage; no
   assert.ok(!('assetType' in r.stored.find(e => e.symbol === 'RKLB')));
 });
 
+// ── S3: backup — validator factory built exactly as qa/run-offline.js builds it (brace-counting extraction) ──
+function braceFn(content, name) {
+  const start = content.indexOf('function ' + name + '(');
+  if (start === -1) return null;
+  const open = content.indexOf('{', start);
+  let depth = 0;
+  for (let i = open; i < content.length; i += 1) {
+    if (content[i] === '{') depth += 1;
+    else if (content[i] === '}') { depth -= 1; if (depth === 0) return content.slice(start, i + 1); }
+  }
+  return null;
+}
+function varSrc(content, name) {
+  const start = content.indexOf('var ' + name);
+  if (start === -1) return null;
+  const semi = content.indexOf(';', start);
+  return semi === -1 ? null : content.slice(start, semi + 1);
+}
+function validatorParts(content) {
+  return [braceFn(content, '_pfIsFiniteNum'), varSrc(content, 'PF_KNOWN_HOLDING_FIELDS'), varSrc(content, 'PF_HOLDING_WRAPPER_MARKER'),
+    varSrc(content, 'PF_RESERVED_MARKER_KEYS'), braceFn(content, '_pfNormalizeHoldingEntry'), braceFn(content, '_normalizePosition'),
+    braceFn(content, '_validatePortfolioBackup')];
+}
+function validatorOf(content) {
+  const parts = validatorParts(content);
+  if (parts.some(p => !p)) throw new Error('validator or a dependency could not be extracted');
+  return new Function(parts.join('\n') + '\nreturn { _validatePortfolioBackup: _validatePortfolioBackup };')()._validatePortfolioBackup;
+}
+const backupDoc = (v, tickers) => {
+  const d = { schemaVersion: v, exportedAt: '2026-10-01T00:00:00.000Z', sourceOrigin: 'http://localhost', appBaseline: 'test',
+    holdings: { AAPL: { symbol: 'AAPL', positionSize: 1000, currency: 'USD', source: 'manual' } }, tickers };
+  if (v >= 2) { d.cash = null; d.fx = null; }
+  if (v >= 4) d.recon = null;
+  return d;
+};
+const tk = (symbol, extra) => Object.assign({ symbol, name: 'N', exchange: 'X', sector: 'S', sectorEtf: 'XLK', personalNote: 'n', position: { hasPosition: false, positionValue: null, pnlPercent: null, partialProfitTaken: false } }, extra || {});
+
+row('AC-8 _validatePortfolioBackup keeps valid / drops invalid; v1-v4 without the field equal the 105b9f9 oracle', async src => {
+  const neu = validatorOf(src);
+  const old = validatorOf(OLD_SRC);
+  for (const v of [1, 2, 3, 4]) {
+    const doc = backupDoc(v, [tk('AAPL', { personalNote: ' MixedCase Note ' }), tk('SPY', { sectorEtf: '' }), tk('TEVA.TA'), tk('AAPL')]);
+    assert.strictEqual(JSON.stringify(neu(deepClone(doc))), JSON.stringify(old(deepClone(doc))), 'v' + v + ' output differs from the oracle');
+  }
+  const withField = backupDoc(4, [tk('NVDA', { assetType: 'ETF' }), tk('SPY', { assetType: 'STOCK' }), tk('QQQ', { assetType: 'etf' }), tk('XLK', { assetType: 'BOND' }),
+    tk('TAN', { assetType: 42 }), tk('AAPL', { assetType: null }), tk('MSFT', { assetType: {} }), tk('IWM')]);
+  const r = neu(deepClone(withField));
+  assert.strictEqual(r.error, null);
+  assert.deepStrictEqual(r.tickers.map(t => t.assetType), ['ETF', 'STOCK', undefined, undefined, undefined, undefined, undefined, undefined]);
+  for (const t of r.tickers.slice(2)) assert.ok(!('assetType' in t), 'dropped: ' + t.symbol);
+  assert.strictEqual(Object.keys(r.tickers[0]).pop(), 'assetType', 'assetType is the last key');
+  // the rest of every ticker equals what the oracle returns for the same document
+  const o = old(deepClone(withField));
+  assert.deepStrictEqual(r.tickers.map(t => { const c = Object.assign({}, t); delete c.assetType; return c; }), o.tickers);
+  // schemaVersion 4 stays the accepted ceiling
+  assert.notStrictEqual(neu(backupDoc(5, [])).error, null);
+});
+
+row('AC-9 run-offline factory compatibility: validator + six dependencies evaluate standalone; .TA pattern count = 3', async src => {
+  const parts = validatorParts(src);
+  assert.strictEqual(parts.length, 7);
+  assert.ok(parts.every(Boolean), 'an extraction came back null');
+  const fn = validatorOf(src);   // evaluates with nothing but the six listed dependencies in scope
+  const r = fn(backupDoc(4, [tk('NVDA', { assetType: 'ETF' }), tk('SPY')]));
+  assert.strictEqual(r.error, null);
+  assert.strictEqual(r.tickers[0].assetType, 'ETF');
+  assert.strictEqual(countOf(src, '/^[A-Z]{1,10}(\\.TA)?$/'), 3, 'the .TA pattern count');
+  assert.strictEqual(countOf(colFn(src, '_validatePortfolioBackup'), '/^[A-Z]{1,10}(\\.TA)?$/'), 1);
+});
+
+// Restore line of importPortfolioBackup, extracted and run (SC-8: restores are unchanged).
+const RESTORE_LINE = "localStorage.setItem('pt_tickers', JSON.stringify(result.tickers));";
+function restoreOf(src) {
+  const body = braceFn(src, 'importPortfolioBackup');
+  assert.strictEqual(countOf(body, RESTORE_LINE), 1, 'restore line occurs once in importPortfolioBackup');
+  return new Function('localStorage', 'result', RESTORE_LINE);
+}
+row('AC-10 round trip: save -> export -> validate -> restore -> load keeps choices; a pre-feature backup restores as Automatic', async src => {
+  const m = model(src, src);
+  const validate = validatorOf(src);
+  const restore = restoreOf(src);
+  // export reads raw pt_tickers and puts the array in the backup unchanged
+  const exp = braceFn(src, 'exportPortfolioBackup');
+  assert.strictEqual(countOf(exp, "localStorage.getItem('pt_tickers')"), 1);
+  assert.strictEqual(exp.split('\n').filter(l => /^\s*tickers:\s+tickers,\s*$/.test(l)).length, 1, 'export passes the raw tickers array');
+  m.setWL([entry('NVDA', { assetType: 'ETF' }), entry('SPY', { assetType: 'STOCK' }), entry('AAPL')]);
+  m.saveWatchlist();
+  const exported = JSON.parse(m.store.pt_tickers);          // what exportPortfolioBackup puts in "tickers"
+  const result = validate(backupDoc(4, exported));
+  assert.strictEqual(result.error, null);
+  const target = model(src, src);                            // a fresh browser
+  restore(target.ls, result);
+  target.loadWatchlist();
+  const loaded = target.getWL();
+  assert.deepStrictEqual(loaded.map(e => e.assetType), ['ETF', 'STOCK', undefined]);
+  const eff = wrapperOnly(src, loaded);
+  assert.strictEqual(eff('NVDA'), 'ETF', 'the restored choice drives the effective type');
+  assert.strictEqual(eff('SPY'), 'STOCK');
+  assert.strictEqual(eff('AAPL'), 'STOCK', 'no choice: classifier');
+  // pre-feature backup (no field) restores as Automatic
+  const pre = validate(backupDoc(4, [tk('NVDA'), tk('SPY')]));
+  const t2 = model(src, src);
+  restore(t2.ls, pre);
+  t2.loadWatchlist();
+  assert.ok(t2.getWL().every(e => !('assetType' in e)), 'pre-feature backup must restore as Automatic');
+});
+
+row('AC-13 S2D-1: a pre-feature v4 backup restored over choices makes every entry Automatic; the comment is at the assetType line', async src => {
+  const validate = validatorOf(src);
+  const restore = restoreOf(src);
+  const m = model(src, src);
+  m.setWL([entry('NVDA', { assetType: 'ETF' }), entry('SPY', { assetType: 'STOCK' }), entry('AAPL', { assetType: 'ETF' })]);
+  m.saveWatchlist();
+  assert.ok(JSON.parse(m.store.pt_tickers).every(e => e.assetType), 'precondition: choices stored');
+  const pre = validate(backupDoc(4, [tk('NVDA'), tk('SPY'), tk('AAPL')]));
+  restore(m.ls, pre);
+  m.loadWatchlist();
+  assert.ok(m.getWL().every(e => !e.assetType), 'every restored entry must be Automatic');
+  assert.ok(JSON.parse(m.store.pt_tickers).every(e => !('assetType' in e)), 'and stored without the key');
+  const lines = colFn(src, '_validatePortfolioBackup').split('\n');
+  const at = lines.findIndex(l => /t\.assetType === 'ETF' \|\| t\.assetType === 'STOCK'/.test(l));
+  assert.ok(at > 0, 'assetType line present');
+  const block = lines.slice(Math.max(0, at - 4), at).join('\n');
+  assert.ok(/S2D-1/.test(block) && /\/\/ /.test(block), 'S2D-1 comment directly above the assetType line');
+  assert.ok(/Automatic/.test(block) && /older/i.test(block), 'comment states the reset-to-Automatic consequence');
+});
+
 // ── planted negatives: [label, row id prefix, mutation of an in-memory copy] ───────────────────────────────
 const sw = (a, b) => s => {
   assert.strictEqual(countOf(s, a), 1, 'mutation anchor must occur exactly once (' + countOf(s, a) + '): ' + a);
@@ -346,7 +475,10 @@ const sw = (a, b) => s => {
 const WRAP_HIT = "if (e && e.symbol === s && (e.assetType === 'ETF' || e.assetType === 'STOCK')) return e.assetType;";
 const MIG_KEEP = "if (e.assetType === 'ETF' || e.assetType === 'STOCK') out.assetType = e.assetType;";
 const SAVE_KEEP = "if (e.assetType === 'ETF' || e.assetType === 'STOCK') o.assetType = e.assetType;";
-const C3_NEW = "if (typeof ptEffectiveAssetType === 'function' && ptEffectiveAssetType(sym) === 'ETF') { panel.textContent";
+// Apply a unique-anchor mutation inside one top-level function only (the anchor may repeat elsewhere in the file).
+const inFn = (name, mut) => s => { const f = colFn(s, name); return s.replace(f, () => mut(f)); };
+const VAL_KEEP ="if (t.assetType === 'ETF' || t.assetType === 'STOCK') nt.assetType = t.assetType;";
+const C3_NEW ="if (typeof ptEffectiveAssetType === 'function' && ptEffectiveAssetType(sym) === 'ETF') { panel.textContent";
 const C4_NEW = "if (typeof ptEffectiveAssetType === 'function' && ptEffectiveAssetType(sym) === 'ETF') { input.value";
 const NEG = [
   ['AC-1 wrapper ignores the stored choice', 'AC-1', sw(WRAP_HIT, 'if (false) return e.assetType;')],
@@ -368,6 +500,15 @@ const NEG = [
   ['AC-7 save stores an invalid value', 'AC-7', sw("assetType: (assetTypeV === 'ETF' || assetTypeV === 'STOCK') ? assetTypeV : undefined", 'assetType: assetTypeV')],
   ['AC-7 save also rewrites the note', 'AC-7', sw('upsertTicker(_editSym, { name, sector, sectorEtf, personalNote, position,', "upsertTicker(_editSym, { name, sector, sectorEtf, personalNote: personalNote + '!', position,")],
   ['AC-7 save clears the technical cache', 'AC-7', sw('  // Clear stale technical snapshot whenever benchmark changes', '  delete _techCache[_editSym];\n  // Clear stale technical snapshot whenever benchmark changes')],
+  ['AC-8 validator drops a valid choice', 'AC-8', sw(VAL_KEEP, '')],
+  ['AC-8 validator keeps an invalid value', 'AC-8', sw(VAL_KEEP, 'if (t.assetType !== undefined) nt.assetType = t.assetType;')],
+  ['AC-8 validator rewrites other ticker fields', 'AC-8', inFn('_validatePortfolioBackup', sw("      personalNote: typeof t.personalNote === 'string' ? t.personalNote.trim() : '',", "      personalNote: typeof t.personalNote === 'string' ? t.personalNote.trim().toLowerCase() : '',"))],
+  ['AC-9 validator calls a new helper', 'AC-9', sw(VAL_KEEP, "if (_ptValidChoice(t.assetType)) nt.assetType = t.assetType;")],
+  ['AC-9 extra .TA pattern copy', 'AC-9', sw('    // S2D-1:', '    var __x = /^[A-Z]{1,10}(\\.TA)?$/;\n    // S2D-1:')],
+  ['AC-10 restore strips the choice', 'AC-10', sw(RESTORE_LINE, "localStorage.setItem('pt_tickers', JSON.stringify(result.tickers.map(function(t) { delete t.assetType; return t; })));")],
+  ['AC-10 export drops the choice', 'AC-10', sw('      tickers:       tickers,', '      tickers:       tickers.map(function(t) { delete t.assetType; return t; }),')],
+  ['AC-13 validator fabricates a choice', 'AC-13', sw(VAL_KEEP, "nt.assetType = (t.assetType === 'ETF' || t.assetType === 'STOCK') ? t.assetType : 'STOCK';")],
+  ['AC-13 S2D-1 comment removed', 'AC-13', s => s.replace(/ *\/\/ S2D-1:[^\n]*\n(?: *\/\/ [^\n]*\n)*/, () => '')],
   ['AC-5 classifier edited', 'AC-5', sw("if (!/^[A-Z0-9.\\-]{1,12}$/.test(s)) return 'UNKNOWN';", "if (!/^[A-Z0-9.\\-]{1,13}$/.test(s)) return 'UNKNOWN';")],
   ['AC-5 clock in wrapper', 'AC-5', sw("function ptEffectiveAssetType(sym) {\n", "function ptEffectiveAssetType(sym) {\n  var __t = Date.now();\n")],
   ['AC-5 wrapper moved away from the classifier', 'AC-5', s => { const w = colFn(s, 'ptEffectiveAssetType'); const t = s.replace(w, ''); return t.replace('function getTickerDefaults(symbol) {', 'var PT_FILLER = 1;\n' + w + '\nfunction getTickerDefaults(symbol) {'); }]
