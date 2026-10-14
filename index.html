@@ -8727,7 +8727,7 @@ function renderMainPanel(item) {
       <div class="ph-row2">
         <div class="ph-price-block">
           <span class="ph-price">${hasData ? price : '—'}</span>
-          <span class="ph-chg ${hasData ? chgCls2 : 'neu'}">${hasData ? (chgDir + (chg !== null ? Math.abs(chg * _displayPriceBase/100 / _pxDiv).toFixed(2) : '—') + ' ' + chgPctStr) : '—'}</span>
+          <span class="ph-chg ${hasData ? chgCls2 : 'neu'}">${hasData ? (chgDir + (chg !== null ? ((1 + chg/100) > 0 ? Math.abs((_displayPriceBase - _displayPriceBase / (1 + chg/100)) / _pxDiv).toFixed(2) : '—') : '—') + ' ' + chgPctStr) : '—'}</span>
           <span class="ph-today">${_todayLbl}</span>
         </div>
         ${hasData && (typeof snap.spyChangePct === 'number' || typeof snap.qqqChangePct === 'number') ? `<div class="ph-divider"></div>` : ''}
@@ -8867,7 +8867,7 @@ function renderMainPanel(item) {
         ` : !hasData && item._aiUnavailable
             ? '<div class="pc-empty" style="color:var(--red2);opacity:.8">Data unavailable — run scan to refresh or verify ticker validity</div>'
             : '<div class="pc-empty">No analysis available — run scan for actionable take</div>'}${_nlmLine}
-        <div class="mp-action-time" style="margin-top:8px">Updated: ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
+        <div class="mp-action-time" style="margin-top:8px">Updated: ${lastUpdated || '—'}</div>
       </div>
 
       <!-- COMPARISON (RS + Rating) — span 6 -->

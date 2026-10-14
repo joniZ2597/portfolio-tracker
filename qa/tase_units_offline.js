@@ -133,10 +133,10 @@ row('TU-2', 'MA rows: .TA levels ÷100 with ₪; US unchanged', src => {
   eq(maVals(r(mkItem('NVDA', 226.73))), ['$180.00', '$170.00', '$160.00'], 'US MA');
   eq(maVals(r(mkItem('MTRX.TA', 8884), { snap: TA_SNAP })), ['₪180.00', '₪170.00', '₪160.00'], '.TA MA');
 });
-row('TU-3', 'change amount: .TA = today\'s formula ÷100 (84.398 agorot → 0.84); US unchanged (2.15); PA-03 not fixed', src => {
+row('TU-3', 'change amount: price - price/(1+chg%) ÷100 for .TA (83.60 agorot → 0.84); US 2.13 (PA-03 fixed by display-honesty-1)', src => {
   const r = buildRenderer(src);
   const eq = (a, b, m) => { if (a !== b) throw new Error(m + ': got ' + JSON.stringify(a) + ' want ' + JSON.stringify(b)); };
-  eq(chgText(r(mkItem('NVDA', 226.73))), '▲2.15 (+0.95%)', 'US change');
+  eq(chgText(r(mkItem('NVDA', 226.73))), '▲2.13 (+0.95%)', 'US change');
   eq(chgText(r(mkItem('MTRX.TA', 8884), { snap: TA_SNAP })), '▲0.84 (+0.95%)', '.TA change');
 });
 row('TU-4', 'PRE / POST: extended price and the post-↻ regular price ÷100 with ₪ for .TA; US unchanged', src => {
@@ -249,7 +249,7 @@ const NEGS = [
   { id: 'NEG-2', row: 'TU-1', label: '$ kept for .TA', f: s => mut(s, "const _pxSym = _pxDiv === 100 ? '₪' : '$';", "const _pxSym = '$';") },
   { id: 'NEG-3', row: 'TU-1', label: '÷100 applied to US', f: s => mut(s, "/\\.TA$/.test(item.ticker || '') ? 100 : 1;", "/\\.TA$/.test(item.ticker || '') ? 100 : 100;") },
   { id: 'NEG-4', row: 'TU-2', label: 'MA rows not converted', f: s => mut(s, 'return _pxSym + (sma / _pxDiv).toFixed(2);', 'return _pxSym + sma.toFixed(2);') },
-  { id: 'NEG-5', row: 'TU-3', label: 'change amount not converted', f: s => mut(s, 'Math.abs(chg * _displayPriceBase/100 / _pxDiv).toFixed(2)', 'Math.abs(chg * _displayPriceBase/100).toFixed(2)') },
+  { id: 'NEG-5', row: 'TU-3', label: 'change amount not converted', f: s => mut(s, 'Math.abs((_displayPriceBase - _displayPriceBase / (1 + chg/100)) / _pxDiv).toFixed(2)', 'Math.abs(_displayPriceBase - _displayPriceBase / (1 + chg/100)).toFixed(2)') },
   { id: 'NEG-6', row: 'TU-4', label: 'extended price not converted', f: s => mut(s, '${_pxSym}${(_extPrice / _pxDiv).toFixed(2)}', '${_pxSym}${_extPrice.toFixed(2)}') },
   { id: 'NEG-7', row: 'TU-5', label: 'prompt left in agorot', f: s => mut(s, "(v / 100).toFixed(2) + ' ILS' : `$${v}`", "v + ' ILS' : `$${v}`") },
   { id: 'NEG-8', row: 'TU-6', label: 'MA prompt levels left in agorot', f: s => mut(s, "(v / 100).toFixed(2) + ' ILS' : '$' + v.toFixed(2)", "v.toFixed(2) + ' ILS' : '$' + v.toFixed(2)") },

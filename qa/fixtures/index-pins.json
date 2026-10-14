@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "0279a89daf0cfaea6fbfe30acefe717f84a6b96ecf400948f75a889e67e18ad8",
+  "fileSha256": "4411bc96f04bf7c4ae4406204e9871032f289fe81fa28f8182833697ed93efec",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -345,7 +345,7 @@
     "renderApiTable": "6ab781fd896bb61a4120a7b6c3529e93e0adf16fb844fd7ba25e5c5d4b245c12",
     "renderChips": "5419165553a4459a6e14d1e39f200ce24d87229b30914685aeafdd4f327bd167",
     "renderLabsToggles": "1c1eef23e6bd00d30cd8bda43f9246643deea275b157c32827e5f50d7c89d94d",
-    "renderMainPanel": "9ae8e8b04e0d21fd6f39c922397736521291904b8ce3f21b296ac881b2971493",
+    "renderMainPanel": "61e663bf2e3a734df928a4a8f59e6cc01691782edd0e51467caa5baebdeaecd1",
     "renderResearchSourceMeta": "7925a95484bde4aab61d18b2454c15803b3568c61f6ff19fc130e48cbea4c459",
     "renderResults": "3e5e77b063e3712741ef28fe2a63143eabf882f2f88cb27a0cdb7aeb2ba286b1",
     "renderSidebar": "ac7119464fe850870432faeb9a0cd62f1a43fda87a638664dc05406f3ab569f3",
