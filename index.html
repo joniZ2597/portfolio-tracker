@@ -5180,6 +5180,17 @@ function ptAssetType(sym) {
   if (Object.prototype.hasOwnProperty.call(TICKER_DEFAULTS, s)) return 'STOCK';
   return 'UNKNOWN';
 }
+// Entry 12 / P2b: the effective type is the user's stored ETF / Stock choice when set, else the classifier.
+function ptEffectiveAssetType(sym) {
+  var s = (typeof sym === 'string') ? sym.trim().toUpperCase() : '';
+  if (typeof watchlist !== 'undefined' && Array.isArray(watchlist)) {
+    for (var i = 0; i < watchlist.length; i++) {
+      var e = watchlist[i];
+      if (e && e.symbol === s && (e.assetType === 'ETF' || e.assetType === 'STOCK')) return e.assetType;
+    }
+  }
+  return ptAssetType(sym);
+}
 var PT_ETF_FUNDAMENTALS_NA_TEXT = 'Not applicable — ETF. SEC company fundamentals apply to operating companies, not funds.';
 
 function getTickerDefaults(symbol) {
@@ -5227,7 +5238,7 @@ function migrateWatchlist(raw) {
   return parsed.map(e => {
     if (!e || typeof e !== 'object' || !e.symbol) return null;
     const d = getTickerDefaults(e.symbol);
-    return {
+    const out = {
       symbol:       e.symbol,
       name:         e.name        ?? d.name,
       exchange:     e.exchange    ?? d.exchange,
@@ -5237,6 +5248,8 @@ function migrateWatchlist(raw) {
       inScan:       true,
       position:     _normalizePosition(e.position),
     };
+    if (e.assetType === 'ETF' || e.assetType === 'STOCK') out.assetType = e.assetType;
+    return out;
   }).filter(Boolean);
 }
 
@@ -5251,15 +5264,19 @@ function loadWatchlist() {
 }
 
 function saveWatchlist() {
-  const toStore = watchlist.map(e => ({
-    symbol:       e.symbol,
-    name:         e.name,
-    exchange:     e.exchange,
-    sector:       e.sector,
-    sectorEtf:    e.sectorEtf,
-    personalNote: e.personalNote,
-    position:     e.position
-  }));
+  const toStore = watchlist.map(e => {
+    const o = {
+      symbol:       e.symbol,
+      name:         e.name,
+      exchange:     e.exchange,
+      sector:       e.sector,
+      sectorEtf:    e.sectorEtf,
+      personalNote: e.personalNote,
+      position:     e.position
+    };
+    if (e.assetType === 'ETF' || e.assetType === 'STOCK') o.assetType = e.assetType;
+    return o;
+  });
   localStorage.setItem('pt_tickers', JSON.stringify(toStore));
 }
 
@@ -12831,7 +12848,7 @@ function deletePosition(sym) {
     buyback:   { label:'buyback/dividend',        q:t=>`${t} recent share buyback authorization or dividend change in the last 30 days, amount and date` },
     risk:      { label:'regulatory/geopolitical', q:t=>`${t} recent regulatory, legal, sanction, tariff, or geopolitical developments in the last 30 days, with dates` }
   };
-  const _selectCats = sym => ptAssetType(sym) === 'ETF' ? ['analyst','risk'] : ['earnings','analyst','insider','contracts','mna','buyback','risk'].slice(0,MAX_CALLS);
+  const _selectCats = sym => ptEffectiveAssetType(sym) === 'ETF' ? ['analyst','risk'] : ['earnings','analyst','insider','contracts','mna','buyback','risk'].slice(0,MAX_CALLS);
 
   async function _callCategory(sym, key){
     const t0 = Date.now();
@@ -13851,7 +13868,7 @@ async function _runCRResearchCard(sym) {
   const btn   = document.getElementById('cr-res-btn-'   + sym);
   const panel = document.getElementById('cr-res-panel-' + sym);
   if (!btn || !panel) return;
-  if (typeof ptAssetType === 'function' && ptAssetType(sym) === 'ETF') { panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; return; }
+  if (typeof ptEffectiveAssetType === 'function' && ptEffectiveAssetType(sym) === 'ETF') { panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; return; }
   btn.disabled = true;
   btn.textContent = '⟳ Fetching SEC data…';
   let result;
@@ -14249,7 +14266,7 @@ async function _runFundFactsCard(sym) {
   var panel = document.getElementById('ffr-panel-' + sym);
   if (!btn || !input || !panel) return;
   if (btn.disabled) return;
-  if (typeof ptAssetType === 'function' && ptAssetType(sym) === 'ETF') { input.value = ''; panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; return; }
+  if (typeof ptEffectiveAssetType === 'function' && ptEffectiveAssetType(sym) === 'ETF') { input.value = ''; panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; return; }
 
   var token = input.value;
   input.value = ''; // cleared before the request ever runs

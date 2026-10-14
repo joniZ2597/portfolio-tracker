@@ -33,7 +33,7 @@ function classifierBlock(src) {
 // Evaluate TICKER_DEFAULTS + the classifier block; return { ptAssetType, NA, TD }.
 function loadClassifier(src) {
   return new Function(tickerLiteral(src) + '\n' + classifierBlock(src) +
-    '\nreturn { ptAssetType: ptAssetType, NA: PT_ETF_FUNDAMENTALS_NA_TEXT, TD: TICKER_DEFAULTS };')();
+    '\nreturn { ptAssetType: ptAssetType, ptEffectiveAssetType: ptEffectiveAssetType, NA: PT_ETF_FUNDAMENTALS_NA_TEXT, TD: TICKER_DEFAULTS };')();
 }
 
 // Baseline (1b31027): the former _isETF regex, recorded here so the test never depends on the source that retired it.
@@ -46,8 +46,9 @@ const BASE_TD = 'c3db28bab1dfcb29b0cefc0c45b1cfc46f115adc918d3f8ea733a2ce0117809
 const BASE_CFS = 'ab2ad1f0048b569e73a260a81076bbf467b9cd6ae8c54e155f1210449262d979';
 const BASE_CTS = '373e9290a82129cb1ec2ec053ceb5263e81159fc7acc8a589a91defad8d2fc9d';
 
-const C3_LINE = "  if (typeof ptAssetType === 'function' && ptAssetType(sym) === 'ETF') { panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; return; }";
-const C4_LINE = "  if (typeof ptAssetType === 'function' && ptAssetType(sym) === 'ETF') { input.value = ''; panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; return; }";
+// surface-2 (P2b): the call sites read the effective type (stored choice, else the classifier).
+const C3_LINE = "  if (typeof ptEffectiveAssetType === 'function' && ptEffectiveAssetType(sym) === 'ETF') { panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; return; }";
+const C4_LINE = "  if (typeof ptEffectiveAssetType === 'function' && ptEffectiveAssetType(sym) === 'ETF') { input.value = ''; panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; return; }";
 
 // ── sandboxes for the two cards ───────────────────────────────────────────────
 async function runCR(src, sym) {
@@ -124,15 +125,15 @@ row('AT-6 deterministic and free of storage / DOM / network / clock', async src 
   const { ptAssetType } = loadClassifier(src);
   for (const s of ['TAN', 'NVDA', 'ZZZZ', null]) assert.strictEqual(ptAssetType(s), ptAssetType(s));
 });
-row('AT-7 _isETF retired; _selectCats uses ptAssetType; TAN 2 categories, NVDA / RKLB 7', async src => {
+row('AT-7 _isETF retired; _selectCats uses ptEffectiveAssetType; TAN 2 categories, NVDA / RKLB 7', async src => {
   // Reading used (brief C1 mandates a comment naming "the former _isETF regex"): no CODE occurrence outside // comment lines.
   const codeHits = src.split('\n').filter(l => l.includes('_isETF') && !/^\s*\/\//.test(l));
   assert.strictEqual(codeHits.length, 0, '_isETF still in index.html code: ' + (codeHits[0] || '').trim());
   const line = /^ *const _selectCats = [^\n]*$/m.exec(src);
   assert.ok(line, '_selectCats missing');
-  assert.ok(line[0].includes('ptAssetType('), '_selectCats does not reference ptAssetType');
-  const { ptAssetType } = loadClassifier(src);
-  const sel = new Function('ptAssetType', 'MAX_CALLS', line[0] + '\nreturn _selectCats;')(ptAssetType, 7);
+  assert.ok(line[0].includes('ptEffectiveAssetType('), '_selectCats does not reference ptEffectiveAssetType');
+  const { ptEffectiveAssetType } = loadClassifier(src);
+  const sel = new Function('ptEffectiveAssetType', 'MAX_CALLS', line[0] + '\nreturn _selectCats;')(ptEffectiveAssetType, 7);
   assert.deepStrictEqual(sel('TAN'), ['analyst', 'risk']);
   assert.strictEqual(sel('NVDA').length, 7);
   assert.strictEqual(sel('RKLB').length, 7);
@@ -171,7 +172,7 @@ const NEG = [
   ['AT-2 seed missing TAN', 'AT-2', sw("'TAN', ", '')],
   ['AT-2 XL[A-Z] dropped', 'AT-2', sw('/^XL[A-Z]$/', '/^$/')],
   ['AT-3 XL[A-Z] dropped', 'AT-3', sw('/^XL[A-Z]$/', '/^$/')],
-  ['AT-5 UNKNOWN -> ETF', 'AT-5', sw("  return 'UNKNOWN';\n}\nvar PT_ETF", "  return 'ETF';\n}\nvar PT_ETF")],
+  ['AT-5 UNKNOWN -> ETF', 'AT-5', sw("  return 'UNKNOWN';\n}\n// Entry 12 / P2b", "  return 'ETF';\n}\n// Entry 12 / P2b")],
   ['AT-1 invalid enum value', 'AT-1', sw("return 'STOCK';", "return 'COMPANY';")],
   ['AT-4 defaults not STOCK', 'AT-4', sw("return 'STOCK';", "return 'UNKNOWN';")],
   ['AT-6 clock in classifier', 'AT-6', sw("var s = (typeof sym", "var __t = Date.now(); var s = (typeof sym")],
@@ -179,7 +180,9 @@ const NEG = [
   ['AT-8 N/A path still fetches (CR)', 'AT-8', sw("panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; return; }", "panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; }", true)],
   ['AT-9 N/A path still reads (FF)', 'AT-9', sw("panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; return; }", "panel.textContent = PT_ETF_FUNDAMENTALS_NA_TEXT; }", true)],
   ['AT-9 FF token not cleared', 'AT-9', sw("{ input.value = ''; panel.textContent", "{ panel.textContent")],
-  ['AT-10 C3 guard loses typeof', 'AT-10', sw("if (typeof ptAssetType === 'function' && ptAssetType(sym) === 'ETF') { panel", "if (ptAssetType(sym) === 'ETF') { panel")],
+  ['AT-10 C3 guard loses typeof', 'AT-10', sw("if (typeof ptEffectiveAssetType === 'function' && ptEffectiveAssetType(sym) === 'ETF') { panel", "if (ptEffectiveAssetType(sym) === 'ETF') { panel")],
+  ['AT-7 _selectCats back on the classifier', 'AT-7', sw('const _selectCats = sym => ptEffectiveAssetType(sym)', 'const _selectCats = sym => ptAssetType(sym)')],
+  ['AT-10 C4 guard back on the classifier', 'AT-10', sw("if (typeof ptEffectiveAssetType === 'function' && ptEffectiveAssetType(sym) === 'ETF') { input", "if (typeof ptAssetType === 'function' && ptAssetType(sym) === 'ETF') { input")],
   ['AT-10 TICKER_DEFAULTS edited', 'AT-10', sw("name:'Invesco Solar ETF'", "name:'Invesco Solar'")],
 ];
 
