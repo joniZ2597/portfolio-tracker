@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "b485137b7f579473703909761d98cbf050f647852f45d5a3028e5b2e71bcbf5e",
+  "fileSha256": "9fe656edcd663521a362e42f8dbcfa06e27725dda7001320d0003e9b973e7fdb",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -328,7 +328,7 @@
     "normalizeSecEvidenceStoreResponse": "7e3d84dd8f5d4e21f2889596c46f8623874ef972e57d909c02445dc777b946ca",
     "openAddPositionModal": "d3dd635cf6c6b2e58e4ce3b234a302a24f243ac5215a6a0f171ae47d4f258d81",
     "openEditCashModal": "33be53c0283844aa05b656a5b3a29e8d4d2b9ccb891aace46ccb06a4fc56baa2",
-    "openEditModal": "3837962a12abd8b7e0569d5e86e158a640055c5e7d2d75ecbfebeb01fc08b124",
+    "openEditModal": "443b29522909b9e45d7c68a8fa1b4c45d16a801a7f31386ea49f3d8eb8e717bc",
     "openEditPositionModal": "51f7a72eb09fecfcd9d33eb090a76c3fc2d41acb4bb3d5c885d42c65b645ab12",
     "openEditReconModal": "b46fc6785cfb44379a8438bf52829499fb65795e7cddd40fe8734e8a97d406b0",
     "openLoadFromCloudModal": "ede815b4456ee0cfc2d7c069d4b3d479fd2bf98ca8842c7e6317e3d599ca0a86",
@@ -359,7 +359,7 @@
     "runTechScoreV1": "cbb5b8aef9cdbf4c3a53f8984ffe588e15857eda4fb8341cd909025cfdabb1f4",
     "saveAddPosition": "c56d654fc274297882b1cfdef8fa395dd1c5bcaee9b6422ff2b2543a7602f597",
     "saveEditCash": "1811949fd50b9f69426c488f7a8ce408eff2ca589d5cd110b935cce240ec6e0f",
-    "saveEditModal": "e64bb675a7eb708020da461df2ede165bfaf940336ea52ba91286ac3851664d5",
+    "saveEditModal": "abcd46635447caee280d02592f7df8accca1a6ad9d446909b352403dba323b9f",
     "saveEditPosition": "574ce23df828e59089367596f827574c5bb56123bba407e71a4257c958f0c2d2",
     "saveEditRecon": "31a2d0762a1f7ec21e3adb7306b187ae474bc7b3f6adcad190d6e4080ee0c4f0",
     "saveHoldings": "166e948f30aa59deb09744b040aa235475cf3a39b095b864e90c8289cb46c104",

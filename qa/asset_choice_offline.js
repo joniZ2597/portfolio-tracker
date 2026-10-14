@@ -225,6 +225,119 @@ row('AC-5 SETUP: functions extract completely; ptAssetType byte-identical; wrapp
   assert.strictEqual(countOf(src, 'function ptAssetType('), 1);
 });
 
+// ── S2: Edit-ticker dialog harness — real openEditModal / saveEditModal over a minimal fake DOM ─────────────
+function fakeDom() {
+  const byId = Object.create(null);
+  const innerHtmlWrites = [];
+  const mk = tag => {
+    const el = {
+      tagName: String(tag).toUpperCase(), children: [], style: {}, className: '', id: '', value: '', textContent: '', checked: false,
+      selected: false, htmlFor: '', placeholder: '', type: '', onclick: null, parent: null,
+      classList: { add() {}, remove() {} }, setAttribute() {},
+      appendChild(c) {
+        c.parent = el; el.children.push(c);
+        if (el.tagName === 'SELECT' && c.tagName === 'OPTION') { if (c.selected || el.children.length === 1) el.value = c.value; }
+        return c;
+      }
+    };
+    Object.defineProperty(el, 'innerHTML', { get() { return ''; }, set(v) { innerHtmlWrites.push(String(v)); if (v === '') el.children.length = 0; } });
+    return el;
+  };
+  const registered = [];
+  const doc = {
+    createElement: mk, addEventListener() {}, removeEventListener() {},
+    getElementById(id) {
+      if (id === 'editOverlay' || id === 'editModal') return byId[id];
+      const walk = n => { if (n.id === id) return n; for (const c of n.children) { const r = walk(c); if (r) return r; } return null; };
+      return walk(byId.editModal);
+    }
+  };
+  byId.editOverlay = mk('div'); byId.editModal = mk('div');
+  return { doc, byId, innerHtmlWrites, registered };
+}
+function dialog(src, wl) {
+  const dom = fakeDom();
+  const store = {};
+  const ls = { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
+  const toasts = [];
+  const body = [
+    tickerLiteral(src), classifierBlock(src),
+    colFn(src, 'getTickerDefaults'), colFn(src, '_normalizePosition'), colFn(src, '_buildEntry'),
+    'let watchlist = __wl; let _editSym = null; const _techCache = { NVDA: { keep: 1 }, SPY: { keep: 1 } }; let _activeTicker = null; const _cockpitResults = [];',
+    'function findTicker(symbol) { return watchlist.find(e => e.symbol === symbol.toUpperCase()) || null; }',
+    colFn(src, 'saveWatchlist'), colFn(src, 'upsertTicker'),
+    colFn(src, 'openEditModal'), colFn(src, '_onEditEscape'), colFn(src, 'closeEditModal'), colFn(src, 'saveEditModal'),
+    'function renderMainPanel() {} function renderTickerPlaceholder() {} function closeTickerMenu() {} function showToast(m) { __toasts.push(m); }',
+    'return { openEditModal, saveEditModal, getWL: () => watchlist, techCache: _techCache };'
+  ].join('\n');
+  const api = new Function('document', 'localStorage', 'setTimeout', '__wl', '__toasts', body)(dom.doc, ls, () => 0, wl, toasts);
+  return Object.assign(api, { dom, store, toasts });
+}
+const deepClone = o => JSON.parse(JSON.stringify(o));
+const dlgEntry = (symbol, extra) => entry(symbol, Object.assign({ name: 'Name <img src=x onerror=alert(1)>', sector: 'S', sectorEtf: 'XLK', personalNote: 'note <b>x</b>' }, extra || {}));
+const selectOf = d => d.dom.doc.getElementById('editAssetType');
+
+row('AC-6 control: options and labels, preselection, placement, no innerHTML with user values', async src => {
+  const wl = [dlgEntry('SPY'), dlgEntry('NVDA'), dlgEntry('RKLB'), dlgEntry('QQQ', { assetType: 'STOCK' }), dlgEntry('TAN', { assetType: 'ETF' }),
+    dlgEntry('XLK', { assetType: 'etf' }), dlgEntry('MSFT', { assetType: 'BOND' })];
+  const want = {
+    SPY: ['Automatic (ETF)', ''], NVDA: ['Automatic (Stock)', ''], RKLB: ['Automatic (Stock)', ''],
+    QQQ: ['Automatic (ETF)', 'STOCK'], TAN: ['Automatic (ETF)', 'ETF'], XLK: ['Automatic (ETF)', ''], MSFT: ['Automatic (Stock)', '']
+  };
+  for (const sym of Object.keys(want)) {
+    const d = dialog(src, deepClone(wl));
+    d.openEditModal(sym);
+    const sel = selectOf(d);
+    assert.ok(sel && sel.tagName === 'SELECT', 'select for ' + sym);
+    assert.deepStrictEqual(sel.children.map(o => o.value), ['', 'ETF', 'STOCK'], 'option values ' + sym);
+    assert.deepStrictEqual(sel.children.map(o => o.textContent), [want[sym][0], 'ETF', 'Stock'], 'option labels ' + sym);
+    assert.strictEqual(sel.value, want[sym][1], 'preselection ' + sym);
+    const body = d.dom.byId.editModal.children[1];
+    const idx = id => body.children.findIndex(r => r.children.some(c => c.id === id));
+    assert.strictEqual(idx('editAssetType'), idx('editSectorEtf') + 1, 'control sits directly after the benchmark-ETF row');
+    assert.ok(d.dom.innerHtmlWrites.every(v => v === ''), 'innerHTML written with a non-empty value: ' + d.dom.innerHtmlWrites.join('|'));
+  }
+  const code = colFn(src, 'openEditModal');
+  assert.strictEqual(countOf(code, '.innerHTML'), 1, 'only the modal reset may touch .innerHTML');
+  assert.strictEqual(countOf(code, "modal.innerHTML = ''"), 1);
+  assert.strictEqual(countOf(code, "id        = 'editAssetType'") + countOf(code, "id = 'editAssetType'"), 1, 'select id');
+});
+
+row('AC-7 save: ETF / Stock set the field; Automatic removes it from storage; no other entry field changes; no _techCache change', async src => {
+  const base = () => [dlgEntry('NVDA'), dlgEntry('SPY', { assetType: 'STOCK' }), dlgEntry('RKLB')];
+  const strip = e => { const o = deepClone(e); delete o.assetType; delete o.inScan; return o; };
+  const run = (sym, value) => {
+    const d = dialog(src, base());
+    d.openEditModal(sym);
+    const before = deepClone(d.getWL().map(strip));
+    selectOf(d).value = value;
+    d.saveEditModal();
+    const stored = JSON.parse(d.store.pt_tickers);
+    return { d, before, after: d.getWL().map(strip), stored, entry: d.getWL().find(e => e.symbol === sym), storedEntry: stored.find(e => e.symbol === sym) };
+  };
+  let r = run('NVDA', 'ETF');
+  assert.strictEqual(r.entry.assetType, 'ETF'); assert.strictEqual(r.storedEntry.assetType, 'ETF');
+  assert.deepStrictEqual(r.after, r.before, 'ETF save changed another field');
+  assert.strictEqual(Object.keys(r.storedEntry).pop(), 'assetType');
+  r = run('NVDA', 'STOCK');
+  assert.strictEqual(r.entry.assetType, 'STOCK'); assert.strictEqual(r.storedEntry.assetType, 'STOCK');
+  assert.deepStrictEqual(r.after, r.before, 'Stock save changed another field');
+  r = run('SPY', '');
+  assert.ok(!r.entry.assetType, 'Automatic clears the in-memory choice');
+  assert.ok(!('assetType' in r.storedEntry), 'Automatic removes the key from storage');
+  assert.deepStrictEqual(r.after, r.before, 'Automatic save changed another field');
+  r = run('RKLB', 'BOND');
+  assert.ok(!r.entry.assetType, 'an invalid select value is not stored');
+  assert.ok(!('assetType' in r.storedEntry));
+  r = run('NVDA', 'ETF');
+  assert.deepStrictEqual(r.d.techCache, { NVDA: { keep: 1 }, SPY: { keep: 1 } }, 'saving only the asset type must not touch _techCache');
+  assert.strictEqual(r.d.toasts.length, 1);
+  // other entries untouched in storage
+  r = run('NVDA', 'ETF');
+  assert.strictEqual(r.stored.find(e => e.symbol === 'SPY').assetType, 'STOCK');
+  assert.ok(!('assetType' in r.stored.find(e => e.symbol === 'RKLB')));
+});
+
 // ── planted negatives: [label, row id prefix, mutation of an in-memory copy] ───────────────────────────────
 const sw = (a, b) => s => {
   assert.strictEqual(countOf(s, a), 1, 'mutation anchor must occur exactly once (' + countOf(s, a) + '): ' + a);
@@ -247,6 +360,14 @@ const NEG = [
   ['AC-4 _selectCats back on the classifier', 'AC-4', sw('const _selectCats = sym => ptEffectiveAssetType(sym)', 'const _selectCats = sym => ptAssetType(sym)')],
   ['AC-4 C3 guard back on the classifier', 'AC-4', sw(C3_NEW, "if (typeof ptAssetType === 'function' && ptAssetType(sym) === 'ETF') { panel.textContent")],
   ['AC-4 C4 guard back on the classifier', 'AC-4', sw(C4_NEW, "if (typeof ptAssetType === 'function' && ptAssetType(sym) === 'ETF') { input.value")],
+  ['AC-6 Automatic label shows UNKNOWN instead of Stock', 'AC-6', sw("(ptAssetType(sym) === 'ETF' ? 'ETF' : 'Stock')", 'ptAssetType(sym)')],
+  ['AC-6 preselection ignores the stored choice', 'AC-6', sw('if (o[0] === atChoice) opt.selected = true;', "if (o[0] === '') opt.selected = true;")],
+  ['AC-6 option text through innerHTML', 'AC-6', sw('opt.textContent = o[1];', 'opt.innerHTML = o[1];')],
+  ['AC-6 control placed before the benchmark row', 'AC-6', s => sw('  body.appendChild(atRow);\n', '')(s).replace('  body.appendChild(etfRow);\n', () => '  body.appendChild(atRow);\n  body.appendChild(etfRow);\n')],
+  ['AC-7 save ignores the select', 'AC-7', sw("assetType: (assetTypeV === 'ETF' || assetTypeV === 'STOCK') ? assetTypeV : undefined", 'assetType: undefined')],
+  ['AC-7 save stores an invalid value', 'AC-7', sw("assetType: (assetTypeV === 'ETF' || assetTypeV === 'STOCK') ? assetTypeV : undefined", 'assetType: assetTypeV')],
+  ['AC-7 save also rewrites the note', 'AC-7', sw('upsertTicker(_editSym, { name, sector, sectorEtf, personalNote, position,', "upsertTicker(_editSym, { name, sector, sectorEtf, personalNote: personalNote + '!', position,")],
+  ['AC-7 save clears the technical cache', 'AC-7', sw('  // Clear stale technical snapshot whenever benchmark changes', '  delete _techCache[_editSym];\n  // Clear stale technical snapshot whenever benchmark changes')],
   ['AC-5 classifier edited', 'AC-5', sw("if (!/^[A-Z0-9.\\-]{1,12}$/.test(s)) return 'UNKNOWN';", "if (!/^[A-Z0-9.\\-]{1,13}$/.test(s)) return 'UNKNOWN';")],
   ['AC-5 clock in wrapper', 'AC-5', sw("function ptEffectiveAssetType(sym) {\n", "function ptEffectiveAssetType(sym) {\n  var __t = Date.now();\n")],
   ['AC-5 wrapper moved away from the classifier', 'AC-5', s => { const w = colFn(s, 'ptEffectiveAssetType'); const t = s.replace(w, ''); return t.replace('function getTickerDefaults(symbol) {', 'var PT_FILLER = 1;\n' + w + '\nfunction getTickerDefaults(symbol) {'); }]

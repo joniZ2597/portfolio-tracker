@@ -7767,6 +7767,31 @@ function openEditModal(sym) {
   etfRow.appendChild(etfHint);
   body.appendChild(etfRow);
 
+  // Entry 12 / P2b: explicit ETF / Stock choice. Automatic follows the classifier; UNKNOWN is shown (and behaves) as Stock.
+  const atRow = document.createElement('div');
+  atRow.className = 'edit-field-row';
+
+  const atLbl = document.createElement('label');
+  atLbl.className   = 'edit-lbl';
+  atLbl.textContent = 'Asset type';
+  atLbl.htmlFor     = 'editAssetType';
+
+  const atSel = document.createElement('select');
+  atSel.id        = 'editAssetType';
+  atSel.className = 'edit-inp';
+  const atChoice = (entry.assetType === 'ETF' || entry.assetType === 'STOCK') ? entry.assetType : '';
+  [['', 'Automatic (' + (ptAssetType(sym) === 'ETF' ? 'ETF' : 'Stock') + ')'], ['ETF', 'ETF'], ['STOCK', 'Stock']].forEach(function(o) {
+    const opt       = document.createElement('option');
+    opt.value       = o[0];
+    opt.textContent = o[1];
+    if (o[0] === atChoice) opt.selected = true;
+    atSel.appendChild(opt);
+  });
+
+  atRow.appendChild(atLbl);
+  atRow.appendChild(atSel);
+  body.appendChild(atRow);
+
   body.appendChild(_makeField('Personal note', 'editNote', 'Your notes…', entry.personalNote, true));
 
   // 7A-1: Position fields — local-only, persisted in watchlist, NEVER sent to AI/API
@@ -7826,6 +7851,7 @@ function saveEditModal() {
   // Safeguard 2: normalize sectorEtf — trim + uppercase
   const sectorEtf    = (document.getElementById('editSectorEtf')?.value ?? '').trim().toUpperCase();
   const personalNote = (document.getElementById('editNote')?.value      ?? '').trim();
+  const assetTypeV   = (document.getElementById('editAssetType')?.value ?? '');
 
   // Detect ETF change before overwriting entry (safeguard 3)
   // Use ?? (not ||) so an empty-string ETF is preserved as '' and not coerced by falsy check
@@ -7845,7 +7871,7 @@ function saveEditModal() {
   });
 
   // Merge fields — inScan and symbol are NOT in the payload, so they are untouched (safeguard 3)
-  upsertTicker(_editSym, { name, sector, sectorEtf, personalNote, position });
+  upsertTicker(_editSym, { name, sector, sectorEtf, personalNote, position, assetType: (assetTypeV === 'ETF' || assetTypeV === 'STOCK') ? assetTypeV : undefined });
 
   // Clear stale technical snapshot whenever benchmark changes — including when cleared to ''
   // No typeof guard: _techCache is a module-level const, always defined
