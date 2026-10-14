@@ -37,7 +37,7 @@ read a file it never imports.)*
 **Execution preflight block (required).** Every brief lists, per slice and for step 0, step 10, §L
 and closure, the commands, tools, scratch files and paths it needs, each classified as: **A**
 auto-approved by `.claude/settings.json` · **B** a Claude Code permission prompt · **C** a governance
-gate (R11 / R12 records, PROTECTED gate, heavy-lane go-ahead, Owner ruling) · **D** hook-denied (must
+gate (R11 / R12 records, PROTECTED gate, Owner ruling) · **D** hook-denied (must
 not appear). B items are minimised: checks run as allow-listed suites or with the Read / Grep tools;
 a one-time proof is one scratch script under `/tmp/pt-<task-id>/` run once per checkpoint; the brief
 is self-contained so the Worker reads nothing outside its slot. The only scratch location is
@@ -181,7 +181,9 @@ commit) or on a STOP condition below.
     - A final commit that must include a DENY-tier or protected path is made by the Owner in a
       normal terminal, unless the brief has a `protected-scope` block — then those paths go in only
       through step 13a.
-    - A gate denial is **STOP-6**.
+    - A gate denial of the commit's *form* (nothing ran - for example `git add … && git commit …` in one
+      call) is a form denial under STOP-6 below: reissue it as the two calls above. Any other gate
+      denial is **STOP-6**.
     - After the final commit — for a brief with a `protected-scope` block, after the step-13a
       protected commit — run
       `node qa/guard_integrity_check.js --task task/<id> --root <canonical checkout>` — base, start time and `main` come from the task-base record; never pass `--base-dev`, `--since` or `--base-main` (a value that differs from the record is a MISMATCH FAIL). A task without a record (opened before records existed and not adopted) uses `--base-main <main oid> --base-dev <actual task base> --task task/<id> --since <task-start ISO> --root <canonical checkout>` with the values from its handoff.
@@ -209,7 +211,7 @@ findings, or decide ordinary in-scope implementation questions — LAND approval
 Owner's; task-branch commits follow the r9 gate (step 13), as they already are under "Protected
 actions" and "Owner LAND / SHIP boundaries" below.**
 
-**The Owner is never a relay for review context.** Diff, brief, QA evidence, `codex.md` and any
+**The Owner is never a relay for review or troubleshooting context.** Diff, brief, QA evidence, `codex.md` and any
 other review material are provided by the Worker directly to the Codex review process. The Owner
 is not asked to copy them into a separate conversation when the Worker can supply them itself.
 
@@ -243,7 +245,7 @@ Every brief sets `Mode: Manual` or `Mode: Auto`.
 - every Owner ruling already exists;
 - the session runs in its own slot under the current guard (see "Worker slot model").
 
-**Manual fallback triggers — any one → STOP-6, then Manual:**
+**Manual fallback triggers (an Auto or `acceptEdits` session only — there every hook denial, a form denial included, is a trigger; the form-denial continuation under STOP-6 applies only in Manual sessions) — any one → STOP-6, then Manual:**
 - an architecture, schema, persistence, contract or scoring surface (M5);
 - any ASK- or DENY-tier file;
 - an Owner-ruling conflict or a missing ruling;
@@ -327,12 +329,80 @@ The Worker stops and returns to the Owner **only** when one of these is true:
 4. A required test or action needs a **live, production, deployment, or other protected
    mutation**.
 5. **Two approved brief requirements contradict each other.**
-6. **A guard or fallback fires.** This means a hook denial, an Auto-mode safety-classifier block,
-   an integrity-check FAIL, or any Manual fallback trigger in an Auto or `acceptEdits` session.
-   Never retry, rephrase or reroute through another form, script or tool.
+6. **A guard denies an attempted protected action, or a guard or fallback fires.** This means:
+   - a hook denial of an action the HOOK-DENY tier exists to stop: push; merge / rebase / pull;
+     destructive git; checkout or switch to `main`; a ref move of `main` or `branch-dev`; a commit
+     the r9 gate refuses for its content (wrong slot or branch, a protected or DENY-tier path
+     staged); a `.git` write; a git-config execution path; a Netlify write; a protected-file write;
+     or the land tool's `land`, `push` or `protected-commit`;
+   - an integrity-check FAIL;
+   - an Auto-mode safety-classifier block, or any Manual fallback trigger in an Auto or
+     `acceptEdits` session.
+
+   A denied operation is never performed by other means - no other form, script, tool or
+   sub-agent.
+
+   **Not STOP-6: a form denial.** Nothing ran, and the intended action is itself permitted: a
+   protected path or the land tool named in a read-only command; a compound, wrapped, escaped or
+   PowerShell form of a permitted command; a request verb in the wrong shape. The Worker writes one
+   line in `review.md` (`Form denial: <shape> -> reissued as <compliant form>`) and reissues the
+   action in its compliant form: the brief's command-card line, the step-13 two-call commit, or the
+   Read / Grep tools. If the Worker cannot tell which kind a denial is, or the same intent is denied
+   twice, it is STOP-6. A denial of an actual `land`, `push` or `protected-commit` operation is
+   always STOP-6, never a form denial.
+
+   **A denial closes a path, not the problem.** After either kind, the Worker keeps solving the
+   underlying problem by any method that needs no denied operation ("Troubleshooting without the
+   Owner" below).
 
 Anything else is the Worker's to decide. A STOP names the condition, the evidence, and the
-smallest decision that would clear it.
+smallest decision that would clear it, in five lines the Owner can answer in one:
+
+    STOP-<n>: <condition, one sentence>
+    Evidence: <one line, plus the file or qa.log line to look at>
+    Impact: <what is blocked and what still proceeds>
+    Recommended decision: <one line the Owner can approve as written>
+    Alternatives: <at most two, one line each>
+
+No transcript, diff or technical thread. If the Owner wants an independent view, the Owner asks
+for it directly and points it at `review.md` and `plan.md`.
+
+### Troubleshooting without the Owner
+
+Ordinary technical problems - a brief's prescribed method not working, a scratch-harness
+failure, an environment difference, an expected RED row failing differently than listed - are
+the Worker's to solve:
+
+1. **Self.** M3 and M4 as written: stop editing and re-derive the cause from source with the
+   Read / Grep tools.
+2. **Consult, if useful.** A read-only sub-agent from the Worker's own session (an Explore agent,
+   or a fork told to diagnose only), or a Codex consultation through
+   `codex exec --sandbox read-only` with a question instead of a review prompt. The default is one
+   independent consultation per problem; further ones are allowed when each adds new diagnostic
+   value. A consultation never performs a denied operation, edits no file, runs no QA suite, and
+   names the hook and the land tool by function, never by file path. It is never used to probe or
+   bypass a security control: no consultation is asked how to get past a denial, and a suggested
+   rephrase of a denied operation is recorded in `plan.md` and not followed. Its output is advice:
+   the Worker classifies it and stays bound by every rule. Raw output stays in the scratch
+   directory.
+3. **Decide and record.** Apply the fix and write one line in `plan.md` in the posture-change
+   form, for example `M4: consulted fork; cause was ROOT resolving to scratch; fixed in the copy`.
+4. **Escalate** only when a STOP condition above holds.
+
+**A method is not a requirement.** A brief that prescribes a method for evidence (a command, a
+scratch location, a harness) describes what to prove. A substitute method that proves the same
+thing needs no ruling: record it under the STOP-2 wording carve-out. Changing *what* is proved -
+removing or weakening an assertion, a kept-unchanged row, a land-test, the step-10 run or a
+security check - is not a method change: it is STOP-1 or STOP-2.
+
+**Who decides.**
+- **Worker:** steps 0-13 end to end, every in-scope fix and method choice, both Codex rounds,
+  `review.md`, `land-request` and `push-request`, and `land` / `push` after the Owner's line.
+- **Codex:** read-only reviews and consultations; findings and advice only.
+- **Bootstrap:** slot preparation, task-start, the R11 brief commit, resync, cleanup -
+  mechanical git only. It approves no method or fix.
+- **Owner:** the R11, PROTECTED, LAND and PUSH lines; rulings on STOP-1 to STOP-6; SHIP, every
+  Netlify write and every action under "Protected actions".
 
 ## Codex findings — FIX / DEFER / REJECT
 
@@ -561,6 +631,19 @@ registry, claim, or mutex exists anywhere in this convention.
   functional commit — only at LAND.
 - `npm run test:qa` — Playwright browser QA, used only when browser-level verification is
   needed.
+- **One heavy run at a time across all slots.** A heavy run is a full `npm run qa:offline`, any
+  `PT_QA_FORCE_HEAVY=1` run, or any run of a digest-pinned suite (`auto_mode_hardening`, `pt_land`,
+  `pt_land_resync`, `task_base`, `fixture_template`, `git_contract`). A brief states this rule as a
+  condition; there is no per-run Owner go-ahead.
+  - **Check before every heavy run.** Immediately before starting one, the Worker verifies that no
+    other heavy run is active on the host: a read-only process listing that shows command lines
+    (for example `wmic process where "name='node.exe'" get ProcessId,CommandLine`) shows no
+    process running `qa/run-offline.js`, `qa:offline` or a `qa/*_offline.js` suite. The check and
+    its result are one line in `qa.log` before the run.
+  - Another heavy run active -> wait and check again; never start a concurrent run. The check
+    cannot be run -> do not start the run; treat it as a troubleshooting problem, then STOP-2.
+  - Task-start sequencing by the Owner is an additional safeguard, not a substitute for the check.
+  - A brief approved before this rule keeps its own heavy-run requirements.
 
 ## Codex as diff reviewer
 
@@ -633,7 +716,7 @@ above.
   deploys/previews, environment-variable changes, and any other Netlify mutation. Read-only
   Netlify inspection does not require approval.
 - Live external API canaries (SEC, Perplexity, or similar).
-- Commits outside the r9 and R11 gates — any other main-checkout commit, any commit staging a DENY-tier or protected path, any denied form — are made by the Owner in a normal terminal (RC2). An R11 brief-only commit requires the Owner's approval record (the line printed by `brief-request`). A PROTECTED commit requires the Owner's PROTECTED record and is made only by `pt-land.js protected-commit` (step 13a).
+- Commits outside the r9 and R11 gates — any other main-checkout commit, any commit staging a DENY-tier or protected path, any commit the r9 gate denies for its content — are made by the Owner in a normal terminal (RC2). An R11 brief-only commit requires the Owner's approval record (the line printed by `brief-request`). A PROTECTED commit requires the Owner's PROTECTED record and is made only by `pt-land.js protected-commit` (step 13a).
 - `git merge`, `rebase`, `pull`, and any ref move of `main`/`branch-dev` — the Owner, in a normal terminal.
   Exception: a fast-forward LAND of `task/*` into `branch-dev` and a `branch-dev` push through `pt-land.js` under the Owner's single-use records (R12); and a `task/*` re-sync through `pt-land.js resync`, which never moves `main` or `branch-dev`.
 - Environment/runtime mutations, and protected governance changes (the hook and settings, through the PROTECTED gate or the Owner copy/hash workflow).
