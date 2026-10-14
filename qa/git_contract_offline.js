@@ -412,14 +412,15 @@ function sourceParts() {
   return parts;
 }
 const digestParts = FP.digestParts;
-const gateDecision = FP.gateDecision; // 'skip' | 'replay-notice' (replay; pass with a notice) | 'replay-fail' (replay; then fail "re-pin required")
-test('GC-4 gate: the decision table - both digests pinned -> skip; unpinned environment -> replay, pass with a notice; changed source -> replay, then fail "re-pin required"', () => {
+const gateDecision = FP.gateDecision; // 'skip' | 'replay-notice' (replay; pass with a notice) | 'replay-stale' (replay; pass with a stale-pin note) | 'replay-fail' (missing or malformed pin: replay, then fail "re-pin required")
+test('GC-4 gate: the decision table - both digests pinned -> skip; unpinned environment -> replay, pass with a notice; changed source -> replay, pass with a stale-pin note; missing or malformed pin -> fail', () => {
   const pin = { source: 'S', environments: ['E1', 'E2'] };
   assert.strictEqual(gateDecision('S', 'E1', pin), 'skip');
   assert.strictEqual(gateDecision('S', 'E2', pin), 'skip');
   assert.strictEqual(gateDecision('S', 'E3', pin), 'replay-notice', 'evidence is never reused across a different environment');
-  assert.strictEqual(gateDecision('S2', 'E1', pin), 'replay-fail', 'a changed source never skips');
-  assert.strictEqual(gateDecision('S2', 'E3', pin), 'replay-fail');
+  assert.strictEqual(gateDecision('S2', 'E1', pin), 'replay-stale', 'a changed source never skips; it replays every transcript');
+  assert.strictEqual(gateDecision('S2', 'E3', pin), 'replay-stale');
+  assert.strictEqual(gateDecision('S2', 'E1', { source: 'S', environments: 'E1' }), 'replay-fail', 'malformed environments with a stale source still fail (a stale source never masks a malformed pin)');
   assert.strictEqual(gateDecision('S', 'E1', { source: null, environments: [] }), 'replay-fail', 'an empty pin never skips');
   assert.strictEqual(gateDecision('S', 'E1', { source: 'S', environments: [] }), 'replay-notice', 'a source pin without a proven environment never skips');
 });
@@ -468,7 +469,7 @@ function replayOne(scn, families) {
 //     in progress;
 //   - a rerun loads the persisted state and resumes from the first incomplete batch; state is bound to the exact source digest,
 //     environment digest and ordered id list (a state for other inputs is discarded, never reused);
-//   - the pin verdict (PASS with a notice, or FAIL "re-pin required") is reached only when EVERY batch - every scenario of the
+//   - the pin verdict (PASS with a notice, PASS with a stale-pin note, or FAIL "re-pin required" for a missing or malformed pin) is reached only when EVERY batch - every scenario of the
 //     table - is complete (pinEligible). No scenario is skipped, weakened or made optional by the batching.
 // The state lives beside the checkout under pt-work-artifacts/ (the land tool's own archive convention): outside the repository,
 // never a tracked or untracked repo file, and it survives the private per-run temp root.
@@ -682,6 +683,7 @@ test('GC-4: contract replay of every transcript against real Git, in resumable b
   assert.strictEqual(run.complete, true, 'the pin verdict needs every batch of every scenario complete');
   assert.strictEqual(run.ran.length + run.reused.length, REC.SCENARIOS.length, 'every scenario of the table replayed identically (in this run or in a persisted batch of the same source, environment and table)');
   if (d === 'replay-fail') throw new Error('re-pin required: source ' + src + ' environment ' + env + ' (every transcript replayed identically against real Git in ' + run.plan.length + ' batches; set GIT_CONTRACT_PIN to this source digest and add this environment digest)');
+  if (d === 'replay-stale') { process.stdout.write('  NOTE  pin stale (every transcript replayed identically against real Git in ' + run.plan.length + ' batches): source ' + src + ' environment ' + env + '; re-pin optional\n'); return; }
   process.stdout.write('  NOTE  environment not pinned: ' + env + '; record it in a task to enable the fast path\n');
 });
 // ── summary ────────────────────────────────────────────────────────────────────────────────

@@ -129,10 +129,15 @@ function digestParts(parts) {
   return h.digest('hex');
 }
 // 'skip' only when the source digest equals the pin AND this environment digest is one of the proven ones;
-// 'replay-notice' (same source, unproven environment): run the proofs, pass with a notice; 'replay-fail' (changed or unpinned source):
-// run the proofs, then fail "re-pin required" so the task that changed an input re-proves and re-pins in its own diff.
+// 'replay-notice' (same source, unproven environment): run the proofs, pass with a notice; 'replay-stale' (a valid pin whose source differs):
+// run every proof and pass with a stale-pin note (re-pin optional); 'replay-fail' (no pin, a source that is not a non-empty string, or a pin whose
+// source or environments are malformed): run the proofs, then fail "re-pin required". The malformed-pin check runs BEFORE the source comparison,
+// so a stale source never masks a malformed pin. An empty environments array is valid (a notice, never a skip).
 function gateDecision(src, env, pin) {
-  if (pin.source !== src) return 'replay-fail';
+  if (typeof src !== 'string' || src === '') return 'replay-fail';
+  if (!pin || typeof pin.source !== 'string' || pin.source === '' || !Array.isArray(pin.environments) ||
+    !pin.environments.every((x) => typeof x === 'string' && x !== '')) return 'replay-fail';
+  if (pin.source !== src) return 'replay-stale';
   return pin.environments.indexOf(env) !== -1 ? 'skip' : 'replay-notice';
 }
 

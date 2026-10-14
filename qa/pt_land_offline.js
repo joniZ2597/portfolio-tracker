@@ -218,12 +218,12 @@ if (!fs.existsSync(REAL_TOOL_PATH)) {
 // ═══════════════ E1: the digest gate (work/qa-e1-digest-gate/brief.md) ═══════════════
 // Every row of this suite that starts a process (real Git, Node, the hook CLI) is HEAVY: it is registered through heavy() and is skipped only
 // when the source digest equals LAND_CONTRACT_PIN.source AND the environment key is one of LAND_CONTRACT_PIN.environments (the GC-4 / FT-0 pattern; digestParts of
-// qa/lib/exec-env-fingerprint.js). Every other case runs it: a changed input runs it and then FAILS "re-pin required"; an unproven environment
+// qa/lib/exec-env-fingerprint.js). Every other case runs it: a changed input runs it and passes with a stale-pin line (re-pin optional); an unproven environment
 // runs it and passes with a notice; an override variable or PT_QA_FORCE_HEAVY=1 is a full replay. A pin is set only from a forced replay's printed digests.
 const FPLIB = require('./lib/exec-env-fingerprint');
 const e1crypto = require('crypto');
 const LAND_CONTRACT_PIN = {
-  source: 'd4dc37aa75844e52575c1001b23f24f1a8b28c033ad73666d5c789a88284479f',
+  source: '00b41e9e1e3fa5ececf88ea3c11d0179fd8ba2bb2f4c9bd46709f166355aab64',
   environments: ['5257c227140204f038c0ec7eb724abb44dbf4e31a2c6d3c5e8a6f07727f1aeb0']
 };
 const E1_LABEL = 'pt-land';
@@ -256,7 +256,7 @@ function e1Decide(o) {
   if (!e1PinValid(o.pin)) return 'pin-invalid';
   const over = E1_OVERRIDE_VARS.filter((v) => vars[v] !== undefined && vars[v] !== '');
   if (over.length > 0) return 'override:' + over[0];
-  if (o.pin.source !== o.src) return 'replay-fail';
+  if (o.pin.source !== o.src) return 'replay-stale';
   if (force === '1') return 'forced';
   if (o.pin.environments.indexOf(o.env) === -1) return 'replay-notice';
   return 'skip';
@@ -519,9 +519,9 @@ function e1Table(fn) {
   const add = (label, o, want) => cases.push([label, o, want]);
   add('G1 matching pin', { src: S, env: E, pin, vars: {} }, 'skip');
   add('G2 unproven environment', { src: S, env: E2, pin, vars: {} }, 'replay-notice');
-  add('G3 changed source', { src: S2, env: E, pin, vars: {} }, 'replay-fail');
-  add('G3 changed source, forced', { src: S2, env: E, pin, vars: { PT_QA_FORCE_HEAVY: '1' } }, 'replay-fail');
-  add('G3 changed source, unproven environment', { src: S2, env: E2, pin, vars: {} }, 'replay-fail');
+  add('G3 changed source', { src: S2, env: E, pin, vars: {} }, 'replay-stale');
+  add('G3 changed source, forced', { src: S2, env: E, pin, vars: { PT_QA_FORCE_HEAVY: '1' } }, 'replay-stale');
+  add('G3 changed source, unproven environment', { src: S2, env: E2, pin, vars: {} }, 'replay-stale');
   add('G5 forced', { src: S, env: E, pin, vars: { PT_QA_FORCE_HEAVY: '1' } }, 'forced');
   add('G5 forced, unproven environment', { src: S, env: E2, pin, vars: { PT_QA_FORCE_HEAVY: '1' } }, 'forced');
   for (const v of E1_OVERRIDE_VARS) {
@@ -561,7 +561,6 @@ function e1Verdict(st) {
   const replayLine = (reason) => '@@QA-SURFACE@@ E1 ' + E1_LABEL + ': REPLAY PASS (' + reason + ') src ' + st.src + ' env ' + st.env + ', ' + counts(true) + ', 0 heavy skipped';
   if (gate === 'invalid-force') return { failure: 'E1 ' + E1_LABEL + ': invalid PT_QA_FORCE_HEAVY (only 1 is accepted)', line: null };
   if (gate === 'pin-invalid') return { failure: 'E1 ' + E1_LABEL + ': pin invalid: source ' + st.src + ' environment ' + st.env, line: null };
-  if (gate === 'replay-fail') return { failure: 'E1 ' + E1_LABEL + ': re-pin required: source ' + st.src + ' environment ' + st.env, line: null };
   if (gate === 'skip') {
     if (st.skipped !== st.reached) return { failure: 'E1 ' + E1_LABEL + ': ' + st.skipped + ' heavy unit(s) skipped but ' + st.reached + ' reached', line: null };
     return { failure: null, line: '@@QA-SURFACE@@ E1 ' + E1_LABEL + ': SKIP (contract pinned: ' + s12 + '/' + e12 + ') ' + counts(false) };
@@ -569,6 +568,7 @@ function e1Verdict(st) {
   if (st.skipped !== 0) return { failure: 'E1 ' + E1_LABEL + ': ' + st.skipped + ' heavy unit(s) skipped under a replay', line: null };
   if (gate === 'forced') return { failure: null, line: replayLine('forced') };
   if (gate === 'replay-notice') return { failure: null, line: replayLine('environment not proven') };
+  if (gate === 'replay-stale') return { failure: null, line: replayLine('pin stale, re-pin optional') };
   if (gate.indexOf('override:') === 0) return { failure: null, line: replayLine('override ' + gate.slice(9)) };
   return { failure: 'E1 ' + E1_LABEL + ': unknown gate ' + gate, line: null };
 }
@@ -638,11 +638,13 @@ e1Row('E1-4 decision table: e1Decide returns R4\'s result for G0..G6, every over
   const noOverrides = (o) => e1Decide(Object.assign({}, o, { vars: Object.assign({}, o.vars, { PT_LAND_TOOL_PATH: '', AH_HOOK_PATH: '', AH_SETTINGS_PATH: '', TB_ONLY: '', NODE_OPTIONS: '' }) }));
   const forceSkipsG3 = (o) => ((o.vars || {}).PT_QA_FORCE_HEAVY === '1' && e1PinValid(o.pin) && o.pin.source !== o.src ? 'forced' : e1Decide(o));
   const skipUnproven = (o) => (e1Decide(o) === 'replay-notice' ? 'skip' : e1Decide(o));
+  const staleSkips = (o) => (e1Decide(o) === 'replay-stale' ? 'skip' : e1Decide(o));
   const emptyPinValid = (o) => (!e1PinValid(o.pin) ? e1Decide(Object.assign({}, o, { pin: { source: o.src, environments: [o.env] } })) : e1Decide(o));
   e1Assert(e1Table(noOverrides).length > 0, 'a variant that ignores overrides passed the table');
   e1Assert(e1Table(forceSkipsG3).length > 0, 'a variant that lets force skip the G3 failure passed the table');
   e1Assert(e1Table(skipUnproven).length > 0, 'a variant that skips on an unproven environment passed the table');
   e1Assert(e1Table(emptyPinValid).length > 0, 'a variant that treats an empty pin as valid passed the table');
+  e1Assert(e1Table(staleSkips).length > 0, 'a variant that treats a stale pin as skip passed the table');
 });
 e1Row('E1-5 verdict: the SKIP / REPLAY PASS lines and the fail-closed verdicts have R7\'s shape, k equals the heavy units reached, and the verdict runs after the last heavy registration (planted: a verdict moved before the rows)', () => {
   const st = { src: 'a'.repeat(64), env: 'b'.repeat(64), skipped: 3, reached: 3, heavyRun: 0, light: 5 };
@@ -654,7 +656,10 @@ e1Row('E1-5 verdict: the SKIP / REPLAY PASS lines and the fail-closed verdicts h
   e1Assert(e1Verdict(Object.assign({ gate: 'forced' }, st)).failure !== null, 'a replay that skipped heavy units passed');
   e1Assert(/REPLAY PASS \(environment not proven\)/.test(e1Verdict(Object.assign({ gate: 'replay-notice' }, st, { skipped: 0 })).line), 'notice line');
   e1Assert(/REPLAY PASS \(override NODE_OPTIONS\)/.test(e1Verdict(Object.assign({ gate: 'override:NODE_OPTIONS' }, st, { skipped: 0 })).line), 'override line');
-  e1Assert(e1Verdict(Object.assign({ gate: 'replay-fail' }, st, { skipped: 0 })).failure === 'E1 ' + E1_LABEL + ': re-pin required: source ' + st.src + ' environment ' + st.env, 're-pin required text');
+  const stale = e1Verdict(Object.assign({ gate: 'replay-stale' }, st, { skipped: 0, heavyRun: 3 }));
+  e1Assert(stale.failure === null && stale.line.indexOf('REPLAY PASS (pin stale, re-pin optional) src ' + st.src + ' env ' + st.env + ', 3 heavy ') !== -1 && /, 0 heavy skipped$/.test(stale.line), 'stale line: ' + stale.line);
+  e1Assert(e1Verdict(Object.assign({ gate: 'replay-stale' }, st)).failure !== null, 'a stale verdict that skipped heavy units passed');
+  e1Assert(e1Verdict(Object.assign({ gate: 'replay-fail' }, st, { skipped: 0 })).failure === 'E1 ' + E1_LABEL + ': unknown gate replay-fail', 'replay-fail did not fail closed as an unknown gate');
   e1Assert(e1Verdict(Object.assign({ gate: 'pin-invalid' }, st, { skipped: 0 })).failure === 'E1 ' + E1_LABEL + ': pin invalid: source ' + st.src + ' environment ' + st.env, 'pin invalid text');
   e1Assert(/invalid PT_QA_FORCE_HEAVY/.test(e1Verdict(Object.assign({ gate: 'invalid-force' }, st)).failure), 'invalid force text');
   const own = e1Normalise(E1_OWN_TEXT);

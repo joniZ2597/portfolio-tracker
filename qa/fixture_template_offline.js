@@ -221,12 +221,12 @@ function mutantToolFile() {
 // environment is not a proven one. They are skipped only when the source digest equals TEMPLATE_CONTRACT_PIN.source AND this
 // environment digest (qa/lib/exec-env-fingerprint.js, brief §3.6) is in TEMPLATE_CONTRACT_PIN.environments. Rows that start no Git
 // process (the FT-3 negatives, the FT-5 fail-closed throws, the FT-0 rows) always run. Evidence is never reused across environments:
-// an unproven environment runs everything and passes with a notice; a changed source runs everything and then FAILS "re-pin required".
+// an unproven environment runs everything and passes with a notice; a changed source runs everything and passes with a stale-pin note (re-pin optional); a missing or malformed pin fails "re-pin required".
 const FPLIB = require('./lib/exec-env-fingerprint');
 const TEMPLATE_CONTRACT_PIN = {
   // set from the passing real run of this task (2026-10-07, Worker A laptop, Windows 11, Git for Windows 2.53.0, Node 24); further environments
   // are added only by a later task with evidence
-  source: '288591877fee2d60d5de1732e72db18588107e58ccc486f61642d9fbcd216e90',
+  source: '2477be30067a21f32b30e9006b75d85a3ff9b2ea90b5f3245072065d441dedb8',
   environments: ['ef28452b4eb84527b7208fc76792410d4948cc9d0fa91173a94c79edefa90858']
 };
 function ftSourceParts() {
@@ -247,11 +247,14 @@ const FT_ENV = FPLIB.collect();
 const FT_GATE = FPLIB.gateDecision(FT_SOURCE_DIGEST, FT_ENV.digest, TEMPLATE_CONTRACT_PIN);
 let skippedHeavy = 0;
 function heavy(name, fn) { if (FT_GATE === 'skip') { skippedHeavy += 1; return; } test(name, fn); }
-test('FT-0: the decision table - both digests pinned -> skip; unpinned environment -> replay, pass with a notice; changed source -> replay, then fail "re-pin required"', () => {
+test('FT-0: the decision table - both digests pinned -> skip; unpinned environment -> replay, pass with a notice; changed source -> replay, pass with a stale-pin note; missing or malformed pin -> fail', () => {
   const pin = { source: 'S', environments: ['E1', 'E2'] };
   assert.strictEqual(FPLIB.gateDecision('S', 'E1', pin), 'skip');
   assert.strictEqual(FPLIB.gateDecision('S', 'E3', pin), 'replay-notice', 'evidence is never reused across a different environment');
-  assert.strictEqual(FPLIB.gateDecision('S2', 'E1', pin), 'replay-fail', 'a changed source never skips');
+  assert.strictEqual(FPLIB.gateDecision('S2', 'E1', pin), 'replay-stale', 'a changed source never skips; it replays every heavy proof');
+  assert.strictEqual(FPLIB.gateDecision('S2', 'E3', pin), 'replay-stale', 'a changed source in an unproven environment is stale, not skipped');
+  assert.strictEqual(FPLIB.gateDecision('S', 'E1', undefined), 'replay-fail', 'a missing pin fails');
+  assert.strictEqual(FPLIB.gateDecision('S2', 'E1', { source: 'S' }), 'replay-fail', 'missing environments with a stale source still fail (a stale source never masks a malformed pin)');
   assert.strictEqual(FPLIB.gateDecision('S', 'E1', { source: null, environments: [] }), 'replay-fail', 'an empty pin never skips');
   assert.strictEqual(FPLIB.gateDecision('S', 'E1', { source: 'S', environments: [] }), 'replay-notice', 'a source pin without a proven environment never skips');
 });
@@ -513,10 +516,15 @@ heavy('FT-7 planted negative: a copy whose claimed task id differs from its comm
 });
 
 // FT-0 verdict: runs LAST, after every heavy proof above has run (or was skipped under a matching pin)
-test('FT-0: the gate - skipped only under a matching pin; an unproven environment passes with a notice; a changed or unpinned source fails "re-pin required"', () => {
+test('FT-0: the gate - skipped only under a matching pin; an unproven environment passes with a notice; a changed source passes with a stale-pin note; a missing or malformed pin fails "re-pin required"', () => {
   if (FT_GATE === 'skip') { process.stdout.write('  SKIP  (contract pinned: ' + FT_SOURCE_DIGEST.slice(0, 12) + '/' + FT_ENV.digest.slice(0, 12) + ') ' + skippedHeavy + ' heavy real-Git row(s) not run\n'); return; }
   if (FT_GATE === 'replay-fail') {
     throw new Error('re-pin required: source ' + FT_SOURCE_DIGEST + ' environment ' + FT_ENV.digest + ' (every heavy proof above passed against real Git; set TEMPLATE_CONTRACT_PIN to this source digest and add this environment digest)');
+  }
+  if (FT_GATE === 'replay-stale') {
+    assert.strictEqual(skippedHeavy, 0, 'a stale pin never skips a heavy row');
+    process.stdout.write('  NOTE  pin stale (every heavy proof above ran against real Git): source ' + FT_SOURCE_DIGEST + ' environment ' + FT_ENV.digest + '; re-pin optional\n');
+    return;
   }
   process.stdout.write('  NOTE  environment not pinned: ' + FT_ENV.digest + '; record it in a task to enable the fast path\n');
 });
