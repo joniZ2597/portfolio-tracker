@@ -203,14 +203,13 @@ evidence.
 *Landed:* "Selected only" watchlist toggle (`5a32c4d`; `work/selected-only-watchlist/`).
 *Legacy refs:* `WP-P12`, `BC-8`.
 
-### 12 · Asset-type classifier + ETF suppression
+### 12 · Asset-type classifier + ETF suppression — **DONE**
 **Scores / Signals**
 
 Replace `_isETF` (`index.html:11881`) with one `ptAssetType`; stop showing stock-only XBRL
 fields as missing on ETFs. Widens ETF treatment to TAN/ITA/KRE. **Gates entry 19.**
-*Master:* `surface-1` S1 (P2a) — **partial: P2a landed** (`work/surface-1/`, 2026-10-11: one `ptAssetType`; TAN / ITA / KRE
-recognised; the Capital Returns and Fund Facts cards say "not applicable" for ETFs); P2b (Edit-ticker choice + persistence,
-Manual) remains for the future `surface-2` Master.
+*Master:* `surface-1` S1 (P2a) and `surface-2` (P2b) — closes the entry. P2a landed (`work/surface-1/`, 2026-10-11: one `ptAssetType`; TAN / ITA / KRE
+recognised; the Capital Returns and Fund Facts cards say "not applicable" for ETFs). P2b (`work/surface-2/`): an explicit Automatic / ETF / Stock choice in the Edit-ticker dialog, stored in the watchlist and carried through backup (v4, additive field) and cloud sync. Restoring an older backup (or running an older build) may reset a manual choice to Automatic (S2D-1).
 *Legacy refs:* `WP-P2 Slice B`, `BC-3b`.
 
 ### 22 · Gate exposure & surfacing policy — **DONE**
@@ -420,6 +419,7 @@ chart/embed · `EG-10A` and `EG-15` design briefs · the ARC governance chain
 **10** Scan Results HELD marker — `df5ad24` (narrowed by Owner ruling 2026-09-26: no
 Risk / Reward column or chips in Scan Results) ·
 **11** Selected-for-scan visibility — `work/selected-only-watchlist/` ·
+**12** Asset-type classifier + ETF suppression, with the explicit ETF / Stock choice persisted through backup and cloud sync — `work/surface-1/`, `work/surface-2/` (restoring an older backup or running an older build may reset a manual choice to Automatic, S2D-1) ·
 **22** Gate exposure & surfacing policy — `work/surface-1b/` ·
 **30** ResearchView `Stale` badge routed through the shared label — `work/surface-1b/` ·
 **32** Technical snapshot reuses a stale price — `work/tech-snapshot-price-cache/` ·
