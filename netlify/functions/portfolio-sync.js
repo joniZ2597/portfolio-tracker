@@ -249,7 +249,7 @@ function buildPersistedSubset(parsed) {
       continue;
     }
     seen.add(tsym);
-    tickers.push({
+    const ticker = {
       symbol: tsym,
       name: trimString(t.name),
       exchange: trimString(t.exchange),
@@ -257,7 +257,12 @@ function buildPersistedSubset(parsed) {
       sectorEtf: trimString(t.sectorEtf).toUpperCase(),
       personalNote: trimString(t.personalNote),
       position: normalizePosition(t.position)
-    });
+    };
+    const assetType = trimString(t.assetType);
+    if (assetType === "ETF" || assetType === "STOCK") {
+      ticker.assetType = assetType;
+    }
+    tickers.push(ticker);
   }
 
   return { ok: true, holdings, tickers };

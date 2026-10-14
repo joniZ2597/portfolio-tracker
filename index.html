@@ -15307,7 +15307,7 @@ function _validateCloudDoc(doc) {
       return { error: 'tickers[' + j + ']: invalid symbol.' };
     if (seenSyms.has(tsym)) continue;
     seenSyms.add(tsym);
-    normalizedTickers.push({
+    var nt = {
       symbol:       tsym,
       name:         typeof t.name === 'string' ? t.name.trim() : '',
       exchange:     typeof t.exchange === 'string' ? t.exchange.trim() : '',
@@ -15315,7 +15315,9 @@ function _validateCloudDoc(doc) {
       sectorEtf:    typeof t.sectorEtf === 'string' ? t.sectorEtf.trim().toUpperCase() : '',
       personalNote: typeof t.personalNote === 'string' ? t.personalNote.trim() : '',
       position:     _normalizePosition(t.position)
-    });
+    };
+    if (t.assetType === 'ETF' || t.assetType === 'STOCK') nt.assetType = t.assetType;
+    normalizedTickers.push(nt);
   }
 
   return {
@@ -15683,7 +15685,7 @@ function _validateLocalForUpload() {
     // Dedup after full validation — first valid occurrence wins; valid duplicates skipped.
     if (seenSyms.has(tsym)) continue;
     seenSyms.add(tsym);
-    tickers.push({
+    var nt = {
       symbol:       tsym,
       name:         typeof t.name === 'string' ? t.name.trim() : '',
       exchange:     typeof t.exchange === 'string' ? t.exchange.trim() : '',
@@ -15696,7 +15698,9 @@ function _validateLocalForUpload() {
         pnlPercent:         pos.pnlPercent,
         partialProfitTaken: pos.partialProfitTaken
       }
-    });
+    };
+    if (t.assetType === 'ETF' || t.assetType === 'STOCK') nt.assetType = t.assetType;
+    tickers.push(nt);
   }
 
   var hCount = Object.keys(holdings).length;

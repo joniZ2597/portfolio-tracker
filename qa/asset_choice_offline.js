@@ -467,7 +467,87 @@ row('AC-13 S2D-1: a pre-feature v4 backup restored over choices makes every entr
   assert.ok(/Automatic/.test(block) && /older/i.test(block), 'comment states the reset-to-Automatic consequence');
 });
 
-// ── planted negatives: [label, row id prefix, mutation of an in-memory copy] ───────────────────────────────
+// ── S4: cloud — client validators and the server whitelist ────────────────────────────────────────────────
+function cloudValidatorOf(content) {
+  const parts = [braceFn(content, '_normalizePosition'), braceFn(content, '_validateCloudDoc')];
+  if (parts.some(p => !p)) throw new Error('cloud validator could not be extracted');
+  return new Function(parts.join('\n') + '\nreturn _validateCloudDoc;')();
+}
+function uploadValidatorOf(content, tickersRaw, holdingsRaw) {
+  const part = braceFn(content, '_validateLocalForUpload');
+  if (!part) throw new Error('upload validator could not be extracted');
+  const store = { pt_tickers: tickersRaw, pt_holdings: holdingsRaw };
+  const ls = { getItem: k => (k in store && store[k] !== undefined ? store[k] : null) };
+  return new Function('localStorage', part + '\nreturn _validateLocalForUpload;')(ls);
+}
+const cloudDoc = tickers => ({ schemaVersion: 1, updatedAt: '2026-10-01T00:00:00.000Z', sourceOrigin: 'http://localhost', appBaseline: 'b',
+  holdings: { AAPL: { symbol: 'AAPL', positionSize: 10 } }, tickers });
+const holdingsRaw = JSON.stringify({ AAPL: { symbol: 'AAPL', positionSize: 10 } });
+const fullTicker = (symbol, extra) => Object.assign({ symbol, name: 'N', exchange: 'X', sector: 'S', sectorEtf: 'XLK', personalNote: 'n',
+  position: { hasPosition: false, positionValue: null, pnlPercent: null, partialProfitTaken: false } }, extra || {});
+const BAD_CHOICES = ['etf', 'BOND', 42, null, {}, [], ' ETF ', ''];
+
+row('AC-11 client cloud validators keep valid / drop invalid; documents without the field equal the oracle; restore path unchanged', async src => {
+  const neu = cloudValidatorOf(src);
+  const old = cloudValidatorOf(OLD_SRC);
+  const plain = cloudDoc([fullTicker('AAPL', { personalNote: ' MixedCase ' }), fullTicker('SPY'), fullTicker('AAPL')]);
+  assert.strictEqual(JSON.stringify(neu(deepClone(plain))), JSON.stringify(old(deepClone(plain))), '_validateCloudDoc differs without the field');
+  const alt = { schemaVersion: 1, holdings: {}, watchlist: [fullTicker('SPY')] };
+  assert.strictEqual(JSON.stringify(neu(deepClone(alt))), JSON.stringify(old(deepClone(alt))), 'watchlist alias');
+  const r = neu(cloudDoc([fullTicker('NVDA', { assetType: 'ETF' }), fullTicker('SPY', { assetType: 'STOCK' })].concat(BAD_CHOICES.map((v, i) => fullTicker('Q' + String.fromCharCode(65 + i), { assetType: v })))));
+  assert.strictEqual(r.error, null);
+  assert.deepStrictEqual(r.tickers.slice(0, 2).map(t => t.assetType), ['ETF', 'STOCK']);
+  for (const t of r.tickers.slice(2)) assert.ok(!('assetType' in t), 'cloud validator kept an invalid value for ' + t.symbol);
+  assert.strictEqual(Object.keys(r.tickers[0]).pop(), 'assetType');
+  // upload validator
+  const tick = list => JSON.stringify(list);
+  const upNew = (list) => uploadValidatorOf(src, tick(list), holdingsRaw)();
+  const upOld = (list) => uploadValidatorOf(OLD_SRC, tick(list), holdingsRaw)();
+  const base = [fullTicker('AAPL', { personalNote: ' MixedCase ' }), fullTicker('SPY'), fullTicker('AAPL')];
+  assert.strictEqual(JSON.stringify(upNew(base)), JSON.stringify(upOld(base)), '_validateLocalForUpload differs without the field');
+  const u = upNew([fullTicker('NVDA', { assetType: 'ETF' }), fullTicker('SPY', { assetType: 'STOCK' })].concat(BAD_CHOICES.map((v, i) => fullTicker('Q' + String.fromCharCode(65 + i), { assetType: v }))));
+  assert.ok(!u.error, 'upload validation failed: ' + u.error);
+  assert.deepStrictEqual(u.tickers.slice(0, 2).map(t => t.assetType), ['ETF', 'STOCK']);
+  for (const t of u.tickers.slice(2)) assert.ok(!('assetType' in t), 'upload validator kept an invalid value for ' + t.symbol);
+  assert.strictEqual(Object.keys(u.tickers[0]).pop(), 'assetType');
+  // an invalid position still blocks the upload
+  assert.ok(upNew([fullTicker('NVDA', { assetType: 'ETF', position: { hasPosition: 'yes' } })]).error, 'invalid position must still block');
+  // SC-8: the restore / apply path and the backup export / pre-import download are unchanged
+  for (const n of ['_applyCloudDoc', 'importPortfolioBackup', 'exportPortfolioBackup', '_downloadPreImportBackup']) {
+    assert.strictEqual(sha(braceFn(src, n)), sha(braceFn(OLD_SRC, n)), n + ' changed vs 105b9f9');
+  }
+  assert.strictEqual(countOf(braceFn(src, '_applyCloudDoc'), "localStorage.setItem('pt_tickers',  JSON.stringify(result.tickers));"), 1);
+});
+
+function serverSubsetOf(srv) {
+  const line = (re, what) => { const m = re.exec(srv); if (!m) throw new Error('server: no ' + what); return m[0]; };
+  const parts = [line(/^const MAX_TICKERS = [^\n]*$/m, 'MAX_TICKERS'), line(/^const SYMBOL_RE = [^\n]*$/m, 'SYMBOL_RE'),
+    braceFn(srv, 'isPlainObject'), braceFn(srv, 'normalizeSymbol'), braceFn(srv, 'trimString'), braceFn(srv, 'normalizePosition'), braceFn(srv, 'buildPersistedSubset')];
+  if (parts.some(p => !p)) throw new Error('server: extraction failed');
+  return new Function(parts.join('\n') + '\nreturn buildPersistedSubset;')();
+}
+row('AC-12 server buildPersistedSubset keeps valid / drops invalid; tickers without the field equal the oracle; SYMBOL_RE literal unchanged', async (src, srv) => {
+  const neu = serverSubsetOf(srv);
+  const old = serverSubsetOf(OLD_SRV);
+  const plain = { schemaVersion: 1, holdings: { AAPL: { symbol: 'AAPL', positionSize: 10 } },
+    tickers: [fullTicker('AAPL', { personalNote: ' MixedCase ' }), fullTicker('SPY'), fullTicker('AAPL')] };
+  assert.strictEqual(JSON.stringify(neu(deepClone(plain))), JSON.stringify(old(deepClone(plain))), 'server output differs without the field');
+  assert.strictEqual(JSON.stringify(neu({ schemaVersion: 1, holdings: {} })), JSON.stringify(old({ schemaVersion: 1, holdings: {} })));
+  const r = neu({ schemaVersion: 1, holdings: {}, tickers: [fullTicker('NVDA', { assetType: 'ETF' }), fullTicker('SPY', { assetType: 'STOCK' }), fullTicker('XLK', { assetType: ' ETF ' }),
+    fullTicker('QQQ', { assetType: 'etf' }), fullTicker('TAN', { assetType: 'BOND' }), fullTicker('IWM', { assetType: 42 }), fullTicker('DIA', { assetType: null }), fullTicker('KRE', { assetType: {} })] });
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.tickers.map(t => t.assetType), ['ETF', 'STOCK', 'ETF', undefined, undefined, undefined, undefined, undefined]);
+  for (const t of r.tickers.slice(3)) assert.ok(!('assetType' in t), 'server kept an invalid value for ' + t.symbol);
+  assert.strictEqual(Object.keys(r.tickers[0]).pop(), 'assetType');
+  assert.strictEqual(neu({ schemaVersion: 2, holdings: {} }).ok, false, 'schemaVersion gate unchanged');
+  // untouched server surfaces
+  assert.strictEqual(countOf(srv, 'const SYMBOL_RE = /^[A-Z]{1,10}$/;'), 1, 'SYMBOL_RE literal');
+  assert.strictEqual(sha(braceFn(srv, 'whitelistServerDoc')), sha(braceFn(OLD_SRV, 'whitelistServerDoc')), 'whitelistServerDoc changed');
+  assert.strictEqual(sha(braceFn(srv, 'handlePut')), sha(braceFn(OLD_SRV, 'handlePut')), 'handlePut changed');
+  assert.strictEqual(sha(braceFn(srv, 'normalizeSymbol')), sha(braceFn(OLD_SRV, 'normalizeSymbol')));
+});
+
+// ── planted negatives: [label, row id prefix, mutation of an in-memory copy, optional target 'srv'] ───────────
 const sw = (a, b) => s => {
   assert.strictEqual(countOf(s, a), 1, 'mutation anchor must occur exactly once (' + countOf(s, a) + '): ' + a);
   return s.replace(a, () => b);
@@ -477,7 +557,8 @@ const MIG_KEEP = "if (e.assetType === 'ETF' || e.assetType === 'STOCK') out.asse
 const SAVE_KEEP = "if (e.assetType === 'ETF' || e.assetType === 'STOCK') o.assetType = e.assetType;";
 // Apply a unique-anchor mutation inside one top-level function only (the anchor may repeat elsewhere in the file).
 const inFn = (name, mut) => s => { const f = colFn(s, name); return s.replace(f, () => mut(f)); };
-const VAL_KEEP ="if (t.assetType === 'ETF' || t.assetType === 'STOCK') nt.assetType = t.assetType;";
+const SRV_KEEP = 'if (assetType === "ETF" || assetType === "STOCK") {';
+const VAL_KEEP = "if (t.assetType === 'ETF' || t.assetType === 'STOCK') nt.assetType = t.assetType;";
 const C3_NEW ="if (typeof ptEffectiveAssetType === 'function' && ptEffectiveAssetType(sym) === 'ETF') { panel.textContent";
 const C4_NEW = "if (typeof ptEffectiveAssetType === 'function' && ptEffectiveAssetType(sym) === 'ETF') { input.value";
 const NEG = [
@@ -500,15 +581,24 @@ const NEG = [
   ['AC-7 save stores an invalid value', 'AC-7', sw("assetType: (assetTypeV === 'ETF' || assetTypeV === 'STOCK') ? assetTypeV : undefined", 'assetType: assetTypeV')],
   ['AC-7 save also rewrites the note', 'AC-7', sw('upsertTicker(_editSym, { name, sector, sectorEtf, personalNote, position,', "upsertTicker(_editSym, { name, sector, sectorEtf, personalNote: personalNote + '!', position,")],
   ['AC-7 save clears the technical cache', 'AC-7', sw('  // Clear stale technical snapshot whenever benchmark changes', '  delete _techCache[_editSym];\n  // Clear stale technical snapshot whenever benchmark changes')],
-  ['AC-8 validator drops a valid choice', 'AC-8', sw(VAL_KEEP, '')],
-  ['AC-8 validator keeps an invalid value', 'AC-8', sw(VAL_KEEP, 'if (t.assetType !== undefined) nt.assetType = t.assetType;')],
+  ['AC-8 validator drops a valid choice', 'AC-8', inFn('_validatePortfolioBackup', sw(VAL_KEEP, ''))],
+  ['AC-8 validator keeps an invalid value', 'AC-8', inFn('_validatePortfolioBackup', sw(VAL_KEEP, 'if (t.assetType !== undefined) nt.assetType = t.assetType;'))],
   ['AC-8 validator rewrites other ticker fields', 'AC-8', inFn('_validatePortfolioBackup', sw("      personalNote: typeof t.personalNote === 'string' ? t.personalNote.trim() : '',", "      personalNote: typeof t.personalNote === 'string' ? t.personalNote.trim().toLowerCase() : '',"))],
-  ['AC-9 validator calls a new helper', 'AC-9', sw(VAL_KEEP, "if (_ptValidChoice(t.assetType)) nt.assetType = t.assetType;")],
+  ['AC-9 validator calls a new helper', 'AC-9', inFn('_validatePortfolioBackup', sw(VAL_KEEP, "if (_ptValidChoice(t.assetType)) nt.assetType = t.assetType;"))],
   ['AC-9 extra .TA pattern copy', 'AC-9', sw('    // S2D-1:', '    var __x = /^[A-Z]{1,10}(\\.TA)?$/;\n    // S2D-1:')],
   ['AC-10 restore strips the choice', 'AC-10', sw(RESTORE_LINE, "localStorage.setItem('pt_tickers', JSON.stringify(result.tickers.map(function(t) { delete t.assetType; return t; })));")],
   ['AC-10 export drops the choice', 'AC-10', sw('      tickers:       tickers,', '      tickers:       tickers.map(function(t) { delete t.assetType; return t; }),')],
-  ['AC-13 validator fabricates a choice', 'AC-13', sw(VAL_KEEP, "nt.assetType = (t.assetType === 'ETF' || t.assetType === 'STOCK') ? t.assetType : 'STOCK';")],
+  ['AC-13 validator fabricates a choice', 'AC-13', inFn('_validatePortfolioBackup', sw(VAL_KEEP, "nt.assetType = (t.assetType === 'ETF' || t.assetType === 'STOCK') ? t.assetType : 'STOCK';"))],
   ['AC-13 S2D-1 comment removed', 'AC-13', s => s.replace(/ *\/\/ S2D-1:[^\n]*\n(?: *\/\/ [^\n]*\n)*/, () => '')],
+  ['AC-11 cloud validator drops a valid choice', 'AC-11', inFn('_validateCloudDoc', sw(VAL_KEEP, ''))],
+  ['AC-11 cloud validator keeps an invalid value', 'AC-11', inFn('_validateCloudDoc', sw(VAL_KEEP, 'if (t.assetType !== undefined) nt.assetType = t.assetType;'))],
+  ['AC-11 upload validator drops a valid choice', 'AC-11', inFn('_validateLocalForUpload', sw(VAL_KEEP, ''))],
+  ['AC-11 upload validator keeps an invalid value', 'AC-11', inFn('_validateLocalForUpload', sw(VAL_KEEP, 'if (t.assetType !== undefined) nt.assetType = t.assetType;'))],
+  ['AC-11 restore path edited', 'AC-11', inFn('_applyCloudDoc', sw("localStorage.setItem('pt_tickers',  JSON.stringify(result.tickers));", "localStorage.setItem('pt_tickers',  JSON.stringify(result.tickers.slice()));"))],
+  ['AC-12 server drops a valid choice', 'AC-12', sw(SRV_KEEP, 'if (false) {'), 'srv'],
+  ['AC-12 server keeps any string', 'AC-12', sw(SRV_KEEP, 'if (assetType !== "") {'), 'srv'],
+  ['AC-12 server does not trim', 'AC-12', sw('const assetType = trimString(t.assetType);', 'const assetType = t.assetType;'), 'srv'],
+  ['AC-12 SYMBOL_RE literal widened', 'AC-12', sw('const SYMBOL_RE = /^[A-Z]{1,10}$/;', 'const SYMBOL_RE = /^[A-Z.]{1,10}$/;'), 'srv'],
   ['AC-5 classifier edited', 'AC-5', sw("if (!/^[A-Z0-9.\\-]{1,12}$/.test(s)) return 'UNKNOWN';", "if (!/^[A-Z0-9.\\-]{1,13}$/.test(s)) return 'UNKNOWN';")],
   ['AC-5 clock in wrapper', 'AC-5', sw("function ptEffectiveAssetType(sym) {\n", "function ptEffectiveAssetType(sym) {\n  var __t = Date.now();\n")],
   ['AC-5 wrapper moved away from the classifier', 'AC-5', s => { const w = colFn(s, 'ptEffectiveAssetType'); const t = s.replace(w, ''); return t.replace('function getTickerDefaults(symbol) {', 'var PT_FILLER = 1;\n' + w + '\nfunction getTickerDefaults(symbol) {'); }]
@@ -521,15 +611,15 @@ if (require.main === module) {
     let pass = 0;
     const failures = [];
     for (const id of ORDER) {
-      try { await ROWS[id](SRC); pass += 1; console.log('  PASS  ' + id); }
+      try { await ROWS[id](SRC, SRV); pass += 1; console.log('  PASS  ' + id); }
       catch (e) { failures.push(id); console.log('  FAIL  ' + id + ' — ' + String(e && e.message || e).split('\n')[0]); }
     }
-    for (const [label, rowId, mutate] of NEG) {
+    for (const [label, rowId, mutate, target] of NEG) {
       const full = ORDER.find(i => i.startsWith(rowId + ' '));
       let mutated;
-      try { mutated = mutate(SRC); } catch (e) { failures.push('negative anchor: ' + label); console.log('  FAIL  negative mutation did not apply: ' + label + ' — ' + String(e.message).split('\n')[0]); continue; }
+      try { mutated = mutate(target === 'srv' ? SRV : SRC); } catch (e) { failures.push('negative anchor: ' + label); console.log('  FAIL  negative mutation did not apply: ' + label + ' — ' + String(e.message).split('\n')[0]); continue; }
       let caught = false;
-      try { await ROWS[full](mutated); } catch (e) { caught = true; }
+      try { await (target === 'srv' ? ROWS[full](SRC, mutated) : ROWS[full](mutated, SRV)); } catch (e) { caught = true; }
       if (caught) { pass += 1; console.log('  PASS  negative caught: ' + label); }
       else { failures.push('negative: ' + label); console.log('  FAIL  negative NOT caught: ' + label); }
     }
