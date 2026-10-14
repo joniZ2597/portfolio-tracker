@@ -75,8 +75,8 @@ exports.handler = async function (event) {
     let _session      = 'CLOSED';
     let _needsOverlay = false;
     try {
-      _session      = getEtSession();
-      _needsOverlay = _session === 'PRE' || _session === 'POST';
+      _session      = getEtSession(new Date(polygonNowMs(event)));
+      _needsOverlay = (_session === 'PRE' || _session === 'POST') && !/\.TA$/i.test(sym);
     } catch (sessionErr) {
       console.warn('[market-data] ext overlay session check skipped for', sym + ':', sessionErr.message);
     }
