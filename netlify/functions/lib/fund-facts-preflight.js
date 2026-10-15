@@ -19,9 +19,10 @@
  * exactly ONE server gate and ONE inbound token — the pull precedent's second
  * gate (WRITER_SERVER_DISABLED) and separate write-token check
  * (WRITER_TOKEN_MISSING) do NOT apply here. Instead, the single fund-facts token
- * is checked for COLLISION against exactly the two other domain tokens named in
- * COLLISION_KEYS — PT_SEC_EVIDENCE_PULL_TOKEN and PT_SEC_EVIDENCE_STORE_WRITE_TOKEN —
- * so a shared secret can never cross domains.
+ * is checked for COLLISION against exactly the three other tokens named in
+ * COLLISION_KEYS — PT_FUND_FACTS_READ_TOKEN, PT_SEC_EVIDENCE_PULL_TOKEN and
+ * PT_SEC_EVIDENCE_STORE_WRITE_TOKEN — so a shared secret can never cross domains
+ * (fund-facts-token-collision-1: the read token was added to match the read side).
  *
  * Contract (frozen by qa/fund_facts_preflight_offline.js):
  *   evaluateFundFactsPreflight({ env, authorization, ticker })
@@ -61,11 +62,12 @@ const TOKEN_KEY = 'PT_FUND_FACTS_TOKEN';
 const ALLOW_KEY = 'PT_FUND_FACTS_ALLOWED_TICKERS';
 const UA_KEY = 'SEC_USER_AGENT';
 
-// The fund-facts token must be distinct from exactly the two domain tokens listed
-// below — PT_SEC_EVIDENCE_PULL_TOKEN and PT_SEC_EVIDENCE_STORE_WRITE_TOKEN (spec
-// §2.1). Absent/empty comparison tokens are NOT a collision — the fund-facts job
-// is deployable standalone without the pull/writer stack.
-const COLLISION_KEYS = ['PT_SEC_EVIDENCE_PULL_TOKEN', 'PT_SEC_EVIDENCE_STORE_WRITE_TOKEN'];
+// The fund-facts token must be distinct from exactly the three tokens listed
+// below — PT_FUND_FACTS_READ_TOKEN (fund-facts-token-collision-1, mirroring the read
+// side's check of this token), PT_SEC_EVIDENCE_PULL_TOKEN and
+// PT_SEC_EVIDENCE_STORE_WRITE_TOKEN (spec §2.1). Absent/empty comparison tokens are
+// NOT a collision — the fund-facts job is deployable standalone without the pull/writer stack.
+const COLLISION_KEYS = ['PT_FUND_FACTS_READ_TOKEN', 'PT_SEC_EVIDENCE_PULL_TOKEN', 'PT_SEC_EVIDENCE_STORE_WRITE_TOKEN'];
 
 // evaluateFundFactsPreflight validates, in fail-closed order, every gate/token/
 // config prerequisite for a single-ticker fund-facts pull. Only { ok: true } may
@@ -90,8 +92,8 @@ function evaluateFundFactsPreflight(input) {
     return fail('UNAUTHORIZED');
   }
 
-  // 3) Token collision — the fund-facts token must differ from exactly the two
-  //    tokens in COLLISION_KEYS (PT_SEC_EVIDENCE_PULL_TOKEN,
+  // 3) Token collision — the fund-facts token must differ from exactly the three
+  //    tokens in COLLISION_KEYS (PT_FUND_FACTS_READ_TOKEN, PT_SEC_EVIDENCE_PULL_TOKEN,
   //    PT_SEC_EVIDENCE_STORE_WRITE_TOKEN); a shared secret collapses the
   //    separation between domains. Absent/empty comparison token is not a collision.
   for (let i = 0; i < COLLISION_KEYS.length; i++) {

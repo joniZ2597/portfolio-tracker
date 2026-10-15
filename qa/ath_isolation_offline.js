@@ -214,7 +214,7 @@ test('AR-7h the 1Y High cannot reach the comparison: compareToVerifiedAth takes 
 const IDX_CORE = require('./lib/index-pins-core.js');
 const IDX_MAP = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'index-pins.json'), 'utf8'));
 const BASELINE_PINS = {
-  'netlify/functions/lib/fund-facts-preflight.js': '2a9a4d3682d68904745b9ec14cbc6fa19fb18e81ad3cd29fa7848eb5455101c2',
+  'netlify/functions/lib/fund-facts-preflight.js': 'd915f63f5b9d9ca67c71b4dd2cd3584f71b48828a0c941aa105a478c4ce5d765',
   'netlify/functions/lib/fund-facts-read-preflight.js': '1ce8c4c5bead5ddd0f0b52e24f012266f1ff06e44daf77721e9a34131c431990',
   'netlify/functions/market-data.js': 'd5821ec68e7108a01cb2daa19be94b5f5021ec1ea61f6185d64394381bd4dc6d'
 };
