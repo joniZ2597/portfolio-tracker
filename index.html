@@ -5912,6 +5912,10 @@ function parsePerplexityContext(raw, sources = []) {
     const revRecency      = _readField('REVISION_RECENCY',   currentLines) || 'unknown';
     const dataFreshness   = _readField('DATA_FRESHNESS',     currentLines) || 'unknown';
     const earnings        = _readField('EARNINGS',           currentLines) || 'NONE';
+    // research-ai-context-1: template text fields that previously never reached the AI ('' when absent / NONE)
+    const guidance        = _readField('GUIDANCE',           currentLines);
+    const contracts       = _readField('CONTRACTS',          currentLines);
+    const peerMove        = _readField('PEER_MOVE',          currentLines);
 
     result[currentTicker] = {
       analystActions,
@@ -5925,6 +5929,9 @@ function parsePerplexityContext(raw, sources = []) {
       revisionRecency: revRecency,
       dataFreshness,
       earnings,
+      guidance,
+      contracts,
+      peerMove,
       sources: Array.isArray(sources) ? sources : []
     };
     // 6B-1: flag Perplexity responses that succeeded but contain no useful catalyst/news data
@@ -5981,21 +5988,44 @@ function formatNewsContext(pplxData, symbol) {
   if (!d) return `No research data for ${symbol}.`;
   // 6B-1: surface upstream state explicitly to Anthropic instead of an empty context
   if (d._unavailable) return `No research data for ${symbol} — upstream Perplexity unavailable.`;
-  if (d._allNone)     return `No catalyst, analyst, earnings, or revision data returned for ${symbol}.`;
+  // research-ai-context-1: guidance / contracts / peer move and full analyst-action detail reach the AI.
+  const _cap = (v, n) => { const t = String(v == null ? '' : v).trim(); return t.length > n ? t.slice(0, n - 1) + '\u2026' : t; };
+  // U-1: dates exactly as reported; a year is never inferred. A year-less date is marked unverified.
+  let _yearless = false;
+  const _dateOf = r => { const m = String(r || '').match(/\(([A-Z][a-z]{2,8}\.?\s+\d{1,2}(,\s*\d{4})?)\)/); if (!m) return null; if (m[2]) return m[1]; _yearless = true; return m[1] + '; year unverified'; };
+  const _extra = [];
+  if (d.guidance)  _extra.push('GUIDANCE: '  + _cap(d.guidance, 300));
+  if (d.contracts) _extra.push('CONTRACTS: ' + _cap(d.contracts, 300));
+  if (d.peerMove)  _extra.push('PEER MOVE: ' + _cap(d.peerMove, 300));
+  if (d._allNone)     return `No catalyst, analyst, earnings, or revision data returned for ${symbol}.` + (_extra.length ? '\n' + _extra.join('\n') : '');
   const lines = [];
   // Analyst actions with freshness context
   if (d.analystActions?.length) {
-    const ptStr = d.analystActions.map(a => `${a.bank} PT $${a.target}`).join(' | ');
-    const freshTag = d.dataFreshness && d.dataFreshness !== 'unknown' ? ` [data: ${d.dataFreshness}]` : '';
+    const _MOVE = /^(?:raised|cut|lowered|trimmed|reduced|boosted|hiked)$/;
+    const ptStr = d.analystActions.map(a => {
+      // a rating verb with no rating named ("RBC maintained $118 PT") describes the target
+      const pv = a.ptAction || (!a.rating && a.ratingAction ? a.ratingAction : null);
+      let s = `${a.bank}: PT ` + (pv ? pv + (_MOVE.test(pv) ? ' to ' : ' at ') : '') + `$${a.target}`;
+      if (a.ptFrom) s += ` from $${a.ptFrom}`;
+      if (a.rating) s += `; ${a.ratingAction ? a.ratingAction + ' ' : ''}${a.rating}`;
+      const dt = _dateOf(a.raw); if (dt) s += ` (${dt})`;
+      return s;
+    }).join(' | ');
+    const freshTag = d.dataFreshness && d.dataFreshness !== 'unknown' ? ` [research freshness: ${d.dataFreshness}]` : '';
     lines.push('ANALYST ACTIONS: ' + ptStr + freshTag);
   } else {
     lines.push('ANALYST ACTIONS: No verified analyst PTs in current data');
   }
+  if (d.ratingOnlyActions?.length) {
+    lines.push('RATING ACTIONS (no PT): ' + d.ratingOnlyActions.map(r => { const dt = _dateOf(r.raw); return `${r.bank}: ${r.action}${r.rating ? ' ' + r.rating : ''}${dt ? ' (' + dt + ')' : ''}`; }).join(' | '));
+  }
+  if (_yearless) lines.push('DATE NOTE: analyst dates marked "year unverified" are as reported by the source, without a year. The year is not verified; do not treat these actions as recent on that basis.');
   // Revision direction — critical for weighting
   if (d.revisionDirection && d.revisionDirection !== 'unknown' && d.revisionDirection !== 'NONE') {
     lines.push('REVISION DIRECTION: ' + d.revisionDirection + (d.revisionRecency !== 'unknown' ? ' (most recent: ' + d.revisionRecency + ')' : ''));
   }
   if (d.earnings && d.earnings !== 'NONE') lines.push('EARNINGS: ' + d.earnings);
+  lines.push(..._extra);
   if (d.bullishCatalysts?.length) lines.push('BULLISH: ' + d.bullishCatalysts.join(' | '));
   if (d.bearishCatalysts?.length) lines.push('BEARISH: ' + d.bearishCatalysts.join(' | '));
   if (d.macroDrivers?.length)     lines.push('MACRO: ' + d.macroDrivers.join(' | '));
