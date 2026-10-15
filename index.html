@@ -5734,7 +5734,8 @@ function parsePerplexityContext(raw, sources = []) {
     },
     rating: {
       upgraded: ['upgraded', 'upgrades', 'upgrade', 'upgrading'], downgraded: ['downgraded', 'downgrades', 'downgrade', 'downgrading'],
-      reiterated: ['reiterated', 'reiterates', 'reiterate', 'reiterating'], maintained: ['maintained', 'maintains', 'maintain', 'maintaining']
+      reiterated: ['reiterated', 'reiterates', 'reiterate', 'reiterating'], reaffirmed: ['reaffirmed', 'reaffirms', 'reaffirm', 'reaffirming'],
+      maintained: ['maintained', 'maintains', 'maintain', 'maintaining']
     },
     coverage: {
       initiated: ['initiated', 'initiates', 'initiate', 'initiating'], started: ['started', 'starts', 'start', 'starting'],
@@ -5749,8 +5750,8 @@ function parsePerplexityContext(raw, sources = []) {
   const _AA_RATINGS = ['Strong Buy', 'Strong Sell', 'Buy', 'Outperform', 'Overweight', 'Accumulate', 'Add', 'Positive', 'Hold', 'Neutral',
     'Equal Weight', 'Market Perform', 'Sector Perform', 'Peer Perform', 'In Line', 'Market Weight', 'Sector Weight',
     'Underperform', 'Underweight', 'Reduce', 'Sell', 'Negative'];
-  const _AA_RATING = '(?:' + _AA_RATINGS.slice().sort((a, b) => b.length - a.length).map(r => r.replace(/ /g, '[\\s-]+')).join('|') + ')';
-  const _aaRatingName = s => { const k = String(s || '').toLowerCase().replace(/[\s-]+/g, ' ').trim(); return _AA_RATINGS.find(r => r.toLowerCase() === k) || null; };
+  const _AA_RATING = '(?:' + _AA_RATINGS.slice().sort((a, b) => b.length - a.length).map(r => r.replace(/ /g, '[\\s-]*')).join('|') + ')';
+  const _aaRatingName = s => { const k = String(s || '').toLowerCase().replace(/[\s-]+/g, ''); return _AA_RATINGS.find(r => r.toLowerCase().replace(/ /g, '') === k) || null; };
   // A $ amount; never a target when followed by B / M / K / bn / mn / billion / million / thousand.
   const _AA_AMT = '\\$\\s?((?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?)(?!\\d|[.,]\\d)(?!\\s?(?:billion|million|thousand|trillion)\\b)(?!(?:bn|mn|tn|[bmk])\\b)';
   const _AA_TW = '\\b(?:PT|price[\\s-]+targets?|targets?)\\b';
@@ -5763,6 +5764,12 @@ function parsePerplexityContext(raw, sources = []) {
   const _AA_RULE_A = new RegExp('\\bfrom\\s+' + _AA_AMT + '\\s+to\\s+' + _AA_AMT, 'i');
   const _AA_RULE_B = new RegExp('\\bto\\s+' + _AA_AMT + ',?\\s*from\\s+' + _AA_AMT, 'i');
   const _AA_RULE_A2 = new RegExp('(?<!\\bby\\s{0,3})' + _AA_AMT + '\\s+to\\s+' + _AA_AMT, 'i');
+  // analyst-action-coverage-1: "PT $24 from $27" (B2), "PT $180 \u2192 $200" (A3), "maintained Buy at $110" (E2), consensus figures (never a firm's target)
+  const _AA_RULE_B2 = new RegExp(_AA_TW + '\\s+' + _AA_AMT + ',?\\s+from\\s+' + _AA_AMT, 'i');
+  const _AA_RULE_B3 = new RegExp(_AA_TW + '\\s+(?:to\\s+)?' + _AA_AMT + '\\s*\\([^()$]{1,40}\\)\\s*,?\\s*from\\s+' + _AA_AMT, 'i'); // N-9; PT-anchored, no $ inside the parenthetical
+  const _AA_RULE_A3 = new RegExp(_AA_TW + '\\s+(?:to\\s+)?' + _AA_AMT + '\\s*(?:\u2192|->)\\s*' + _AA_AMT, 'i'); // anchored to a PT word
+  const _AA_RULE_E2 = new RegExp('\\b(?:' + ['maintained', 'reiterated', 'reaffirmed'].map(k => _AA_GROUPS.rating[k].join('|')).join('|') + ')\\s+(?:a\\s+|its\\s+)?' + _AA_RATING + '\\s+(?:rating\\s+)?(?:at|with(?:\\s+a)?)\\s+' + _AA_AMT + '(?!\\s*(?:per\\s+share|a\\s+share|\\/\\s*share|share\\b))', 'i'); // not a share price
+  const _AA_CONSENSUS = new RegExp('\\b(?:consensus|average|avg\\.?|mean|median)\\s+(?:analyst\\s+)?(?:price[\\s-]+)?(?:targets?|PT)\\b\\s*(?::|is|of|at|was)?\\s*' + _AA_AMT, 'i');
   const _AA_RULE_C = new RegExp(_AA_TW + '\\s*(?::|(unchanged\\s+at|of|at|to|is|was)\\b)?\\s*' + _AA_AMT, 'i');
   const _AA_RULE_D = new RegExp(_AA_AMT + '\\s*-?\\s*' + _AA_TW, 'i');
   const _AA_RULE_E = new RegExp('\\b(?:' + _aaFormsOf('coverage') + ')\\s+(?:coverage\\s+)?(?:(?:at|with|on)\\s+)?(?:a\\s+)?' + _AA_RATING + '\\s+(?:at|with(?:\\s+a)?)\\s+' + _AA_AMT, 'i');
@@ -5792,7 +5799,7 @@ function parsePerplexityContext(raw, sources = []) {
       while ((m = re.exec(it)) !== null) {
         const rest = it.slice(m.index + m[0].length);
         const vs = _aaVerbs(rest.slice(0, 80));
-        if (/^[A-Z]/.test(rest) && vs.length && vs[0].i > 0 && rest.slice(0, vs[0].i).indexOf('$') === -1 && vs[0].i <= 60) {
+        if (/^[A-Z]/.test(rest) && vs.length && vs[0].i > 0 && rest.slice(0, vs[0].i).indexOf('$') === -1 && vs[0].i <= 60 && _aaVerbs(it.slice(start, m.index)).length) {
           parts.push(it.slice(start, m.index).trim());
           start = m.index;
         }
@@ -5819,16 +5826,22 @@ function parsePerplexityContext(raw, sources = []) {
     do { prev = firm; firm = firm.replace(/[\s,]+$/, '').replace(/\s+(?:has|have|also|now)$/i, ''); } while (firm !== prev);
     firm = firm.trim();
     if (!firm || firm.length > 60 || firm.indexOf('$') !== -1 || /^(?:and|while|whereas|but|also|meanwhile|plus|with|the|consensus|analysts?)$/i.test(firm)) return null;
+    if (/\b(?:stocks?|shares|saw|price\s+targets?|targets?)\b/i.test(firm)) return null; // AC-7
     const hasTW = _AA_TW_RE.test(item);
     let target = null, ptFrom = null, unchanged = false, m;
     if (hasTW && (m = _AA_RULE_A.exec(item))) { target = _aaNum(m[2]); ptFrom = _aaNum(m[1]); }
     else if (hasTW && (m = _AA_RULE_B.exec(item))) { target = _aaNum(m[1]); ptFrom = _aaNum(m[2]); }
+    else if (hasTW && (m = _AA_RULE_B2.exec(item))) { target = _aaNum(m[1]); ptFrom = _aaNum(m[2]); }
+    else if (hasTW && (m = _AA_RULE_B3.exec(item))) { target = _aaNum(m[1]); ptFrom = _aaNum(m[2]); }
     else if (hasTW && (m = _AA_RULE_A2.exec(item))) { target = _aaNum(m[2]); ptFrom = _aaNum(m[1]); }
+    else if (hasTW && (m = _AA_RULE_A3.exec(item))) { target = _aaNum(m[2]); ptFrom = _aaNum(m[1]); }
     else if ((m = _AA_RULE_C.exec(item))) { target = _aaNum(m[2]); unchanged = /^unchanged/i.test(m[1] || ''); }
     else if ((m = _AA_RULE_D.exec(item))) target = _aaNum(m[1]);
     else if ((m = _AA_RULE_E.exec(item))) target = _aaNum(m[1]);
+    else if ((m = _AA_RULE_E2.exec(item))) target = _aaNum(m[1]);
     else if (hasTW && (m = _AA_RULE_F.exec(item))) target = _aaNum(m[1]);
     if (!(target > 0)) target = null;
+    if (target !== null && (m = _AA_CONSENSUS.exec(item)) && _aaNum(m[1]) === target) target = null; // AC-6
     if (target === null || !(ptFrom > 0)) ptFrom = null;
     const rm = _AA_RATING_TO.exec(item) || _AA_RATING_VERB.exec(item) || _AA_RATING_PREP.exec(item);
     const rating = rm ? _aaRatingName(rm[1]) : _aaRatingName(hint);
@@ -5855,8 +5868,11 @@ function parsePerplexityContext(raw, sources = []) {
     const seenA = new Set();
     const seenR = new Set();
     _aaItems(text).forEach(it => {
-      const r = _aaParseItem(it);
-      if (!r) return;
+      const r0 = _aaParseItem(it);
+      if (!r0) return;
+      const _fp = /\sand\s/i.test(r0.bank) ? r0.bank.split(/\s*,\s*(?:and\s+)?|\s+and\s+/i).map(f => f.trim()).filter(Boolean) : [r0.bank];
+      const firms = _fp.some(f => /^(?:co\.?|cos\.?|company|partners|associates|sons)$/i.test(f)) ? [r0.bank] : _fp; // "X and Company" stays one firm
+      firms.forEach(bank => { const r = Object.assign({}, r0, { bank });
       if (r.target !== null) {
         const key = r.bank.toLowerCase() + '|' + r.target;
         if (seenA.has(key)) return;
@@ -5868,6 +5884,7 @@ function parsePerplexityContext(raw, sources = []) {
         seenR.add(key);
         ratingOnlyActions.push({ bank: r.bank, action: r.ratingAction, ratingAction: r.ratingAction, rating: r.rating, raw: r.raw });
       }
+      });
     });
     return { analystActions: analystActions.slice(0, 5), ratingOnlyActions: ratingOnlyActions.slice(0, 5) };
   };
