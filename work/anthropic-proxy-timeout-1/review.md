@@ -10,8 +10,9 @@ The Anthropic proxy's upstream abort timer is raised from 25 s to 50 s: the `TIM
 - Must-stay-green, unchanged files, all PASS: `p5_call2_offline` 401 asserts, `deep_dive_v0_offline` 74, `fund_facts_route_offline` 14.
 - Step 10: full `qa:offline` PASS, 96 suites (= step 0 + 1), 0 FAIL, the same 1 pre-existing advisory warning (raw in `qa.log`).
 - Planted negative AT-N1: on a temp copy of the production source the literal is restored to 25000; AT-1 and AT-4 both fail, and the unmutated control passes both.
+- Post-resync (base `6f23f58`, tip `5863a25`): full `qa:offline` PASS, 97 suites (the resync brought in Worker A's `analyst-action-coverage-1` suite; this task's +1 is unchanged), 0 FAIL, the same 1 pre-existing advisory warning; the three land-tests (`anthropic_proxy_timeout` 23, `p5_call2` 401, `deep_dive_v0` 74) PASS. The 96-suite result above was the pre-resync run (raw in `qa.log`).
 
-LAND-EVIDENCE: qa-offline=PASS 96; targeted=PASS; codex-classI-unresolved=0
+LAND-EVIDENCE: qa-offline=PASS 97; targeted=PASS; codex-classI-unresolved=0
 
 ## Reading used (wording, not a STOP)
 - AT-2 is arithmetic on the documented 60 s limit, not a platform test (as the brief states); the platform limit is proven only by the later §4 long-duration DEV check, which this task neither runs nor depends on.
