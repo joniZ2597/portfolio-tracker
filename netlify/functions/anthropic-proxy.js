@@ -29,7 +29,7 @@
 
 const ANTHROPIC_URL     = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
-const TIMEOUT_MS        = 25000; // reduced from 30s - stay under Netlify 26s function limit
+const TIMEOUT_MS        = 50000; // Netlify synchronous functions run up to 60 s (credit-based plans); keep a 10 s margin
 const MAX_BODY_BYTES    = 65536; // 64 KB - covers system prompt + stock context + pplxData JSON
 
 // -- P-5 Call-2 tool definition (proxy-owned, R-3) ------------------------------
