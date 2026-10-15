@@ -10,7 +10,9 @@ The AI's research block now carries the three template fields it never received 
 - Step 10: full `qa:offline` PASS, 94 suites (= step 0 + 1), 0 FAIL, the same 1 pre-existing advisory warning.
 - Planted negatives (each mutates the production source, anchor exactly once; the named row fails): RC-N1 (`lines.push(..._extra)` removed -> RC-1), RC-N2a/N2b (`ptFrom` / direction removed -> RC-3), RC-N3 (rating-only line removed -> RC-4), RC-N4 (year-less marker removed -> RC-10a), RC-N5a/N5b (DATE NOTE push removed / text altered -> RC-10e).
 
-LAND-EVIDENCE: qa-offline=PASS 94; targeted=PASS; codex-classI-unresolved=0
+- Post-resync (base `7e5df3e`, tip `9a49190`): full `qa:offline` PASS, 95 suites (the resync brought in Worker B's `fund-facts-token-collision-1` suite; this task's +1 is unchanged), 0 FAIL, the same 1 pre-existing advisory warning; the four land-tests (`research_ai_context` 31, `analyst_parser` 57, `research_parser_hygiene` 18, `index_pins` 13) and `index-pins --check` PASS. The 94-suite result above was the pre-resync run (raw in `qa.log`).
+
+LAND-EVIDENCE: qa-offline=PASS 95; targeted=PASS; codex-classI-unresolved=0
 
 ## RED record (S1)
 Against the unmodified source the new suite gave 9 rows failing (RC-1, RC-3, RC-4, RC-7b, RC-9, RC-10a, RC-10b, RC-10d, RC-10e — RC-10b also fails on the old source because the old line drops the date) and all planted-negative anchors absent (`occurs 0 times`); RC-2, RC-5, RC-6, RC-7a, RC-8 and RC-10c passed on the old source, as they pin unchanged behaviour. After E-1…E-7 all pass. Raw output in `qa.log`.
