@@ -3500,7 +3500,7 @@ async function _p5RunResearch(symbol, mountEl, nowMs) {
 var P5_CALL2_TOOL_NAME  = 'emit_synthesis';      // R-3 — proxy owns the definition; client matches by name only
 var P5_CALL2_MODEL      = 'claude-sonnet-4-5';   // J1 — pinned, never inherited
 var P5_CALL2_MAX_TOKENS = 700;                   // J8
-var P5_CALL2_TIMEOUT_MS = 28000;                 // > proxy 25s and Netlify's 26s ceiling, so a real 504 surfaces
+var P5_CALL2_TIMEOUT_MS = 52000;                 // > proxy 50s (anthropic-proxy TIMEOUT_MS) and < Netlify's 60s limit, so a real 504 surfaces
 
 // Narrow, high-precision backstop. The prompt is the primary control; this
 // only catches unambiguous recommendation formats. Deliberately NOT a broad
@@ -5524,14 +5524,20 @@ async function fetchBatchStockData(symbols) {
 function formatStockContext(stockMap) {
   if (!Object.keys(stockMap).length) return '';
   const lines = Object.values(stockMap).map(d => {
-    const chg = isNaN(d.change_percent) ? 'N/A' : (d.change_percent >= 0 ? `+${d.change_percent}%` : `${d.change_percent}%`);
+    // ai-request-hygiene-1 (G-1, D-18): an invalid or missing price, volume or change % prints n/a. A price is valid only
+    // as a finite number > 0 (a 0 is the providers' "unavailable" fallback); volume as a finite number >= 0; change % as any
+    // finite number. USD prices print 2 decimals (up to 4 below $1) instead of raw float noise; .TA stays agorot -> ILS.
+    const _fin = v => typeof v === 'number' && Number.isFinite(v);
+    const chg = !_fin(d.change_percent) ? 'n/a' : (d.change_percent >= 0 ? `+${d.change_percent}%` : `${d.change_percent}%`);
     const pct = isNaN(d.change_percent) ? 'N/A' : (d.change_percent >= 0 ? `+${d.change_percent}%` : `${d.change_percent}%`);
     const _ta = /\.TA$/.test(d.symbol || ''); // tase-units-1: .TA prices arrive raw in agorot → ILS in the prompt
-    const _px = v => (_ta && typeof v === 'number' && isFinite(v)) ? (v / 100).toFixed(2) + ' ILS' : `$${v}`;
+    const _usd = v => (v >= 1 ? v.toFixed(2) : v.toFixed(4).replace(/0{1,2}$/, ''));
+    const _px = v => !(_fin(v) && v > 0) ? 'n/a' : (_ta ? (v / 100).toFixed(2) + ' ILS' : '$' + _usd(v));
+    const _vol = (_fin(d.volume) && d.volume >= 0) ? d.volume.toLocaleString() : 'n/a';
     return (
       `${d.symbol} [source: ${d.source}]\n` +
       `  Price: ${_px(d.price)} (${chg}) | Open: ${_px(d.open)} | Prev Close: ${_px(d.previous_close)}\n` +
-      `  Intraday High: ${_px(d.high)} | Intraday Low: ${_px(d.low)} | Volume: ${d.volume.toLocaleString()}\n` +
+      `  Intraday High: ${_px(d.high)} | Intraday Low: ${_px(d.low)} | Volume: ${_vol}\n` +
       (_ta ? '  CURRENCY: ILS (Tel Aviv listing; prices converted from agorot). State every price level in ILS.\n' : '') +
       `  NOTE: Do NOT estimate or infer November low / April low → mark as "not available" if unknown.`
     );
@@ -6427,13 +6433,40 @@ Tickers: ${batch.join(',')}`;
 
   console.log('[PT] Anthropic user prompt length:', user.length);
 
+  // ai-request-hygiene-1 (G-2): output cap 2,500 (proven on DEV: 2,500 tokens in 30.2 s < the 50 s proxy timeout).
+  const _AI_MAX_TOKENS = 2500;
+  // E-2: memory-only telemetry of every attempt (first call and retry), mirroring window._pplxDebug. Never persisted,
+  // never rendered, never sent. Every value it reads (including the response status) is read inside its try, so it can
+  // never throw into the scan. Bounded: last 4 attempts per ticker, last 100 tickers (least recently written dropped;
+  // a Map keeps true write order for every key, including digit-only ones).
+  const _aiTel = (res, d) => {
+    try {
+      if (typeof window === 'undefined' || !window) return;
+      const _int = v => (typeof v === 'number' && Number.isInteger(v) && v >= 0) ? v : null;
+      const u = (d && typeof d === 'object' && d.usage && typeof d.usage === 'object') ? d.usage : {};
+      const rec = {
+        at: Date.now(), status: _int(res && res.status), maxTokens: _AI_MAX_TOKENS,
+        stopReason: (d && typeof d === 'object' && typeof d.stop_reason === 'string') ? d.stop_reason.slice(0, 40) : null,
+        inputTokens: _int(u.input_tokens), outputTokens: _int(u.output_tokens)
+      };
+      if (!(window._aiReqDebug instanceof Map)) window._aiReqDebug = new Map();
+      const store = window._aiReqDebug;
+      const key = batch.join(',');
+      const prev = Array.isArray(store.get(key)) ? store.get(key) : [];
+      store.delete(key);                                  // re-insert so the key becomes the most recent
+      store.set(key, prev.concat([rec]).slice(-4));
+      for (const k of store.keys()) { if (store.size <= 100) break; store.delete(k); }
+    } catch (_e) { /* telemetry is best-effort */ }
+  };
+
   const response = await fetch('/.netlify/functions/anthropic-proxy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1800, system: system, messages: [{ role: 'user', content: user }, { role: 'assistant', content: '{' }] })
+    body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: _AI_MAX_TOKENS, system: system, messages: [{ role: 'user', content: user }, { role: 'assistant', content: '{' }] })
   });
-  if (!response.ok) { const err = await response.json(); throw new Error('Anthropic: ' + (err.error?.message || 'API error')); }
+  if (!response.ok) { _aiTel(response, null); const err = await response.json(); throw new Error('Anthropic: ' + (err.error?.message || 'API error')); }
   const data = await response.json();
+  _aiTel(response, data);
   let textContent = '';
   for (const block of data.content) { if (block.type === 'text') textContent += block.text; }
 

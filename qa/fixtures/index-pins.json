@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "08d8289935a59c2b497185510ee42cc37f5a7719231b928212de319879aee3a9",
+  "fileSha256": "2bb13d5730ce3767d2b2a49376457506fd281ea6c5733f13522e9d47629af05a",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -296,7 +296,7 @@
     "exportJSON": "6bc77494345c43b216f21df9500512f5c45f82de42eac89ecb0db36a08b0b273",
     "exportPortfolioBackup": "b5b5906c443ec83d941d902d3ea5638729e446c0d164d46396b3ec66a376b3c1",
     "fetchAlphaVantage": "506fc899c5f89a7d4150e04c316f80c2539afb1a0692d3ca388f8bd1ca446c2b",
-    "fetchAnthropicAnalysis": "be916d0c24c40940d2cb9bc3338aba631292a708041003b15d7b28e1fddd70de",
+    "fetchAnthropicAnalysis": "99eb1e8d96c2c0f17acc4dc7af289815b87edaa0a57e5a5616c661373df95089",
     "fetchBatchStockData": "19df8efbcf24d9ca069b24f11ab235178f5e5240009648e3ced140fffde9ff96",
     "fetchHistoricalCandles": "94b245c8700ed0e84fed41782f6fc1ee00e24f468f014fc20e26809ce114d17d",
     "fetchPerplexityAnalysis": "26ea112e5aa82171bc79c2a721798240698a35a4c435c09b3b70bf5ea37e0e9d",
@@ -307,7 +307,7 @@
     "filterWatchlistRows": "c3128340651197b8960f12f14f6057975bf50809456b1f6a9be565313953ecfd",
     "findTicker": "0294e91f60b66051b7f84a023b0b1cb30a18bc5eb06a7bfd07c3f52ad1c9f5f1",
     "formatNewsContext": "2690087b1a615637b8c1f8175cae1ab2180bbf874ca94ba6c3f6d0cc99d3409c",
-    "formatStockContext": "586df52b56abec183d235cc5a770e341e53c4146d9cd0673ecc8d05a6317b9a8",
+    "formatStockContext": "4833b20da3470692c54d183d185c2e83581a93a71c981a8fd75fba46d697abd0",
     "getHistoricalCacheStats": "d92d5c22c01f73e0b20f3c191c9abdcc01f82dea3b701e4ae65d6224e9428b47",
     "getScanSymbols": "3d319e463e2d78d8748d0c17da5a2cc6ba99fd24a4fc5d47a0f5dbb604bf6755",
     "getSymbols": "c76492ad2ae04fb621a29999995bfb698374e3a082af4aded898b4b3a382f03c",
@@ -535,5 +535,5 @@
       "sha256": "79b78d1ed91f3d6f8c2b867378a1a228f83399c8931ddd150eea31143bb3a31e"
     }
   },
-  "remainderSha256": "f5a8fc6e94723df94b8b21e6b042381acc882a0fe28383b11787447c629868a4"
+  "remainderSha256": "dfd6060a12602933fbf3ff3d28e40ef972f971439fc51984de57f81aba72ee53"
 }

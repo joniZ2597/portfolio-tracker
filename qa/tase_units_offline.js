@@ -92,8 +92,9 @@ const stockRow = (symbol, k, over) => Object.assign({ symbol, source: 'yahoo', p
   high: 227.5 * k, low: 224.9 * k, volume: 1234567, change_percent: 0.95 }, over || {});
 const WRAP = body => '\n=== LIVE MARKET DATA (verified, use exactly as provided) ===\n' + body + '\n=== END MARKET DATA ===';
 const NOTE = '  NOTE: Do NOT estimate or infer November low / April low → mark as "not available" if unknown.';
-// US oracle: the pre-task output (2c2b0d9 / 14d6c94), byte for byte
-const US_CONTEXT = WRAP('NVDA [source: yahoo]\n  Price: $226.73 (+0.95%) | Open: $225.1 | Prev Close: $224.6\n  Intraday High: $227.5 | Intraday Low: $224.9 | Volume: 1,234,567\n' + NOTE);
+// US oracle: the pre-task output (2c2b0d9 / 14d6c94), byte for byte, except that USD prices print 2 decimals since
+// ai-request-hygiene-1 (G-1): $225.1 -> $225.10 etc.
+const US_CONTEXT = WRAP('NVDA [source: yahoo]\n  Price: $226.73 (+0.95%) | Open: $225.10 | Prev Close: $224.60\n  Intraday High: $227.50 | Intraday Low: $224.90 | Volume: 1,234,567\n' + NOTE);
 const CURRENCY_LINE = '  CURRENCY: ILS (Tel Aviv listing; prices converted from agorot). State every price level in ILS.';
 const TA_ROW = { symbol: 'MTRX.TA', source: 'yahoo', price: 8884, open: 8800, previous_close: 8800, high: 8950, low: 8790, volume: 1234567, change_percent: 0.95 };
 
@@ -110,7 +111,7 @@ const BASE_DIGESTS = {
   analyzeChunk: 'e9303a0690a6fad433918ee02772dcc63e0ad9d65f431f4dd7ee007b3c9ea703',
   orchestrate: '2e352b3f1d4739e8f98fb079ed3c3865115263e12dcdc53dda70350bebf97dfb',
   enforceScoreConsistency: '28a3a5cac29be9a0b61e854182caaa7cac2ed241fe847fd5b65e8e05a8cbfc60',
-  fetchAnthropicAnalysis: 'be916d0c24c40940d2cb9bc3338aba631292a708041003b15d7b28e1fddd70de',
+  fetchAnthropicAnalysis: '99eb1e8d96c2c0f17acc4dc7af289815b87edaa0a57e5a5616c661373df95089',   // ai-request-hygiene-1 (E-1 cap, E-2 telemetry)
   fetchHistoricalCandles: '94b245c8700ed0e84fed41782f6fc1ee00e24f468f014fc20e26809ce114d17d',
   computeTechnicalSnapshot: '373e9290a82129cb1ec2ec053ceb5263e81159fc7acc8a589a91defad8d2fc9d'
 };
@@ -251,7 +252,7 @@ const NEGS = [
   { id: 'NEG-4', row: 'TU-2', label: 'MA rows not converted', f: s => mut(s, 'return _pxSym + (sma / _pxDiv).toFixed(2);', 'return _pxSym + sma.toFixed(2);') },
   { id: 'NEG-5', row: 'TU-3', label: 'change amount not converted', f: s => mut(s, 'Math.abs((_displayPriceBase - _displayPriceBase / (1 + chg/100)) / _pxDiv).toFixed(2)', 'Math.abs(_displayPriceBase - _displayPriceBase / (1 + chg/100)).toFixed(2)') },
   { id: 'NEG-6', row: 'TU-4', label: 'extended price not converted', f: s => mut(s, '${_pxSym}${(_extPrice / _pxDiv).toFixed(2)}', '${_pxSym}${_extPrice.toFixed(2)}') },
-  { id: 'NEG-7', row: 'TU-5', label: 'prompt left in agorot', f: s => mut(s, "(v / 100).toFixed(2) + ' ILS' : `$${v}`", "v + ' ILS' : `$${v}`") },
+  { id: 'NEG-7', row: 'TU-5', label: 'prompt left in agorot', f: s => mut(s, "_ta ? (v / 100).toFixed(2) + ' ILS' : '$' + _usd(v)", "_ta ? v + ' ILS' : '$' + _usd(v)") },
   { id: 'NEG-8', row: 'TU-6', label: 'MA prompt levels left in agorot', f: s => mut(s, "(v / 100).toFixed(2) + ' ILS' : '$' + v.toFixed(2)", "v.toFixed(2) + ' ILS' : '$' + v.toFixed(2)") },
   { id: 'NEG-9', row: 'TU-7', label: 'old ticker-header regex', f: s => mut(s, '([A-Z]{1,6}(?:[.\\-][A-Z]{1,2})?)(?=\\b|\\*\\*|\\s|$)/);', '([A-Z]{1,6})(?=\\b|\\*\\*|\\s|$)/);') },
   { id: 'NEG-10', row: 'TU-7', label: 'regex accepting 3+ letter suffixes (AAPL.COM)', f: s => mut(s, '(?:[.\\-][A-Z]{1,2})?)', '(?:[.\\-][A-Z]{1,3})?)') }
