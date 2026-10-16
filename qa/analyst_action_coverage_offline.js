@@ -71,12 +71,12 @@ const CAPS = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8')).captures;
 // Parsed-field hashes recorded from the base index.html (05e9fac) on the 8 live captures.
 const LIVE_BASE = {
   'NVDA#1': { rest: '4015e2b9de12b234', aa: '9dfa537c934447b2' },
-  'MSFT#2': { rest: 'ca834cbbf22211c8' },
+  'MSFT#2': { rest: '90ffd3b019658ca6' },
   'FROG#3': { rest: '149d3dd5c2cfb3bd' },
   'ENPH#4': { rest: '4effb9eacb212354' },
   'QQQ#5': { rest: 'f588becd308c8de0', aa: '9dfa537c934447b2' },
   'NXSN.TA#6': { rest: '4581ae6c68e46d2b', aa: '9dfa537c934447b2' },
-  'MGOR.TA#7': { rest: 'c474f85bb7f873d6', aa: '9dfa537c934447b2' },
+  'MGOR.TA#7': { rest: '0cb937910c80e671', aa: '9dfa537c934447b2' },
   'NXSN.TA#8': { rest: '497916daf9dc4c93', aa: '9dfa537c934447b2' }
 };
 

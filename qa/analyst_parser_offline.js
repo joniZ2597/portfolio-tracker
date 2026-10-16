@@ -277,11 +277,11 @@ check('AP-8 11a target 5600', A('11a').length === 1 && A('11a')[0].target === 56
     roOf(parsePerplexityContext('TICKER: TST\nANALYST_ACTIONS: ' + ro6 + '\nEARNINGS: NONE\n').TST).length === 5);
 }
 
-// -- AP-13: _allNone unchanged --
+// -- AP-13: _allNone (catalyst-hygiene-2, R-6 / D-6: rating-only research is coverage, never all-none) --
 {
   const only = parsePerplexityContext('TICKER: TST\nANALYST_ACTIONS: UBS upgraded to Buy from Neutral (Oct 2)\nBULLISH: NONE\nBEARISH: NONE\nMACRO: NONE\nREVISION_DIRECTION: NONE\nEARNINGS: NONE\n').TST;
-  check('AP-13 a block whose only analyst content is rating-only has _allNone === true',
-    only._allNone === true && only.analystActions.length === 0 && roOf(only).length === 1);
+  check('AP-13 a block whose only analyst content is rating-only has _allNone === false',
+    only._allNone === false && only.analystActions.length === 0 && roOf(only).length === 1);
   const withTarget = parsePerplexityContext('TICKER: TST\nANALYST_ACTIONS: UBS raised PT to $120 (Oct 2)\nBULLISH: NONE\nBEARISH: NONE\nMACRO: NONE\nREVISION_DIRECTION: NONE\nEARNINGS: NONE\n').TST;
   check('AP-13 a block with a target row has _allNone === false', withTarget._allNone === false);
   const startAll = ext.source.indexOf('result[currentTicker]._allNone = (');
@@ -290,9 +290,9 @@ check('AP-8 11a target 5600', A('11a').length === 1 && A('11a')[0].target === 56
   check('AP-13 the _allNone expression is byte-equal to the baseline (pin-map region)', expr !== '' && idxMismatch(content, ['regions.allnone_expr']).length === 0);
   const filler = 'General commentary line that carries no analyst content at all.\n';
   const rawRo = parsePerplexityContext(filler + 'UBS upgraded to Buy from Neutral (Oct 2)\n').__raw__;
-  check('AP-13 __raw__ fallback: rating-only row present, analystActions empty, _allNone true',
+  check('AP-13 __raw__ fallback: rating-only row present, analystActions empty, _allNone false',
     !!rawRo && rawRo.analystActions.length === 0 && Array.isArray(rawRo.ratingOnlyActions) &&
-    roOf(rawRo).length === 1 && rawRo._allNone === true);
+    roOf(rawRo).length === 1 && rawRo._allNone === false);
   const rawT = parsePerplexityContext(filler + 'Goldman Sachs cut PT to $485 and maintained Neutral (Sep 30)\n').__raw__;
   check('AP-13 __raw__ fallback: target row extracted, _allNone false',
     !!rawT && rawT.analystActions.length === 1 && rawT.analystActions[0].target === 485 && rawT._allNone === false);

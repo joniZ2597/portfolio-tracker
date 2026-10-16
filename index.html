@@ -5691,30 +5691,127 @@ function parsePerplexityContext(raw, sources = []) {
     const v = line.slice(idx + 1).trim();
     return _isNoneVal(v) ? '' : v;
   };
+  // catalyst-hygiene-2 E-7 (D-5, rev 4): does a price row state an explicit causal EVENT?
+  // The text after a cue word ("after", "amid", "following", …) is cut at the clause end and read by grammatical ROLE, never by
+  // matching a word anywhere nearby. An event needs an actor or an occurrence:
+  //   (a) a clause "<subject> <past verb>" whose subject is not the market, the stock, a market participant or a chart level;
+  //   (b) a leading gerund with a real object ("after losing a key client");
+  //   (c) a noun phrase whose HEAD is an occurrence: an event-type noun, a verb-particle noun ("shake-up", "write-down"), or a
+  //       derived noun (-tion, -ment, -ure, -al …) anchored to an actor or subject matter (a noun modifier, a possessive,
+  //       or an actor in its complement);
+  //   (d) "news / reports / word of X" is read as X.
+  // Market description — price action, trading, participants, mood, chart levels and times — is never a cause, whether it is
+  // the subject, the head, a modifier or the complement of the phrase.
+  const _E7_CUE = /\b(?:after|following|amid|due\s+to|because\s+of|driven\s+by|on\s+the\s+back\s+of|in\s+response\s+to|on\s+news\s+(?:of|that))\s+/g;
+  const _E7_END = /[;:,|([]|(?<!\b[a-z])\.(?=\s|$)|\s(?:and|but|while|whereas|as|amid|after|following|despite|even\s+as)\s/;
+  const _E7_MKT = /^(?:markets?|trading|trades?|sessions?|volumes?|flows?|momentum|volatility|volatile|weakness|strength|rall(?:y|ies)|sell-?offs?|selling|buying|pullbacks?|rebounds?|bounces?|corrections?|consolidation|rotation|speculation|jitters|optimism|pessimism|sentiment|moods?|tone|tape|malaise|risk|risk-off|risk-on|appetite|liquidity|participation|breadth|exposure|positions?|positioning|stocks?|shares?|prices?|index|indices|indexes|nasdaq|dow|s&p|russell|benchmarks?|futures|options|caps|defensives|cyclicals|names|highs?|lows?|peaks?|floors?|records?|resistance|support|levels?|ranges?|averages?|lines?|trendlines?|trends?|uptrends?|downtrends?|patterns?|tops?|bottoms?|close|open|opening|bell|hours|days?|weeks?|weekend|months?|mornings?|afternoons?|holiday|gaps?|squeeze|breakouts?|breakdowns?|technicals?|charts?|profit-taking|profit-booking|slump|surge|slide|declines?|drops?|gains?|moves?|swings?|turmoil|run-up|run|streaks?|fade|reversal|retest|covering|drawdown|ground|valuations?|multiples?|52-week|intraday|year-to-date|ytd|\d+-(?:day|week|month|year)|traders?|investors?|bulls?|bears?|buyers?|sellers?|shorts|longs|funds|dip-buyers)$/;
+  const _E7_ACTOR = /^(?:ceo|cfo|coo|chair(?:man|woman)?|founders?|executives?|directors?|board|management|auditors?|regulators?|government|court|judge|jury|fda|sec|ftc|doj|eu|senate|congress|company|firm|partners?|customers?|clients?|suppliers?|unions?|workers|employees|shareholders|creditors|lenders?|banks?|rivals?|competitors?|agency|authorities|officials|ministry|parent|subsidiary|insurers?)$/;
+  const _E7_PRON = /^(?:it|they|this|that|these|those)$/;
+  const _E7_POSS = /^(?:its|their|his|her|our)$/;
+  const _E7_DET = /^(?:the|a|an|its|their|his|her|our|this|that|these|those|some|any|new|recent|latest|two|three|several|key|major)$/;
+  const _E7_MOVE = /^(?:rose|fell|gained|dropped|surged|slid|rallied|jumped|climbed|sank|tumbled|plunged|soared|rebounded|dipped|closed|opened|traded|touched|reached|broke|slumped|retreated|advanced|declined|edged|spiked|crashed|gapped|drifted|faded|stalled|bounced|recovered|underperformed|outperformed|lagged)$/;
+  const _E7_AMBIG = /^(?:hit|lost|gave|held|extended|added|shed|pared|erased|took)$/;
+  // regular past (-ed) plus the closed class of irregular past forms (grammar, not event vocabulary)
+  const _E7_PAST = /^(?:[a-z]{2,}ed|went|hit|cut|lost|won|made|said|set|sold|took|gave|bought|began|quit|led|left|paid|shut|split|struck|spent|fell|rose|sank|broke|bid|told|met|ran|grew|withdrew|forecast|chose|put|drove|sent|sought|stood|wrote|fought|froze|hid|swore|bore|tore|undercut|overtook|threw|fled|stole|flew|drew|shook|swung|spun|hung|stuck|caught|brought|kept|felt|dealt|built|lent|shed|spread|upset|cast|cost|hurt|let|undertook|forbade|oversaw|withheld|upheld|overrode|spoke|got|became|came|knew|blew|saw|did|had|found|read|fed|misled|sped|slid|shrank)$/;
+  const _E7_AUX = /^(?:was|were|is|are|been|being|got|gets|has|have|had)$/;
+  const _E7_PREP = /^(?:of|for|to|in|on|at|by|with|from|over|about|against|into|near|ahead|than|among|under|across|toward|towards|through|off|below|above)$/;
+  const _E7_HEAD = /^(?:recalls?|probes?|breach(?:es)?|fires?|strikes?|lawsuits?|suits?|cases?|deals?|defects?|outages?|mergers?|bids?|bans?|wars?|rulings?|verdicts?|reports?|results|earnings|guidance|outlook|forecasts?|targets?|warnings?|offerings?|splits?|buybacks?|dividends?|churn|loss(?:es)?|hacks?|leaks?|crash(?:es)?|collapse|death|explosions?|spills?|layoffs?|shutdowns?|delays?|downgrades?|upgrades?|hikes?|cuts?|tariffs?|sanctions?|embargo(?:es)?|elections?|ceasefires?|storms?|hurricanes?|earthquakes?|floods?|outbreaks?|pandemic|trials?|launch(?:es)?|filings?|orders?|contracts?|wins?|sales?|ouster|exit|takeover|buyout|stake|ipo|scandal|fines?|penalt(?:y|ies)|subpoenas?|indictments?|charges?|default|bankruptcy|fraud|attacks?|cyberattacks?|complaints?|incidents?|derailments?|accidents?|restatement|inquiry|inquiries|approach|walkout|miss|beat)$/;
+  const _E7_INFO = /^(?:news|reports?|word|reporting)$/;
+  const _E7_PARTICLE = /^[a-z]{3,}-(?:up|down|off|out|in|over|back)$/;     // "shake-up", "write-down", "spin-off"
+  const _E7_SUFFIX = /^[a-z-]{3,}(?:tion|sion|ment|ure|ance|ence|age|ship)s?$/;
+  const _E7_AL = /^(?:approv|remov|withdraw|dismiss|refus|renew|propos|deni|revers|arriv|disapprov|referr|acquitt|repris)als?$/;
+  // adjective-like modifiers (by suffix, including participles in -ed / -ing, plus the closed class of degree / time / tone adjectives) never anchor an event
+  const _E7_ADJ = /^(?:[a-z-]+(?:ent|ant|ive|ous|ful|ic|al|ary|able|ible|ed|less|ish|ing)|broad|mixed|weak|strong|soft|firm|calm|quiet|general|overall|modest|sharp|brief|heavy|light|thin|early|late|lukewarm|tepid|muted|slow|fast|big|small|large|high|low|steady|choppy|jittery|nervous|cautious|sluggish|downward|upward|further|fresh|new|recent|current|ongoing|continued|prolonged|sudden|abrupt|surprise|unexpected|widespread)$/;
+  const _e7Words = c => c.replace(/\[\d+\]/g, ' ').split(/\s+/)
+    .map(w => w.replace(/^[^a-z0-9$&]+|[^a-z0-9%&]+$/g, '')).filter(Boolean).slice(0, 10);
+  const _e7Upto = (ws) => { const o = []; for (const x of ws) { if (_E7_PREP.test(x)) break; o.push(x); } return o; };
+  const _e7IsEvent = (w, depth) => {
+    if (!w.length) return false;
+    // (a) "<subject> <past verb>"
+    for (let i = 1; i < w.length; i++) {
+      if (_E7_PREP.test(w[i])) break;
+      if (!_E7_PAST.test(w[i])) continue;
+      const passive = _E7_AUX.test(w[i - 1]);
+      const subj = w.slice(0, passive ? i - 1 : i).filter(x => !_E7_DET.test(x) && !_E7_AUX.test(x));
+      if (!subj.length) break;                                   // "an expanded partnership" is a phrase, not a clause
+      if (/ed$/.test(subj[subj.length - 1])) break;             // "elevated put volume": a participle cannot head the subject
+      const obj = _e7Upto(w.slice(i + 1));
+      if (_E7_MOVE.test(w[i]) && subj.every(x => _E7_PRON.test(x))) return false; // "it fell": the stock's own price movement
+      if (_E7_AMBIG.test(w[i]) && obj.some(x => _E7_MKT.test(x))) return false;    // "it gave back early gains", "it lost ground"
+      if (passive && !_E7_MOVE.test(w[i]) && !/^(?:off|lower|higher|up|down)$/.test(w[i + 1] || ''))
+        return !subj.some(x => _E7_MKT.test(x) && !/^(?:stocks?|shares?)$/.test(x));  // "the stock was downgraded"
+      if (subj.some(x => _E7_MKT.test(x))) return false;          // "investors took profits", "the shares retreated"
+      return true;                                                // "the CEO resigned", "Q3 sales fell", "the deal closed"
+    }
+    // (b) leading gerund (checked after the clause test, so "Boeing halted deliveries" is a clause): not market activity; it needs a real object (an article / possessive / number, or an event noun),
+    //     and the object is not market description. "failing to hold its moving average" is read through the infinitive.
+    if (/^[a-z]{3,}ing$/.test(w[0]) && !_E7_MKT.test(w[0])) {
+      const rest = w[1] === 'to' ? w.slice(3) : w.slice(1);
+      const obj = _e7Upto(rest);
+      if (!obj.length || obj.some(x => _E7_MKT.test(x))) return false;
+      return _E7_DET.test(obj[0]) || /^[$\d]/.test(obj[0]) || obj.some(x => _E7_HEAD.test(x) || _E7_ACTOR.test(x));
+    }
+    // (c) noun phrase: the head is the last word before a preposition; no part of the phrase may be market description
+    const np = _e7Upto(w);
+    if (!np.length || np.some(x => _E7_MKT.test(x))) return false;
+    const head = np[np.length - 1];
+    const comp = _E7_PREP.test(w[np.length] || '') ? _e7Upto(w.slice(np.length + 1)) : null;
+    if (comp && comp.some(x => _E7_MKT.test(x))) return false;    // "a reversal off the highs", "an absence of buyers"
+    // (d) "news / reports / word of X": the event is X
+    if (_E7_INFO.test(head) && comp && depth < 1 && /^(?:of|on|about)$/.test(w[np.length])) return _e7IsEvent(w.slice(np.length + 1), depth + 1);
+    if (_E7_HEAD.test(head)) return true;
+    if (_E7_PARTICLE.test(head)) return true;
+    if (!(_E7_AL.test(head) || _E7_SUFFIX.test(head))) return false;
+    // derived noun: anchored by a noun modifier ("a supply disruption"), or by a complement that names an actor, carries a
+    // possessive or names an event ("the departure of two senior executives", "the withdrawal of its takeover offer")
+    const mods = np.slice(0, -1).filter(x => !_E7_DET.test(x));
+    if (mods.some(x => _E7_HEAD.test(x) || _E7_ACTOR.test(x) || _E7_SUFFIX.test(x) || !_E7_ADJ.test(x))) return true;
+    return !!comp && comp.some(x => _E7_ACTOR.test(x) || _E7_POSS.test(x) || _E7_HEAD.test(x));
+  };
+  const _statedEventCause = t => {
+    _E7_CUE.lastIndex = 0;
+    let m;
+    while ((m = _E7_CUE.exec(t)) !== null) {
+      const rest = t.slice(m.index + m[0].length);
+      const end = rest.search(_E7_END);
+      if (_e7IsEvent(_e7Words(end === -1 ? rest : rest.slice(0, end)), 0)) return true;
+    }
+    return false;
+  };
   // 7B-3B1: catalyst quality guard — reject price-history-only rows that sonar-pro
   // occasionally puts in BULLISH/BEARISH/MACRO slots (e.g. "May 28, 2026 stock close
   // at $214.25"). Only rejects when the row matches a price-history pattern AND has
   // NO real catalyst term. Conservative-by-default: a row mentioning a price alongside
   // a real catalyst term (e.g. "Q1 earnings beat drove shares to close at $185") is kept.
+  // catalyst-hygiene-2 E-2: a row that starts with a date followed by a dash or colon, carries a currency price level
+  // ($, ₪, ILA, ILS, NIS) and a % move is a dated price move.
+  const _isDatedPriceMove = t =>
+    /^\s*(?:on\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s*\d{4})?\s*[—–:-]/i.test(t) &&
+    /(?:\$|₪|\b(?:ila|ils|nis))\s*\d/i.test(t) && /\d\s*%/.test(t);
   const _isPriceHistoryOnly = s => {
     const t = String(s || '').toLowerCase();
     if (!t) return false;
     const looksLikePriceHistory =
-      /\b(?:close[ds]?|trad(?:ed|ing))\s+(?:at|near|around)\s+\$?\d/i.test(t) ||
+      /\b(?:close[ds]?|trad(?:ed|ing))\s+(?:at|near|around)\s+(?:\$|₪|ila\s*|ils\s*|nis\s*)?\d/i.test(t) ||
       /\bshares\s+closed?\b/i.test(t) ||
       /\btrading\s+range\b/i.test(t) ||
       /\b(?:intraday|52[- ]week|year[- ]to[- ]date)\s+(?:high|low|range)\b/i.test(t) ||
-      /^\s*(?:on\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s*\d{4})?\b[^a-z]*\$\d/i.test(t);
+      /^\s*(?:on\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s*\d{4})?\b[^a-z]*(?:\$|₪|ila\s*|ils\s*|nis\s*)\d/i.test(t) ||
+      _isDatedPriceMove(t);
     if (!looksLikePriceHistory) return false;
     const hasCatalyst = /\b(?:earnings|eps|revenue|beat|miss|guidance|raise[ds]?|cut|price\s+target|\bpt\b|analyst|upgrad|downgrad|initiat|reiterat|maintain|contract|customer|partnership|\bwin\b|backlog|acquisit|merger|m&a|regulat|approv|\bfda\b|sanction|tariff|demand|supply|capacity|expansion|sector|peer|sympathy|rotation|macro|\bfed\b|\brate\b|inflation|\bgdp\b|buyback|dividend)\b/i.test(t);
-    return !hasCatalyst;
+    return !(hasCatalyst || _statedEventCause(t));
   };
   // 7B-3B1: per-ticker filter accumulator (reset at start of each flushTicker call)
   const _filterStats = { count: 0, samples: [] };
+  // catalyst-hygiene-2 E-3: filler that says "nothing to report" is not a catalyst. Matched against the WHOLE list item (closed
+  // adjective and noun lists), so "No Sell ratings in one cited analyst set (…)" and "No new contracts announced, a negative
+  // for growth" are kept. A bare U+2212 minus run is a dash placeholder (NONE_RE covers - — – only).
+  const _FILLER_RE = /^(?:no\s+(?:specific|significant|notable|major|new|newer|other|additional|recent|clear)\s+(?:[\w'\u2019-]+\s+){0,3}?(?:catalysts?|news|actions?|developments?|events?)(?:\s+(?:was|were|has\s+been|have\s+been))?(?:\s+(?:reported|found|identified|available|announced))?|none\s+(?:reported|found|identified)|\u2212+)\.?$/i;
   // Split a list value on " | " into clean items, dropping NONE/empties and
   // (7B-3B1) price-history-only rows. Filter stats reported via _filterStats.
   const _splitList = (val) => val ? val.split(/\s*\|\s*/).map(s => s.trim()).filter(s => {
-    if (!s || _isNoneVal(s)) return false;
+    if (!s || _isNoneVal(s) || _FILLER_RE.test(s)) return false;
     if (_isPriceHistoryOnly(s)) {
       _filterStats.count++;
       if (_filterStats.samples.length < 2) _filterStats.samples.push(s.slice(0, 60));
@@ -5958,6 +6055,7 @@ function parsePerplexityContext(raw, sources = []) {
       bearishCatalysts.length === 0 &&
       macroDrivers.length === 0 &&
       _isNoneVal(earnings) &&
+      ratingOnlyActions.length === 0 &&
       _isNoneVal(revDir)
     );
     console.log(`[PT] Parsed ${currentTicker}: ${analystActions.length} actions, ${bullishCatalysts.length} bullish, ${bearishCatalysts.length} bearish, ${macroDrivers.length} macro${result[currentTicker]._allNone ? ' [allNone]' : ''}`);
@@ -5993,8 +6091,8 @@ function parsePerplexityContext(raw, sources = []) {
       risks: [],
       sources: Array.isArray(sources) ? sources : []
     };
-    // 6B-1: __raw__ is allNone when fallback extracted no analyst PTs
-    result['__raw__']._allNone = rawActions.length === 0;
+    // 6B-1: __raw__ is allNone when fallback extracted no analyst PTs (catalyst-hygiene-2 R-6 / D-6: nor rating-only actions)
+    result['__raw__']._allNone = rawActions.length === 0 && _rawAA.ratingOnlyActions.length === 0;
     console.log(`[PT] __raw__ fallback: ${rawActions.length} analyst actions`);
   }
   return result;
