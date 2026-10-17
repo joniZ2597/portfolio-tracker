@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "2bb13d5730ce3767d2b2a49376457506fd281ea6c5733f13522e9d47629af05a",
+  "fileSha256": "73a4042632ff923d5e2ae7d2c84168055edb7090389aed71a79107d2a6c96000",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -13,6 +13,7 @@
     "_crEsc": "d4027b5731d9691edc156d517401a5b97f7077a3c98d81a3f5d65f2078e1cdf0",
     "_crFetchForScan": "ab2ad1f0048b569e73a260a81076bbf467b9cd6ae8c54e155f1210449262d979",
     "_crSafeFilingUrl": "0783de724af322bd0a09dddeae2d8df57db273ddeb6e80302ed3a25d8ec29141",
+    "_dailySessionChange": "dbbc05106d5da9ca9765e49e20cb9e835fb4d1575350f68b14c7d07a661cf27d",
     "_dd0FetchAnalysis": "bcec3745e3511b354337220208531e9a04143cd82df626f8348da57f39894a6c",
     "_dd0RenderResultHtml": "6171436119820182497a18cae07837c0518d701d681d0a1e70bb5a2f54835f38",
     "_dd0RunCard": "dc9d15fa2b1c15b3d97244e5b276e4d12e7b725564701fb2f00a2c71a8c4bb1e",
@@ -302,7 +303,7 @@
     "fetchPerplexityAnalysis": "26ea112e5aa82171bc79c2a721798240698a35a4c435c09b3b70bf5ea37e0e9d",
     "fetchPerplexityContext": "08c0d05765e5f07c138559978312bf6806dae72d5a16194cec2fbc93cb1b8e0d",
     "fetchStockData": "c3f2a021b72b9e6cf0ade43ad0ae7d9f316e64e9b6c6d3e9461cf1dc0542d752",
-    "fetchYahoo": "03b4938ed74daaaa38444d8c458d01b7aa622923a49bb881450ce622320b751b",
+    "fetchYahoo": "da826004e7de4edbcd086a8def36ed775f3f656e9117eb37957a662bf2a899d1",
     "fetchYahooChart": "2a55af04a7a6d1eb8e82cbf97d16a8685ed0747a163023dce4c1a9946d75ce6c",
     "filterWatchlistRows": "c3128340651197b8960f12f14f6057975bf50809456b1f6a9be565313953ecfd",
     "findTicker": "0294e91f60b66051b7f84a023b0b1cb30a18bc5eb06a7bfd07c3f52ad1c9f5f1",
@@ -535,5 +536,5 @@
       "sha256": "79b78d1ed91f3d6f8c2b867378a1a228f83399c8931ddd150eea31143bb3a31e"
     }
   },
-  "remainderSha256": "dfd6060a12602933fbf3ff3d28e40ef972f971439fc51984de57f81aba72ee53"
+  "remainderSha256": "f9ae24a95896b753ad0d39fb90aab214aab23f42b2652aa85f51c1b3e58da5b9"
 }

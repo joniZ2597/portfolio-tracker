@@ -50,7 +50,7 @@ const BASE_DIGESTS = {
   _p5RequestSynthesis: '8152ce42c87fe272e5a9fa07f0af807c5d42c0564ea4187d19d196b94597e428',
   _dd0FetchAnalysis: 'bcec3745e3511b354337220208531e9a04143cd82df626f8348da57f39894a6c',
   fetchStockData: 'c3f2a021b72b9e6cf0ade43ad0ae7d9f316e64e9b6c6d3e9461cf1dc0542d752',
-  fetchYahoo: '03b4938ed74daaaa38444d8c458d01b7aa622923a49bb881450ce622320b751b',
+  fetchYahoo: 'da826004e7de4edbcd086a8def36ed775f3f656e9117eb37957a662bf2a899d1',   // market-data-daily-change-1 (V-1): session-aligned daily change
   fetchAlphaVantage: '506fc899c5f89a7d4150e04c316f80c2539afb1a0692d3ca388f8bd1ca446c2b',
   runAnalysis: '1b20f27d19618e9e43e512aa20cb8c8c032b8262c60e57c57d29be906bd2b676'
 };

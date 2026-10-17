@@ -5370,6 +5370,80 @@ function isValidStockData(d) {
     d.timestamp;
 }
 
+// market-data-daily-change-1 (V-1): the daily change belongs to the session of the price.
+// S   = exchange-local date of regularMarketTime (the price's session);
+// S-1 = the previous trading session before S - per the governed calendar (TS1_POLICY_V1) when S is covered,
+//       otherwise the latest daily candle dated before S;
+// previous close = the close of the daily candle dated S-1 (the last valid one of that date);
+// change = (regularMarketPrice - previous close) / previous close.
+// If S or S-1 is unknown, or the S-1 candle is missing or has no close yet, previous close and change are null:
+// never an older candle, never the range-start chartPreviousClose, never "the last two non-null closes".
+// Pure: reads only its arguments and the calendar constant; never throws.
+function _dailySessionChange(result, sym) {
+  var out = { prevClose: null, changePct: null, sessionDate: null, prevSessionDate: null, basis: null };
+  try {
+    var meta = result && result.meta;
+    if (!meta) return out;
+    var price = parseFloat(meta.regularMarketPrice);
+    var rmt = meta.regularMarketTime;
+    if (!isFinite(price) || price <= 0 || typeof rmt !== 'number' || !isFinite(rmt)) return out;
+    var mkt = _ts1ResolveMarket(meta.exchangeTimezoneName, sym);
+    var cal = (mkt.market === 'US' || mkt.market === 'TASE') ? TS1_POLICY_V1.calendar[mkt.market] : null;
+    var tz = cal ? cal.timeZone : ((typeof meta.exchangeTimezoneName === 'string' && meta.exchangeTimezoneName) ? meta.exchangeTimezoneName : null);
+    if (!tz) return out;
+    var localDate = function (epochSec) {
+      var d = new Date(epochSec * 1000);
+      if (isNaN(d.getTime())) return null;
+      var p = _ts1ExchangeLocalParts(d.toISOString(), tz);
+      return p ? p.dateStr : null;
+    };
+    var sDate = localDate(rmt);
+    if (!sDate) return out;
+    out.sessionDate = sDate;
+    // daily candles by exchange-local date; the last candle of a date with a valid close wins
+    var ts = Array.isArray(result.timestamp) ? result.timestamp : [];
+    var q = result.indicators && result.indicators.quote && result.indicators.quote[0];
+    var closes = (q && Array.isArray(q.close)) ? q.close : [];
+    var byDate = {};
+    for (var i = 0; i < ts.length; i++) {
+      if (typeof ts[i] !== 'number' || !isFinite(ts[i])) continue;
+      var cd = localDate(ts[i]);
+      if (!cd) continue;
+      var c = closes[i];
+      if (typeof c === 'number' && isFinite(c) && c > 0) byDate[cd] = c;
+      else if (!Object.prototype.hasOwnProperty.call(byDate, cd)) byDate[cd] = null;
+    }
+    var prevDate = null, basis = null;
+    var inCal = cal ? _ts1IsTradingSession(sDate, cal) : null;
+    if (inCal === false) return out;                       // a price stamped on a non-trading day: unknown
+    if (inCal === true) {
+      var cur = new Date(sDate + 'T00:00:00Z');
+      for (var k = 0; k < 15; k++) {
+        cur = new Date(cur.getTime() - 86400000);
+        var ds = cur.toISOString().slice(0, 10);
+        var isSession = _ts1IsTradingSession(ds, cal);
+        if (isSession === null) break;                     // left the calendar's coverage: unknown
+        if (isSession === true) { prevDate = ds; break; }
+      }
+      basis = 'calendar';
+    } else {
+      var earlier = Object.keys(byDate).filter(function (d) { return d < sDate; }).sort();
+      prevDate = earlier.length ? earlier[earlier.length - 1] : null;
+      basis = 'candles';
+    }
+    if (!prevDate) return out;
+    out.prevSessionDate = prevDate;
+    out.basis = basis;
+    var pc = Object.prototype.hasOwnProperty.call(byDate, prevDate) ? byDate[prevDate] : null;
+    if (typeof pc !== 'number' || !isFinite(pc) || pc <= 0) return out;   // missing or not yet published: unknown
+    out.prevClose = pc;
+    out.changePct = parseFloat(((price - pc) / pc * 100).toFixed(2));
+    return out;
+  } catch (e) {
+    return { prevClose: null, changePct: null, sessionDate: null, prevSessionDate: null, basis: null };
+  }
+}
+
 // Fetch daily price from Yahoo Finance — uses multi-proxy fallback via fetchYahooChart
 async function fetchYahoo(symbol) {
   // 5d range guarantees multiple daily candles so prev/current close comparison always works
@@ -5381,27 +5455,15 @@ async function fetchYahoo(symbol) {
   // Prefer meta.regularMarketPrice for displayed price
   const price = parseFloat(meta.regularMarketPrice);
 
-  // ── Daily change from chart candles (most reliable across market states) ──
-  let change_percent = 0;
-  let previous_close = 0;
-
-  const closes = result?.indicators?.quote?.[0]?.close || [];
-  const validCloses = closes.filter(c => c !== null && !isNaN(c) && c > 0);
-
-  if (validCloses.length >= 2) {
-    // Use last two valid daily closes from the 5d candle array
-    const prevClose  = validCloses[validCloses.length - 2];
-    const lastClose  = validCloses[validCloses.length - 1];
-    previous_close   = prevClose;
-    change_percent   = parseFloat(((lastClose - prevClose) / prevClose * 100).toFixed(2));
-  } else {
-    // Last resort: try meta fields (may be absent in market-closed state)
-    previous_close = parseFloat(meta.chartPreviousClose) || parseFloat(meta.previousClose) || 0;
-    if (previous_close > 0 && previous_close !== price) {
-      change_percent = parseFloat(((price - previous_close) / previous_close * 100).toFixed(2));
-    } else {
-      console.warn('[market-data] daily change fallback unavailable for ' + symbol);
-    }
+  // ── Daily change of the price's own session (market-data-daily-change-1, V-1) ──
+  // null when the previous session's close is not known: isValidStockData then rejects this result and the
+  // existing Alpha Vantage fallback (or the "no market data" state) applies - never a substituted change.
+  const _sess = _dailySessionChange(result, symbol);
+  const change_percent = _sess.changePct;
+  const previous_close = _sess.prevClose;
+  if (change_percent === null) {
+    console.warn('[market-data] daily change unknown for ' + symbol + ' (session ' + _sess.sessionDate +
+      ', previous session ' + _sess.prevSessionDate + ' close not available)');
   }
 
   // Parse optional numeric Yahoo extended-hours fields; Number.isFinite preserves valid 0
@@ -5423,6 +5485,9 @@ async function fetchYahoo(symbol) {
     volume:         parseInt(meta.regularMarketVolume),
     timestamp:      new Date(meta.regularMarketTime * 1000).toISOString(),
     source:         'yahoo',
+    sessionDate:     _sess.sessionDate,
+    prevSessionDate: _sess.prevSessionDate,
+    dailyBasis:      _sess.basis,
     ...(_extMs     !== null ? { marketState: _extMs }                                                       : {}),
     ...(_prePrice  !== null ? { preMarketPrice: _prePrice,  preMarketChangePercent: _preChgPct  }           : {}),
     ...(_postPrice !== null ? { postMarketPrice: _postPrice, postMarketChangePercent: _postChgPct }          : {}),

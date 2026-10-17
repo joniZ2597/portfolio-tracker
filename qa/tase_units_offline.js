@@ -104,7 +104,7 @@ const ATH_TA = { state: 'verified', athValue: 120, currency: 'ILS', athDate: '20
 
 // ── base digests of the functions that must stay byte-identical through the task (TS-1) ─────────────
 const BASE_DIGESTS = {
-  fetchYahoo: '03b4938ed74daaaa38444d8c458d01b7aa622923a49bb881450ce622320b751b',
+  fetchYahoo: 'da826004e7de4edbcd086a8def36ed775f3f656e9117eb37957a662bf2a899d1',   // market-data-daily-change-1 (V-1): session-aligned daily change
   _athAccept: '02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24',
   _pfLiveNormalize: 'c9e3b362c10d3325df9417d99f9abb7f5aba1f7b4cb4dddc9954e4df1cc5b6f1',
   _nlmConsistencyChecks: '6716b144c8d3edde40a38b0fad8822493b022fc9b28d0b0b2ab43f76c4a4312b',
