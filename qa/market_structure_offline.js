@@ -744,18 +744,58 @@ function isolationViolations(g) {
   return g.changed.map(function (f) { return 'changed vs base: ' + f; });
 }
 function wiringHits(text) { return /market-structure|analyzeMarketStructure/.test(text); }
+// rev 1.2 (evidence-capture-1): index.html carries a byte-identical copy of services/evidence-memory.js
+// (evidence_capture_offline CP-1 proves it) whose text mentions this module in a comment. Exactly that
+// region is not scanned; everything else in index.html, comments included, still is. A missing,
+// duplicated or misordered marker fails; it never falls back to scanning less.
+const EM_OPEN = 'var PulseEvidenceMemory = (function (module) {\n';
+const EM_CLOSE = 'return module.exports;\n})({ exports: {} });\n';
+function indexScanText(rawHtml) {
+  const text = rawHtml.replace(/\r\n/g, '\n');
+  [['open', EM_OPEN], ['close', EM_CLOSE]].forEach(function (m) {
+    const n = text.split(m[1]).length - 1;
+    if (n !== 1) throw new Error('evidence-memory ' + m[0] + ' marker not found exactly once (found ' + n + ')');
+  });
+  const a = text.indexOf(EM_OPEN);
+  const b = text.indexOf(EM_CLOSE);
+  if (a > b) throw new Error('evidence-memory open marker is after the close marker');
+  return text.slice(0, a) + text.slice(b + EM_CLOSE.length);
+}
 test('MS-T16 index.html, market-data.js and run-offline.js are byte-identical to the base and do not reference the module', function () {
   eq(GIT.error, null, 'git readable');
   eq(isolationViolations(GIT), []);
   ISOLATED.forEach(function (rel) {
-    ok(!wiringHits(fs.readFileSync(path.join(ROOT, rel), 'utf8')), rel + ' references the module');
+    const body = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+    ok(!wiringHits(rel === 'index.html' ? indexScanText(body) : body), rel + ' references the module');
   });
 });
 test('PN MS-T16 a changed isolated file, or a reference to the module, is reported', function () {
   eq(isolationViolations({ changed: [] }), [], 'positive control');
   ok(isolationViolations({ changed: ['index.html'] }).length === 1, 'changed');
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-  ok(!wiringHits(html) && wiringHits(html + "\nrequire('./services/market-structure.js');"), 'wiring scan bites');
+  ok(!wiringHits(indexScanText(html)) && wiringHits(indexScanText(html + "\nrequire('./services/market-structure.js');")), 'wiring scan bites');
+});
+test('PN MS-T16 AM-N1..N11 the exclusion covers only the verified S1 block and cannot widen or turn ambiguous', function () {
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').replace(/\r\n/g, '\n');
+  ok(!wiringHits(indexScanText(html)), 'positive control: live text has no hit');
+  function swap(text, anchor, replacement) { return text.split(anchor).join(replacement); }
+  function hit(label, mutated) { ok(wiringHits(indexScanText(mutated)), label + ': a reference outside the region must be reported'); }
+  function fails(label, mutated, re) {
+    let msg = null;
+    try { indexScanText(mutated); } catch (e) { msg = e.message; }
+    ok(msg !== null && re.test(msg), label + ': must fail with ' + re + ' (got ' + msg + ')');
+  }
+  hit('AM-N1', swap(html, EM_OPEN, "require('./services/market-structure.js');\n" + EM_OPEN));
+  hit('AM-N2', swap(html, EM_CLOSE, EM_CLOSE + 'analyzeMarketStructure(x);\n'));
+  fails('AM-N3', swap(html, EM_OPEN, EM_OPEN + EM_OPEN), /open marker not found exactly once/);
+  fails('AM-N4', swap(html, EM_OPEN, ''), /open marker not found exactly once/);
+  fails('AM-N5', swap(html, EM_CLOSE, ''), /close marker not found exactly once/);
+  fails('AM-N6', swap(swap(html, EM_OPEN, ''), EM_CLOSE, EM_CLOSE + EM_OPEN), /open marker is after the close marker/);
+  fails('AM-N7', swap(html, EM_CLOSE, EM_CLOSE + EM_CLOSE), /close marker not found exactly once/);
+  hit('AM-N8', swap(html, EM_OPEN, 'analyzeMarketStructure' + EM_OPEN));
+  hit('AM-N9', swap(html, EM_CLOSE, EM_CLOSE + 'market-structure'));
+  hit('AM-N10', swap(html, EM_CLOSE, EM_CLOSE + 'return module.exports;\n// market-structure\n'));
+  hit('AM-N11', swap(html, EM_CLOSE, EM_CLOSE + '// see services/market-structure.js\n'));
 });
 
 // MS-T17 — non-forecast rule

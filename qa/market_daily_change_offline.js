@@ -64,7 +64,7 @@ const BASE_DIGESTS = {
   _ts1RuleFor: 'dd62a58b61a09de395243d1b18169289ea4ba443eb74e119eed40093d3fe1ef6',
   _ts1ResolveMarket: '88daede9f4b83a35bba2c5b674814a6df7dbed4854af98d2058fd9c9f270083f',
   _pfSessionDateFor: '3f3954a128f39a99c781a4bb8a53a7394a3b2dbc18d092784a2d6f25c8747731',
-  runAnalysis: '1b20f27d19618e9e43e512aa20cb8c8c032b8262c60e57c57d29be906bd2b676',
+  runAnalysis: '7d5c029bd336cdfadb93a542b38e45ee715f2a70a2fd14e501f1c0a29e2e1aa7',   // evidence-capture-1: one fire-and-forget capture call
   renderMainPanel: '61e663bf2e3a734df928a4a8f59e6cc01691782edd0e51467caa5baebdeaecd1'
 };
 

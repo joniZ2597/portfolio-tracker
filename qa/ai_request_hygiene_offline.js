@@ -52,7 +52,7 @@ const BASE_DIGESTS = {
   fetchStockData: 'c3f2a021b72b9e6cf0ade43ad0ae7d9f316e64e9b6c6d3e9461cf1dc0542d752',
   fetchYahoo: 'da826004e7de4edbcd086a8def36ed775f3f656e9117eb37957a662bf2a899d1',   // market-data-daily-change-1 (V-1): session-aligned daily change
   fetchAlphaVantage: '506fc899c5f89a7d4150e04c316f80c2539afb1a0692d3ca388f8bd1ca446c2b',
-  runAnalysis: '1b20f27d19618e9e43e512aa20cb8c8c032b8262c60e57c57d29be906bd2b676'
+  runAnalysis: '7d5c029bd336cdfadb93a542b38e45ee715f2a70a2fd14e501f1c0a29e2e1aa7'   // evidence-capture-1: one fire-and-forget capture call
 };
 const DEV_PROOF_MS = 30159;   // Check B (2026-10-16): a 2,500-token reply took 30,159 ms and returned 200
 
