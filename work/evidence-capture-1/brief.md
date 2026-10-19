@@ -2,7 +2,9 @@
 
 This brief takes effect only when the Owner has approved these exact contents and the brief-only commit records them unchanged. Everything it relies on is written below.
 
-**Status: FINAL-DRAFT rev 1.1 — the one pre-R11 Codex review is complete and triaged under C+ (W findings in §W, M corrections applied); ready for the Owner's R11** (COWORK draft; Bootstrap M revision, 2026-10-17). Built on `branch-dev` = `792da92` (`origin/branch-dev` = `2b197a1` = V-1 landed; `792da92` adds only `work/evidence-memory-1-s2-r2/brief.md`); the current tip is `1eef672` (`evidence-memory-1` S2-r2 landed and pushed: it adds only `services/evidence-changes.js`, `qa/evidence_changes_offline.js` and `work/` documents; every §TS blob below re-verified unchanged at `1eef672`). Ruled: **D-22** (Main Control, 2026-10-16: W2 lane A, enabled by default, visible export / clear, strict S1 privacy), **R-3** (local browser storage, structured snapshots + source metadata, 90 days, local export, no sync / cloud / auth), **D-26** (V-1 first — landed). C+ review workflow (§C+). **Pre-R11 review:** done, the one review C+ allows (`shared-reports/codex/2026-10-17_evidence-capture-1-review.md`, "Rev 1 — verdict"); no further pre-R11 review. **Remaining:** the Owner's R11 on the final hash. The appendices (§A1–§A3) are unchanged from the reviewed text.
+**Status: rev 1.2 — amendment (§AM), re-submitted for the Owner's R11 on this hash after its focused Codex review; the rev 1.1 history follows.** Rev 1.1: FINAL-DRAFT — the one pre-R11 Codex review is complete and triaged under C+ (W findings in §W, M corrections applied); ready for the Owner's R11** (COWORK draft; Bootstrap M revision, 2026-10-17). Built on `branch-dev` = `792da92` (`origin/branch-dev` = `2b197a1` = V-1 landed; `792da92` adds only `work/evidence-memory-1-s2-r2/brief.md`); the current tip is `1eef672` (`evidence-memory-1` S2-r2 landed and pushed: it adds only `services/evidence-changes.js`, `qa/evidence_changes_offline.js` and `work/` documents; every §TS blob below re-verified unchanged at `1eef672`). Ruled: **D-22** (Main Control, 2026-10-16: W2 lane A, enabled by default, visible export / clear, strict S1 privacy), **R-3** (local browser storage, structured snapshots + source metadata, 90 days, local export, no sync / cloud / auth), **D-26** (V-1 first — landed). C+ review workflow (§C+). **Pre-R11 review:** done, the one review C+ allows (`shared-reports/codex/2026-10-17_evidence-capture-1-review.md`, "Rev 1 — verdict"); no further pre-R11 review. **Remaining:** the Owner's R11 on the final hash. The appendices (§A1–§A3) are unchanged from the reviewed text.
+
+**Amendment rev 1.2 (MAIN, 2026-10-19; Owner ruling "D-1 / D-2 APPROVED", D-1 = Option A).** Made after the Worker's step-10 STOP. `qa/market_structure_offline.js` MS-T16 / PN MS-T16 failed because the C-1 byte-identical copy of `services/evidence-memory.js` brings its line 771 comment `// (matching services/market-structure.js).` into `index.html`; the brief's sweep had missed this suite. The amendment adds that suite to §1, land-scope and land-tests, with one narrowly scoped change (**§AM**). Nothing else in rev 1.1 changes: §2 contract, §A1–§A3, the CP rows, the pin delta and the CP-10 base digest are byte-identical. Under §C+ this is an **S change** (scope and land-scope), so it needs this revised brief, the Owner's R11 on its hash, and a focused review. Precondition for resuming: `qa-evidence-changes-eol-1` has landed (it fixes the existing CRLF failure of `qa/evidence_changes_offline.js`, which no rev of this brief may touch) and the task branch has been resynced through the governed workflow.
 
 | | |
 |---|---|
@@ -12,7 +14,7 @@ This brief takes effect only when the Owner has approved these exact contents an
 | Decisions | none open (D-22, R-3 ruled). The control's place and wording are presentation details the breakdown left to D3 (§2 C-6) |
 | Backlog | none. No `BACKLOG.md` edit |
 | Depends on | S1 landed (`0903940`) ✓ · V-1 landed (`2b197a1`; lane A free) ✓ |
-| Baseline / start (§TS) | Start at the current tip T. Valid only if all hold; otherwise HOLD: <ul><li>`index.html` = `17e2ffdfa23a14dac1d875c84ef99cfa638c664b` (every §A1 OLD block exactly once);</li><li>`services/evidence-memory.js` = `c74d64040c99936d7aee03f945818cab41da90ef` (sha256 `378bd80a…7a78`);</li><li>`qa/ai_request_hygiene_offline.js` = `88f55981c495c82e6b3e3398cb0b74b0efb07dac`;</li><li>`qa/market_daily_change_offline.js` = `c7dd1fa23e4329dbc9273e3e9f9f55f58363920a`;</li><li>`qa/fixtures/index-pins.json` = `885d04c3d52641403cc17ad83eccf6fe8891b64e`;</li><li>`qa/lib/index-pins-core.js` = `a8ae73317d65aa43129b9fe41aa09f4c34d5e888`;</li><li>`qa/labs_panel_offline.js` = `f120a7f00a595c46fb7f0c286cc59a029f0a0cab` (not edited; must stay green);</li><li>`qa/fixtures/research-live-2026-10-15.json` = `54526e2c15414dab849bd52cb544daaff5bcd2b3`;</li><li>`qa/evidence_capture_offline.js` does not exist.</li></ul>Any tip on which all of these blobs match is valid |
+| Baseline / start (§TS) | Start at the current tip T. Valid only if all hold; otherwise HOLD: <ul><li>`index.html` = `17e2ffdfa23a14dac1d875c84ef99cfa638c664b` (every §A1 OLD block exactly once);</li><li>`services/evidence-memory.js` = `c74d64040c99936d7aee03f945818cab41da90ef` (sha256 `378bd80a…7a78`);</li><li>`qa/ai_request_hygiene_offline.js` = `88f55981c495c82e6b3e3398cb0b74b0efb07dac`;</li><li>`qa/market_daily_change_offline.js` = `c7dd1fa23e4329dbc9273e3e9f9f55f58363920a`;</li><li>`qa/fixtures/index-pins.json` = `885d04c3d52641403cc17ad83eccf6fe8891b64e`;</li><li>`qa/lib/index-pins-core.js` = `a8ae73317d65aa43129b9fe41aa09f4c34d5e888`;</li><li>`qa/labs_panel_offline.js` = `f120a7f00a595c46fb7f0c286cc59a029f0a0cab` (not edited; must stay green);</li><li>`qa/fixtures/research-live-2026-10-15.json` = `54526e2c15414dab849bd52cb544daaff5bcd2b3`;</li><li>`qa/evidence_capture_offline.js` does not exist.</li><li>(rev 1.2) `qa/market_structure_offline.js` = `806a0f7a5a66dd1e380bb33c1fabb37f43a46064`.</li></ul>Any tip on which all of these blobs match is valid |
 | Branch / slot / mode | `task/evidence-capture-1` · **Worker A** · **Manual** (new persistence path in the browser) |
 | qa:offline | step-0 count **+1** (`qa/evidence_capture_offline.js`; 101 → 102 at `792da92`; auto-discovered; the runner stays forbidden). If `evidence-memory-1-s2-r2` lands first, its suite makes it 102 → 103 (refreshed at R11) |
 | Parallel with | Worker B (`evidence-memory-1-s2-r2`: `services/evidence-changes.js`, `qa/evidence_changes_offline.js`, both new): no shared file. One heavy QA run at a time |
@@ -26,6 +28,7 @@ This brief takes effect only when the Owner has approved these exact contents an
 - `qa/fixtures/index-pins.json` — `node qa/tools/index-pins.js --update`; exactly: `fileSha256`, `remainderSha256` and `functions.runAnalysis` change; **45 functions are added** (the 38 S1 functions, now column-0 inside the wrapper, and the 7 `_eh*` functions: see §3); `regions` unchanged; nothing removed
 - `qa/ai_request_hygiene_offline.js` (blob `88f55981…`) and `qa/market_daily_change_offline.js` (blob `c7dd1fa2…`) — **one line each**: the pinned `runAnalysis` digest → `7d5c029b…aa7` (**§A3**). Any other change to these suites is a STOP
 - `qa/evidence_capture_offline.js` (new) — exact text **§A2**
+- (rev 1.2) `qa/market_structure_offline.js` (blob `806a0f7a…`) — **only** the MS-T16 / PN MS-T16 change of **§AM**. Any other change to this suite is a STOP
 - `work/evidence-capture-1/review.md`
 
 **Forbidden:** every other function and line of `index.html` — in particular `toggleApiStatus`, `renderLabsToggles`, `setLabsFlag` and `#labsBox` (pinned by `labs_panel` LB-1…LB-10), `orchestrate`, `analyzeChunk`, `enforceScoreConsistency`, `renderResults`, `mergeResultsByTicker`, `_isValidScanResult`, `exportJSON`, `_ptDownload`, `_ptTimestamp`, `showToast`, `parsePerplexityContext`; `services/**` (S1 is inlined, never edited); `netlify/**`; `qa/run-offline.js`; every other `qa/` file; `package*.json`; `.claude/**`; `AGENTS.md`; `CLAUDE.md`; `BACKLOG.md`.
@@ -123,6 +126,39 @@ Classified W by Bootstrap from the one pre-R11 Codex review (`shared-reports/cod
 - **W3 — CP-3 full parser-output mapping.** Assert the parser-output → snapshot mapping field by field on the live captures (bearish / macro lists, earnings, peer move, revision direction / recency, data freshness, guidance, contracts, source metadata, rating-only actions), so a dropped or mis-mapped field fails; planted negative: one field dropped.
 - **W4 — CP-4 / CP-1 / CP-7 gaps.** CP-4: cancellation after one ticker completes (only the completed ticker is captured), a second `runAnalysis` started while a capture is pending (its puts stay behind the first's), the capture receives only the tickers scanned in this run (not merged prior results). CP-1: the wrapper is strict at run time (an assertion that fails if the `'use strict'` directive is removed). CP-7: clear racing a queued capture is covered by W1. Planted negatives for the new assertions.
 
+## §AM Amendment rev 1.2 — MS-T16 excludes only the verified copied S1 block (normative)
+
+**Today** (`qa/market_structure_offline.js:722-758`): MS-T16 asserts that `index.html`, `netlify/functions/market-data.js` and `qa/run-offline.js` are unchanged between the module's introducing commit and its parent (the `GIT` isolation part), and that none of the three files' text matches `wiringHits` = `/market-structure|analyzeMarketStructure/`. PN MS-T16 asserts that the live `index.html` has no hit and that an appended `require('./services/market-structure.js');` is caught.
+
+**Change (index.html text only):**
+
+| # | Rule |
+|---|---|
+| AM-1 | Before the `wiringHits` scan of `index.html`, the text is converted CRLF → LF, and **exactly one region is removed**: from the first character of the open marker `var PulseEvidenceMemory = (function (module) {\n` to the last character of the close marker, which is the **complete two-line sequence** `return module.exports;\n})({ exports: {} });\n`. A bare `return module.exports;` elsewhere is not a marker and stays scanned. Text on the same line before the open marker, or after the close marker, is outside the region and is scanned. That is the C-1 region, which CP-1 proves byte-identical to the committed `services/evidence-memory.js`. Everything else in `index.html` is still scanned, comments included |
+| AM-2 | Each of the two markers must occur **exactly once**, and the open marker must come before the close marker. A missing, duplicated or out-of-order marker makes MS-T16 **fail** with a message naming the marker. It never falls back to scanning less |
+| AM-3 | `market-data.js` and `run-offline.js` are scanned exactly as today (whole file). The `GIT` isolation part, `ISOLATED`, the regex and the MS-T16 / PN MS-T16 titles are unchanged |
+| AM-4 | PN MS-T16 uses the same AM-1 scanned text for its positive control ("live `index.html` has no hit") and keeps its existing appended-`require` negative |
+
+**New planted negatives** (in-memory mutations of the `index.html` fixture text, never of the test; each with the live text as positive control):
+
+| ID | Mutation | Must |
+|---|---|---|
+| AM-N1 | `require('./services/market-structure.js');` inserted **before** the open marker | MS-T16 scan reports a hit |
+| AM-N2 | `analyzeMarketStructure(x);` inserted **after** the close marker | hit |
+| AM-N3 | open marker duplicated | fail: "marker not found exactly once" |
+| AM-N4 | open marker removed | fail |
+| AM-N5 | close marker removed | fail |
+| AM-N6 | open marker moved after the close marker | fail |
+| AM-N7 | close marker duplicated (a second complete close sequence anywhere) | fail: "marker not found exactly once" |
+| AM-N8 | `analyzeMarketStructure` written on the same line, immediately **before** the open marker (no newline between) | hit |
+| AM-N9 | `market-structure` written immediately **after** the close marker's final newline, at the start of the next line | hit |
+| AM-N10 | a second, bare `return module.exports;` line followed by `// market-structure` placed **outside** the region (after the close marker) | hit; the region does not grow |
+| AM-N11 | a comment `// see services/market-structure.js` placed outside the region | hit (comments outside the region are scanned) |
+
+**Why it is safe:** the excluded region can hold no new text without failing CP-1, whose byte-identity check is unchanged. A real reference anywhere else, comments included, is still caught (AM-N1 / N2). The exclusion cannot widen silently or become ambiguous (AM-N3 … N7, N10), and its edges are exact (AM-N8, N9).
+
+**Evidence:** RED (the unchanged MS-T16 on the task's `index.html` → the 2 current failures); GREEN (MS-T16 + PN MS-T16 + AM-N1…N11 pass); the full suite count reported; recorded in `qa.log` and in `review.md` under "Appendix deltas" (rev 1.2), with the line-ending byte audit of the edited file.
+
 ## §4 Steps
 
 | Step | Action |
@@ -131,11 +167,12 @@ Classified W by Bootstrap from the one pre-R11 Codex review (`shared-reports/cod
 | S1 RED | `qa/evidence_capture_offline.js` (§A2) fails: no inlined block |
 | S2 GREEN | §A1 E-1…E-3; §A3; `node qa/tools/index-pins.js --update` (exactly the §1 delta); all rows + negatives + must-stay-green pass |
 | 8 | Codex round one (diff review) |
+| R1.2 | (rev 1.2, after `qa-evidence-changes-eol-1` lands and the governed resync) re-verify the branch, HEAD and brief blob, and the task record (the record carries rev 1.1's `briefSha256` / `briefCommit`; before Worker A resumes, Bootstrap confirms whether the governed resync refreshes them or how the record is to be read for rev 1.2; the Worker reports the record as it finds it and never treats rev 1.1 values as matching rev 1.2); §AM RED → GREEN; re-run the land-tests; Codex on the **whole** task diff (the §AM hunks verified independently) |
 | 10 | process check → full `qa:offline` PASS at step 0 + 1 |
 | 11–13 | `review.md` (L9, incl. "Appendix deltas" if any), final Codex, step-13 commit, integrity |
 | LAND / PUSH | usual R12 |
 
-**STOP only for:** a change outside §1 / §2; a suite change beyond §A3 (amendments of the **new** suite §A2 under §C+ / §W are not a STOP); a pin delta beyond §1; any existing suite failing; a denied protected action or an integrity FAIL.
+**STOP only for:** a change outside §1 / §2; a suite change beyond §A3 and §AM (amendments of the **new** suite §A2 under §C+ / §W are not a STOP); a pin delta beyond §1; any existing suite failing; a denied protected action or an integrity FAIL.
 
 **After LAND (DEV, separate Owner approval; snapshot / restore protocol):** one scan of ≤ 3 tickers (the usual paid calls of a scan, nothing else) → ⚙ → Research history shows the count; Export downloads a document with no raw AI text; an immediate second scan of the same tickers adds only changed snapshots; Clear: cancel keeps, confirm empties; DevTools shows the `pulse-evidence-memory` database; `pt_results` behaves as before.
 
@@ -146,6 +183,7 @@ Classified W by Bootstrap from the one pre-R11 Codex review (`shared-reports/cod
 3. The Research history box shows, exports and (after confirmation) clears the history.
 4. No file or function outside §1 changes (CP-10).
 5. The §W assertions (W1–W4) are present in the suite, each with RED / GREEN evidence and the appendix deltas listed in `review.md` under "Appendix deltas".
+6. (rev 1.2) `qa/market_structure_offline.js` passes with AM-1…AM-4 and AM-N1…AM-N11, with RED / GREEN evidence; no other line of that suite changed.
 
 ## §6 Decisions and risks
 
@@ -791,6 +829,7 @@ node qa/evidence_memory_offline.js
 node qa/no_synthetic_score_offline.js
 node qa/high1y_label_offline.js
 node qa/pulse_analyst_view_offline.js
+node qa/market_structure_offline.js
 node qa/tools/index-pins.js --check
 node qa/tools/index-pins.js --update
 node qa/index_pins_offline.js
@@ -810,6 +849,7 @@ qa/fixtures/index-pins.json
 qa/ai_request_hygiene_offline.js
 qa/market_daily_change_offline.js
 qa/evidence_capture_offline.js
+qa/market_structure_offline.js
 work/evidence-capture-1/review.md
 <!-- land-scope:end -->
 <!-- land-tests:begin -->
@@ -823,4 +863,5 @@ node qa/no_synthetic_score_offline.js
 node qa/high1y_label_offline.js
 node qa/pulse_analyst_view_offline.js
 node qa/index_pins_offline.js
+node qa/market_structure_offline.js
 <!-- land-tests:end -->
