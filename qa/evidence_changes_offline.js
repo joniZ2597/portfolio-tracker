@@ -32,15 +32,22 @@
  *   EC-18 shown / groups carry one entry per event; changes is the full audit list (advisory)
  *   EC-19 collision-safe keys (rev 3): field values containing the old "|" separator never make distinct evidence or
  *         distinct events share a key (firm vs action, action vs date, rating fields), in either input order
- *   EC-N1..N22 planted negatives (each mutates the module source; its named rows must fail)
+ *   EC-20 line-ending independence (qa-evidence-changes-eol-1): the module texts carry no CR whatever the working-tree EOL
+ *         (core.autocrlf checkouts are CRLF); a CRLF rendering through the helper equals the LF text, every EC-N1..N22
+ *         anchor occurs exactly once in it, and rows EC-1..EC-19 give the same result on both
+ *   EC-N1..N23 planted negatives (each mutates the module source; its named rows must fail; N23 feeds a CRLF rendering
+ *         WITHOUT the helper and EC-20 must fail)
  */
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..');
-const S1_SRC = fs.readFileSync(path.join(ROOT, 'services', 'evidence-memory.js'), 'utf8');
-const SRC = fs.readFileSync(path.join(ROOT, 'services', 'evidence-changes.js'), 'utf8');
+// working copies are CRLF under core.autocrlf; the module texts and every anchor below are LF
+const toLF = text => text.replace(/\r\n/g, '\n');
+const readLF = file => toLF(fs.readFileSync(file, 'utf8'));
+const S1_SRC = readLF(path.join(ROOT, 'services', 'evidence-memory.js'));
+const SRC = readLF(path.join(ROOT, 'services', 'evidence-changes.js'));
 function load(src) { const m = { exports: {} }; new Function('module', 'exports', src)(m, m.exports); return m.exports; }
 const S1 = load(S1_SRC);
 
@@ -464,6 +471,29 @@ async function rows(M, src, only) {
     if (!(s1.ok && s1.snapshot.research.analystActions.length === 0)) bad.push('S1 admitted a "|" firm');
     ok('EC-19', bad.length === 0, JSON.stringify(bad));
   });
+
+  // EC-20 (qa-evidence-changes-eol-1): the suite does not depend on the working-tree line endings. One row; every
+  // finding is collected so a failure names what broke (EC-N23 relies on the anchor names).
+  if (want('EC-20')) {
+    try {
+      const bad = [];
+      const lf = toLF(src), crlf = lf.replace(/\n/g, '\r\n'), viaHelper = toLF(crlf);
+      // a: the texts under test carry no CR
+      if (/\r/.test(S1_SRC)) bad.push('S1_SRC has CR');
+      if (/\r/.test(src)) bad.push('SRC has CR');
+      // b: the helper restores the LF text byte-for-byte and every existing negative's anchor occurs exactly once in it
+      if (viaHelper !== lf) bad.push('helper output differs from the LF text');
+      const anchors = text => NEG.slice(0, 22).map(([name, mutate]) => { try { mutate(text); return null; } catch (e) { return name.split(' ')[0]; } }).filter(Boolean);
+      const lostSrc = anchors(src), lostHelper = anchors(viaHelper);
+      if (lostSrc.length) bad.push('anchors not found exactly once in the text under test: ' + lostSrc.join(','));
+      if (lostHelper.length) bad.push('anchors not found exactly once after the helper: ' + lostHelper.join(','));
+      // c: behaviour is the same on the LF text and on the CRLF rendering passed through the helper
+      const ids = Array.from({ length: 19 }, (_, i) => 'EC-' + (i + 1));
+      const rl = await rows(load(lf), lf, ids), rc = await rows(load(viaHelper), viaHelper, ids);
+      if (JSON.stringify(rl) !== JSON.stringify(rc)) bad.push('rows differ between the LF text and the CRLF text through the helper');
+      ok('EC-20', bad.length === 0, JSON.stringify(bad));
+    } catch (e) { ok('EC-20', false, 'threw: ' + (e && e.message)); }
+  }
   return R;
 }
 
@@ -498,6 +528,8 @@ const NEG = [
     "  return [firmKey(a.firm), a.action, a.ratingAction, a.rating, a.date, a.target, a.targetFrom, a.targetAction]\n    .map(function (v) { return v === null || v === undefined ? '' : String(v); }).join('|');\n"), ['EC-19']],
   ['EC-N22 "|" join restored in the event identity (rev 2)', rep("function analystIdentity(a) { return JSON.stringify([firmKey(a.firm), a.action || '', a.date || '']); }",
     "function analystIdentity(a) { return firmKey(a.firm) + '|' + (a.action || '') + '|' + (a.date || ''); }"), ['EC-19']],
+  // fixture-input negative: the module text as a CRLF checkout renders it, fed WITHOUT the line-ending helper (EC-20 holds the control)
+  ['EC-N23 CRLF module text fed without the line-ending helper', s => s.replace(/\n/g, '\r\n'), ['EC-20']],
 ];
 
 (async () => {
