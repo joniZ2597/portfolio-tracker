@@ -35,7 +35,7 @@ const LIVE = JSON.parse(fs.readFileSync(path.join(ROOT, 'qa', 'fixtures', 'resea
 const sha = s => crypto.createHash('sha256').update(s, 'utf8').digest('hex');
 
 const S1_SHA = '378bd80a3875592f4119b8daa1a6a18816700292655477da838413a1d6b77a78';
-const BASE_INDEX_SHA = '73a4042632ff923d5e2ae7d2c84168055edb7090389aed71a79107d2a6c96000'; // index.html at the base (LF), before the three insertions
+const BASE_INDEX_SHA = 'c23c34a3219d701d10c9de1f9635546e3b113561d90b9a9c6d00077711caf733'; // index.html at the base (LF), before the three insertions // scan-action-gate-1 (DR-1 / DR-2)
 const HEAD_MARK = '\n// ═══ services/evidence-memory.js — inlined (evidence-capture-1) ═══════════\n';
 const END_MARK = '// ── end evidence-capture-1 ─────────────────────────────────────────────────────────────────────────────\n';
 const WRAP_OPEN = 'var PulseEvidenceMemory = (function (module) {\n';

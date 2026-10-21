@@ -109,7 +109,7 @@ const BASE_DIGESTS = {
   _pfLiveNormalize: 'c9e3b362c10d3325df9417d99f9abb7f5aba1f7b4cb4dddc9954e4df1cc5b6f1',
   _nlmConsistencyChecks: '6716b144c8d3edde40a38b0fad8822493b022fc9b28d0b0b2ab43f76c4a4312b',
   analyzeChunk: 'e9303a0690a6fad433918ee02772dcc63e0ad9d65f431f4dd7ee007b3c9ea703',
-  orchestrate: '2e352b3f1d4739e8f98fb079ed3c3865115263e12dcdc53dda70350bebf97dfb',
+  orchestrate: '490d522b4714fe08d4e7030eb05594b07734f6dd7dbb8d6750efd972d66263e2', // scan-action-gate-1 (DR-1 / DR-2)
   enforceScoreConsistency: '28a3a5cac29be9a0b61e854182caaa7cac2ed241fe847fd5b65e8e05a8cbfc60',
   fetchAnthropicAnalysis: '99eb1e8d96c2c0f17acc4dc7af289815b87edaa0a57e5a5616c661373df95089',   // ai-request-hygiene-1 (E-1 cap, E-2 telemetry)
   fetchHistoricalCandles: '94b245c8700ed0e84fed41782f6fc1ee00e24f468f014fc20e26809ce114d17d',

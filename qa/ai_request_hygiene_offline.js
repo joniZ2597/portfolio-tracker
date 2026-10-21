@@ -38,7 +38,7 @@ const BASE_PROMPT_DIGEST = 'f7279ba21eca41cc41e634778afd75eb33b1206e94e1c16dcafe
 // Functions this task must not change (extracted with index-pins-core, sha256 of the text at d5a03fe).
 const BASE_DIGESTS = {
   analyzeChunk: 'e9303a0690a6fad433918ee02772dcc63e0ad9d65f431f4dd7ee007b3c9ea703',
-  orchestrate: '2e352b3f1d4739e8f98fb079ed3c3865115263e12dcdc53dda70350bebf97dfb',
+  orchestrate: '490d522b4714fe08d4e7030eb05594b07734f6dd7dbb8d6750efd972d66263e2', // scan-action-gate-1 (DR-1 / DR-2)
   enforceScoreConsistency: '28a3a5cac29be9a0b61e854182caaa7cac2ed241fe847fd5b65e8e05a8cbfc60',
   parseJSON: 'c02413e78fb8c027bcfc8518fc36615ca8294637b5e8403196e5a2212f94c4e9',
   repairJSON: '9a8db71f54bd5b191e671a26c9838c44a785c5b6eaa29b06896b6945dd4d9eaa',

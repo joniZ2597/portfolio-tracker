@@ -48,7 +48,7 @@ const sha = s => crypto.createHash('sha256').update(s).digest('hex');
 
 // digests at the base (1b48971 / 6f094f5): functions this task must not change
 const BASE_DIGESTS = {
-  orchestrate: '2e352b3f1d4739e8f98fb079ed3c3865115263e12dcdc53dda70350bebf97dfb',
+  orchestrate: '490d522b4714fe08d4e7030eb05594b07734f6dd7dbb8d6750efd972d66263e2', // scan-action-gate-1 (DR-1 / DR-2)
   isValidStockData: 'c785375bd6be1f80594d5e581794e4c78a6a7fcc6eab18c9ca5512703348d828',
   fetchStockData: 'c3f2a021b72b9e6cf0ade43ad0ae7d9f316e64e9b6c6d3e9461cf1dc0542d752',
   fetchAlphaVantage: '506fc899c5f89a7d4150e04c316f80c2539afb1a0692d3ca388f8bd1ca446c2b',

@@ -7552,7 +7552,7 @@ function orchestrate(claudeResults, pplxData, stockData, techSnaps) {
     });
     // Issue 1: deterministic setup is source of truth — overwrite AI-generated technical_setup
     if (_setup6a && _setup6a !== 'unknown') item.technical_setup = _setup6a;
-    else item.technical_setup = item.technical_setup || 'unknown';
+    else item.technical_setup = 'unknown';
     // Score clamp: extended_near_ath — use item.technical_setup (already overridden above) as reliable source
     if (item._aiUnavailable !== true && item.technical_setup === 'extended_near_ath' && item.sentiment_score > 62) {
       console.warn(`[PT] Orchestrate: setup clamp ${sym} extended_near_ath → score ${item.sentiment_score} → 62`);
@@ -7587,6 +7587,29 @@ function orchestrate(claudeResults, pplxData, stockData, techSnaps) {
         item.conflict = 'Bullish catalyst conflicts with weak technical structure below key moving averages.';
       }
     }
+    // scan-action-gate-1 (DR-1) begin — setup → action gate for setups 1-6; setup 7 keeps its block above; unknown is not gated (D11-D)
+    // Q1 = X safety exception: accepts more than the unchanged prompt lists (hold_wait in rows 4-5, the AI's own trim/avoid in rows 1-5), only in the safer direction.
+    if (item._aiUnavailable !== true) {
+      const _sagAllowed = {
+        extended_near_ath:        ['hold_wait', 'trim', 'avoid'],
+        healthy_uptrend_near_ath: ['hold_wait', 'add_on_pullback', 'trim', 'avoid'],
+        healthy_uptrend:          ['hold', 'add_on_pullback', 'add_on_breakout', 'trim', 'avoid'],
+        pullback_in_uptrend:      ['add_on_reclaim', 'add_on_pullback', 'hold_wait', 'trim', 'avoid'],
+        support_test:             ['add_on_pullback', 'hold_wait', 'trim', 'avoid'],
+        breakdown_risk:           ['trim', 'avoid']
+      };
+      const _sagFallback = { extended_near_ath: 'hold_wait', healthy_uptrend_near_ath: 'hold_wait', healthy_uptrend: 'hold', pullback_in_uptrend: 'hold_wait', support_test: 'hold_wait', breakdown_risk: 'avoid' };
+      if (Object.prototype.hasOwnProperty.call(_sagAllowed, _setup6a)) {
+        const _sagWas = item.action;
+        const _sagNorm = typeof _sagWas === 'string' ? _sagWas.trim().toLowerCase() : '';
+        const _sagNow = _sagAllowed[_setup6a].indexOf(_sagNorm) !== -1 ? _sagNorm : _sagFallback[_setup6a];
+        if (_sagNow !== _sagWas) {
+          console.warn(`[PT] Orchestrate: action override ${sym} ${_setup6a} → ${_sagNow} (was: ${_sagWas})`);
+          item.action = _sagNow;
+        }
+      }
+    }
+    // scan-action-gate-1 (DR-1) end
     // Attach structured audit trail — console + object level only in 6A-1
     // (assembled after all overrides so finalDecision reflects corrected values)
     // 6B-1: per-item flag so render layer can pick the right catalyst fallback wording
