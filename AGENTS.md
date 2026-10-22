@@ -34,6 +34,8 @@ read a file it never imports.)*
 
 **Protected-scope block (governance briefs).** A brief that changes a protected path lists each target in a `<!-- protected-scope:begin --> … <!-- protected-scope:end -->` block and also in its `land-scope` block. Only listed targets can pass the PROTECTED gate (step 13a). `work/*/brief.md`, `CHECKPOINT.md`, `.env*`, `.claude/settings.local.json` and anything under `.git` are never approvable.
 
+**Auto-edit-scope block (optional, Worker briefs).** A brief may list, one repository path per line, the files whose Edit, Write and MultiEdit calls the hook grants without a permission prompt in the task's own Worker slot (R15 grant), between the whole-line markers `<!-- auto-edit-scope:begin -->` … `<!-- auto-edit-scope:end -->`. Every entry must also be in `land-scope`. A duplicate marker, a glob, a `..` or dot-segment, or an ASK-tier, DENY-tier or protected path voids the whole block. M5 surfaces are left out, so they keep prompting. No block means no grant. The R11 line that approves the brief also approves the block.
+
 **Execution preflight block (required).** Every brief lists, per slice and for step 0, step 10, §L
 and closure, the commands, tools, scratch files and paths it needs, each classified as: **A**
 auto-approved by `.claude/settings.json` · **B** a Claude Code permission prompt · **C** a governance
@@ -290,7 +292,9 @@ log, `review.md`, and the step-13 integrity result.
 
 ## Worker mode policy
 
-Every brief sets `Mode: Manual` or `Mode: Auto`.
+Every brief sets `Mode: Manual` or `Mode: Auto`. A `Mode: Auto` brief also carries exactly one whole line `<!-- worker-mode: auto -->`; without it the hook treats the brief as Manual.
+
+**Mode lock (R15, HOOK-DENY).** When the session's project directory or its current directory is a Worker slot, the hook denies every Bash, PowerShell, Edit, Write, MultiEdit and NotebookEdit call whose permission mode is not Manual (`default`) — Auto, `acceptEdits`, `dontAsk`, `plan`, `bypassPermissions`, an unknown or a missing mode — unless the slot is detached or its task's committed brief, read at the task-record base, is a `Mode: Auto` brief. A missing or invalid record or brief, or any doubt about which brief applies, counts as Manual. The denial is STOP-6. The guard hook entry fails closed (`onFailure: "block"`).
 
 - **Manual** — Claude Code `default` mode, every action approved — is the project default.
 - `Mode: Auto` *permits* the Owner to run the session in **attended Auto** or `acceptEdits`. It never
@@ -330,13 +334,13 @@ Every brief sets `Mode: Manual` or `Mode: Auto`.
 
 PLAN, IMPLEMENT and MANUAL remain **postures** inside any mode.
 
-**Auto-approved commands (settings allowlist).** Read-only inspection (`grep`, `cat`, `head`, `tail`, `wc`, `ls`, `diff`, `cmp`, `sha256sum`, and `git status|log|diff|show|rev-parse|ls-files`), offline QA (`npm run qa:offline`, `npm run test:*`, `node qa/*_offline.js`, `node qa/*_test.js`, `node qa/guard_integrity_check.js …`, `node qa/tools/index-pins.js --check|--update|--diff …`), Codex read-only review (`codex exec --sandbox read-only …`), scratch under `/tmp/pt-<task-id>/`, and the `pt-land.js` request and cleanup verbs run without a prompt. Everything else prompts in Manual. **Always prompt, in every mode including Auto** (`ask` rules): `pt-land.js land` and `push`, `netlify env:get|list`, `curl`, `wget`, `Invoke-WebRequest`, `Invoke-RestMethod`. Bypass-permissions mode is disabled. A Worker session never accepts an "always allow" for a non-read-only command. The hook and the `deny` rules block; `ask` rules force an Owner prompt in every mode; written rules and the Auto-mode safety classifier are not boundaries. `sed` is deliberately not auto-approved; use the Read tool for line ranges.
+**Auto-approved commands (settings allowlist).** Read-only inspection (`grep`, `cat`, `head`, `tail`, `wc`, `ls`, `diff`, `cmp`, `sha256sum`, and `git status|log|diff|show|rev-parse|ls-files`), offline QA (`npm run qa:offline`, `npm run test:*`, `node qa/*_offline.js`, `node qa/*_test.js`, `node qa/guard_integrity_check.js …`, `node qa/tools/index-pins.js --check|--update|--diff …`), Codex read-only review (`codex exec --sandbox read-only …`), the exact heavy-run process check `wmic process where "name='node.exe'" get ProcessId,CommandLine` (no other `wmic` form), `mkdir -p /tmp/pt-<task-id>…`, and the `pt-land.js` request and cleanup verbs run without a prompt. In a Worker slot in Manual, the hook also grants (R15) Edit, Write and MultiEdit without a prompt for the task's `auto-edit-scope` paths, its `work/<id>/plan.md`, `codex.md` and `qa.log`, and files under `/tmp/pt-<id>/` outside `protected/`; every other edit prompts, and `deny` and `ask` rules still apply. Everything else prompts in Manual. **Always prompt, in every mode including Auto** (`ask` rules): `pt-land.js land` and `push`, `netlify env:get|list`, `curl`, `wget`, `Invoke-WebRequest`, `Invoke-RestMethod`. Bypass-permissions mode is disabled. A Worker session never accepts an "always allow" for a non-read-only command. The hook and the `deny` rules block; `ask` rules force an Owner prompt in every mode; written rules and the Auto-mode safety classifier are not boundaries. `sed` is deliberately not auto-approved; use the Read tool for line ranges.
 
 ### Protection tiers — the enforced layer
 
 | Tier | Enforced by | Covers |
 |---|---|---|
-| **HOOK-DENY** | PreToolUse hook, exit 2, every Claude Code session — the only deterministic boundary | push (R3g); merge/rebase/pull (R3m); destructive git; checkout/switch to main; ref moves of main/branch-dev (RC4, R10-4, R10-5); commits outside the r9 gate (R3c); unknown git subcommands (R10-2); escaped forms (R10-1); git config execution paths (R10-3); `.git` writes by any tool (R10-3c, R10-6); PowerShell rules (R2, R2b); wrappers and stdin-fed interpreters; Netlify writes and protected-file writes from Worker slots |
+| **HOOK-DENY** | PreToolUse hook, exit 2, every Claude Code session — the only deterministic boundary | push (R3g); merge/rebase/pull (R3m); destructive git; checkout/switch to main; ref moves of main/branch-dev (RC4, R10-4, R10-5); commits outside the r9 gate (R3c); unknown git subcommands (R10-2); escaped forms (R10-1); git config execution paths (R10-3); `.git` writes by any tool (R10-3c, R10-6); PowerShell rules (R2, R2b); wrappers and stdin-fed interpreters; Netlify writes and protected-file writes from Worker slots; the Manual mode lock (R15) |
 | **DENY** | `deny` | `.claude/settings.json` · `.claude/settings.local.json` · `.claude/hooks/**` |
 | **ASK** | `ask` | `CLAUDE.md` · `AGENTS.md` · `.gitignore` · `.claude/rules/**` · `qa/run-offline.js` · `netlify.toml` · `package.json` · `package-lock.json` · `work/*/brief.md` (once approved/committed) |
 | **ORDINARY** | the approved brief | everything else in the approved brief |
@@ -407,7 +411,7 @@ The Worker stops and returns to the Owner **only** when one of these is true:
      destructive git; checkout or switch to `main`; a ref move of `main` or `branch-dev`; a commit
      the r9 gate refuses for its content (wrong slot or branch, a protected or DENY-tier path
      staged); a `.git` write; a git-config execution path; a Netlify write; a protected-file write;
-     or the land tool's `land`, `push` or `protected-commit`;
+     the land tool's `land`, `push` or `protected-commit`; or an R15 mode-lock denial;
    - an integrity-check FAIL;
    - an Auto-mode safety-classifier block, or any Manual fallback trigger in an Auto or
      `acceptEdits` session.

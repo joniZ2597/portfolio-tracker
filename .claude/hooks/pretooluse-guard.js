@@ -6,8 +6,10 @@
  * (work/auto-mode-hardening/brief.md §4, rulings R1-R5).
  *
  * decide({ tool_name, tool_input, cwd }) -> { decision: 'allow' | 'ask' | 'deny', reason }
- * The hook never grants anything: 'allow' means "no opinion", the normal permission rules
- * still apply. Node only, no dependencies.
+ * 'allow' means "no opinion": the normal permission rules still apply. The only grant is R15
+ * (work/worker-exec-permissions-1/brief.md §2.3): an Edit / Write / MultiEdit of a path the task's
+ * committed brief lists, emitted as permissionDecision "allow"; `deny` and `ask` rules still win.
+ * R15 also locks a Worker slot to Manual mode (§2.4). Node only, no dependencies.
  *
  * Fail closed: unparseable stdin, a missing / non-string command, any thrown error, and any
  * command this parser cannot fully resolve all block (exit 2). Claude Code treats every other
@@ -18,6 +20,7 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const crypto = require('crypto');
@@ -1498,7 +1501,15 @@ const DEFAULT_DEPS = {
   resolveFileToolTarget: resolveFileToolTargetFs,
   briefApproval: briefApprovalFs,
   canonicalStatus: canonicalStatusGit,
-  indexBlobSha256: indexBlobSha256Git
+  indexBlobSha256: indexBlobSha256Git,
+  projectDir: () => process.env.CLAUDE_PROJECT_DIR,
+  tmpDir: () => os.tmpdir(),
+  realpathNative: (p) => (fs.realpathSync.native ? fs.realpathSync.native(p) : fs.realpathSync(p)),
+  lstatSync: (p) => fs.lstatSync(p),
+  slotIdentity: r15SlotIdentityFs,
+  loadRecord: r15LoadTaskRecord,
+  isAncestor: r15IsAncestorGit,
+  readBlob: r15ReadBlobGit
 };
 
 function commitDeny(cause) {
@@ -1585,6 +1596,328 @@ function resetGate(f, cwd, slot, deps) {
   return { decision: 'deny', reason: 'git reset can move main/branch-dev - denied in every session (R10-5)' };
 }
 
+// ── R15: task-scoped Worker edit grant and the Manual mode lock (work/worker-exec-permissions-1/brief.md §2.2-§2.5) ──
+// Both run only when the hook input has the own property permission_mode (only runCli builds it), so a direct decide() call behaves as before.
+// The grant is "no opinion" (allow) on anything uncertain; the lock denies on anything uncertain. Record, brief and parser logic is copied here
+// (no require of the integrity check or the land tool).
+const R15_BUDGET_MS = 6000;
+const R15_BEGIN = '<!-- auto-edit-scope:begin -->';
+const R15_END = '<!-- auto-edit-scope:end -->';
+const R15_WORKER_MODE_AUTO = '<!-- worker-mode: auto -->';
+const R15_LAND_BEGIN = '<!-- land-scope:begin -->';
+const R15_LAND_END = '<!-- land-scope:end -->';
+const R15_PROT_BEGIN = '<!-- protected-scope:begin -->';
+const R15_PROT_END = '<!-- protected-scope:end -->';
+const R15_ENTRY_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/;
+const R15_HEAD_TASK_RE = /^ref: refs\/heads\/task\/([a-z0-9][a-z0-9._-]*)$/;
+const R15_DETACHED_RE = /^[0-9a-f]{40}$/;
+const R15_ABS_RE = /^[A-Za-z]:\//;
+const R15_MAX_ENTRIES = 64;
+const R15_OID_RE = /^[0-9a-f]{40}$/;
+const R15_SHA_RE = /^[0-9a-f]{64}$/;
+const R15_ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+const R15_TASK_RE = /^task\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+const R15_BRIEF_RE = /^work\/[a-z0-9][a-z0-9._-]*\/brief\.md$/;
+const R15_AUDIT_VERBS = ['task-start', 'adopt', 'resync'];
+const R15_EXCLUDED_NAMES = ['agents.md', 'claude.md', 'checkpoint.md', 'netlify.toml', 'package.json', 'package-lock.json', 'bunfig.toml', 'pyrightconfig.json'];
+
+// N(x): backslashes to slashes, runs of slashes collapsed, trailing slash removed, a leading drive letter upper-cased.
+function r15N(x) {
+  let s = String(x).replace(/\\/g, '/').replace(/\/+/g, '/');
+  if (s.length > 1) s = s.replace(/\/+$/, '');
+  return s.replace(/^([a-z]):/, (m, l) => l.toUpperCase() + ':');
+}
+function r15Ci(x) { return r15N(x).toLowerCase(); }
+// SR(x): the slot root of N(x) (first pt-wt-worker-a|b segment), or null.
+function r15SlotRoot(x) {
+  const m = /^(.*?\/pt-wt-worker-[ab])(?:\/|$)/i.exec(r15N(x));
+  return m ? m[1] : null;
+}
+// REL: the path below root (case-insensitive prefix plus a slash boundary), original case kept; null when not below.
+function r15Rel(raw, rootN) {
+  const n = r15N(raw);
+  if (n.toLowerCase().indexOf(rootN.toLowerCase() + '/') !== 0) return null;
+  return n.slice(rootN.length + 1);
+}
+// G10, per path: true = ambiguous (UNC / \\?\ / \\.\ prefix, drive-less or drive-relative, ADS colon, dot segment, trailing dot or space, 8.3 form, control char).
+function r15BadPath(raw) {
+  if (typeof raw !== 'string' || !raw) return true;
+  if (/[\u0000-\u001f\u007f]/.test(raw)) return true;
+  if (/^(?:\\\\|\/\/)/.test(raw)) return true;
+  const n = r15N(raw);
+  if (!R15_ABS_RE.test(n)) return true;
+  if (n.indexOf(':', 2) !== -1) return true;
+  for (const seg of n.slice(3).split('/')) {
+    if (seg === '.' || seg === '..' || /[. ]$/.test(seg) || /~\d/.test(seg)) return true;
+  }
+  return false;
+}
+// G11 exclusion X, on a lowercased REL.
+function r15Excluded(relLower, protectedEntries) {
+  const segs = relLower.split('/');
+  if (segs.some((s) => s.startsWith('.'))) return true;
+  if (PROTECTED_RES.some((re) => re.test(relLower)) || STAGED_DENY_RES.some((re) => re.test(relLower))) return true;
+  const base = segs[segs.length - 1];
+  if (R15_EXCLUDED_NAMES.indexOf(base) !== -1) return true;
+  if (/^lefthook[^/]*\.yml$/.test(base) || /-wrapper\.properties$/.test(base)) return true;
+  if (/(?:^|\/)qa\/(?:run-offline|guard_integrity_check)\.js$/.test(relLower)) return true;
+  if (/(?:^|\/)work\/[^/]+\/brief\.md$/.test(relLower)) return true;
+  if (segs.indexOf('node_modules') !== -1) return true;
+  return Array.isArray(protectedEntries) && protectedEntries.some((e) => String(e).toLowerCase() === relLower);
+}
+function r15ScopeBlock(text, begin, end) {
+  if (typeof text !== 'string') return null;
+  if (text.split(begin).length - 1 !== 1 || text.split(end).length - 1 !== 1) return null;
+  const bi = text.indexOf(begin);
+  const ei = text.indexOf(end);
+  if (bi === -1 || ei === -1 || ei < bi) return null;
+  const paths = text.slice(bi + begin.length, ei).split(/\r\n|\r|\n/)
+    .map((l) => l.replace(/^\s*[-*]\s*/, '').replace(/`/g, '').trim())
+    .filter(Boolean);
+  if (paths.length === 0) return null;
+  return { paths };
+}
+function r15ParseLandScope(text) { return r15ScopeBlock(text, R15_LAND_BEGIN, R15_LAND_END); }
+function r15ParseProtectedScope(text) { return r15ScopeBlock(text, R15_PROT_BEGIN, R15_PROT_END); }
+// §2.2: the opt-in auto-edit-scope block. Returns the entry list, or null (the whole block is void).
+function r15ParseAutoEditScope(text) {
+  if (typeof text !== 'string') return null;
+  if (text.split(R15_BEGIN).length - 1 !== 1 || text.split(R15_END).length - 1 !== 1) return null;
+  const lines = text.split('\n').map((l) => l.replace(/\r$/, ''));
+  const bi = lines.indexOf(R15_BEGIN);
+  const ei = lines.indexOf(R15_END);
+  if (bi === -1 || ei === -1 || ei < bi) return null;
+  const entries = lines.slice(bi + 1, ei)
+    .map((l) => l.replace(/^\s*[-*]\s*/, '').replace(/`/g, '').trim())
+    .filter(Boolean);
+  if (entries.length < 1 || entries.length > R15_MAX_ENTRIES) return null;
+  if (new Set(entries).size !== entries.length) return null;
+  const land = r15ParseLandScope(text);
+  if (!land) return null;
+  const protectedBlock = r15ParseProtectedScope(text);
+  if ((text.indexOf(R15_PROT_BEGIN) !== -1 || text.indexOf(R15_PROT_END) !== -1) && !protectedBlock) return null;
+  const protectedEntries = protectedBlock ? protectedBlock.paths : [];
+  for (const e of entries) {
+    if (!R15_ENTRY_RE.test(e)) return null;
+    if (r15Excluded(e.toLowerCase(), protectedEntries)) return null;
+    if (land.paths.indexOf(e) === -1) return null;
+  }
+  return entries;
+}
+// A `Mode: Auto` brief carries exactly one whole line equal to the worker-mode marker and no other line naming worker-mode.
+function r15IsAutoBrief(text) {
+  if (typeof text !== 'string') return false;
+  const named = text.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l.indexOf('worker-mode') !== -1);
+  return named.length === 1 && named[0] === R15_WORKER_MODE_AUTO;
+}
+// Copy of loadTaskRecord in qa/guard_integrity_check.js (task-base record + the latest ok audit recordSha256).
+function r15LoadTaskRecord(commonAbs, task) {
+  const p = path.join(commonAbs, 'pt-task', encodeURIComponent(String(task).replace(/^task\//, '')) + '.json');
+  if (!fs.existsSync(p)) return { exists: false };
+  const bad = (reason) => ({ exists: true, valid: false, reason });
+  let buf;
+  try { buf = fs.readFileSync(p); } catch (e) { return bad('the record cannot be read'); }
+  let rec;
+  try { rec = JSON.parse(buf.toString('utf8')); } catch (e) { return bad('the record is not valid JSON'); }
+  if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return bad('the record is not a JSON object');
+  if (rec.schema !== 'pt-task-base/v1') return bad('unknown schema');
+  if (typeof rec.task !== 'string' || !R15_TASK_RE.test(rec.task) || rec.task !== task) return bad('the record names a different task');
+  for (const k of ['base', 'mainAtStart', 'briefCommit']) {
+    if (typeof rec[k] !== 'string' || !R15_OID_RE.test(rec[k])) return bad(k + ' is not a 40-hex oid');
+  }
+  if (rec.originDevAtStart !== null && (typeof rec.originDevAtStart !== 'string' || !R15_OID_RE.test(rec.originDevAtStart))) return bad('originDevAtStart is not a 40-hex oid or null');
+  if (typeof rec.startedAt !== 'string' || !R15_ISO_RE.test(rec.startedAt) || Number.isNaN(Date.parse(rec.startedAt))) return bad('startedAt is not an ISO-8601 UTC time');
+  if (typeof rec.briefPath !== 'string' || !R15_BRIEF_RE.test(rec.briefPath)) return bad('briefPath is not work/<id>/brief.md');
+  if (typeof rec.briefSha256 !== 'string' || !R15_SHA_RE.test(rec.briefSha256)) return bad('briefSha256 is not a 64-hex digest');
+  if (typeof rec.adopted !== 'boolean') return bad('adopted is not a boolean');
+  if (!Array.isArray(rec.history) || rec.history.length === 0) return bad('history is empty');
+  for (const h of rec.history) {
+    if (!h || typeof h !== 'object' || typeof h.ts !== 'string' || !R15_ISO_RE.test(h.ts) || R15_AUDIT_VERBS.indexOf(h.verb) === -1 ||
+      !(h.mode === null || h.mode === 'F' || h.mode === 'R') || !(h.from === null || (typeof h.from === 'string' && R15_OID_RE.test(h.from))) ||
+      typeof h.to !== 'string' || !R15_OID_RE.test(h.to)) return bad('a history entry is malformed');
+  }
+  if (rec.history[0].verb !== 'task-start' && rec.history[0].verb !== 'adopt') return bad('history[0] is not a task-start or adopt entry');
+  if (rec.base !== rec.history[rec.history.length - 1].to) return bad('base is not history[last].to');
+  const sha = crypto.createHash('sha256').update(buf).digest('hex');
+  let latest = null;
+  const logPath = path.join(commonAbs, 'pt-land-log');
+  if (fs.existsSync(logPath)) {
+    let logText = '';
+    try { logText = fs.readFileSync(logPath, 'utf8'); } catch (e) { logText = ''; }
+    for (const line of logText.split('\n')) {
+      if (!line.trim()) continue;
+      let e;
+      try { e = JSON.parse(line); } catch (err) { continue; }
+      if (e && e.task === task && e.result === 'ok' && R15_AUDIT_VERBS.indexOf(e.verb) !== -1 && typeof e.recordSha256 === 'string') latest = e;
+    }
+  }
+  if (!latest) return bad('no ok audit line carries a recordSha256 for this task');
+  if (latest.recordSha256 !== sha) return bad('the record sha256 differs from the latest audit recordSha256 (edited or replaced)');
+  return { exists: true, valid: true, record: rec, sha256: sha };
+}
+// G5 (real reader): the slot is a real directory whose .git file points at <C>/.git/worktrees/<name>, C's .git is a directory, the admin dir points back, and slot and C are siblings.
+function r15SlotIdentityFs(sr) {
+  const real = fs.realpathSync.native ? fs.realpathSync.native(sr) : fs.realpathSync(sr);
+  if (r15Ci(real) !== r15Ci(sr)) return null;
+  const dotGit = sr + '/.git';
+  if (!fs.lstatSync(dotGit).isFile()) return null;
+  const m = /^gitdir:\s*(.+?)\s*$/m.exec(fs.readFileSync(dotGit, 'utf8'));
+  if (!m) return null;
+  const gitdir = r15N(m[1]);
+  if (!R15_ABS_RE.test(gitdir)) return null;
+  const w = /^(.*)\/\.git\/worktrees\/[^/]+$/i.exec(gitdir);
+  if (!w) return null;
+  const canonical = w[1];
+  if (!fs.lstatSync(canonical + '/.git').isDirectory()) return null;
+  const back = r15N(fs.readFileSync(gitdir + '/gitdir', 'utf8').split(/\r?\n/)[0]);
+  if (r15Ci(back) !== r15Ci(sr + '/.git')) return null;
+  if (r15Ci(path.posix.dirname(sr)) !== r15Ci(path.posix.dirname(canonical))) return null;
+  return { canonical, commonDir: canonical + '/.git' };
+}
+function r15GitEnv() {
+  const env = {};
+  for (const k of Object.keys(process.env)) if (!/^GIT_/i.test(k)) env[k] = process.env[k];
+  env.GIT_OPTIONAL_LOCKS = '0';
+  return env;
+}
+function r15IsAncestorGit(root, base, ref, deadline) {
+  const r = spawnSync('git', ['merge-base', '--is-ancestor', base, ref], { cwd: root, env: r15GitEnv(), encoding: 'utf8', timeout: spawnBudgetMs(deadline), windowsHide: true });
+  if (r.error) throw r.error;
+  if (r.status === 0) return true;
+  if (r.status === 1) return false;
+  throw new Error('git merge-base exited ' + r.status);
+}
+function r15ReadBlobGit(root, base, rel, deadline) {
+  const r = spawnSync('git', ['cat-file', 'blob', base + ':' + rel], { cwd: root, env: r15GitEnv(), encoding: 'buffer', timeout: spawnBudgetMs(deadline), windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+  if (r.error) throw r.error;
+  if (r.status !== 0) throw new Error('git cat-file exited ' + r.status);
+  if (!Buffer.isBuffer(r.stdout)) throw new Error('git cat-file produced no output');
+  return r.stdout;
+}
+// G5-G8 / M3: slot identity, a valid record for the task, (grant only) base reachable from the task ref, and the brief blob at the record base with the recorded sha256.
+function r15TaskContext(sr, id, deps, deadline, needAncestry) {
+  const ident = deps.slotIdentity(sr);
+  if (!ident || typeof ident.canonical !== 'string' || typeof ident.commonDir !== 'string') return null;
+  const rec = deps.loadRecord(ident.commonDir, 'task/' + id);
+  if (!rec || rec.valid !== true || !rec.record) return null;
+  const record = rec.record;
+  if (record.briefPath !== 'work/' + id + '/brief.md') return null;
+  if (needAncestry && deps.isAncestor(ident.canonical, record.base, 'refs/heads/task/' + id, deadline) !== true) return null;
+  const blob = deps.readBlob(ident.canonical, record.base, record.briefPath, deadline);
+  if (!Buffer.isBuffer(blob) || crypto.createHash('sha256').update(blob).digest('hex') !== record.briefSha256) return null;
+  return { ident, record, briefText: blob.toString('utf8') };
+}
+// §2.4: a candidate for the mode lock from one raw directory string.
+function r15Candidate(raw) {
+  if (!/(?:^|[\\/])pt-wt-worker-[ab](?:[\\/]|$)/i.test(raw)) return { kind: 'none' };
+  const n = r15N(raw);
+  if (!R15_ABS_RE.test(n)) return { kind: 'ambiguous' };
+  const sr = r15SlotRoot(n);
+  return sr ? { kind: 'slot', sr } : { kind: 'ambiguous' };
+}
+function r15LockDeny(id, mode) {
+  const shown = typeof mode === 'string' ? mode.replace(/[^\x20-\x7e]/g, '?').slice(0, 40) : 'absent';
+  return { decision: 'deny', reason: 'R15 mode lock: brief ' + id + ' is Manual, session mode is ' + shown + ' - STOP-6' };
+}
+// The lock: null = pass, else a deny decision. M0: the exact mode "default" passes with no reads.
+function r15Lock(input, deps) {
+  const mode = input.permission_mode;
+  if (mode === 'default') return null;
+  try {
+    const deadline = Date.now() + R15_BUDGET_MS;
+    const pd = deps.projectDir();
+    const hc = input.hook_cwd;
+    const havePd = typeof pd === 'string' && pd.length > 0;
+    const haveHc = typeof hc === 'string' && hc.length > 0;
+    if (!havePd && !haveHc) return r15LockDeny('?', mode);
+    const slots = [];
+    for (const raw of [havePd ? pd : null, haveHc ? hc : null]) {
+      if (raw === null) continue;
+      // Owner-approved deviation (brief rulings R-c / R-d / R-f over the literal-name rule of M1): a slot reached through an alias (8.3 name,
+      // junction, symlink, subst drive) is found by its native real path; a path that cannot be resolved is ambiguous -> deny.
+      let resolved;
+      try { resolved = deps.realpathNative(raw); } catch (e) { return r15LockDeny('?', mode); }
+      if (typeof resolved !== 'string' || !resolved) return r15LockDeny('?', mode);
+      for (const form of [raw, resolved]) {
+        const c = r15Candidate(form);
+        if (c.kind === 'ambiguous') return r15LockDeny('?', mode);
+        if (c.kind === 'slot' && !slots.some((s) => r15Ci(s) === r15Ci(c.sr))) slots.push(c.sr);
+      }
+    }
+    for (const sr of slots) {
+      let head;
+      try { head = String(deps.readHeadRef(sr)).trim(); } catch (e) { return r15LockDeny('?', mode); }
+      if (R15_DETACHED_RE.test(head)) continue;
+      const m = R15_HEAD_TASK_RE.exec(head);
+      if (!m) return r15LockDeny('?', mode);
+      let auto = false;
+      try {
+        const ctx = r15TaskContext(sr, m[1], deps, deadline, false);
+        auto = !!ctx && r15IsAutoBrief(ctx.briefText);
+      } catch (e) { auto = false; }
+      if (!auto) return r15LockDeny(m[1], mode);
+    }
+    return null;
+  } catch (e) {
+    return r15LockDeny('?', mode);
+  }
+}
+// §2.3 G2-G12: a grant decision or null (no opinion). `resolved` is the real path of the target (today's resolveFileToolTarget).
+function r15Grant(input, ti, resolved, deps) {
+  try {
+    if (input.tool_name !== 'Edit' && input.tool_name !== 'Write' && input.tool_name !== 'MultiEdit') return null;
+    if (input.permission_mode !== 'default') return null;
+    const deadline = Date.now() + R15_BUDGET_MS;
+    const target = ti && ti.file_path;
+    if (typeof target !== 'string' || !target) return null;
+    const pd = deps.projectDir();
+    const hc = input.hook_cwd;
+    if (typeof pd !== 'string' || !pd || typeof hc !== 'string' || !hc) return null;
+    if (!R15_ABS_RE.test(r15N(pd)) || !R15_ABS_RE.test(r15N(hc))) return null;
+    const sp = r15SlotRoot(pd);
+    const sh = r15SlotRoot(hc);
+    if (!sp || !sh || r15Ci(sp) !== r15Ci(sh)) return null;
+    if (!deps.slotIdentity(sp)) return null;
+    const head = String(deps.readHeadRef(sp)).trim();
+    const hm = R15_HEAD_TASK_RE.exec(head);
+    if (!hm) return null;
+    const id = hm[1];
+    // G10 / G11 on the target, before any record or git read
+    let root = sp;
+    let scratch = false;
+    if (r15Rel(target, sp) === null) {
+      const tmpRoot = r15N(deps.realpathNative(deps.tmpDir())) + '/pt-' + id;
+      if (r15Rel(target, tmpRoot) === null) return null;
+      root = tmpRoot;
+      scratch = true;
+    }
+    if (r15BadPath(target) || r15BadPath(resolved)) return null;
+    const rel = r15Rel(target, root);
+    const relRt = r15Rel(resolved, root);
+    if (rel === null || relRt === null || rel !== relRt) return null;
+    let st = null;
+    try { st = deps.lstatSync(resolved); } catch (e) { if (!e || (e.code !== 'ENOENT' && e.code !== 'ENOTDIR')) return null; }
+    if (st && (!st.isFile() || st.nlink !== 1)) return null;
+    if (r15Excluded(rel.toLowerCase(), [])) return null;
+    if (scratch) {
+      if (rel.split('/')[0].toLowerCase() === 'protected') return null;
+      const lst = deps.lstatSync(root);
+      if (!lst.isDirectory() || lst.isSymbolicLink() || r15Ci(deps.realpathNative(root)) !== r15Ci(root)) return null;
+    }
+    const ctx = r15TaskContext(sp, id, deps, deadline, true);
+    if (!ctx) return null;
+    const protectedBlock = r15ParseProtectedScope(ctx.briefText);
+    if (protectedBlock && r15Excluded(rel.toLowerCase(), protectedBlock.paths)) return null;
+    if (scratch) return { decision: 'grant', reason: 'R15 grant ' + id + ' tmp:' + rel };
+    if (rel === 'work/' + id + '/plan.md' || rel === 'work/' + id + '/codex.md' || rel === 'work/' + id + '/qa.log') return { decision: 'grant', reason: 'R15 grant ' + id + ' ' + rel };
+    const block = r15ParseAutoEditScope(ctx.briefText);
+    if (!block || block.indexOf(rel) === -1) return null;
+    return { decision: 'grant', reason: 'R15 grant ' + id + ' ' + rel };
+  } catch (e) {
+    return null;
+  }
+}
+
 function fileToolDecision(input, deps) {
   const tool = input && input.tool_name;
   if (!R10_FILE_TOOLS.has(tool)) return { decision: 'allow', reason: 'no opinion on tool ' + String(tool) };
@@ -1594,6 +1927,12 @@ function fileToolDecision(input, deps) {
   try {
     const resolved = deps.resolveFileToolTarget(input.cwd, raw);
     if (isDotGitText(resolved) || isDotGitText(raw)) return { decision: 'deny', reason: tool + ' targeting .git - denied in every session (R10-6)' };
+    if (Object.prototype.hasOwnProperty.call(input, 'permission_mode')) {
+      const lock = r15Lock(input, deps);
+      if (lock) return lock;
+      const grant = r15Grant(input, ti, resolved, deps);
+      if (grant) return grant;
+    }
     return { decision: 'allow', reason: 'no .git file-tool target detected' };
   } catch (e) {
     return { decision: 'deny', reason: tool + ' path could not be resolved - denied fail-closed (R10-6)' };
@@ -1625,6 +1964,10 @@ function decide(input, deps) {
   const gateDeps = Object.assign({}, DEFAULT_DEPS, deps, { deadline });
   if (R10_FILE_TOOLS.has(tool)) return fileToolDecision(input, gateDeps);
   if (tool !== 'Bash' && tool !== 'PowerShell') return { decision: 'allow', reason: 'no opinion on tool ' + String(tool) };
+  if (Object.prototype.hasOwnProperty.call(input, 'permission_mode')) {
+    const r15Denial = r15Lock(input, gateDeps);
+    if (r15Denial) return r15Denial;
+  }
   if (tool === 'PowerShell' && isWorkerSlot(input.cwd)) return { decision: 'deny', reason: 'PowerShell tool - denied in Worker-slot sessions (R2)' };
   const command = input.tool_input && input.tool_input.command;
   if (typeof command !== 'string') return { decision: 'deny', reason: 'missing or non-string command (fail closed)' };
@@ -1717,7 +2060,17 @@ function runCli(stdinText, opts) {
     const toolInput = input.tool_input || {};
     if ((tool === 'Bash' || tool === 'PowerShell') && typeof toolInput.command !== 'string') return block('missing or non-string command (fail closed)');
     const cwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : process.env.CLAUDE_PROJECT_DIR;
-    const r = decideFn({ tool_name: tool, tool_input: toolInput, cwd }, opts && opts.deps);
+    const permissionMode = typeof input.permission_mode === 'string' ? input.permission_mode : null;
+    const hookCwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : null;
+    const r = decideFn({ tool_name: tool, tool_input: toolInput, cwd, permission_mode: permissionMode, hook_cwd: hookCwd }, opts && opts.deps);
+    if (r && r.decision === 'grant') {
+      if (typeof r.reason !== 'string' || (tool !== 'Edit' && tool !== 'Write' && tool !== 'MultiEdit')) return block('guard returned an invalid decision (fail closed)');
+      return {
+        code: 0,
+        stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: r.reason } }) + '\n',
+        stderr: ''
+      };
+    }
     if (!r || typeof r.reason !== 'string' || !Object.prototype.hasOwnProperty.call(SEVERITY, r.decision)) {
       return block('guard returned an invalid decision (fail closed)');
     }
@@ -1735,7 +2088,10 @@ function runCli(stdinText, opts) {
   }
 }
 
-module.exports = { decide, runCli, isWorkerSlot, FAIL_CLOSED_EXIT, spawnBudgetMs, stripShellEscapes, KNOWN_GIT_SUBCOMMANDS };
+module.exports = {
+  decide, runCli, isWorkerSlot, FAIL_CLOSED_EXIT, spawnBudgetMs, stripShellEscapes, KNOWN_GIT_SUBCOMMANDS,
+  r15LoadTaskRecord, r15ParseAutoEditScope, r15ParseLandScope, r15ParseProtectedScope, r15IsAutoBrief
+};
 
 if (require.main === module) {
   process.on('uncaughtException', () => process.exit(FAIL_CLOSED_EXIT));
