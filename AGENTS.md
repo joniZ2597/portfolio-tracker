@@ -204,7 +204,7 @@ commit) or on a STOP condition below.
 15. **Push — Owner-approved (R12).** Run `node .claude/hooks/pt-land.js push-request`, show its report — including the public Netlify DEV deploy notice and the commits to publish — print its approval line exactly, and **STOP until the Owner answers**. After the Owner enters it with `!`, run `node .claude/hooks/pt-land.js push`; it verifies `branch-dev == origin/branch-dev`. Any refusal is **STOP-6**. If the Owner declines, the task ends LANDed and unpushed. Then run step 16.
 16. **Cleanup.** After a verified push, run `node .claude/hooks/pt-land.js cleanup task/<id>` — it archives the task's ignored evidence (`plan.md`, `codex.md`, `qa.log`) to `pt-work-artifacts/<id>/`, detaches the slot at `branch-dev` and safely deletes the local task branch. A refusal is reported, not retried. Then **STOP** with the final completion report.
 
-**The `!` rule.** After `!`, the Owner types only a line printed by `pt-land.js` (`brief-request`, `protected-request`, `land-request`, `push-request` or `adopt-request`) in the exact shape `! printf '%s\n' '<payload>' > '<common-dir>/pt-<kind>-approval'`, where `<kind>` is `brief`, `protected`, `land`, `push` or `adopt` — nothing else. Claude never writes an approval record.
+**The `!` rule.** After `!`, the Owner types only a line printed by `pt-land.js` (`brief-request`, `protected-request`, `land-request`, `push-request` or `adopt-request`) in the exact shape `! printf '%s\n' '<payload>' > '<common-dir>/pt-<kind>-approval'`, where `<kind>` is `brief`, `protected`, `land`, `push` or `adopt` — nothing else. Claude never writes an approval record. The R11 line also opens the task's execution envelope (see "Execution envelope" below); that changes no record, format or check.
 
 **The Owner does not approve individual file edits, inspect code previews, relay Codex
 findings, or decide ordinary in-scope implementation questions — LAND approval remains the
@@ -214,6 +214,79 @@ actions" and "Owner LAND / SHIP boundaries" below.**
 **The Owner is never a relay for review or troubleshooting context.** Diff, brief, QA evidence, `codex.md` and any
 other review material are provided by the Worker directly to the Codex review process. The Owner
 is not asked to copy them into a separate conversation when the Worker can supply them itself.
+
+### Execution envelope (one Owner act per task)
+
+This subsection applies to a task whose R11 brief-only commit is made after this subsection is on
+`branch-dev`. It changes no hook, tool, record format, check, `ask` rule or permission, and
+Claude never writes an approval record. It is used only when MAIN — the Owner-facing session that
+coordinates Bootstrap and the Workers and keeps the task's handoff ledger — coordinates the task;
+otherwise every transition below needs the Owner's go-ahead as before. It is **ATTENDED-ONLY**:
+the Owner is present for the whole envelope (see "Worker mode policy").
+
+**Opening act.** The Owner reviews the task's package, answers every open decision in it, and
+then types the task's R11 `!` line. That one act approves the exact brief (the sha256, path and
+`branch-dev` oid in the line) and authorizes, for that task only, these routine transitions:
+
+- (a) Bootstrap's R11 brief-only commit of exactly that brief;
+- (b) slot assignment and `git -C <slot> switch -c task/<id> <base>` from the current `branch-dev`;
+- (c) bare `task-start`;
+- (d) MAIN's assignment message to the Worker;
+- (e) MAIN's QA-slot grants (the check before every heavy run under "Test commands" still applies);
+- (f) the Worker's step-13 r9 commit, staging only paths listed in the brief's `land-scope` block
+  (`protected-scope` paths enter only through step 13a). Immediately before the commit the Worker
+  checks that `git diff --cached --name-only` lists only `land-scope` paths, and MAIN verifies the
+  same staged list before the commit and the committed list after it. On a mismatch the commit
+  does not run (V2);
+- (g) the step-13 integrity check and `land-request`;
+- (h) a Second-LAND `resync` by Bootstrap (see "Owner LAND / SHIP boundaries"; a refusal is a STOP),
+  and the Worker's re-run QA, integrity check and new `land-request` that follow it;
+- (i) `cleanup` after a verified push of this task.
+
+Permission prompts on these steps still appear, and the Owner answers them at the machine.
+Answering one is not a new decision and never widens the envelope.
+
+**Never covered:** LAND, PUSH, PROTECTED, ADOPT, any STOP ruling, destructive Git, any Netlify
+write, live external canaries, `main`/production/SHIP, any governance, hook, settings or
+permission change, and any unattended operation.
+
+**Expiry.** (a)–(g) are authorized until the first of: 72 hours after the committer time of the
+task's R11 commit (`git log -1 --format=%cI <commit>`), or the `land-request` report. (h) and
+(i) stay authorized after `land-request` only until this task is pushed and cleaned up, or its
+LAND or PUSH is declined, or refused for any reason other than Second LAND. Expiry is a STOP, not
+a failure. The Owner either renews the envelope with a one-line ruling naming the task and a new
+end time, or ends the task.
+
+**Synchronization wait.** The synchronization requirement is not relaxed. When a brief's
+task-start checks require `branch-dev` = `origin/branch-dev` and they differ (for example because
+of the R11 commit itself), (b) and (c) wait. They continue only after a separate PUSH approved by
+the Owner with its own PUSH record. The envelope never covers that PUSH. MAIN records the wait and
+the PUSH in the ledger. The wait does not pause the expiry.
+
+**Void conditions.** Any one voids the envelope. The agent that detects it STOPs with the
+five-line STOP message and makes no further change. MAIN records the void in the ledger with the
+evidence named below. No routine transition runs until the Owner act in the last column, which
+MAIN also records verbatim.
+
+| # | Condition (how it is tested) | Ledger evidence | Fresh Owner act |
+|---|---|---|---|
+| V1 | Content or base: the sha256 of the committed brief blob, the task record's `briefSha256` (`--print-record`), or the brief blob the Worker checks at assignment differs from the sha256 in the R11 line; the record's `briefPath` differs from the line's path; the R11 commit's parent differs from the line's oid; or the record's `base` differs from the `branch-dev` oid used at (b) | the line's sha256, path and oid; the differing value and where it was read | a ruling. If the brief must change: a new brief and a new R11 line (a new envelope) |
+| V2 | Scope: an edit outside the brief's file set (STOP-1), a gap-rule case, or a step-13 staged set (`git diff --cached --name-only`) that is not a subset of `land-scope` | the offending paths; the staged list | a STOP-1 ruling. A ruling that leaves the file set, `land-scope`, `protected-scope` and objective unchanged restores the envelope; any other change needs a new brief |
+| V3 | Review: an unresolved Class I finding at step 12, or an unresolved security finding from the brief review that the approved package did not disposition | the finding text and its `review.md` line | a ruling at the step-13 STOP; (f) does not run before it |
+| V4 | QA: a step-0 or step-10 `qa:offline` FAIL not shown under M4 to pre-exist on the base, a step-10 count different from step 0 (or from the count the brief states), or a land-test FAIL | the `qa.log` line, both counts, the failing suite | a ruling |
+| V5 | Guard: a hook denial other than a logged form denial, an Auto-mode classifier block, an integrity FAIL, or a `task-start` or `resync` refusal | the denial or refusal text verbatim | a STOP-6 ruling. A re-run PASS with no implementation change then continues the envelope (step 13) |
+| V6 | `branch-dev` moved: a commit in `<R11 commit>..branch-dev` that neither came in through a LAND (this task's or another task's) logged in the land tool's audit log nor is another task's single-file `A work/<other>/brief.md` R11 commit; or any later commit that touches `work/<id>/brief.md`. (An unpushed R11 commit is not a void; see "Synchronization wait") | the offending oids and the audit-log lines checked | a ruling. An amended brief is a new brief and a new R11 line (a new envelope) |
+| V7 | Expiry, as above | the R11 commit time, the expiry time, the step reached | a renewal ruling, or the task ends |
+| V8 | Owner: a ruling that changes scope or objective; a session mode the brief does not set, or any unattended operation; the Owner becoming unavailable | the ruling verbatim, or the mode or absence observed | scope or objective: a new brief. Mode or absence: a resume ruling when the Owner is back |
+
+**Audit.** MAIN's ledger holds, in order:
+- `ENVELOPE OPEN <id>`, followed by the R11 line verbatim, the R11 commit oid and committer time, the scope `(a)–(i)` and the expiry time;
+- one line per routine transition: `ENVELOPE <id> <letter> <UTC time> <result> <evidence>`. The evidence is the commit oid, record sha256, QA count, slot grant or release, or the `land-request` tip and base;
+- one line per void: `ENVELOPE <id> VOID V<n> <UTC time> <evidence>`, then the Owner act verbatim;
+- `ENVELOPE CLOSED <id> <reason>`.
+
+The repository evidence is unchanged: the R11 commit, the task record and the land tool's audit
+log, `review.md`, and the step-13 integrity result.
 
 ## Worker mode policy
 
@@ -400,8 +473,10 @@ security check - is not a method change: it is STOP-1 or STOP-2.
   `review.md`, `land-request` and `push-request`, and `land` / `push` after the Owner's line.
 - **Codex:** read-only reviews and consultations; findings and advice only.
 - **Bootstrap:** slot preparation, task-start, the R11 brief commit, resync, cleanup -
-  mechanical git only. It approves no method or fix.
-- **Owner:** the R11, PROTECTED, LAND and PUSH lines; rulings on STOP-1 to STOP-6; SHIP, every
+  mechanical git only, under the task's execution envelope when one is active. It approves no
+  method or fix.
+- **Owner:** the R11 line (which also opens the execution envelope), the PROTECTED line, and the
+  LAND and PUSH lines (one decision, two records); rulings on STOP-1 to STOP-6; SHIP, every
   Netlify write and every action under "Protected actions".
 
 ## Codex findings — FIX / DEFER / REJECT
@@ -642,7 +717,8 @@ registry, claim, or mutex exists anywhere in this convention.
     its result are one line in `qa.log` before the run.
   - Another heavy run active -> wait and check again; never start a concurrent run. The check
     cannot be run -> do not start the run; treat it as a troubleshooting problem, then STOP-2.
-  - Task-start sequencing by the Owner is an additional safeguard, not a substitute for the check.
+  - Task-start sequencing (by the Owner, or by MAIN under an execution envelope) is an additional
+    safeguard, not a substitute for the check.
   - A brief approved before this rule keeps its own heavy-run requirements.
 
 ## Codex as diff reviewer
@@ -703,7 +779,15 @@ above.
     Otherwise the Worker re-runs `npm run qa:offline`, the relevant targeted tests and the
     integrity check (in the form `resync` prints; for a recorded task, `resync` also advances the record's base) in its slot and reports, before LAND — the
     post-rebase integrity result is LAND evidence only, never recorded in `review.md`.
-- **Push** runs only through `pt-land.js push` after the Owner's single-use PUSH record (step 15), or by the Owner in a normal terminal; a direct `git push` stays HOOK-DENY (R3g). A push publishes the public Netlify DEV deploy of `branch-dev`; the PUSH record is the explicit approval for that branch deploy. One consolidated push after a batch is preferred.
+- **Push** runs only through `pt-land.js push` after the Owner's single-use PUSH record (step 15), or by the Owner in a normal terminal; a direct `git push` stays HOOK-DENY (R3g). A push publishes the public Netlify DEV deploy of `branch-dev`; the PUSH record is the explicit approval for that branch deploy. A push normally follows its own LAND under the same Owner decision; one consolidated push after several LANDs happens only when the Owner decides it.
+- **LAND and PUSH — one Owner decision, two records.** After the `land-request` report the Owner
+  decides LAND and PUSH together, in this order: the Owner types the LAND line and the Worker runs
+  `land`; then the Worker runs `push-request`, the Owner types its PUSH line and the Worker runs
+  `push`. Each record is checked by its own tool verb and consumed separately. That decision does
+  not authorize the PUSH — STOP for the Owner — if `land` fails or is refused, if `branch-dev`
+  after `land` is not the approved tip, or if the PUSH line's first oid is not the approved tip or
+  its second oid is not the `origin/branch-dev` oid at `land-request`. A Second-LAND re-sync
+  produces a new tip, a new `land-request` and a new decision.
 - **SHIP** (`branch-dev` → `main`/production): always requires explicit, separate Owner
   approval, on top of a landed and QA'd `branch-dev` state. Never bundled with a LAND approval.
 
@@ -740,7 +824,7 @@ above.
 - A Worker session runs only in its own slot (cwd) — never in the other slot or the main checkout.
 - **Current-guard check** before any non-Manual session: the slot's task branch descends from the
   current `branch-dev`, and `git status --porcelain .claude` is empty.
-- The Git/bootstrap Worker performs approved, deterministic mechanical Git/worktree setup (slots,
-  task branches, refs, hashes, status), and an Owner-approved brief-only commit through the R11
-  gate only where the hook permits. It is never a bypass; anything the hook denies goes to the
-  Owner's terminal.
+- The Git/bootstrap Worker performs deterministic mechanical Git/worktree setup (slots, task
+  branches, refs, hashes, status) approved by the Owner or authorized by the task's execution
+  envelope, and an Owner-approved brief-only commit through the R11 gate only where the hook
+  permits. It is never a bypass; anything the hook denies goes to the Owner's terminal.
