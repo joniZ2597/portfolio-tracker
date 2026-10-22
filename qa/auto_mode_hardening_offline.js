@@ -1484,7 +1484,7 @@ function spawnCli(stdin, hookPath) {
   return spawnSync(process.execPath, [hookPath || HOOK_PATH], { input: stdin, encoding: 'utf8', timeout: 15000 });
 }
 function payload(command, cwd, tool) {
-  return JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool || 'Bash', tool_input: { command }, cwd });
+  return JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool || 'Bash', tool_input: { command }, cwd, permission_mode: 'default' });
 }
 heavy('AH-9 CLI', () => {
   const allow = spawnCli(payload('git status --short --branch', SLOT_A));
@@ -1847,8 +1847,11 @@ const GU2_ASK_ADDED = [
   'Bash(netlify env:get*)', 'Bash(netlify env:list*)', 'Bash(curl *)', 'Bash(wget *)',
   'PowerShell(Invoke-WebRequest *)', 'PowerShell(Invoke-RestMethod *)', 'PowerShell(iwr *)', 'PowerShell(irm *)', 'WebFetch'
 ];
+// work/worker-exec-permissions-1/brief.md §2.1 / §3.2: exactly one entry added to permissions.allow, the exact heavy-run process check (no wildcard).
+const WEP_WMIC_RULE = 'Bash(wmic process where "name=\'node.exe\'" get ProcessId,CommandLine)';
+const WEP_ALLOW_ADDED = [WEP_WMIC_RULE];
 const EXPECT_ALLOW = [...BASE_ALLOW, ...RC5_ALLOW_ADDED, ...WCF_ALLOW_ADDED, ...OAG_ALLOW_ADDED]
-  .filter((x) => GU2_ALLOW_REMOVED.indexOf(x) === -1).concat(GU2_ALLOW_ADDED);
+  .filter((x) => GU2_ALLOW_REMOVED.indexOf(x) === -1).concat(GU2_ALLOW_ADDED).concat(WEP_ALLOW_ADDED);
 const HOOK_COMMAND = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/pretooluse-guard.js"';
 // r10 R10-6: the Owner-applied matcher extends coverage to the file tools.
 const R10_MATCHER = 'Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit';
@@ -1897,13 +1900,13 @@ function settingsProblems(s) {
   }
   const pre = s && s.hooks && s.hooks.PreToolUse;
   const wired = Array.isArray(pre) && pre.some((e) => e && e.matcher === R10_MATCHER && Array.isArray(e.hooks) &&
-    e.hooks.some((h) => h && h.type === 'command' && h.command === HOOK_COMMAND && h.timeout === 10));
-  if (!wired) p.push('PreToolUse hook not wired with matcher ' + R10_MATCHER + ' / exact command / timeout 10');
+    e.hooks.some((h) => h && h.type === 'command' && h.command === HOOK_COMMAND && h.timeout === 10 && h.onFailure === 'block'));
+  if (!wired) p.push('PreToolUse hook not wired with matcher ' + R10_MATCHER + ' / exact command / timeout 10 / onFailure "block" (WEP §2.1)');
   return p;
 }
 function appliedSettings() {
   return {
-    hooks: { PreToolUse: [{ matcher: R10_MATCHER, hooks: [{ type: 'command', command: HOOK_COMMAND, timeout: 10 }] }] },
+    hooks: { PreToolUse: [{ matcher: R10_MATCHER, hooks: [{ type: 'command', command: HOOK_COMMAND, timeout: 10, onFailure: 'block' }] }] },
     permissions: {
       deny: EXPECT_DENY_R11.slice(),
       ask: EXPECT_ASK_R11.slice(),
@@ -1969,8 +1972,30 @@ check('AH-8 control: §5-applied fixture has no problems', settingsProblems(appl
   check('AH-8 GU-2 anchors: the added/removed lists have 7 / 2 / 11 entries with no duplicates and EXPECT_* counts follow',
     GU2_ALLOW_ADDED.length === 7 && GU2_ALLOW_REMOVED.length === 2 && GU2_ASK_ADDED.length === 11 &&
     new Set(GU2_ASK_ADDED).size === 11 && new Set(GU2_ALLOW_ADDED).size === 7 &&
-    EXPECT_ALLOW.length === BASE_ALLOW.length + RC5_ALLOW_ADDED.length + WCF_ALLOW_ADDED.length + OAG_ALLOW_ADDED.length - 2 + 7 &&
+    EXPECT_ALLOW.length === BASE_ALLOW.length + RC5_ALLOW_ADDED.length + WCF_ALLOW_ADDED.length + OAG_ALLOW_ADDED.length - 2 + 7 + WEP_ALLOW_ADDED.length &&
     GU2_ALLOW_REMOVED.every((x) => BASE_ALLOW.indexOf(x) !== -1));
+}
+// WEP planted negatives (work/worker-exec-permissions-1/brief.md §3.2, N95 / N96); the positive control is the AH-8 control row above.
+{
+  const wepNeg = (label, mutants) => check('AH-8 planted negative (WEP) ' + label + ': every mutated fixture is rejected',
+    mutants.length > 0 && mutants.every((m) => settingsProblems(m).length > 0));
+  const guardEntry = (m) => m.hooks.PreToolUse[0].hooks[0];
+  wepNeg('1 the guard entry without onFailure', [(() => { const m = clone(appliedSettings()); delete guardEntry(m).onFailure; return m; })()]);
+  wepNeg('2 onFailure "continue" / "allow" / "Block" / true', ['continue', 'allow', 'Block', true].map((v) => {
+    const m = clone(appliedSettings()); guardEntry(m).onFailure = v; return m;
+  }));
+  wepNeg('3 onFailure "block" on a different entry only', [(() => {
+    const m = clone(appliedSettings()); delete guardEntry(m).onFailure;
+    m.hooks.PreToolUse.push({ matcher: 'Read', hooks: [{ type: 'command', command: 'node other.js', timeout: 10, onFailure: 'block' }] }); return m;
+  })()]);
+  wepNeg('4 a broadened wmic allow rule (Bash(wmic *), Bash(wmic process *), the exact rule plus a wildcard)', ['Bash(wmic *)', 'Bash(wmic process *)', 'Bash(wmic process where *)'].map((rule) => {
+    const m = clone(appliedSettings()); m.permissions.allow.push(rule); return m;
+  }));
+  wepNeg('5 the exact wmic rule missing from allow', [(() => { const m = clone(appliedSettings()); m.permissions.allow = m.permissions.allow.filter((x) => x !== WEP_WMIC_RULE); return m; })()]);
+  wepNeg('6 the exact wmic rule in ask or deny instead of allow', ['ask', 'deny'].map((tier) => {
+    const m = clone(appliedSettings()); m.permissions.allow = m.permissions.allow.filter((x) => x !== WEP_WMIC_RULE); m.permissions[tier].push(WEP_WMIC_RULE); return m;
+  }));
+  check('AH-8 WEP anchors: the added list is exactly the one exact wmic rule, with no wildcard', WEP_ALLOW_ADDED.length === 1 && WEP_ALLOW_ADDED[0] === WEP_WMIC_RULE && WEP_WMIC_RULE.indexOf('*') === -1);
 }
 // AH-8-W (R11 Amendment 1, A1-1): the twelve Write(...) rules are gone, their Edit(...) twins stay in tier, and
 // no re-added Write(...), dropped Edit(...), tier-moved Edit(...) or allow-listed one of the 12 paths is accepted.
@@ -2207,9 +2232,9 @@ heavy('AH-17 CLI spawn', () => { for (const cmd of ['g\\it push', 'git p', 'git 
   check('AH-17 CLI [slot] ' + JSON.stringify(cmd) + ' -> exit 2', r.status === 2 && r.stdout === '');
 } });
 heavy('AH-17 CLI write', () => {
-  const denyFt = spawnCli(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: 'C:/x/.git/config' }, cwd: SLOT_A }));
+  const denyFt = spawnCli(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: 'C:/x/.git/config' }, cwd: SLOT_A, permission_mode: 'default' }));
   check('AH-17 CLI Write .git target -> exit 2', denyFt.status === 2 && denyFt.stdout === '');
-  const okFt = spawnCli(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(SLOT_A, 'qa', 'ah17_probe.js') }, cwd: SLOT_A }));
+  const okFt = spawnCli(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(SLOT_A, 'qa', 'ah17_probe.js') }, cwd: SLOT_A, permission_mode: 'default' }));
   check('AH-17 CLI Write ordinary (existing parent) -> exit 0', okFt.status === 0 && okFt.stdout === '');
 });
 
@@ -2966,13 +2991,15 @@ const AH23_FORBIDDEN_ALLOW_SUBSTRINGS = [
   'Bash(git worktree',
   'Bash(rm', 'Bash(sed', 'Bash(node -e', 'Bash(bash', 'Bash(sh ', 'Bash(npx', 'Bash(npm run *)', 'Bash(npm exec',
   'pt-land.js land task', 'pt-land.js push)',
+  // work/worker-exec-permissions-1: no wmic or git -C rule other than the one exact known-safe process check below.
+  'Bash(wmic', 'Bash(git -C',
   // owner-one-action-gates: protected-commit mutates and is record-gated - it stays prompting,
   // never allow-listed, same tier as land/push themselves.
   'pt-land.js protected-commit'
 ];
 // The one pre-existing, narrow, read-only exception: 'git branch --show-current' prints the
 // current branch name - no mutation, no wildcard - and predates this brief by several ARCs.
-const AH23_KNOWN_SAFE_ALLOW = ['Bash(git branch --show-current)'];
+const AH23_KNOWN_SAFE_ALLOW = ['Bash(git branch --show-current)', WEP_WMIC_RULE];
 function ah23ForbiddenHits(allowList) {
   const candidates = allowList.filter((rule) => AH23_KNOWN_SAFE_ALLOW.indexOf(rule) === -1);
   return AH23_FORBIDDEN_ALLOW_SUBSTRINGS.filter((sub) => candidates.some((rule) => rule.indexOf(sub) !== -1));
@@ -2986,6 +3013,8 @@ check('AH-23: the real allow list contains none of the forbidden mutating-git/sh
   ah23ForbiddenHits(AH23_REAL_ALLOW).join('; ') + ')', ah23ForbiddenHits(AH23_REAL_ALLOW).length === 0);
 check('AH-23 control: a planted forbidden entry is detected',
   ah23ForbiddenHits([...AH23_REAL_ALLOW, 'Bash(git push --force*)']).length > 0);
+check('AH-23 WEP: planted wmic / git -C allow entries are detected (call create, wildcard, git -C status)',
+  ['Bash(wmic process call create x)', 'Bash(wmic *)', 'Bash(git -C x status)'].every((rule) => ah23ForbiddenHits([...AH23_REAL_ALLOW, rule]).length > 0));
 
 // Differential: over a representative corpus (every AH-1 ALLOWED command, every R12 form/deny
 // form, and the R13 risky/control forms), the pre-R13 and post-R13 hook disagree on a decision
@@ -3421,6 +3450,915 @@ mutantCatches('R12 adopt alternative widened (any argument accepted)',
   (m) => r12DecideOn(m, 'node .claude/hooks/pt-land.js adopt task/x --force', { cwd: SLOT_A }).decision === 'deny');
 
 fs.rmSync(R11_CANON, { recursive: true, force: true });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// AH-27..AH-30 - R15 (work/worker-exec-permissions-1/brief.md §2-§3): the task-scoped edit grant (AH-27), the Manual mode lock (AH-28), the runCli
+// plumbing (AH-29) and a real-git fixture (AH-30). The hermetic rows inject every R15 dependency; N<k> is a row of brief §3.6. "NO" = no opinion
+// (decision allow), "GRANT" = decision grant, "DENY" = decision deny.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+const R15_SLOT_B = 'C:\\Users\\Owner\\Documents\\Project\\pt-wt-worker-b';
+const R15_TMP = 'C:\\Users\\Owner\\AppData\\Local\\Temp';
+const R15_CANON_FWD = 'C:/Users/Owner/Documents/Project/portfolio-tracker';
+const R15_X = SLOT_A + '\\qa\\x_offline.js';
+const sha256Hex = (b) => crypto.createHash('sha256').update(b).digest('hex');
+const fwdSlash = (p) => String(p).replace(/\\/g, '/');
+const r15Stat = (kind, nlink) => ({ isFile: () => kind === 'file', isDirectory: () => kind === 'dir', isSymbolicLink: () => kind === 'link', nlink: nlink === undefined ? 1 : nlink });
+function r15Brief(o) {
+  o = o || {};
+  const entries = o.entries === undefined ? ['qa/x_offline.js', 'qa/y_offline.js'] : o.entries;
+  const land = o.land === undefined ? ['qa/x_offline.js', 'qa/y_offline.js', 'index.html', 'work/wx-1/review.md'] : o.land;
+  const prot = o.prot === undefined ? ['AGENTS.md'] : o.prot;
+  const nl = o.eol || '\n';
+  const lines = ['# Brief: wx-1', '', 'Mode: ' + (o.auto ? 'Auto' : 'Manual')];
+  if (o.auto) lines.push(o.autoLine === undefined ? '<!-- worker-mode: auto -->' : o.autoLine);
+  if (entries !== null) lines.push('<!-- auto-edit-scope:begin -->', ...entries, '<!-- auto-edit-scope:end -->');
+  if (land !== null) lines.push('<!-- land-scope:begin -->', ...land, '<!-- land-scope:end -->');
+  if (prot !== null) lines.push('<!-- protected-scope:begin -->', ...prot, '<!-- protected-scope:end -->');
+  if (o.tail) lines.push(...o.tail);
+  return lines.join(nl) + nl;
+}
+// A fake world: every R15 dependency is injected and counted (calls) so a row can assert "no reads".
+function r15World(o) {
+  o = o || {};
+  const id = o.id || 'wx-1';
+  const tasks = o.tasks || { [id]: { brief: o.brief !== undefined ? o.brief : r15Brief() } };
+  if (o.blob !== undefined && tasks[id]) tasks[id].blob = o.blob;
+  const calls = { head: 0, ident: 0, record: 0, blob: 0, anc: 0, real: 0, lstat: 0 };
+  const enoent = () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; return e; };
+  const deps = {
+    projectDir: () => { if (o.pdThrows) throw new Error('planted'); return o.pd === undefined ? SLOT_A : (o.pd === false ? undefined : o.pd); },
+    tmpDir: () => R15_TMP,
+    realpathNative: (p) => { calls.real += 1; return o.realpath ? o.realpath(String(p)) : String(p).replace(/\//g, '\\'); },
+    lstatSync: (p) => {
+      calls.lstat += 1;
+      const n = fwdSlash(p).toLowerCase();
+      if (o.lstat) { const r = o.lstat(n); if (r) return r; }
+      if (n === fwdSlash(R15_TMP).toLowerCase() + '/pt-' + id) return r15Stat('dir');
+      throw enoent();
+    },
+    readHeadRef: (sr) => {
+      calls.head += 1;
+      const h = o.head === undefined ? 'ref: refs/heads/task/' + id : o.head;
+      const v = typeof h === 'function' ? h(sr) : h;
+      if (v instanceof Error) throw v;
+      return v;
+    },
+    slotIdentity: (sr) => {
+      calls.ident += 1;
+      if (o.ident === null) return null;
+      if (typeof o.ident === 'function') return o.ident(sr);
+      return { canonical: R15_CANON_FWD, commonDir: R15_CANON_FWD + '/.git' };
+    },
+    loadRecord: (cd, task) => {
+      calls.record += 1;
+      if (o.recordThrows) throw new Error('planted');
+      if (o.rec !== undefined) return o.rec;
+      const tid = String(task).replace(/^task\//, '');
+      const t = tasks[tid];
+      if (!t) return { exists: false };
+      return { exists: true, valid: true, sha256: 'x', record: { base: 'b'.repeat(40), briefPath: 'work/' + tid + '/brief.md', briefSha256: sha256Hex(Buffer.from(t.recordBrief !== undefined ? t.recordBrief : t.brief)) } };
+    },
+    isAncestor: () => { calls.anc += 1; if (o.ancThrows) throw new Error('r10 time budget exhausted'); return o.ancestor === undefined ? true : o.ancestor; },
+    readBlob: (root, base, rel) => {
+      calls.blob += 1;
+      if (o.blobThrows) throw new Error('planted');
+      const m = /^work\/([^/]+)\/brief\.md$/.exec(rel);
+      const t = m && tasks[m[1]];
+      if (!t) throw new Error('no such blob');
+      return Buffer.from(t.blob !== undefined ? t.blob : t.brief);
+    },
+    resolveFileToolTarget: (cwd, raw) => (o.resolve ? o.resolve(String(raw)) : String(raw))
+  };
+  return { deps, calls, id };
+}
+function r15Input(over) {
+  const o = over || {};
+  const tool = o.tool || 'Write';
+  const input = {
+    tool_name: tool,
+    tool_input: o.tool_input || (tool === 'Bash' || tool === 'PowerShell' ? { command: o.command || 'git status --short --branch' } : { file_path: o.file === undefined ? R15_X : o.file }),
+    cwd: o.cwd === undefined ? SLOT_A : o.cwd,
+    hook_cwd: o.hook_cwd === undefined ? SLOT_A : o.hook_cwd,
+    permission_mode: o.mode === undefined ? 'default' : o.mode
+  };
+  if (o.noMode) delete input.permission_mode;
+  for (const k of Object.keys(o)) if (['file', 'tool', 'tool_input', 'cwd', 'hook_cwd', 'mode', 'noMode', 'command'].indexOf(k) === -1) input[k] = o[k];
+  return input;
+}
+const r15Kind = (r) => (r.decision === 'grant' ? 'GRANT' : r.decision === 'allow' ? 'NO' : r.decision === 'deny' ? 'DENY' : String(r.decision).toUpperCase());
+function r15Decide(mod, w, over) {
+  if (!mod) return { decision: 'NOMODULE', reason: '' };
+  try { return mod.decide(r15Input(over), Object.assign({}, TEST_DEPS, w.deps)); } catch (e) { return { decision: 'THROW', reason: String(e && e.message) }; }
+}
+const r15Run = (mod, w, over) => r15Kind(r15Decide(mod, w, over));
+function r15Row(n, label, wo, over, expect) {
+  const got = r15Run(guard, r15World(wo), over);
+  check('AH-27 N' + n + ' ' + label + ' -> ' + expect + ' (got ' + got + ')', got === expect);
+}
+
+// ── AH-27 grant: the positive controls ─────────────────────────────────────────────────────────
+r15Row(54, 'control: Write of a listed file (new file, parent exists)', {}, {}, 'GRANT');
+for (const tool of ['Edit', 'Write', 'MultiEdit']) {
+  r15Row(55, tool + ' overwrite of an existing listed file', { lstat: (n) => (/\/qa\/x_offline\.js$/.test(n) ? r15Stat('file') : null) }, { tool }, 'GRANT');
+}
+check('AH-27 N58 the grant reason names the task and the relative path', (() => { const r = r15Decide(guard, r15World(), {}); return r.decision === 'grant' && r.reason === 'R15 grant wx-1 qa/x_offline.js'; })());
+r15Row(47, 'mixed separators of the same listed path', {}, { file: 'C:/Users\\Owner/Documents\\Project/pt-wt-worker-a\\qa/x_offline.js' }, 'GRANT');
+r15Row(64, 'cwd = a subdirectory of the same slot (positive control)', {}, { hook_cwd: SLOT_A + '\\qa', cwd: SLOT_A + '\\qa' }, 'GRANT');
+r15Row(65, 'PD forward slashes + lower-case drive, cwd other case and backslashes (positive control)',
+  { pd: 'c:/users/owner/documents/project/pt-wt-worker-a' }, { hook_cwd: 'C:\\USERS\\OWNER\\DOCUMENTS\\PROJECT\\PT-WT-WORKER-A', cwd: SLOT_A }, 'GRANT');
+r15Row(52, 'Write of a new listed file under a missing listed directory (REL equal)', { brief: r15Brief({ entries: ['qa/sub/new_offline.js'], land: ['qa/sub/new_offline.js'] }) },
+  { file: SLOT_A + '\\qa\\sub\\new_offline.js' }, 'GRANT');
+r15Row(99, 'evidence path of this task under a missing work/<id>/ directory (REL equal)', { brief: r15Brief({ entries: null }) }, { file: SLOT_A + '\\work\\wx-1\\plan.md' }, 'GRANT');
+for (const ev of ['plan.md', 'codex.md', 'qa.log']) {
+  r15Row('ev', 'evidence ' + ev + ' is granted without any auto-edit-scope block (G9 applies only to non-evidence)', { brief: r15Brief({ entries: null }) }, { file: SLOT_A + '\\work\\wx-1\\' + ev }, 'GRANT');
+}
+r15Row(15, 'work/other/qa.log (another task\'s evidence)', {}, { file: SLOT_A + '\\work\\other\\qa.log' }, 'NO');
+r15Row('ev', 'work/wx-1/review.md is not evidence and not listed', {}, { file: SLOT_A + '\\work\\wx-1\\review.md' }, 'NO');
+r15Row('ev', 'evidence path with the mixed-case directory (REL differs from the real path)', { brief: r15Brief({ entries: null }), resolve: (raw) => raw.toLowerCase() }, { file: SLOT_A + '\\Work\\wx-1\\plan.md' }, 'NO');
+r15Row(99, 'evidence path, real path differs by case (REL differs)', { brief: r15Brief({ entries: null }), resolve: (raw) => raw.toLowerCase() }, { file: SLOT_A + '\\WORK\\wx-1\\qa.log' }, 'NO');
+
+// ── scope: path not listed, other slots, other cwd ───────────────────────────────────────────────
+r15Row(1, 'PD = cwd = slot A, target inside slot B\'s scope', {}, { file: R15_SLOT_B + '\\qa\\x_offline.js' }, 'NO');
+r15Row(2, 'cwd drift: PD = A, cwd = B, target in B (and in A)', {}, { hook_cwd: R15_SLOT_B, cwd: R15_SLOT_B, file: R15_SLOT_B + '\\qa\\x_offline.js' }, 'NO');
+r15Row(2, 'cwd drift: PD = A, cwd = B, target in A\'s block', {}, { hook_cwd: R15_SLOT_B, cwd: R15_SLOT_B }, 'NO');
+r15Row(3, 'PD = A, cwd = canonical, target = canonical index.html', {}, { hook_cwd: MAIN, cwd: MAIN, file: MAIN + '\\index.html' }, 'NO');
+r15Row(4, 'PD = canonical, cwd = A (SR(PD) null)', { pd: MAIN }, {}, 'NO');
+r15Row(5, 'PD missing', { pd: false }, {}, 'NO');
+r15Row(5, 'PD empty', { pd: '' }, {}, 'NO');
+r15Row(5, 'hook cwd missing (null)', {}, { hook_cwd: null }, 'NO');
+r15Row(9, 'target in neither the block nor evidence', {}, { file: SLOT_A + '\\qa\\z_offline.js' }, 'NO');
+r15Row(10, 'target in land-scope but not in the block (M5 index.html)', {}, { file: SLOT_A + '\\index.html' }, 'NO');
+r15Row(11, 'a block entry outside land-scope voids every entry (valid entry)', { brief: r15Brief({ entries: ['qa/x_offline.js', 'qa/not_in_land.js'] }) }, {}, 'NO');
+r15Row(11, 'a block entry outside land-scope voids every entry (the outside entry)', { brief: r15Brief({ entries: ['qa/x_offline.js', 'qa/not_in_land.js'] }) }, { file: SLOT_A + '\\qa\\not_in_land.js' }, 'NO');
+r15Row(12, 'duplicate begin marker', { brief: r15Brief().replace('<!-- auto-edit-scope:begin -->', '<!-- auto-edit-scope:begin -->\n<!-- auto-edit-scope:begin -->') }, {}, 'NO');
+r15Row(12, 'duplicate end marker', { brief: r15Brief().replace('<!-- auto-edit-scope:end -->', '<!-- auto-edit-scope:end -->\n<!-- auto-edit-scope:end -->') }, {}, 'NO');
+r15Row(12, 'a marker quoted inline in prose plus the real block (substring count 2)', { brief: r15Brief({ tail: ['Use <!-- auto-edit-scope:begin --> for the opt-in block.'] }) }, {}, 'NO');
+r15Row(12, 'end marker before the begin marker', { brief: r15Brief().replace('<!-- auto-edit-scope:begin -->', '@@B@@').replace('<!-- auto-edit-scope:end -->', '<!-- auto-edit-scope:begin -->').replace('@@B@@', '<!-- auto-edit-scope:end -->') }, {}, 'NO');
+r15Row(13, 'the block exists only in the working tree (the HEAD blob has none)', { brief: r15Brief({ entries: null }) }, {}, 'NO');
+r15Row(14, 'listed path in another case (QA\\x_offline.js; the real path is lower-case)', { resolve: (raw) => raw.toLowerCase() }, { file: SLOT_A + '\\QA\\x_offline.js' }, 'NO');
+r15Row(14, 'listed path in another case when the file does not exist (REL equal, but not an exact block member)', {}, { file: SLOT_A + '\\QA\\x_offline.js' }, 'NO');
+r15Row(53, 'NotebookEdit on a listed path', {}, { tool: 'NotebookEdit', tool_input: { notebook_path: R15_X, file_path: R15_X } }, 'NO');
+r15Row(53, 'a Write with no path stays the R10-6 deny (G0, unchanged)', {}, { tool: 'Write', tool_input: {} }, 'DENY');
+
+// ── record / head / identity failures ────────────────────────────────────────────────────────────
+r15Row(16, 'record missing', { rec: { exists: false } }, {}, 'NO');
+r15Row(17, 'record invalid (edited or no ok audit line)', { rec: { exists: true, valid: false, reason: 'x' } }, {}, 'NO');
+r15Row(19, 'brief sha256 in the record differs from the blob', { tasks: { 'wx-1': { brief: r15Brief(), recordBrief: r15Brief({ entries: ['qa/other_offline.js'], land: ['qa/other_offline.js'] }) } } }, {}, 'NO');
+r15Row(19, 'the blob differs from what the record hashes (tampered blob)', { blob: r15Brief({ entries: ['qa/x_offline.js', 'qa/evil_offline.js'], land: ['qa/x_offline.js', 'qa/evil_offline.js'] }) }, { file: SLOT_A + '\\qa\\evil_offline.js' }, 'NO');
+r15Row(20, 'record base not an ancestor of the task ref', { ancestor: false }, {}, 'NO');
+r15Row(21, 'record loader throws', { recordThrows: true }, {}, 'NO');
+r15Row(56, 'injected loader exception is a no-opinion, never a deny', { recordThrows: true }, { tool: 'Edit' }, 'NO');
+r15Row(57, 'a git call past its budget is a no-opinion', { ancThrows: true }, {}, 'NO');
+r15Row(77, 'the blob read fails', { blobThrows: true }, {}, 'NO');
+r15Row(8, 'record names another task than HEAD (briefPath mismatch)', { head: 'ref: refs/heads/task/wx-2', rec: { exists: true, valid: true, sha256: 'x', record: { base: 'b'.repeat(40), briefPath: 'work/wx-1/brief.md', briefSha256: sha256Hex(Buffer.from(r15Brief())) } } }, {}, 'NO');
+r15Row(8, 'HEAD on a task with no record', { head: 'ref: refs/heads/task/wx-2' }, {}, 'NO');
+r15Row(7, 'slot on task/foo, the target only in task/bar\'s brief', { head: 'ref: refs/heads/task/foo', tasks: { foo: { brief: r15Brief({ entries: ['qa/y_offline.js'] }) }, bar: { brief: r15Brief() } } }, {}, 'NO');
+r15Row(22, 'HEAD detached', { head: 'a'.repeat(40) }, {}, 'NO');
+r15Row(23, 'HEAD on branch-dev', { head: 'ref: refs/heads/branch-dev' }, {}, 'NO');
+r15Row(23, 'HEAD on main', { head: 'ref: refs/heads/main' }, {}, 'NO');
+r15Row(24, 'HEAD on refs/heads/task-foo', { head: 'ref: refs/heads/task-foo' }, {}, 'NO');
+r15Row(22, 'HEAD unreadable', { head: new Error('planted') }, {}, 'NO');
+r15Row(78, 'task id with an upper-case letter', { head: 'ref: refs/heads/task/Wx-1' }, {}, 'NO');
+r15Row(78, 'task id with a slash', { head: 'ref: refs/heads/task/wx/1' }, {}, 'NO');
+r15Row(6, 'slot identity fails (a fake slot directory)', { ident: null }, {}, 'NO');
+r15Row(67, 'PD given as an 8.3 short form (identity realpath check fails)', { pd: 'C:/Users/Owner/Documents/Project/PT-WT-~1', ident: null }, { hook_cwd: SLOT_A }, 'NO');
+r15Row(67, 'PD 8.3 form naming the slot segment, identity realpath differs', { pd: 'C:/USERS/OWNER~1/Documents/Project/pt-wt-worker-a', ident: (sr) => (/~/.test(sr) ? null : { canonical: R15_CANON_FWD, commonDir: R15_CANON_FWD + '/.git' }) }, {}, 'NO');
+r15Row(66, 'decoy pt-wt-worker-a-old', { pd: DECOY_OLD }, { hook_cwd: DECOY_OLD, cwd: DECOY_OLD, file: DECOY_OLD + '\\qa\\x_offline.js' }, 'NO');
+r15Row(66, 'decoy pt-wt-worker-c', { pd: DECOY_C }, { hook_cwd: DECOY_C, cwd: DECOY_C, file: DECOY_C + '\\qa\\x_offline.js' }, 'NO');
+r15Row(68, 'PD in UNC form naming a slot', { pd: '\\\\localhost\\c$\\Users\\Owner\\Documents\\Project\\pt-wt-worker-a' }, {}, 'NO');
+
+// ── mode: only the exact string "default" can grant ─────────────────────────────────────────────
+r15Row(79, 'permission_mode "Default" (case)', {}, { mode: 'Default' }, 'DENY');
+for (const [label, mode] of [['a number', 5], ['an object', {}], ['null', null], ['an empty string', '']]) {
+  r15Row(80, 'permission_mode is ' + label, {}, { mode }, 'DENY');
+}
+r15Row(33, 'Auto brief + acceptEdits: in-scope Edit is never a grant', { brief: r15Brief({ auto: true }) }, { tool: 'Edit', mode: 'acceptEdits' }, 'NO');
+r15Row(33, 'Auto brief + auto: in-scope Edit is never a grant', { brief: r15Brief({ auto: true }) }, { tool: 'Edit', mode: 'auto' }, 'NO');
+r15Row(33, 'Auto brief + default: the in-scope Edit is still a grant', { brief: r15Brief({ auto: true }) }, { tool: 'Edit' }, 'GRANT');
+
+// ── protected / ASK / DENY tier, dot segments, never-approvable names ───────────────────────────
+const R15_BAD_ENTRIES = [
+  '.claude/settings.json', '.claude/settings.local.json', '.claude/hooks/x.js', '.claude/rules/x.md',
+  'AGENTS.md', 'CLAUDE.md', '.gitignore', 'netlify.toml', 'package.json', 'package-lock.json', 'qa/run-offline.js', 'qa/guard_integrity_check.js',
+  'work/wx-1/brief.md', 'work/other/brief.md', 'CHECKPOINT.md', '.env', '.env.local',
+  '.husky/pre-commit', '.vscode/settings.json', '.devcontainer/x', '.npmrc', '.mcp.json', '.gitmodules', '.envrc',
+  'bunfig.toml', 'pyrightconfig.json', 'lefthook.yml', 'gradle-wrapper.properties', 'node_modules/x/index.js', 'docs/protected_x.md'
+];
+for (const bad of R15_BAD_ENTRIES) {
+  const wo = { brief: r15Brief({ entries: ['qa/x_offline.js', bad], land: ['qa/x_offline.js', bad], prot: ['AGENTS.md', 'docs/protected_x.md'] }) };
+  r15Row('36-41', 'protected / ASK / DENY / dot entry ' + bad + ' voids the whole block (valid entry)', wo, {}, 'NO');
+  r15Row('36-41', 'protected / ASK / DENY / dot entry ' + bad + ' is never granted itself', wo, { file: SLOT_A + '\\' + bad.replace(/\//g, '\\') }, 'NO');
+}
+r15Row(37, '.git/config is the R10-6 deny, byte-identical reason', {}, { file: SLOT_A + '\\.git\\config' }, 'DENY');
+check('AH-27 N37 the .git denial text is today\'s R10-6 text', r15Decide(guard, r15World(), { file: SLOT_A + '\\.git\\config' }).reason === 'Write targeting .git - denied in every session (R10-6)');
+r15Row(37, '.git/hooks/pre-commit', {}, { file: SLOT_A + '\\.git\\hooks\\pre-commit', tool: 'Edit' }, 'DENY');
+for (const f of ['.CLAUDE\\settings.json', 'Agents.md', 'claude.md', 'Package.json', 'QA\\RUN-OFFLINE.JS', 'WORK\\wx-1\\BRIEF.MD']) {
+  r15Row(43, 'case variant of a protected path ' + f + ' (not listed)', {}, { file: SLOT_A + '\\' + f }, 'NO');
+}
+for (const f of ['qa\\..\\.claude\\settings.json', 'qa\\..\\AGENTS.md', 'qa\\.\\x_offline.js']) {
+  r15Row(44, 'dot segments ' + f, {}, { file: SLOT_A + '\\' + f }, 'NO');
+}
+r15Row(44, 'dot segments in a listed path', { brief: r15Brief() }, { file: SLOT_A + '\\qa\\sub\\..\\x_offline.js' }, 'NO');
+r15Row(73, 'block entry with a glob', { brief: r15Brief({ entries: ['qa/*.js'], land: ['qa/*.js'] }) }, {}, 'NO');
+r15Row(73, 'block entry with a leading ./', { brief: r15Brief({ entries: ['./qa/x_offline.js'], land: ['./qa/x_offline.js'] }) }, {}, 'NO');
+r15Row(73, 'block entry with a backslash', { brief: r15Brief({ entries: ['qa\\x_offline.js'], land: ['qa\\x_offline.js'] }) }, {}, 'NO');
+r15Row(73, 'block entry with ..', { brief: r15Brief({ entries: ['qa/../qa/x_offline.js'], land: ['qa/../qa/x_offline.js'] }) }, {}, 'NO');
+r15Row(73, 'block entry with a space', { brief: r15Brief({ entries: ['qa/x offline.js'], land: ['qa/x offline.js'] }) }, { file: SLOT_A + '\\qa\\x offline.js' }, 'NO');
+r15Row(73, 'empty block', { brief: r15Brief({ entries: [] }) }, {}, 'NO');
+r15Row(73, '65 entries (one over the cap)', (() => { const many = []; for (let i = 0; i < 65; i += 1) many.push('qa/e' + i + '_offline.js'); return { brief: r15Brief({ entries: many, land: many }) }; })(), { file: SLOT_A + '\\qa\\e0_offline.js' }, 'NO');
+r15Row(73, '64 entries (at the cap, positive control)', (() => { const many = []; for (let i = 0; i < 64; i += 1) many.push('qa/e' + i + '_offline.js'); return { brief: r15Brief({ entries: many, land: many }) }; })(), { file: SLOT_A + '\\qa\\e0_offline.js' }, 'GRANT');
+r15Row(73, 'duplicate entry voids the block', { brief: r15Brief({ entries: ['qa/x_offline.js', 'qa/x_offline.js'] }) }, {}, 'NO');
+r15Row(74, 'valid block, no land-scope block', { brief: r15Brief({ land: null }) }, {}, 'NO');
+r15Row(75, 'two land-scope blocks', { brief: r15Brief({ tail: ['<!-- land-scope:begin -->', 'qa/x_offline.js', '<!-- land-scope:end -->'] }) }, {}, 'NO');
+r15Row(74, 'two protected-scope blocks (malformed) void the block', { brief: r15Brief({ tail: ['<!-- protected-scope:begin -->', 'AGENTS.md', '<!-- protected-scope:end -->'] }) }, {}, 'NO');
+r15Row(73, 'a CRLF brief is parsed (positive control)', { brief: r15Brief({ eol: '\r\n' }) }, {}, 'GRANT');
+r15Row(73, 'a bulleted / backticked block is parsed like the land tool (positive control)', { brief: r15Brief({ entries: ['- `qa/x_offline.js`', '* qa/y_offline.js'] }) }, {}, 'GRANT');
+r15Row(11, 'an entry listed in the protected-scope block voids the block', { brief: r15Brief({ prot: ['qa/y_offline.js'] }) }, {}, 'NO');
+
+// ── path ambiguity: UNC, \\?\, drive-less, drive-relative, ADS, trailing dot / space, 8.3, links, hard links ────────────
+for (const f of ['\\\\localhost\\c$\\Users\\Owner\\Documents\\Project\\pt-wt-worker-a\\qa\\x_offline.js', '\\\\?\\C:\\Users\\Owner\\Documents\\Project\\pt-wt-worker-a\\qa\\x_offline.js', '\\\\.\\C:\\Users\\Owner\\Documents\\Project\\pt-wt-worker-a\\qa\\x_offline.js', '//server/share/pt-wt-worker-a/qa/x_offline.js']) {
+  r15Row(48, 'UNC / device prefix ' + f, {}, { file: f }, 'NO');
+}
+r15Row(49, 'trailing dot', {}, { file: R15_X + '.' }, 'NO');
+r15Row(49, 'trailing space', {}, { file: R15_X + ' ' }, 'NO');
+r15Row(49, 'a directory segment with a trailing dot', {}, { file: SLOT_A + '\\qa.\\x_offline.js' }, 'NO');
+r15Row(50, 'ADS', {}, { file: R15_X + ':evil' }, 'NO');
+r15Row(51, 'drive-relative C:qa\\x_offline.js', {}, { file: 'C:qa\\x_offline.js' }, 'NO');
+r15Row(51, 'a relative path', {}, { file: 'qa\\x_offline.js' }, 'NO');
+r15Row(46, '8.3 name for the slot directory', {}, { file: 'C:\\Users\\Owner\\Documents\\Project\\PT-WT-~1\\qa\\x_offline.js' }, 'NO');
+r15Row(46, '8.3 name for a program directory', {}, { file: 'C:\\PROGRA~1\\x\\y.js' }, 'NO');
+r15Row(46, '8.3 name inside the slot', {}, { file: SLOT_A + '\\qa\\X_OFF~1.JS' }, 'NO');
+r15Row(45, 'junction / symlink inside the slot to slot B (the real path is outside the root)', { resolve: () => R15_SLOT_B + '\\qa\\x_offline.js' }, {}, 'NO');
+r15Row(45, 'junction inside the slot to another directory of the slot (REL differs)', { resolve: () => SLOT_A + '\\qa\\y_offline.js' }, {}, 'NO');
+r15Row(72, 'an existing listed target with nlink 2 (hard link)', { lstat: (n) => (/\/qa\/x_offline\.js$/.test(n) ? r15Stat('file', 2) : null) }, {}, 'NO');
+r15Row(72, 'an existing listed target that is a directory', { lstat: (n) => (/\/qa\/x_offline\.js$/.test(n) ? r15Stat('dir') : null) }, {}, 'NO');
+r15Row(72, 'lstat of the target fails with a non-ENOENT error', { lstat: (n) => { if (/\/qa\/x_offline\.js$/.test(n)) { const e = new Error('EPERM'); e.code = 'EPERM'; throw e; } return null; } }, {}, 'NO');
+r15Row(69, 'drive-less \\tmp\\pt-wx-1\\x', {}, { file: '\\tmp\\pt-wx-1\\x.js' }, 'NO');
+r15Row(70, 'POSIX /tmp/pt-wx-1/x', {}, { file: '/tmp/pt-wx-1/x.js' }, 'NO');
+
+// ── scratch (D-3): <realpath tmp>/pt-<id>/** except protected/** ─────────────────────────────────
+const R15_SCRATCH = R15_TMP + '\\pt-wx-1';
+r15Row(71, 'scratch file', {}, { file: R15_SCRATCH + '\\x.js' }, 'GRANT');
+r15Row(71, 'scratch file in a nested new directory', {}, { file: R15_SCRATCH + '\\a\\b\\x.js' }, 'GRANT');
+r15Row(71, 'scratch file with an Auto-less / block-less brief (no block needed)', { brief: r15Brief({ entries: null }) }, { file: R15_SCRATCH + '\\x.js' }, 'GRANT');
+r15Row(71, 'scratch reason carries the tmp: prefix', {}, { file: R15_SCRATCH + '\\x.js' }, 'GRANT');
+check('AH-27 N71 the scratch reason is "R15 grant <id> tmp:<REL>"', r15Decide(guard, r15World(), { file: R15_SCRATCH + '\\a\\x.js' }).reason === 'R15 grant wx-1 tmp:a/x.js');
+for (const f of ['protected\\manifest.json', 'PROTECTED\\manifest.json', 'Protected\\cand.js', 'protected\\sub\\x.js', 'pProtected\\x.js'.slice(1)]) {
+  r15Row(71, 'scratch ' + f + ' (the 13a directory keeps prompting; the filesystem is case-insensitive)', {}, { file: R15_SCRATCH + '\\' + f }, 'NO');
+}
+r15Row(71, 'scratch protected/ with the directory present', { lstat: (n) => (/\/pt-wx-1\/protected$/.test(n) ? r15Stat('dir') : null) }, { file: R15_SCRATCH + '\\Protected\\x.js' }, 'NO');
+r15Row(71, 'a directory that merely starts with protected is scratch (positive control)', {}, { file: R15_SCRATCH + '\\protected2\\x.js' }, 'GRANT');
+r15Row(71, 'another task\'s scratch directory', {}, { file: R15_TMP + '\\pt-other\\x.js' }, 'NO');
+r15Row(71, 'a lookalike scratch directory', {}, { file: R15_TMP + '\\pt-wx-1-evil\\x.js' }, 'NO');
+r15Row(71, 'pt-<id> is a junction', { lstat: (n) => (/\/pt-wx-1$/.test(n) ? r15Stat('link') : null) }, { file: R15_SCRATCH + '\\x.js' }, 'NO');
+r15Row(71, 'pt-<id> is missing', { lstat: (n) => { if (/\/pt-wx-1$/.test(n)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; } return null; } }, { file: R15_SCRATCH + '\\x.js' }, 'NO');
+r15Row(71, 'pt-<id> is a file', { lstat: (n) => (/\/pt-wx-1$/.test(n) ? r15Stat('file') : null) }, { file: R15_SCRATCH + '\\x.js' }, 'NO');
+r15Row(71, 'pt-<id> realpath differs (a link above)', { realpath: (p) => (/pt-wx-1$/i.test(p) ? 'D:\\elsewhere\\pt-wx-1' : p.replace(/\//g, '\\')) }, { file: R15_SCRATCH + '\\x.js' }, 'NO');
+r15Row(71, 'scratch dot segment', {}, { file: R15_SCRATCH + '\\.hidden\\x.js' }, 'NO');
+r15Row(71, 'scratch never-approvable name (AGENTS.md)', {}, { file: R15_SCRATCH + '\\AGENTS.md' }, 'NO');
+r15Row(71, 'scratch needs a valid record too', { rec: { exists: false } }, { file: R15_SCRATCH + '\\x.js' }, 'NO');
+r15Row(71, 'scratch real path outside the root (a junction below)', { resolve: () => 'D:\\elsewhere\\x.js' }, { file: R15_SCRATCH + '\\x.js' }, 'NO');
+r15Row(71, 'tmpdir realpath fails', { realpath: () => { throw new Error('planted'); } }, { file: R15_SCRATCH + '\\x.js' }, 'NO');
+
+// ── dispatch: tools, spies, direct decide() ───────────────────────────────────────────────────
+r15Row(2, 'Bash is never granted (decision stays allow)', {}, { tool: 'Bash' }, 'NO');
+{
+  const w = r15World();
+  r15Run(guard, w, { tool: 'Bash' });
+  check('AH-27 N93 a Bash call makes zero grant-path reads', Object.keys(w.calls).every((k) => w.calls[k] === 0));
+  const w2 = r15World({ brief: r15Brief({ auto: true }) });
+  r15Run(guard, w2, { tool: 'Edit', mode: 'acceptEdits' });
+  check('AH-27 N93 mode != default makes no grant-path read (no ancestry, no lstat); the lock\'s own alias resolution is the only realpath use (2: PD and hook cwd)', w2.calls.anc === 0 && w2.calls.lstat === 0 && w2.calls.real === 2);
+  const w3 = r15World();
+  r15Run(guard, w3, { tool: 'NotebookEdit', tool_input: { notebook_path: R15_X } });
+  check('AH-27 N93 NotebookEdit (G2) makes no grant-path read', w3.calls.anc === 0 && w3.calls.lstat === 0 && w3.calls.blob === 0 && w3.calls.record === 0);
+  const w4 = r15World();
+  r15Run(guard, w4, { file: SLOT_A + '\\AGENTS.md' });
+  check('AH-27 a never-approvable name is rejected before any record or git read', w4.calls.anc === 0 && w4.calls.blob === 0 && w4.calls.record === 0);
+}
+r15Row(92, 'a direct decide() call without permission_mode behaves as today (no grant, no lock)', {}, { noMode: true }, 'NO');
+r15Row(92, 'a direct decide() Bash call without permission_mode (no lock even with a Manual brief)', {}, { noMode: true, tool: 'Bash' }, 'NO');
+r15Row(97, 'an audit-log append through Write is the R10-6 deny', {}, { file: SLOT_A + '\\.git\\pt-land-log' }, 'DENY');
+r15Row(97, 'a record write through Write is the R10-6 deny', {}, { file: MAIN + '\\.git\\pt-task\\wx-1.json' }, 'DENY');
+r15Row(97, 'a working-tree edit of the brief adds a scope entry: only the committed blob counts', { tasks: { 'wx-1': { brief: r15Brief(), blob: r15Brief() } } }, { file: SLOT_A + '\\qa\\z_offline.js' }, 'NO');
+
+// ── AH-27 on the real filesystem readers (no process started): slot identity, record + audit, hard links, case ──────────────
+function r15FsFixture(o) {
+  o = o || {};
+  const id = 'wx-1';
+  const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ah27-')));
+  const canon = path.join(base, 'portfolio-tracker');
+  const slotParent = o.slotParent ? path.join(base, o.slotParent) : base;
+  const slot = path.join(slotParent, 'pt-wt-worker-a');
+  const admin = path.join(canon, '.git', 'worktrees', 'pt-wt-worker-a');
+  fs.mkdirSync(admin, { recursive: true });
+  fs.mkdirSync(path.join(canon, '.git', 'pt-task'), { recursive: true });
+  fs.mkdirSync(path.join(slot, 'qa'), { recursive: true });
+  fs.writeFileSync(path.join(slot, '.git'), 'gitdir: ' + fwdSlash(admin) + '\n');
+  fs.writeFileSync(path.join(admin, 'gitdir'), (o.backPointer || fwdSlash(path.join(slot, '.git'))) + '\n');
+  fs.writeFileSync(path.join(admin, 'HEAD'), (o.head || 'ref: refs/heads/task/' + id) + '\n');
+  fs.writeFileSync(path.join(slot, 'qa', 'x_offline.js'), '// x\n');
+  const brief = o.brief !== undefined ? o.brief : r15Brief();
+  const recordObj = {
+    schema: 'pt-task-base/v1', task: 'task/' + id, base: 'b'.repeat(40), mainAtStart: 'c'.repeat(40), originDevAtStart: 'd'.repeat(40),
+    startedAt: '2026-10-22T10:00:00.000Z', briefPath: 'work/' + id + '/brief.md', briefSha256: sha256Hex(Buffer.from(brief)), briefCommit: 'b'.repeat(40),
+    adopted: false, history: [{ ts: '2026-10-22T10:00:00.000Z', verb: 'task-start', mode: null, from: null, to: 'b'.repeat(40) }]
+  };
+  if (o.mutateRecord) o.mutateRecord(recordObj);
+  const recText = JSON.stringify(recordObj, null, 2) + '\n';
+  if (!o.noRecord) fs.writeFileSync(path.join(canon, '.git', 'pt-task', id + '.json'), recText);
+  if (!o.noAudit) {
+    fs.writeFileSync(path.join(canon, '.git', 'pt-land-log'), JSON.stringify({ ts: '2026-10-22T10:00:00.000Z', verb: 'task-start', task: 'task/' + id, from: null, to: 'b'.repeat(40), result: o.auditResult || 'ok', reason: null, recordSha256: o.auditSha || sha256Hex(Buffer.from(recText)) }) + '\n');
+  }
+  const fx = { base, canon, slot, admin, id, brief, recText };
+  if (o.afterWrite) o.afterWrite(fx);
+  return fx;
+}
+// The three heavy deps are injected (no git process); the slot, record, audit and real-path readers are the real ones.
+function r15FsDecide(mod, fx, over) {
+  const o = over || {};
+  const file = o.file === undefined ? path.join(fx.slot, 'qa', 'x_offline.js') : o.file;
+  const input = { tool_name: o.tool || 'Write', tool_input: { file_path: file }, cwd: o.cwd || fx.slot, hook_cwd: o.hook_cwd === undefined ? fx.slot : o.hook_cwd, permission_mode: o.mode === undefined ? 'default' : o.mode };
+  try {
+    return r15Kind(mod.decide(input, { projectDir: () => (o.pd === undefined ? fwdSlash(fx.slot) : o.pd), isAncestor: () => true, readBlob: () => Buffer.from(fx.brief) }));
+  } catch (e) { return 'THROW'; }
+}
+function r15FsRow(mod, label, fxOpts, over, expect) {
+  let fx = null;
+  try {
+    fx = r15FsFixture(fxOpts);
+    const got = r15FsDecide(mod, fx, typeof over === 'function' ? over(fx) : over);
+    check('AH-27 fs ' + label + ' -> ' + expect + ' (got ' + got + ')', got === expect);
+  } catch (e) {
+    check('AH-27 fs ' + label + ': fixture error ' + (e && e.message), false);
+  } finally {
+    if (fx) fs.rmSync(fx.base, { recursive: true, force: true });
+  }
+}
+r15FsRow(guard, 'N54 control: a listed existing file in a real worktree-shaped slot', {}, {}, 'GRANT');
+r15FsRow(guard, 'N52 a new listed file', {}, (fx) => ({ file: path.join(fx.slot, 'qa', 'y_offline.js') }), 'GRANT');
+r15FsRow(guard, 'N16 record file missing', { noRecord: true }, {}, 'NO');
+r15FsRow(guard, 'N17 record edited after the audit line (sha256 differs)', { afterWrite: (fx) => fs.writeFileSync(path.join(fx.canon, '.git', 'pt-task', fx.id + '.json'), fx.recText.replace('"adopted": false', '"adopted": true')) }, {}, 'NO');
+r15FsRow(guard, 'N18 no audit line', { noAudit: true }, {}, 'NO');
+r15FsRow(guard, 'N18 the audit line is not ok', { auditResult: 'refused' }, {}, 'NO');
+r15FsRow(guard, 'N18 the audit line carries another sha256', { auditSha: 'a'.repeat(64) }, {}, 'NO');
+r15FsRow(guard, 'N20 record base is not history[last].to', { mutateRecord: (r) => { r.base = 'e'.repeat(40); } }, {}, 'NO');
+r15FsRow(guard, 'N19 record briefPath is not work/<id>/brief.md', { mutateRecord: (r) => { r.briefPath = 'work/other/brief.md'; } }, {}, 'NO');
+r15FsRow(guard, 'N6 a fake slot with its own .git directory', { afterWrite: (fx) => { fs.rmSync(path.join(fx.slot, '.git')); fs.mkdirSync(path.join(fx.slot, '.git')); } }, {}, 'NO');
+r15FsRow(guard, 'N6 a .git file pointing at the real admin dir whose back-pointer names another path', { backPointer: 'C:/elsewhere/pt-wt-worker-a/.git' }, {}, 'NO');
+r15FsRow(guard, 'N6 a slot that is not a sibling of the canonical checkout', { slotParent: 'other', afterWrite: (fx) => fs.mkdirSync(path.join(fx.base, 'other'), { recursive: true }) }, {}, 'NO');
+r15FsRow(guard, 'N6 a .git file with no gitdir line', { afterWrite: (fx) => fs.writeFileSync(path.join(fx.slot, '.git'), 'nonsense\n') }, {}, 'NO');
+r15FsRow(guard, 'N22 slot HEAD on branch-dev', { head: 'ref: refs/heads/branch-dev' }, {}, 'NO');
+r15FsRow(guard, 'N72 a hard link of the listed file (nlink 2)', { afterWrite: (fx) => fs.linkSync(path.join(fx.slot, 'qa', 'x_offline.js'), path.join(fx.slot, 'qa', 'x_link.js')) }, {}, 'NO');
+r15FsRow(guard, 'N14 a case variant of an existing listed file (real path has the other case)', { brief: r15Brief({ entries: ['QA/x_offline.js'], land: ['QA/x_offline.js'] }) },
+  (fx) => ({ file: path.join(fx.slot, 'QA', 'x_offline.js') }), (() => { const p = fs.mkdtempSync(path.join(os.tmpdir(), 'ah27c-')); fs.writeFileSync(path.join(p, 'a.txt'), ''); const insens = fs.existsSync(path.join(p, 'A.TXT')); fs.rmSync(p, { recursive: true, force: true }); return insens ? 'NO' : 'GRANT'; })());
+r15FsRow(guard, 'N98 PD on another slot than the hook cwd', {}, (fx) => ({ hook_cwd: fx.base }), 'NO');
+{
+  let fx = null;
+  let linked = false;
+  try {
+    fx = r15FsFixture({ brief: r15Brief({ entries: ['qa/lnk/x_offline.js'], land: ['qa/lnk/x_offline.js'] }) });
+    fs.mkdirSync(path.join(fx.slot, 'other'));
+    fs.writeFileSync(path.join(fx.slot, 'other', 'x_offline.js'), '// y\n');
+    try { fs.symlinkSync(path.join(fx.slot, 'other'), path.join(fx.slot, 'qa', 'lnk'), 'junction'); linked = true; } catch (e) { linked = false; }
+    const got = linked ? r15FsDecide(guard, fx, { file: path.join(fx.slot, 'qa', 'lnk', 'x_offline.js') }) : 'NO';
+    check('AH-27 fs N45 a junction inside the slot to another directory: the real path differs -> NO (got ' + got + ')' + (linked ? '' : ' (skipped, no privilege)'), got === 'NO');
+  } catch (e) {
+    check('AH-27 fs N45 junction row: fixture error ' + (e && e.message), false);
+  } finally {
+    if (fx) fs.rmSync(fx.base, { recursive: true, force: true });
+  }
+}
+
+// ── parity (a): the guard's record loader vs loadTaskRecord of qa/guard_integrity_check.js on shared fixtures ───────────────
+function r15CommonFixture(variant) {
+  const common = fs.mkdtempSync(path.join(os.tmpdir(), 'ah27p-'));
+  const id = 'wx-1';
+  const task = variant === 'wrong-task' ? 'task/wx-1' : 'task/' + id;
+  fs.mkdirSync(path.join(common, 'pt-task'));
+  const rec = {
+    schema: 'pt-task-base/v1', task: variant === 'wrong-task' ? 'task/other' : task, base: 'b'.repeat(40), mainAtStart: 'c'.repeat(40), originDevAtStart: null,
+    startedAt: '2026-10-22T10:00:00.000Z', briefPath: 'work/' + id + '/brief.md', briefSha256: 'f'.repeat(64), briefCommit: 'b'.repeat(40), adopted: false,
+    history: [{ ts: '2026-10-22T10:00:00.000Z', verb: 'task-start', mode: null, from: null, to: 'b'.repeat(40) }]
+  };
+  if (variant === 'base-differs') rec.base = 'e'.repeat(40);
+  if (variant === 'bad-schema') rec.schema = 'pt-task-base/v0';
+  if (variant === 'bad-briefpath') rec.briefPath = 'work/Wx 1/brief.md';
+  if (variant === 'bad-oid') rec.mainAtStart = 'xyz';
+  if (variant === 'empty-history') rec.history = [];
+  if (variant === 'adopted-not-bool') rec.adopted = 'no';
+  if (variant === 'bad-sha') rec.briefSha256 = 'F'.repeat(64);
+  let text = JSON.stringify(rec, null, 2) + '\n';
+  if (variant === 'not-json') text = '{not json';
+  if (variant !== 'missing') fs.writeFileSync(path.join(common, 'pt-task', id + '.json'), text);
+  let auditSha = sha256Hex(Buffer.from(text));
+  if (variant === 'edited') auditSha = sha256Hex(Buffer.from(text + ' '));
+  if (variant !== 'no-audit') fs.writeFileSync(path.join(common, 'pt-land-log'), 'not json\n' + JSON.stringify({ task, verb: 'task-start', result: 'ok', recordSha256: auditSha }) + '\n');
+  return { common, task };
+}
+{
+  const variants = ['valid', 'edited', 'no-audit', 'wrong-task', 'base-differs', 'bad-schema', 'bad-briefpath', 'missing', 'bad-oid', 'empty-history', 'adopted-not-bool', 'bad-sha', 'not-json'];
+  let same = 0;
+  const diffs = [];
+  for (const v of variants) {
+    const f = r15CommonFixture(v);
+    try {
+      const a = guard && guard.r15LoadTaskRecord ? guard.r15LoadTaskRecord(f.common, f.task) : { exists: 'NOLOADER' };
+      const b = integrity.loadTaskRecord(f.common, f.task);
+      if (JSON.stringify(a) === JSON.stringify(b)) same += 1; else diffs.push(v + ': ' + JSON.stringify(a) + ' vs ' + JSON.stringify(b));
+    } finally { fs.rmSync(f.common, { recursive: true, force: true }); }
+  }
+  check('AH-27 N61 parity (a): the guard\'s record loader equals loadTaskRecord on ' + variants.length + ' shared fixtures' + (diffs.length ? ' - ' + diffs.join('; ') : ''), same === variants.length && variants.length >= 8);
+  const valid = r15CommonFixture('valid');
+  try {
+    const a = guard && guard.r15LoadTaskRecord ? guard.r15LoadTaskRecord(valid.common, valid.task) : null;
+    check('AH-27 N61 parity (a) control: the valid fixture loads as valid', !!a && a.valid === true && !!a.record && a.record.task === valid.task);
+  } finally { fs.rmSync(valid.common, { recursive: true, force: true }); }
+}
+// parity (b) for the land-scope parser lives in qa/pt_land_offline.js (PL), where both the land tool and the guard are digest parts.
+
+// ── AH-28 the Manual mode lock ──────────────────────────────────────────────────────────────────
+function lockRow(n, label, wo, over, expect, reasonRe) {
+  const r = r15Decide(guard, r15World(wo), over);
+  const got = r15Kind(r);
+  check('AH-28 N' + n + ' ' + label + ' -> ' + expect + ' (got ' + got + (got === 'DENY' ? ': ' + r.reason : '') + ')', got === expect && (!reasonRe || reasonRe.test(r.reason)));
+}
+const R15_TOOLS = ['Bash', 'PowerShell', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
+const lockOver = (tool, mode, extra) => Object.assign({ tool, mode, tool_input: tool === 'NotebookEdit' ? { notebook_path: R15_X } : undefined }, extra || {});
+for (const mode of ['acceptEdits', 'auto', 'dontAsk', 'bypassPermissions', 'weird-mode']) {
+  for (const tool of R15_TOOLS) {
+    lockRow('25-29', tool + ' in mode ' + mode + ' with a Manual brief', {}, lockOver(tool, mode), 'DENY', new RegExp('^R15 mode lock: brief wx-1 is Manual, session mode is ' + mode + ' - STOP-6$'));
+  }
+}
+for (const tool of R15_TOOLS) {
+  lockRow(30, tool + ' in plan mode with a Manual brief (D-2)', {}, lockOver(tool, 'plan'), 'DENY', /^R15 mode lock: brief wx-1 is Manual, session mode is plan - STOP-6$/);
+  lockRow(31, tool + ' with permission_mode null (D-1: absent)', {}, lockOver(tool, null), 'DENY', /session mode is absent - STOP-6$/);
+  lockRow(79, tool + ' with permission_mode "Default"', {}, lockOver(tool, 'Default'), 'DENY', /^R15 mode lock:/);
+  lockRow(80, tool + ' with a numeric permission_mode', {}, lockOver(tool, 5), 'DENY', /session mode is absent - STOP-6$/);
+  lockRow(80, tool + ' with an object permission_mode', {}, lockOver(tool, {}), 'DENY', /^R15 mode lock:/);
+}
+lockRow(31, 'a mode with control characters is shown sanitised', {}, lockOver('Bash', 'ac\u0007ce\npt'), 'DENY', /^R15 mode lock: brief wx-1 is Manual, session mode is ac\?ce\?pt - STOP-6$/);
+lockRow(32, 'Auto brief + acceptEdits: Bash passes (lock off)', { brief: r15Brief({ auto: true }) }, lockOver('Bash', 'acceptEdits'), 'NO');
+lockRow(32, 'Auto brief + auto: Bash passes', { brief: r15Brief({ auto: true }) }, lockOver('Bash', 'auto'), 'NO');
+lockRow(32, 'Auto brief + dontAsk: Edit passes the lock and is not granted', { brief: r15Brief({ auto: true }) }, lockOver('Edit', 'dontAsk'), 'NO');
+lockRow(83, 'CRLF Auto brief (positive control)', { brief: r15Brief({ auto: true, eol: '\r\n' }) }, lockOver('Bash', 'auto'), 'NO');
+lockRow(34, 'cwd cd\'d to the canonical checkout, PD = the slot', {}, { tool: 'Bash', mode: 'auto', hook_cwd: MAIN, cwd: MAIN }, 'DENY');
+lockRow(4, 'PD = canonical, hook cwd = slot A (Manual): the lock evaluates A', { pd: MAIN }, { tool: 'Bash', mode: 'auto' }, 'DENY');
+lockRow(4, 'PD = canonical, hook cwd = slot A (Auto brief): pass', { pd: MAIN, brief: r15Brief({ auto: true }) }, { tool: 'Bash', mode: 'auto' }, 'NO');
+lockRow(35, 'a subagent payload (agent_id) is locked like its parent', {}, { tool: 'Bash', mode: 'auto', agent_id: 'sub-1' }, 'DENY');
+{
+  const w = r15World();
+  const a = r15Run(guard, w, lockOver('Bash', 'auto'));
+  const b = r15Run(guard, w, lockOver('Bash', 'auto'));
+  check('AH-28 N62 after a DENY the same call is denied again', a === 'DENY' && b === 'DENY');
+}
+lockRow(66, 'decoy pt-wt-worker-a-old is not a slot (lock passes)', { pd: DECOY_OLD }, { tool: 'Bash', mode: 'auto', hook_cwd: DECOY_OLD, cwd: DECOY_OLD }, 'NO');
+lockRow(66, 'decoy pt-wt-worker-c is not a slot (lock passes)', { pd: DECOY_C }, { tool: 'Bash', mode: 'auto', hook_cwd: DECOY_C, cwd: DECOY_C }, 'NO');
+for (const unc of ['\\\\localhost\\c$\\Users\\Owner\\Documents\\Project\\pt-wt-worker-a', '\\\\?\\C:\\Users\\Owner\\Documents\\Project\\pt-wt-worker-a', '/c/Users/Owner/Documents/Project/pt-wt-worker-a', 'Project\\pt-wt-worker-b\\qa']) {
+  lockRow(68, 'PD names a slot in an unresolvable form (' + unc + '): ambiguous', { pd: unc }, { tool: 'Bash', mode: 'auto', hook_cwd: MAIN, cwd: MAIN }, 'DENY');
+  lockRow(68, 'hook cwd names a slot in an unresolvable form (' + unc + '): ambiguous', { pd: MAIN }, { tool: 'Bash', mode: 'auto', hook_cwd: unc, cwd: unc }, 'DENY');
+}
+lockRow(81, 'slot HEAD detached, mode auto: task-free, passes', { head: 'a'.repeat(40) }, lockOver('Bash', 'auto'), 'NO');
+lockRow(81, 'slot HEAD detached, mode acceptEdits, Edit: passes the lock (no grant)', { head: 'a'.repeat(40) }, lockOver('Edit', 'acceptEdits'), 'NO');
+lockRow(82, 'slot on branch-dev', { head: 'ref: refs/heads/branch-dev' }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(82, 'HEAD unreadable', { head: new Error('planted') }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(82, 'task branch with no record', { rec: { exists: false } }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(82, 'task branch whose record is invalid', { rec: { exists: true, valid: false, reason: 'x' } }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(82, 'task branch whose record names another briefPath', { head: 'ref: refs/heads/task/wx-2', rec: { exists: true, valid: true, sha256: 'x', record: { base: 'b'.repeat(40), briefPath: 'work/wx-1/brief.md', briefSha256: sha256Hex(Buffer.from(r15Brief({ auto: true }))) } }, brief: r15Brief({ auto: true }) }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(82, 'slot identity fails (a fake slot directory)', { ident: null, brief: r15Brief({ auto: true }) }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(82, 'the brief blob sha256 differs from the record', { tasks: { 'wx-1': { brief: r15Brief({ auto: true }), recordBrief: r15Brief() } } }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(82, 'a branch named task-x (not task/<id>)', { head: 'ref: refs/heads/task-x', brief: r15Brief({ auto: true }) }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(83, 'worker-mode auto line twice', { brief: r15Brief({ auto: true, tail: ['<!-- worker-mode: auto -->'] }) }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(83, 'worker-mode auto and manual lines', { brief: r15Brief({ auto: true, tail: ['<!-- worker-mode: manual -->'] }) }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(83, 'worker-mode AUTO (case)', { brief: r15Brief({ auto: true, autoLine: '<!-- worker-mode: AUTO -->' }) }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(83, 'worker-mode with different spacing', { brief: r15Brief({ auto: true, autoLine: '<!--  worker-mode: auto -->' }) }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(83, 'worker-mode line with trailing text', { brief: r15Brief({ auto: true, autoLine: '<!-- worker-mode: auto --> ok' }) }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(83, 'an inline mention only', { brief: r15Brief({ tail: ['Set <!-- worker-mode: auto --> to opt in.'] }) }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(83, 'a Mode: Auto brief without the marker line', { brief: r15Brief({ auto: true, autoLine: 'Mode: Auto' }) }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(83, 'the marker plus another line naming worker-mode', { brief: r15Brief({ auto: true, tail: ['The worker-mode line is above.'] }) }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(84, 'the Auto line exists only in the working-tree brief (the committed blob is Manual)', { tasks: { 'wx-1': { brief: r15Brief({ auto: true }), recordBrief: r15Brief({ auto: true }), blob: r15Brief() } } }, lockOver('Bash', 'auto'), 'DENY');
+{
+  const heads = (sr) => (/worker-a/i.test(sr) ? 'ref: refs/heads/task/wx-1' : 'ref: refs/heads/task/wx-2');
+  const tasks = () => ({ 'wx-1': { brief: r15Brief() }, 'wx-2': { brief: r15Brief({ auto: true }) } });
+  lockRow(85, 'PD = slot A (Manual), cwd = slot B (Auto)', { head: heads, tasks: tasks() }, { tool: 'Bash', mode: 'auto', hook_cwd: R15_SLOT_B, cwd: R15_SLOT_B }, 'DENY');
+  lockRow(85, 'PD = slot B (Auto), cwd = slot A (Manual)', { pd: R15_SLOT_B, head: heads, tasks: tasks() }, { tool: 'Bash', mode: 'auto' }, 'DENY');
+  lockRow(85, 'PD = slot B (Auto), cwd = slot B (Auto): pass', { pd: R15_SLOT_B, head: heads, tasks: tasks() }, { tool: 'Bash', mode: 'auto', hook_cwd: R15_SLOT_B, cwd: R15_SLOT_B }, 'NO');
+}
+lockRow(86, 'PD = cwd = canonical, mode auto: MAIN is unaffected', { pd: MAIN }, { tool: 'Bash', mode: 'auto', hook_cwd: MAIN, cwd: MAIN }, 'NO');
+lockRow(86, 'PD = cwd = canonical, mode acceptEdits, Write: unaffected', { pd: MAIN }, { tool: 'Write', mode: 'acceptEdits', hook_cwd: MAIN, cwd: MAIN, file: MAIN + '\\x.txt' }, 'NO');
+lockRow(87, 'PD and hook cwd both missing, mode auto: ambiguous', { pd: false }, { tool: 'Bash', mode: 'auto', hook_cwd: null }, 'DENY');
+lockRow(87, 'PD and hook cwd both empty, mode acceptEdits: ambiguous', { pd: '' }, { tool: 'Bash', mode: 'acceptEdits', hook_cwd: '' }, 'DENY');
+lockRow(87, 'PD and hook cwd both missing, mode default: pass', { pd: false }, { tool: 'Bash', mode: 'default', hook_cwd: null }, 'NO');
+lockRow(88, 'the lock evaluator throws (projectDir throws)', { pdThrows: true }, lockOver('Bash', 'auto'), 'DENY', /brief \? is Manual/);
+lockRow(88, 'a budget overrun while reading the brief blob', { blobThrows: true }, lockOver('Bash', 'auto'), 'DENY');
+lockRow(94, 'the same record-loader exception: grant path -> NO (default mode), lock path -> DENY (auto mode)', { recordThrows: true }, lockOver('Edit', 'auto'), 'DENY');
+lockRow('G0', 'a .git write keeps its R10-6 reason under the lock', {}, { tool: 'Write', mode: 'auto', file: SLOT_A + '\\.git\\config' }, 'DENY', /R10-6/);
+lockRow('G0', 'a write with no path keeps its R10-6 reason under the lock', {}, { tool: 'Write', mode: 'auto', tool_input: {} }, 'DENY', /R10-6/);
+{
+  const w = r15World();
+  const r = r15Run(guard, w, { tool: 'Bash', mode: 'default' });
+  check('AH-28 N89 mode "default": the lock makes zero reads (spy) and passes', r === 'NO' && Object.keys(w.calls).every((k) => w.calls[k] === 0));
+  const wf = r15World();
+  r15Run(guard, wf, { tool: 'PowerShell', mode: 'default' });
+  check('AH-28 N89 mode "default" for a PowerShell call: zero R15 reads', Object.keys(wf.calls).every((k) => wf.calls[k] === 0));
+}
+check('AH-28 the denial is STOP-6 text: "R15 mode lock: brief <id> is Manual, session mode <mode> - STOP-6"', r15Decide(guard, r15World(), lockOver('Bash', 'auto')).reason === 'R15 mode lock: brief wx-1 is Manual, session mode is auto - STOP-6');
+
+// ── AH-28 alias resolution (Owner-approved deviation: brief rulings R-c / R-d / R-f over the literal-name rule of M1) ─────────────
+// A slot reached through an alias (8.3 name, junction, symlink, subst drive, long-path form) is found by its native real path; a path that cannot be
+// resolved is ambiguous -> deny. Hermetic rows inject realpathNative; the real-filesystem rows below create what the platform allows.
+// Limitation (also in plan.md / qa.log): a real `subst` is system-wide and is NOT run here - the subst drive is exercised through the injected dep only.
+function aliasReal(map) {
+  return (p) => {
+    const s = String(p).replace(/\//g, '\\').replace(/\\+$/, '');
+    const low = s.toLowerCase();
+    for (const [alias, real] of map) {
+      const a = alias.toLowerCase();
+      if (low === a || low.indexOf(a + '\\') === 0) return real + s.slice(alias.length);
+    }
+    return s;
+  };
+}
+const R15_LONG_ALIAS = 'C:\\' + 'long\\'.repeat(60) + 'alias';
+const R15_ALIASES = [
+  ['8.3 (short project dir + short slot)', 'C:\\Users\\Owner\\DOCUME~1\\Project\\PT-WT-~1'],
+  ['mixed 8.3 / long (short user dir, short slot)', 'C:\\Users\\OWNER~1\\Documents\\Project\\PT-WT-~1'],
+  ['junction', 'C:\\links\\slotjunction'],
+  ['symlink', 'C:\\links\\slotsymlink'],
+  ['subst drive', 'S:'],
+  ['a path longer than 260 characters', R15_LONG_ALIAS]
+];
+check('AH-28 alias fixtures: the long alias is longer than 260 characters', R15_LONG_ALIAS.length > 260);
+for (const [label, alias] of R15_ALIASES) {
+  const realpath = aliasReal([[alias, SLOT_A]]);
+  for (const mode of ['auto', 'acceptEdits']) {
+    for (const tool of ['Bash', 'Edit']) {
+      lockRow('R-c', label + ': PD and hook cwd are both the alias, ' + tool + ' in ' + mode + ' with a Manual brief', { pd: alias, realpath },
+        { tool, mode, hook_cwd: alias, cwd: alias, file: alias + '\\qa\\x_offline.js' }, 'DENY', /^R15 mode lock: brief wx-1 is Manual, session mode is /);
+    }
+  }
+  lockRow('R-c', label + ': the alias is resolved to the slot and its Auto brief is honoured (pass)', { pd: alias, realpath, brief: r15Brief({ auto: true }) }, { tool: 'Bash', mode: 'auto', hook_cwd: alias, cwd: alias }, 'NO');
+  lockRow('R-c', label + ': the alias is resolved to a detached slot (pass)', { pd: alias, realpath, head: 'a'.repeat(40) }, { tool: 'Bash', mode: 'auto', hook_cwd: alias, cwd: alias }, 'NO');
+  lockRow('R-d', label + ': only the hook cwd is the alias (PD canonical)', { pd: MAIN, realpath }, { tool: 'Bash', mode: 'auto', hook_cwd: alias, cwd: alias }, 'DENY', /brief wx-1 is Manual/);
+  lockRow('R-d', label + ': only PD is the alias (hook cwd canonical)', { pd: alias, realpath }, { tool: 'Bash', mode: 'auto', hook_cwd: MAIN, cwd: MAIN }, 'DENY', /brief wx-1 is Manual/);
+  lockRow('R-c', label + ': mode "default" never resolves anything (zero reads, pass)', { pd: alias, realpath }, { tool: 'Bash', mode: 'default', hook_cwd: alias, cwd: alias }, 'NO');
+}
+{
+  const w = r15World({ pd: R15_ALIASES[0][1], realpath: aliasReal([[R15_ALIASES[0][1], SLOT_A]]) });
+  r15Run(guard, w, { tool: 'Bash', mode: 'default', hook_cwd: R15_ALIASES[0][1] });
+  check('AH-28 R-c mode "default": the alias resolution makes zero reads', Object.keys(w.calls).every((k) => w.calls[k] === 0));
+}
+lockRow('R-c', 'a long-path (\\\\?\\) real path naming the slot is ambiguous (deny, id unknown)', { pd: 'C:\\links\\jx', realpath: () => '\\\\?\\' + SLOT_A, brief: r15Brief({ auto: true }) }, { tool: 'Bash', mode: 'auto', hook_cwd: 'C:\\links\\jx', cwd: 'C:\\links\\jx' }, 'DENY', /brief \? is Manual/);
+lockRow('R-c', 'a long-path (\\\\?\\) real path of the canonical checkout does not name a slot (pass)', { pd: MAIN, realpath: (p) => '\\\\?\\' + String(p) }, { tool: 'Bash', mode: 'auto', hook_cwd: MAIN, cwd: MAIN }, 'NO');
+lockRow('R-c', 'a resolved path in UNC form naming a slot is ambiguous', { pd: 'C:\\links\\jx', realpath: () => '\\\\server\\share\\' + 'pt-wt-worker-a' }, { tool: 'Bash', mode: 'auto', hook_cwd: 'C:\\links\\jx', cwd: 'C:\\links\\jx' }, 'DENY', /brief \? is Manual/);
+lockRow('R-c', 'a > 260 character path that names the slot literally (raw form) is evaluated', { pd: 'C:\\' + 'long\\'.repeat(60) + 'pt-wt-worker-a', realpath: (p) => String(p) }, { tool: 'Bash', mode: 'auto', hook_cwd: 'C:\\' + 'long\\'.repeat(60) + 'pt-wt-worker-a', cwd: SLOT_A }, 'DENY', /brief wx-1 is Manual/);
+lockRow('R-c', 'either form counts: the raw name is a slot although the real path is the canonical checkout', { pd: SLOT_A, realpath: () => MAIN }, { tool: 'Bash', mode: 'auto', hook_cwd: SLOT_A, cwd: SLOT_A }, 'DENY', /brief wx-1 is Manual/);
+lockRow('R-c', 'either form counts: the real path is a slot although the raw name is the canonical checkout', { pd: MAIN, realpath: () => SLOT_A }, { tool: 'Bash', mode: 'auto', hook_cwd: MAIN, cwd: MAIN }, 'DENY', /brief wx-1 is Manual/);
+for (const [label, rp] of [['throws', () => { throw new Error('planted'); }], ['returns an empty string', () => ''], ['returns null', () => null], ['returns a number', () => 5], ['returns an object', () => ({})]]) {
+  lockRow('R-f', 'resolution failure (' + label + ') of a non-empty PD / hook cwd that names no slot', { pd: MAIN, realpath: rp }, { tool: 'Bash', mode: 'auto', hook_cwd: MAIN, cwd: MAIN }, 'DENY', /brief \? is Manual/);
+  lockRow('R-f', 'resolution failure (' + label + ') of the hook cwd only', { pd: MAIN, realpath: (p) => (/Hook/i.test(String(p)) ? rp() : String(p)) }, { tool: 'Bash', mode: 'acceptEdits', hook_cwd: 'C:\\Hook\\x', cwd: MAIN }, 'DENY', /brief \? is Manual/);
+  lockRow('R-f', 'resolution failure (' + label + ') under the file tools', { pd: MAIN, realpath: rp }, { tool: 'Write', mode: 'auto', hook_cwd: MAIN, cwd: MAIN, file: MAIN + '\\x.txt' }, 'DENY', /^R15 mode lock:/);
+}
+lockRow('R-f', 'resolution failure in mode "default" is not looked at (M0 pass, zero reads)', { pd: MAIN, realpath: () => { throw new Error('planted'); } }, { tool: 'Bash', mode: 'default', hook_cwd: MAIN, cwd: MAIN }, 'NO');
+lockRow('R-f', 'the canonical checkout resolves normally and is not locked (MAIN unaffected)', { pd: MAIN, realpath: (p) => String(p) }, { tool: 'Bash', mode: 'auto', hook_cwd: MAIN, cwd: MAIN }, 'NO');
+// real filesystem: relative gitdir, a junction, a symlink, an 8.3 name (each only where the platform lets this process create it; skips are printed)
+{
+  const lockFs = (label, fxOpts, build, expect) => {
+    let fx = null;
+    try {
+      fx = r15FsFixture(fxOpts);
+      const o = build(fx);
+      if (o === null) { console.log('  note: AH-28 real-filesystem row skipped (' + label + ')'); return; }
+      const got = r15FsDecide(guard, fx, o);
+      check('AH-28 real fs ' + label + ' -> ' + expect + ' (got ' + got + ')', got === expect);
+    } catch (e) {
+      check('AH-28 real fs ' + label + ': fixture error ' + (e && e.message), false);
+    } finally { if (fx) fs.rmSync(fx.base, { recursive: true, force: true }); }
+  };
+  const viaAlias = (alias) => ({ pd: fwdSlash(alias), hook_cwd: alias, cwd: alias, tool: 'Edit', mode: 'auto', file: path.join(alias, 'qa', 'x_offline.js') });
+  lockFs('control: the real slot of a Manual brief, mode auto', {}, (fx) => ({ tool: 'Edit', mode: 'auto' }), 'DENY');
+  lockFs('control: the real slot of an Auto brief, mode auto (lock off, no grant)', { brief: r15Brief({ auto: true }) }, (fx) => ({ tool: 'Edit', mode: 'auto' }), 'NO');
+  lockFs('a slot whose .git file carries a RELATIVE gitdir (identity unproven -> Manual), mode auto', { brief: r15Brief({ auto: true }),
+    afterWrite: (fx) => fs.writeFileSync(path.join(fx.slot, '.git'), 'gitdir: ../portfolio-tracker/.git/worktrees/pt-wt-worker-a\n') }, (fx) => ({ tool: 'Edit', mode: 'auto' }), 'DENY');
+  lockFs('a junction to the real slot (PD and hook cwd both the junction), Manual brief, mode auto', {}, (fx) => {
+    const alias = path.join(fx.base, 'jslot');
+    try { fs.symlinkSync(fx.slot, alias, 'junction'); } catch (e) { return null; }
+    return viaAlias(alias);
+  }, 'DENY');
+  lockFs('a junction to the real slot, Auto brief, mode auto (the resolved slot\'s brief is honoured)', { brief: r15Brief({ auto: true }) }, (fx) => {
+    const alias = path.join(fx.base, 'jslot');
+    try { fs.symlinkSync(fx.slot, alias, 'junction'); } catch (e) { return null; }
+    return viaAlias(alias);
+  }, 'NO');
+  lockFs('a directory symbolic link to the real slot (needs symlink privilege), Manual brief, mode auto', {}, (fx) => {
+    const alias = path.join(fx.base, 'sslot');
+    try { fs.symlinkSync(fx.slot, alias, 'dir'); } catch (e) { return null; }
+    return viaAlias(alias);
+  }, 'DENY');
+  lockFs('an 8.3 short name of the real slot directory (needs 8.3 generation on this volume), Manual brief, mode auto', {}, (fx) => {
+    const alias = path.join(fx.base, 'PT-WT-~1');
+    let real = null;
+    try { real = fs.realpathSync.native(alias); } catch (e) { real = null; }
+    if (!real || real.toLowerCase() !== fx.slot.toLowerCase()) return null;
+    return viaAlias(alias);
+  }, 'DENY');
+  lockFs('a path that does not exist (resolution fails), mode auto', {}, (fx) => ({ pd: fwdSlash(path.join(fx.base, 'nope')), hook_cwd: path.join(fx.base, 'nope'), cwd: fx.slot, tool: 'Edit', mode: 'auto' }), 'DENY');
+}
+// planted negatives for the alias resolution
+mutantCatches('R15 lock resolves no alias (raw-name only, the pre-deviation behaviour)',
+  'for (const form of [raw, resolved]) {', 'for (const form of [raw]) {',
+  (m) => r15Run(m, r15World({ pd: R15_ALIASES[0][1], realpath: aliasReal([[R15_ALIASES[0][1], SLOT_A]]) }), { tool: 'Bash', mode: 'auto', hook_cwd: R15_ALIASES[0][1], cwd: R15_ALIASES[0][1] }) === 'DENY');
+mutantCatches('R15 lock looks at the resolved form only (the raw slot name is ignored)',
+  'for (const form of [raw, resolved]) {', 'for (const form of [resolved]) {',
+  (m) => r15Run(m, r15World({ pd: SLOT_A, realpath: () => MAIN }), { tool: 'Bash', mode: 'auto', hook_cwd: SLOT_A, cwd: SLOT_A }) === 'DENY');
+mutantCatches('R15 lock trusts a path that fails to resolve',
+  "try { resolved = deps.realpathNative(raw); } catch (e) { return r15LockDeny('?', mode); }", 'try { resolved = deps.realpathNative(raw); } catch (e) { resolved = raw; }',
+  (m) => r15Run(m, r15World({ pd: MAIN, realpath: () => { throw new Error('planted'); } }), { tool: 'Bash', mode: 'auto', hook_cwd: MAIN, cwd: MAIN }) === 'DENY');
+mutantCatches('R15 lock trusts an empty / non-string resolution',
+  "if (typeof resolved !== 'string' || !resolved) return r15LockDeny('?', mode);", "if (typeof resolved !== 'string' || !resolved) resolved = raw;",
+  (m) => r15Run(m, r15World({ pd: MAIN, realpath: () => '' }), { tool: 'Bash', mode: 'auto', hook_cwd: MAIN, cwd: MAIN }) === 'DENY');
+mutantCatches('R15 lock trusts an ambiguous (long-path / UNC) resolved form',
+  "if (c.kind === 'ambiguous') return r15LockDeny('?', mode);", "if (c.kind === 'ambiguous') continue;",
+  (m) => r15Run(m, r15World({ pd: 'C:\\links\\jx', realpath: () => '\\\\?\\' + SLOT_A }), { tool: 'Bash', mode: 'auto', hook_cwd: 'C:\\links\\jx', cwd: 'C:\\links\\jx' }) === 'DENY');
+mutantCatches('R15 lock mode "default" pass (M0) removed',
+  "if (mode === 'default') return null;", '',
+  (m) => r15Run(m, r15World(), { tool: 'Bash', mode: 'default' }) === 'NO');
+mutantCatches('R15 lock resolves only the project directory (the hook cwd alias is ignored)',
+  'for (const raw of [havePd ? pd : null, haveHc ? hc : null]) {', 'for (const raw of [havePd ? pd : null]) {',
+  (m) => r15Run(m, r15World({ pd: MAIN, realpath: aliasReal([[R15_ALIASES[2][1], SLOT_A]]) }), { tool: 'Bash', mode: 'auto', hook_cwd: R15_ALIASES[2][1], cwd: R15_ALIASES[2][1] }) === 'DENY');
+
+// ── AH-29 runCli plumbing ───────────────────────────────────────────────────────────────────────
+if (guard) {
+  let seen = null;
+  const spy = (decision) => ({ decideFn(input) { seen = input; return decision || { decision: 'allow', reason: 'x' }; } });
+  const stdinOf = (o) => JSON.stringify(Object.assign({ hook_event_name: 'PreToolUse', tool_name: 'Edit', tool_input: { file_path: R15_X }, cwd: SLOT_A, permission_mode: 'default' }, o));
+  guard.runCli(stdinOf({}), spy());
+  check('AH-29 N90 runCli passes permission_mode and hook_cwd as own keys', seen && Object.prototype.hasOwnProperty.call(seen, 'permission_mode') && Object.prototype.hasOwnProperty.call(seen, 'hook_cwd') &&
+    seen.permission_mode === 'default' && seen.hook_cwd === SLOT_A && seen.cwd === SLOT_A);
+  guard.runCli(JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: R15_X } }), spy());
+  check('AH-29 N90 absent permission_mode and cwd -> own keys present, both null', seen && seen.permission_mode === null && seen.hook_cwd === null && Object.prototype.hasOwnProperty.call(seen, 'permission_mode'));
+  for (const bad of [5, {}, true, ['default']]) {
+    guard.runCli(stdinOf({ permission_mode: bad }), spy());
+    check('AH-29 N90 a non-string permission_mode (' + JSON.stringify(bad) + ') reaches decide() as null', seen && seen.permission_mode === null);
+  }
+  guard.runCli(stdinOf({ cwd: '' }), spy());
+  check('AH-29 N90 an empty hook cwd is null (the cwd fallback stays: cwd = CLAUDE_PROJECT_DIR)', seen && seen.hook_cwd === null && seen.cwd === process.env.CLAUDE_PROJECT_DIR);
+  const reason = 'R15 grant wx-1 qa/x_offline.js';
+  for (const tool of ['Edit', 'Write', 'MultiEdit']) {
+    const r = guard.runCli(stdinOf({ tool_name: tool }), spy({ decision: 'grant', reason }));
+    check('AH-29 N58 ' + tool + ': a grant is exit 0, the exact allow JSON + newline, empty stderr',
+      r.code === 0 && r.stderr === '' && r.stdout === '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"' + reason + '"}}\n');
+    const parsed = JSON.parse(r.stdout);
+    check('AH-29 N59 ' + tool + ': no updatedInput and no additionalContext anywhere', JSON.stringify(parsed).indexOf('updatedInput') === -1 && JSON.stringify(parsed).indexOf('additionalContext') === -1 &&
+      Object.keys(parsed).length === 1 && Object.keys(parsed.hookSpecificOutput).sort().join(',') === 'hookEventName,permissionDecision,permissionDecisionReason');
+  }
+  for (const tool of ['Bash', 'PowerShell', 'NotebookEdit']) {
+    const stdin = tool === 'Bash' || tool === 'PowerShell' ? stdinOf({ tool_name: tool, tool_input: { command: 'git status' } }) : stdinOf({ tool_name: tool, tool_input: { notebook_path: R15_X } });
+    const r = guard.runCli(stdin, spy({ decision: 'grant', reason }));
+    check('AH-29 N91 a grant for ' + tool + ' is exit 2 "invalid decision"', r.code === 2 && r.stdout === '' && /invalid decision/.test(r.stderr));
+  }
+  check('AH-29 a grant with a non-string reason is exit 2', guard.runCli(stdinOf({}), spy({ decision: 'grant', reason: 5 })).code === 2);
+  check('AH-29 a decision "GRANT" (case) is exit 2', guard.runCli(stdinOf({}), spy({ decision: 'GRANT', reason })).code === 2);
+  check('AH-29 an allow stays exit 0 with empty stdout (no opinion)', (() => { const r = guard.runCli(stdinOf({}), spy({ decision: 'allow', reason: 'x' })); return r.code === 0 && r.stdout === '' && r.stderr === ''; })());
+  check('AH-29 an ask still maps to the ask JSON', (() => { const r = guard.runCli(stdinOf({}), spy({ decision: 'ask', reason: 'x' })); return r.code === 0 && JSON.parse(r.stdout).hookSpecificOutput.permissionDecision === 'ask'; })());
+  check('AH-29 a deny still blocks with exit 2', guard.runCli(stdinOf({}), spy({ decision: 'deny', reason: 'x' })).code === 2);
+  const hookSrc = fs.readFileSync(HOOK_PATH, 'utf8').replace(/\r\n/g, '\n');
+  check('AH-29 SEVERITY is unchanged (no grant level; the Bash reduction never sees a grant)', hookSrc.indexOf('const SEVERITY = { allow: 1, ask: 2, deny: 3 };') !== -1);
+  check('AH-29 the header no longer claims the hook never grants anything, and names R15', hookSrc.indexOf('The hook never grants anything') === -1 && /R15/.test(hookSrc.slice(0, 1200)));
+  check('AH-29 module exports the R15 parsers and the record loader', ['r15LoadTaskRecord', 'r15ParseAutoEditScope', 'r15ParseLandScope', 'r15ParseProtectedScope', 'r15IsAutoBrief'].every((k) => typeof guard[k] === 'function'));
+} else {
+  check('AH-29 guard loaded', false);
+}
+// the parsers, directly (the hermetic rows above reach them through decide())
+if (guard && guard.r15ParseAutoEditScope) {
+  const P = guard.r15ParseAutoEditScope;
+  check('AH-27 parser: a valid block returns its entries in order', JSON.stringify(P(r15Brief())) === JSON.stringify(['qa/x_offline.js', 'qa/y_offline.js']));
+  check('AH-27 parser: marker strings only inline (as in this task\'s own brief) -> void', P('see `<!-- auto-edit-scope:begin -->` and `<!-- auto-edit-scope:end -->`\n<!-- land-scope:begin -->\nqa/x_offline.js\n<!-- land-scope:end -->\n') === null);
+  check('AH-27 parser: a begin marker followed by text on its line is not a whole-line marker -> void', P(r15Brief().replace('<!-- auto-edit-scope:begin -->', '<!-- auto-edit-scope:begin --> x')) === null);
+  check('AH-27 parser: not a string -> null', P(undefined) === null && P(5) === null);
+  check('AH-27 parser: an Auto brief is recognised only by exactly one whole marker line', guard.r15IsAutoBrief(r15Brief({ auto: true })) === true && guard.r15IsAutoBrief(r15Brief()) === false && guard.r15IsAutoBrief(undefined) === false);
+}
+
+// ── AH-30 (heavy): a real canonical repo + a real worktree named pt-wt-worker-a, a record and audit line written by the fixture (never by the land tool), the real CLI ──
+heavy('AH-30 real git fixture: R15 end to end through the real CLI', () => {
+  const git = (args, cwd) => spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  const gitOk = (args, cwd) => {
+    const r = git(args, cwd);
+    if (r.status !== 0) throw new Error('git ' + args.join(' ') + ' failed: ' + String(r.stderr).trim());
+    return String(r.stdout).trim();
+  };
+  const build = (briefText, orphanBase) => {
+    const id = 'wx-1';
+    const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ah30-')));
+    const canon = path.join(base, 'portfolio-tracker');
+    fs.mkdirSync(path.join(canon, 'work', id), { recursive: true });
+    fs.mkdirSync(path.join(canon, 'qa'));
+    gitOk(['init', '-q', '-b', 'branch-dev'], canon);
+    for (const kv of [['user.name', 'ah30'], ['user.email', 'ah30@example.invalid'], ['core.autocrlf', 'false'], ['commit.gpgsign', 'false']]) gitOk(['config', kv[0], kv[1]], canon);
+    fs.writeFileSync(path.join(canon, 'work', id, 'brief.md'), briefText);
+    fs.writeFileSync(path.join(canon, 'qa', 'x_offline.js'), '// x\n');
+    gitOk(['add', '-A'], canon);
+    gitOk(['commit', '-q', '-m', 'base'], canon);
+    const baseOid = gitOk(['rev-parse', 'HEAD'], canon);
+    const slot = path.join(base, 'pt-wt-worker-a');
+    gitOk(['worktree', 'add', '-q', '-b', 'task/' + id, slot, 'HEAD'], canon);
+    const recBase = orphanBase ? gitOk(['commit-tree', '4b825dc642cb6eb9a060e54bf8d69288fbee4904', '-m', 'orphan'], canon) : baseOid;
+    const rec = {
+      schema: 'pt-task-base/v1', task: 'task/' + id, base: recBase, mainAtStart: baseOid, originDevAtStart: null, startedAt: '2026-10-22T10:00:00.000Z',
+      briefPath: 'work/' + id + '/brief.md', briefSha256: sha256Hex(Buffer.from(briefText)), briefCommit: recBase, adopted: false,
+      history: [{ ts: '2026-10-22T10:00:00.000Z', verb: 'task-start', mode: null, from: null, to: recBase }]
+    };
+    const recText = JSON.stringify(rec, null, 2) + '\n';
+    fs.mkdirSync(path.join(canon, '.git', 'pt-task'), { recursive: true });
+    fs.writeFileSync(path.join(canon, '.git', 'pt-task', id + '.json'), recText);
+    fs.writeFileSync(path.join(canon, '.git', 'pt-land-log'), JSON.stringify({ ts: '2026-10-22T10:00:00.000Z', verb: 'task-start', task: 'task/' + id, from: null, to: recBase, result: 'ok', reason: null, recordSha256: sha256Hex(Buffer.from(recText)) }) + '\n');
+    return { id, base, canon, slot, recText };
+  };
+  const cli = (fx, obj, env) => spawnSync(process.execPath, [HOOK_PATH], {
+    input: JSON.stringify(obj), encoding: 'utf8', timeout: 30000, windowsHide: true,
+    env: Object.assign({}, process.env, { CLAUDE_PROJECT_DIR: fx.slot }, env || {})
+  });
+  const wr = (fx, rel, extra) => Object.assign({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(fx.slot, rel) }, cwd: fx.slot, permission_mode: 'default' }, extra || {});
+  const grantJson = (reason) => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: reason } }) + '\n';
+  const made = [];
+  try {
+    const fx1 = build(r15Brief());
+    made.push(fx1);
+    let r = cli(fx1, wr(fx1, 'qa/x_offline.js'));
+    check('AH-30 N54 real CLI: an in-scope Write is exit 0 with the exact grant JSON', r.status === 0 && r.stderr === '' && r.stdout === grantJson('R15 grant wx-1 qa/x_offline.js'));
+    r = cli(fx1, wr(fx1, 'work/wx-1/plan.md'));
+    check('AH-30 evidence: work/<id>/plan.md is granted', r.status === 0 && r.stdout === grantJson('R15 grant wx-1 work/wx-1/plan.md'));
+    r = cli(fx1, wr(fx1, 'qa/other_offline.js'));
+    check('AH-30 N9 an unlisted file is exit 0 with empty stdout (the normal prompt)', r.status === 0 && r.stdout === '' && r.stderr === '');
+    r = cli(fx1, wr(fx1, 'AGENTS.md'));
+    check('AH-30 N36 AGENTS.md is exit 0 with empty stdout', r.status === 0 && r.stdout === '');
+    r = cli(fx1, wr(fx1, '.git/config'));
+    check('AH-30 N37 a .git write is the exit-2 R10-6 deny', r.status === 2 && r.stdout === '' && /R10-6/.test(r.stderr));
+    const noMode = wr(fx1, 'qa/x_offline.js'); delete noMode.permission_mode;
+    r = cli(fx1, noMode);
+    check('AH-30 N31 absent permission_mode + a Manual brief: exit 2, "R15 mode lock", mode absent', r.status === 2 && r.stdout === '' && r.stderr === 'pretooluse-guard: BLOCKED - R15 mode lock: brief wx-1 is Manual, session mode is absent - STOP-6\n');
+    r = cli(fx1, wr(fx1, 'qa/x_offline.js', { permission_mode: 'acceptEdits' }));
+    check('AH-30 N25 acceptEdits + a Manual brief: exit 2 with the R15 prefix', r.status === 2 && r.stderr.indexOf('pretooluse-guard: BLOCKED - R15 mode lock:') === 0);
+    r = cli(fx1, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git status --short --branch' }, cwd: fx1.slot, permission_mode: 'default' });
+    check('AH-30 Bash in default mode: exit 0, empty stdout (the lock is off in Manual)', r.status === 0 && r.stdout === '' && r.stderr === '');
+    r = cli(fx1, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git status --short --branch' }, cwd: fx1.slot, permission_mode: 'auto' });
+    check('AH-30 Bash in auto mode with a Manual brief: exit 2', r.status === 2 && /R15 mode lock/.test(r.stderr));
+    r = cli(fx1, wr(fx1, 'qa/x_offline.js', { cwd: fx1.canon }));
+    check('AH-30 N2 hook cwd drifted to the canonical checkout (default mode): no grant', r.status === 0 && r.stdout === '');
+    r = cli(fx1, wr(fx1, 'qa/x_offline.js', { cwd: fx1.canon, permission_mode: 'auto' }));
+    check('AH-30 N34 hook cwd drifted to the canonical checkout (auto mode): the lock still evaluates the slot', r.status === 2 && /R15 mode lock/.test(r.stderr));
+    r = cli(fx1, wr(fx1, 'qa/x_offline.js'), { CLAUDE_PROJECT_DIR: fx1.canon });
+    check('AH-30 N4 PD = canonical, hook cwd = slot (default mode): no grant', r.status === 0 && r.stdout === '');
+    fs.writeFileSync(path.join(fx1.canon, '.git', 'pt-task', fx1.id + '.json'), fx1.recText.replace('"adopted": false', '"adopted": true'));
+    r = cli(fx1, wr(fx1, 'qa/x_offline.js'));
+    check('AH-30 N17 the record edited after the audit line: no grant', r.status === 0 && r.stdout === '');
+    r = cli(fx1, wr(fx1, 'qa/x_offline.js', { permission_mode: 'auto' }));
+    check('AH-30 N17 the record edited, auto mode: counts as Manual -> exit 2', r.status === 2);
+
+    const fx2 = build(r15Brief({ auto: true }));
+    made.push(fx2);
+    r = cli(fx2, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git status --short --branch' }, cwd: fx2.slot, permission_mode: 'acceptEdits' });
+    check('AH-30 N32 acceptEdits + an Auto brief: no lock, exit 0, empty stdout', r.status === 0 && r.stdout === '' && r.stderr === '');
+    r = cli(fx2, wr(fx2, 'qa/x_offline.js', { permission_mode: 'auto' }));
+    check('AH-30 N33 an in-scope Write in auto mode with an Auto brief: never a grant (exit 0, empty stdout)', r.status === 0 && r.stdout === '');
+    r = cli(fx2, wr(fx2, 'qa/x_offline.js'));
+    check('AH-30 an Auto brief in default mode still grants the listed file', r.status === 0 && r.stdout === grantJson('R15 grant wx-1 qa/x_offline.js'));
+    r = cli(fx2, wr(fx2, '.git/config', { permission_mode: 'auto' }));
+    check('AH-30 a .git write in auto mode with an Auto brief is the R10-6 deny', r.status === 2 && /R10-6/.test(r.stderr));
+
+    const fx3 = build(r15Brief(), true);
+    made.push(fx3);
+    r = cli(fx3, wr(fx3, 'qa/x_offline.js'));
+    check('AH-30 N76 the record base is not an ancestor of the task ref (real git merge-base): no grant', r.status === 0 && r.stdout === '');
+  } catch (e) {
+    check('AH-30 fixture error: ' + (e && e.message), false);
+  } finally {
+    for (const fx of made) fs.rmSync(fx.base, { recursive: true, force: true });
+  }
+});
+
+// ── R15 planted negatives: mutate the PRODUCTION guard source, the suite must notice (brief §3.3) ──
+const mutAuto = r15Brief({ auto: true });
+const lowerResolve = (raw) => raw.toLowerCase();
+const fsProbe = (m, fxOpts, over) => { let fx = null; try { fx = r15FsFixture(fxOpts); return r15FsDecide(m, fx, typeof over === 'function' ? over(fx) : over); } finally { if (fx) fs.rmSync(fx.base, { recursive: true, force: true }); } };
+mutantCatches('R15 G3 exact-"default" mode check removed (a non-default mode can grant)',
+  "if (input.permission_mode !== 'default') return null;", '',
+  (m) => r15Run(m, r15World({ brief: mutAuto }), { tool: 'Edit', mode: 'acceptEdits' }) === 'NO');
+mutantCatches('R15 G4 PD = hook cwd slot equality removed (cwd drift grants)',
+  'if (!sp || !sh || r15Ci(sp) !== r15Ci(sh)) return null;', 'if (!sp || !sh) return null;',
+  (m) => r15Run(m, r15World(), { hook_cwd: R15_SLOT_B, cwd: R15_SLOT_B }) === 'NO');
+mutantCatches('R15 G5 admin-dir back-pointer check removed (a fake slot borrows a real admin dir)',
+  "if (r15Ci(back) !== r15Ci(sr + '/.git')) return null;", '',
+  (m) => fsProbe(m, { backPointer: 'C:/elsewhere/pt-wt-worker-a/.git' }, {}) === 'NO');
+mutantCatches('R15 G5 slot-and-canonical sibling check removed',
+  "if (r15Ci(path.posix.dirname(sr)) !== r15Ci(path.posix.dirname(canonical))) return null;", '',
+  (m) => fsProbe(m, { slotParent: 'other' }, {}) === 'NO');
+mutantCatches('R15 G7 audit-sha check removed (an edited record is accepted)',
+  "if (latest.recordSha256 !== sha) return bad('the record sha256 differs from the latest audit recordSha256 (edited or replaced)');", '',
+  (m) => fsProbe(m, { afterWrite: (fx) => fs.writeFileSync(path.join(fx.canon, '.git', 'pt-task', fx.id + '.json'), fx.recText.replace('"adopted": false', '"adopted": true')) }, {}) === 'NO');
+mutantCatches('R15 G7 ancestry check removed (a record base off the task ref is accepted)',
+  "if (needAncestry && deps.isAncestor(ident.canonical, record.base, 'refs/heads/task/' + id, deadline) !== true) return null;", '',
+  (m) => r15Run(m, r15World({ ancestor: false }), {}) === 'NO');
+mutantCatches('R15 G8 brief-sha256 check removed (a tampered blob is accepted)',
+  "crypto.createHash('sha256').update(blob).digest('hex') !== record.briefSha256", 'false',
+  (m) => r15Run(m, r15World({ blob: r15Brief({ entries: ['qa/x_offline.js', 'qa/evil_offline.js'], land: ['qa/x_offline.js', 'qa/evil_offline.js'] }) }), { file: SLOT_A + '\\qa\\evil_offline.js' }) === 'NO');
+mutantCatches('R15 land-scope subset check removed (a block entry outside land-scope is accepted)',
+  'if (land.paths.indexOf(e) === -1) return null;', '',
+  (m) => r15Run(m, r15World({ brief: r15Brief({ entries: ['qa/x_offline.js', 'qa/not_in_land.js'] }) }), {}) === 'NO');
+mutantCatches('R15 G10 REL(T) = REL(RT) equality removed (a case variant / link is accepted)',
+  'if (rel === null || relRt === null || rel !== relRt) return null;', 'if (rel === null || relRt === null) return null;',
+  (m) => r15Run(m, r15World({ brief: r15Brief({ entries: ['QA/x_offline.js'], land: ['QA/x_offline.js'] }), resolve: lowerResolve }), { file: SLOT_A + '\\QA\\x_offline.js' }) === 'NO');
+mutantCatches('R15 G10 hard-link (nlink) check removed',
+  'if (st && (!st.isFile() || st.nlink !== 1)) return null;', 'if (st && !st.isFile()) return null;',
+  (m) => r15Run(m, r15World({ lstat: (n) => (/\/qa\/x_offline\.js$/.test(n) ? r15Stat('file', 2) : null) }), {}) === 'NO');
+mutantCatches('R15 G10 ADS / drive-relative colon check removed',
+  "if (n.indexOf(':', 2) !== -1) return true;", '',
+  (m) => r15Run(m, r15World(), { file: R15_SCRATCH + '\\x.js:evil' }) === 'NO');
+mutantCatches('R15 G10 8.3 short-name check removed',
+  "|| /~\\d/.test(seg)) return true;", ') return true;',
+  (m) => r15Run(m, r15World(), { file: R15_SCRATCH + '\\X_OFF~1.JS' }) === 'NO');
+mutantCatches('R15 G10 trailing dot / space check removed',
+  "|| /[. ]$/.test(seg)", '',
+  (m) => r15Run(m, r15World(), { file: R15_SCRATCH + '\\x.js.' }) === 'NO');
+mutantCatches('R15 G11 dot-segment exclusion removed',
+  "if (segs.some((s) => s.startsWith('.'))) return true;", '',
+  (m) => r15Run(m, r15World(), { file: R15_SCRATCH + '\\.hidden\\x.js' }) === 'NO');
+mutantCatches('R15 G11 never-approvable names removed',
+  "if (R15_EXCLUDED_NAMES.indexOf(base) !== -1) return true;", '',
+  (m) => r15Run(m, r15World(), { file: R15_SCRATCH + '\\bunfig.toml' }) === 'NO');
+mutantCatches('R15 scratch protected/ exclusion removed (the 13a directory is granted)',
+  "if (rel.split('/')[0].toLowerCase() === 'protected') return null;", '',
+  (m) => r15Run(m, r15World(), { file: R15_SCRATCH + '\\protected\\manifest.json' }) === 'NO');
+mutantCatches('R15 scratch protected comparison made case-sensitive (PROTECTED/ is granted)',
+  "rel.split('/')[0].toLowerCase() === 'protected'", "rel.split('/')[0] === 'protected'",
+  (m) => r15Run(m, r15World(), { file: R15_SCRATCH + '\\PROTECTED\\manifest.json' }) === 'NO');
+mutantCatches('R15 scratch directory link check removed (pt-<id> a junction)',
+  '!lst.isDirectory() || lst.isSymbolicLink() ||', '!lst.isDirectory() ||',
+  (m) => r15Run(m, r15World({ lstat: (n) => (/\/pt-wx-1$/.test(n) ? { isFile: () => false, isDirectory: () => true, isSymbolicLink: () => true, nlink: 1 } : null) }), { file: R15_SCRATCH + '\\x.js' }) === 'NO');
+mutantCatches('R15 evidence list widened to review.md',
+  "rel === 'work/' + id + '/qa.log') return", "rel === 'work/' + id + '/qa.log' || rel === 'work/' + id + '/review.md') return",
+  (m) => r15Run(m, r15World({ brief: r15Brief({ entries: null }) }), { file: SLOT_A + '\\work\\wx-1\\review.md' }) === 'NO');
+mutantCatches('R15 M1 ambiguous -> deny flipped to pass (an unresolvable slot form is trusted)',
+  "if (c.kind === 'ambiguous') return r15LockDeny('?', mode);", "if (c.kind === 'ambiguous') continue;",
+  (m) => r15Run(m, r15World({ pd: '\\\\localhost\\c$\\Users\\Owner\\Documents\\Project\\pt-wt-worker-a' }), { tool: 'Bash', mode: 'auto', hook_cwd: MAIN, cwd: MAIN }) === 'DENY');
+mutantCatches('R15 M1 only the project directory is a lock candidate (the hook cwd is ignored)',
+  'for (const raw of [havePd ? pd : null, haveHc ? hc : null]) {', 'for (const raw of [havePd ? pd : null]) {',
+  (m) => r15Run(m, r15World({ pd: MAIN }), { tool: 'Bash', mode: 'auto' }) === 'DENY');
+mutantCatches('R15 M1 both-missing -> ambiguous removed',
+  'if (!havePd && !haveHc) return r15LockDeny(\'?\', mode);', '',
+  (m) => r15Run(m, r15World({ pd: false }), { tool: 'Bash', mode: 'auto', hook_cwd: null }) === 'DENY');
+mutantCatches('R15 M2 detached HEAD no longer passes',
+  'if (R15_DETACHED_RE.test(head)) continue;', '',
+  (m) => r15Run(m, r15World({ head: 'a'.repeat(40) }), { tool: 'Bash', mode: 'auto' }) === 'NO');
+mutantCatches('R15 M3 "unknown -> Manual" flipped (a missing record counts as Auto)',
+  'auto = !!ctx && r15IsAutoBrief(ctx.briefText);', 'auto = !ctx || r15IsAutoBrief(ctx.briefText);',
+  (m) => r15Run(m, r15World({ rec: { exists: false } }), { tool: 'Bash', mode: 'auto' }) === 'DENY');
+mutantCatches('R15 M3 Auto-brief check removed (every task counts as Auto)',
+  'auto = !!ctx && r15IsAutoBrief(ctx.briefText);', 'auto = !!ctx;',
+  (m) => r15Run(m, r15World(), { tool: 'Bash', mode: 'auto' }) === 'DENY');
+mutantCatches('R15 worker-mode line check loosened (a second worker-mode line is tolerated)',
+  "return named.length === 1 && named[0] === R15_WORKER_MODE_AUTO;", "return named.indexOf(R15_WORKER_MODE_AUTO) !== -1;",
+  (m) => r15Run(m, r15World({ brief: r15Brief({ auto: true, tail: ['<!-- worker-mode: manual -->'] }) }), { tool: 'Bash', mode: 'auto' }) === 'DENY');
+mutantCatches('R15 ME deny flipped to pass (a lock exception is trusted)',
+  "  } catch (e) {\n    return r15LockDeny('?', mode);\n  }\n}\n// §2.3 G2-G12", "  } catch (e) {\n    return null;\n  }\n}\n// §2.3 G2-G12",
+  (m) => r15Run(m, r15World({ pdThrows: true }), { tool: 'Bash', mode: 'auto' }) === 'DENY');
+mutantCatches('R15 mode lock skipped for file tools (only Bash locked)',
+  '      const lock = r15Lock(input, deps);\n      if (lock) return lock;', '',
+  (m) => r15Run(m, r15World(), { tool: 'Edit', mode: 'auto' }) === 'DENY');
+mutantCatches('R15 mode lock skipped for Bash / PowerShell',
+  '    const r15Denial = r15Lock(input, gateDeps);\n    if (r15Denial) return r15Denial;', '',
+  (m) => r15Run(m, r15World(), { tool: 'Bash', mode: 'auto' }) === 'DENY');
+mutantCatches('R15 grant exception turned into a deny (never deny from the grant path)',
+  "  } catch (e) {\n    return null;\n  }\n}\n\nfunction fileToolDecision", "  } catch (e) {\n    return { decision: 'deny', reason: 'x' };\n  }\n}\n\nfunction fileToolDecision",
+  (m) => r15Run(m, r15World({ recordThrows: true }), {}) === 'NO');
+mutantCatches('R15 gated on the own key permission_mode removed (a direct decide() call is locked)',
+  "if (Object.prototype.hasOwnProperty.call(input, 'permission_mode')) {\n    const r15Denial", "if (true) {\n    const r15Denial",
+  (m) => r15Run(m, r15World(), { tool: 'Bash', noMode: true }) === 'NO');
+mutantCatches('runCli drops permission_mode (decide() sees null)',
+  "const permissionMode = typeof input.permission_mode === 'string' ? input.permission_mode : null;", 'const permissionMode = null;',
+  (m) => { let seen = null; m.runCli(JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: R15_X }, cwd: SLOT_A, permission_mode: 'default' }), { decideFn(i) { seen = i; return { decision: 'allow', reason: 'x' }; } }); return !!seen && seen.permission_mode === 'default'; });
+mutantCatches('runCli drops hook_cwd',
+  "const hookCwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : null;", 'const hookCwd = null;',
+  (m) => { let seen = null; m.runCli(JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: R15_X }, cwd: SLOT_A, permission_mode: 'default' }), { decideFn(i) { seen = i; return { decision: 'allow', reason: 'x' }; } }); return !!seen && seen.hook_cwd === SLOT_A; });
+mutantCatches('runCli maps a grant for any tool (Bash granted)',
+  "(tool !== 'Edit' && tool !== 'Write' && tool !== 'MultiEdit')) return block(", 'false) return block(',
+  (m) => m.runCli(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'git status' }, cwd: SLOT_A, permission_mode: 'default' }), { decideFn() { return { decision: 'grant', reason: 'x' }; } }).code === 2);
+mutantCatches('runCli grant JSON gains updatedInput',
+  "permissionDecision: 'allow', permissionDecisionReason: r.reason } }) + '\\n',\n        stderr: ''\n      };\n    }\n    if (!r ||", "permissionDecision: 'allow', permissionDecisionReason: r.reason }, updatedInput: {} }) + '\\n',\n        stderr: ''\n      };\n    }\n    if (!r ||",
+  (m) => { const o = m.runCli(JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: R15_X }, cwd: SLOT_A, permission_mode: 'default' }), { decideFn() { return { decision: 'grant', reason: 'x' }; } }); return o.stdout.indexOf('updatedInput') === -1; });
+mutantCatches('R15 parser: duplicate entries tolerated',
+  'if (new Set(entries).size !== entries.length) return null;', '',
+  (m) => r15Run(m, r15World({ brief: r15Brief({ entries: ['qa/x_offline.js', 'qa/x_offline.js'] }) }), {}) === 'NO');
+mutantCatches('R15 parser: the 64-entry cap removed',
+  'entries.length > R15_MAX_ENTRIES', 'false',
+  (m) => { const many = []; for (let i = 0; i < 65; i += 1) many.push('qa/e' + i + '_offline.js'); return r15Run(m, r15World({ brief: r15Brief({ entries: many, land: many }) }), { file: SLOT_A + '\\qa\\e0_offline.js' }) === 'NO'; });
+mutantCatches('R15 parser: protected-scope entries no longer excluded',
+  "return Array.isArray(protectedEntries) && protectedEntries.some((e) => String(e).toLowerCase() === relLower);", 'return false;',
+  (m) => r15Run(m, r15World({ brief: r15Brief({ prot: ['qa/y_offline.js'] }) }), {}) === 'NO');
+mutantCatches('R15 parser: the whole-line marker requirement removed (a marker with trailing text is accepted)',
+  "const bi = lines.indexOf(R15_BEGIN);\n  const ei = lines.indexOf(R15_END);", "const bi = lines.findIndex((l) => l.indexOf(R15_BEGIN) === 0);\n  const ei = lines.findIndex((l) => l.indexOf(R15_END) === 0);",
+  (m) => r15Run(m, r15World({ brief: r15Brief().replace('<!-- auto-edit-scope:begin -->', '<!-- auto-edit-scope:begin --> x') }), {}) === 'NO');
+
 e1Finish();
 
 if (failures) {

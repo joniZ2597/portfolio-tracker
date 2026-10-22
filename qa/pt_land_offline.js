@@ -1115,6 +1115,46 @@ heavy('CDX-5: the CLI prints an auditWarning to stderr on an otherwise-successfu
   });
 })();
 
+// ── PL-56 (work/worker-exec-permissions-1/brief.md §3.3 (b)): the guard's copy of the land-scope parser equals the land tool's parseLandScope ──
+// AH_HOOK_PATH is an E1 override variable of this suite, so loading the guard from it forces a full replay (the same override shape as AH).
+(function plLandScopeParity() {
+  const GUARD_PATH = process.env.AH_HOOK_PATH
+    ? path.resolve(process.env.AH_HOOK_PATH)
+    : path.join(ROOT, '.claude', 'hooks', 'pretooluse-guard.js');
+  test('PL-56: parity - the guard\'s land-scope parser returns exactly what parseLandScope returns on 8+ shared fixtures', () => {
+    const TOOL = require(REAL_TOOL_PATH);
+    const guardMod = require(GUARD_PATH);
+    assert.strictEqual(typeof guardMod.r15ParseLandScope, 'function', 'r15ParseLandScope is not exported by the guard');
+    assert.strictEqual(typeof TOOL.parseLandScope, 'function', 'parseLandScope is not exported by the land tool');
+    const B = '<!-- land-scope:begin -->';
+    const E = '<!-- land-scope:end -->';
+    const fixtures = {
+      'one block': '# b\n' + B + '\na/b.js\nc/d.js\n' + E + '\n',
+      'two blocks': B + '\na\n' + E + '\n' + B + '\nb\n' + E + '\n',
+      'no block': '# brief\nno scope here\n',
+      'empty block': B + '\n\n   \n' + E + '\n',
+      'bullets and backticks': B + '\n- `a/b.js`\n* c/d.js\n  -  e/f.js  \n' + E + '\n',
+      'CRLF': B + '\r\na/b.js\r\nc/d.js\r\n' + E + '\r\n',
+      'end before begin': E + '\na\n' + B + '\n',
+      'prose mention plus block': 'Use ' + B + ' to start.\n' + B + '\na\n' + E + '\n',
+      'begin only': B + '\na\n',
+      'end only': 'a\n' + E + '\n',
+      'lone CR separators': B + '\ra/b.js\rc/d.js\r' + E + '\r',
+      'same-line markers': B + ' a/b.js ' + E + '\n',
+      'not a string': undefined
+    };
+    let compared = 0;
+    for (const k of Object.keys(fixtures)) {
+      assert.deepStrictEqual(guardMod.r15ParseLandScope(fixtures[k]), TOOL.parseLandScope(fixtures[k]), 'parser output differs on fixture "' + k + '"');
+      compared += 1;
+    }
+    assert.ok(compared >= 8, 'fewer than 8 shared fixtures');
+    assert.deepStrictEqual(guardMod.r15ParseLandScope(fixtures['one block']), { paths: ['a/b.js', 'c/d.js'] }, 'control: the valid block parses');
+    const prot = '<!-- protected-scope:begin -->\n- `x/y.js`\n<!-- protected-scope:end -->\n';
+    assert.deepStrictEqual(guardMod.r15ParseProtectedScope(prot), TOOL.parseProtectedScope(prot), 'the protected-scope parser differs');
+  });
+})();
+
 // ── AH-20 (hook R12) - see qa/auto_mode_hardening_offline.js for the pretooluse-guard.js rows ──
 // (kept in that suite per repo convention: hook-decision rows live with the hook's other AH-* rows.)
 
