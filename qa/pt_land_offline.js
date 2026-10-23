@@ -1162,7 +1162,8 @@ heavy('CDX-5: the CLI prints an auditWarning to stderr on an otherwise-successfu
 //    trivially kill it, then a specific should-refuse case must now succeed, or the refusal
 //    reason must change. ──────────────────────────────────────────────────────────────────
 function withMutantSource(mutateFn) {
-  const src = fs.readFileSync(REAL_TOOL_PATH, 'utf8');
+  // EOL-agnostic: the anchors below are written with CRLF (the working-tree form); a candidate or checkout that carries LF is normalised first.
+  const src = fs.readFileSync(REAL_TOOL_PATH, 'utf8').replace(/\r?\n/g, '\r\n');
   const mutated = mutateFn(src);
   assert.notStrictEqual(mutated, src, 'mutant must actually change the source');
   const tmpFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ptland-mut-')), 'pt-land.js');
@@ -1174,6 +1175,191 @@ function withMutantSource(mutateFn) {
 
 
 
+
+// ── PL-57..PL-62 (work/worker-permission-profile-1/brief.md §2.2 / §3.3): task-start and adopt create the task's own scratch directory ──
+// <realpath(tmpdir)>/pt-<id>, so the unchanged R15 scratch grant applies from the first write. A scratch problem never fails the verb. Hermetic: every row
+// injects the tmpdir (and, for the mkdir rows, the mkdir function) through opts, so no row touches the real os.tmpdir().
+(function plScratch() {
+  const NOW = '2026-10-23T12:00:00.000Z';
+  const realOf = (p) => fs.realpathSync.native(p);
+  const LINE_NOT_READY = /^scratch: NOT READY .+ \([A-Z_]{1,20}\); scratch writes will prompt$/;
+  function mk(label, toolSource) {
+    const fx = buildFixture({ taskShort: 'sc1', slotACommit: false, withSlotB: false, toolSource });
+    const root = path.join(fx.tmp, 'tmproot-' + label);
+    fs.mkdirSync(root, { recursive: true });
+    return { fx, root, S: path.join(realOf(root), 'pt-sc1') };
+  }
+  function runStart(c, extra) { return c.fx.requireTool().runTaskStart(Object.assign({ cwd: c.fx.canon, task: c.fx.task, tmpDir: () => c.root }, extra || {})); }
+  function runAdopt(c, extra) {
+    const T = c.fx.requireTool();
+    const req = T.runAdoptRequest({ cwd: c.fx.canon, task: c.fx.task, now: NOW });
+    assert.strictEqual(req.ok, true, JSON.stringify(req));
+    fs.writeFileSync(path.join(c.fx.commonDir, 'pt-adopt-approval'), 'ADOPT ' + c.fx.task + ' ' + req.base + ' ' + req.startedAt + '\n');
+    return T.runAdopt(Object.assign({ cwd: c.fx.canon, task: c.fx.task, now: NOW, tmpDir: () => c.root }, extra || {}));
+  }
+  const hasRecord = (c) => fs.existsSync(path.join(c.fx.commonDir, 'pt-task', encodeURIComponent('sc1') + '.json'));
+  const VERBS = [['task-start', runStart], ['adopt', runAdopt]];
+
+  for (const [verb, run] of VERBS) {
+    heavy('PL-57 ' + verb + ': S absent -> S is created (not recursive), the verb result carries "scratch: created <S>", the record is written', () => {
+      const c = mk('a1');
+      try {
+        const calls = [];
+        const r = run(c, { mkdir: function (p) { calls.push(Array.prototype.slice.call(arguments)); return fs.mkdirSync.apply(fs, arguments); } });
+        assert.strictEqual(r.ok, true, JSON.stringify(r));
+        assert.strictEqual(r.scratchLine, 'scratch: created ' + c.S);
+        assert.ok(fs.lstatSync(c.S).isDirectory() && !fs.lstatSync(c.S).isSymbolicLink(), 'S is a real directory');
+        assert.deepStrictEqual(fs.readdirSync(c.S), [], 'S is empty');
+        assert.strictEqual(calls.length, 1, 'exactly one mkdir call');
+        assert.deepStrictEqual(calls[0], [c.S], 'mkdir is called with the path only (not recursive)');
+        assert.strictEqual(hasRecord(c), true, 'the record is written');
+      } finally { c.fx.cleanup(); }
+    });
+    heavy('PL-58 ' + verb + ': S an existing real directory -> no change, "scratch: present <S>"; nothing in it is touched', () => {
+      const c = mk('p1');
+      try {
+        fs.mkdirSync(c.S);
+        fs.writeFileSync(path.join(c.S, 'keep.txt'), 'keep\n');
+        const r = run(c);
+        assert.strictEqual(r.ok, true, JSON.stringify(r));
+        assert.strictEqual(r.scratchLine, 'scratch: present ' + c.S);
+        assert.deepStrictEqual(fs.readdirSync(c.S), ['keep.txt']);
+        assert.strictEqual(fs.readFileSync(path.join(c.S, 'keep.txt'), 'utf8'), 'keep\n');
+      } finally { c.fx.cleanup(); }
+    });
+    heavy('PL-59 ' + verb + ': S a file -> NOT READY (NOT_A_DIRECTORY), the file is unchanged, the verb result and the record are unchanged', () => {
+      const c = mk('f1');
+      try {
+        fs.writeFileSync(c.S, 'not a directory\n');
+        const r = run(c);
+        assert.strictEqual(r.ok, true, JSON.stringify(r));
+        assert.strictEqual(r.exitCode, 0);
+        assert.match(r.scratchLine, LINE_NOT_READY);
+        assert.ok(r.scratchLine.indexOf('NOT READY ' + c.S + ' (NOT_A_DIRECTORY);') !== -1, r.scratchLine);
+        assert.strictEqual(fs.readFileSync(c.S, 'utf8'), 'not a directory\n');
+        assert.strictEqual(hasRecord(c), true);
+      } finally { c.fx.cleanup(); }
+    });
+    heavy('PL-59 ' + verb + ': S a junction / link to another directory -> NOT READY (LINK), the link and its target are unchanged, the verb is ok', () => {
+      const c = mk('j1');
+      try {
+        const target = path.join(c.root, 'link-target');
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, c.S, 'junction');
+        const r = run(c);
+        assert.strictEqual(r.ok, true, JSON.stringify(r));
+        assert.match(r.scratchLine, LINE_NOT_READY);
+        assert.ok(r.scratchLine.indexOf('(LINK)') !== -1, r.scratchLine);
+        assert.ok(fs.lstatSync(c.S).isSymbolicLink(), 'S is still a link');
+        assert.deepStrictEqual(fs.readdirSync(target), [], 'the target is untouched');
+        assert.strictEqual(hasRecord(c), true);
+      } finally { c.fx.cleanup(); }
+    });
+    heavy('PL-60 ' + verb + ': mkdir throws / the tmpdir is missing / the tmpdir parent is a file -> NOT READY, the verb is ok, nothing else changes', () => {
+      for (const [label, extraOf, code] of [
+        ['mkdir throws EACCES', () => ({ mkdir: () => { const e = new Error('planted'); e.code = 'EACCES'; throw e; } }), 'EACCES'],
+        ['mkdir throws without a code', () => ({ mkdir: () => { throw new Error('planted'); } }), 'ERROR'],
+        ['the tmpdir is missing', (cc) => ({ tmpDir: () => path.join(cc.root, 'missing', 'deeper') }), 'ENOENT']
+      ]) {
+        const c = mk('m' + code);
+        try {
+          const r = run(c, extraOf(c));
+          assert.strictEqual(r.ok, true, label + ': ' + JSON.stringify(r));
+          assert.strictEqual(r.exitCode, 0, label);
+          assert.match(r.scratchLine, LINE_NOT_READY, label);
+          assert.ok(r.scratchLine.indexOf('(' + code + ');') !== -1, label + ': ' + r.scratchLine);
+          assert.strictEqual(hasRecord(c), true, label);
+          assert.strictEqual(fs.existsSync(path.join(c.root, 'missing')), false, label + ': no directory was created');
+        } finally { c.fx.cleanup(); }
+      }
+      const c2 = mk('pf');
+      try {
+        const parentFile = path.join(c2.root, 'parent-file');
+        fs.writeFileSync(parentFile, 'x\n');
+        const r = run(c2, { tmpDir: () => parentFile });
+        assert.strictEqual(r.ok, true, JSON.stringify(r));
+        assert.match(r.scratchLine, LINE_NOT_READY);
+        assert.strictEqual(fs.readFileSync(parentFile, 'utf8'), 'x\n');
+      } finally { c2.fx.cleanup(); }
+    });
+    heavy('PL-61 ' + verb + ': S is derived from the real path of the tmpdir (a tmpdir reached through a junction)', () => {
+      const c = mk('r1');
+      try {
+        const real = path.join(c.root, 'real-tmp');
+        const alias = path.join(c.root, 'alias-tmp');
+        fs.mkdirSync(real);
+        fs.symlinkSync(real, alias, 'junction');
+        const r = run(c, { tmpDir: () => alias });
+        assert.strictEqual(r.ok, true, JSON.stringify(r));
+        assert.strictEqual(r.scratchLine, 'scratch: created ' + path.join(realOf(alias), 'pt-sc1'));
+        assert.ok(fs.lstatSync(path.join(real, 'pt-sc1')).isDirectory());
+      } finally { c.fx.cleanup(); }
+    });
+  }
+
+  heavy('PL-62: the CLI prints exactly one scratch: line for task-start and for adopt, after the unchanged existing lines; exit 0', () => {
+    const c = mk('c1');
+    try {
+      const toolPath = path.join(c.fx.canon, '.claude', 'hooks', 'pt-land.js');
+      const env = {};
+      for (const k of Object.keys(process.env)) if (!/^GIT_/i.test(k)) env[k] = process.env[k];
+      env.TEMP = c.root; env.TMP = c.root; env.TMPDIR = c.root;
+      const r = spawnSync(process.execPath, [toolPath, 'task-start', c.fx.task], { cwd: c.fx.canon, encoding: 'utf8', env, windowsHide: true });
+      assert.strictEqual(r.status, 0, r.stderr);
+      const lines = r.stdout.split('\n').filter((l) => /^\s*scratch: /.test(l));
+      assert.strictEqual(lines.length, 1, r.stdout);
+      assert.strictEqual(lines[0], 'scratch: created ' + c.S);
+      assert.match(r.stdout, /^TASK-START task\/sc1\n {2}base: {6}[0-9a-f]{40}\n {2}main: {6}[0-9a-f]{40}\n {2}startedAt: \S+\n {2}brief sha256: [0-9a-f]{64}\n {2}record: {4}\S+\n {2}step 13: {3}node qa\/guard_integrity_check\.js --task task\/sc1 --root \S+\nscratch: created /);
+      assert.ok(fs.lstatSync(c.S).isDirectory());
+    } finally { c.fx.cleanup(); }
+  });
+
+  // ── mutants (each planted in the production source, committed into a fresh fixture) ──
+  heavy('MUT-WPP-1: mkdir made recursive -> the path-only mkdir call is no longer made (caught)', () => {
+    const mutSrc = withMutantSource((s) => s.replace('mkdirFn(S);', 'mkdirFn(S, { recursive: true });'));
+    const c = mk('w1', mutSrc);
+    try {
+      const calls = [];
+      const r = runStart(c, { mkdir: function (p) { calls.push(Array.prototype.slice.call(arguments)); return fs.mkdirSync.apply(fs, arguments); } });
+      assert.strictEqual(r.ok, true);
+      assert.notDeepStrictEqual(calls[0], [c.S], 'the mutant passes options to mkdir, which PL-57 rejects');
+    } finally { c.fx.cleanup(); }
+  });
+  for (const [verb, run, anchor] of [['task-start', runStart, 'const scratchStart = ensureTaskScratch(task, opts);'], ['adopt', runAdopt, 'const scratchAdopt = ensureTaskScratch(task, opts);']]) {
+    heavy('MUT-WPP-2 ' + verb + ': NOT READY made to fail the verb -> the verb result changes (caught)', () => {
+      const varName = anchor.split(' ')[1];
+      const mutSrc = withMutantSource((s) => s.replace(anchor, anchor + "\r\n    if (" + varName + ".state === 'not-ready') return { ok: false, exitCode: 1, reason: 'scratch' };"));
+      const m = mk('w2m', mutSrc);
+      try {
+        fs.writeFileSync(m.S, 'not a directory\n');
+        const r = run(m);
+        assert.strictEqual(r.ok, false, 'the mutant fails the verb, which PL-59 rejects');
+      } finally { m.fx.cleanup(); }
+    });
+  }
+  heavy('MUT-WPP-3: S derived from the unrealpathed tmpdir -> the reported path differs (caught)', () => {
+    const mutSrc = withMutantSource((s) => s.replace("S = path.join(fs.realpathSync.native(tmp), 'pt-' + id);", "S = path.join(tmp, 'pt-' + id);"));
+    const c = mk('w3', mutSrc);
+    try {
+      const real = path.join(c.root, 'real-tmp');
+      const alias = path.join(c.root, 'alias-tmp');
+      fs.mkdirSync(real);
+      fs.symlinkSync(real, alias, 'junction');
+      const r = runStart(c, { tmpDir: () => alias });
+      assert.notStrictEqual(r.scratchLine, 'scratch: created ' + path.join(realOf(alias), 'pt-sc1'), 'the mutant reports the alias path, which PL-61 rejects');
+    } finally { c.fx.cleanup(); }
+  });
+  heavy('MUT-WPP-4: S deleted when present -> the content of S is gone (caught)', () => {
+    const mutSrc = withMutantSource((s) => s.replace("return { state: 'present', dir: S, line: 'scratch: present ' + S };", "fs.rmSync(S, { recursive: true, force: true }); return { state: 'present', dir: S, line: 'scratch: present ' + S };"));
+    const c = mk('w4', mutSrc);
+    try {
+      fs.mkdirSync(c.S);
+      fs.writeFileSync(path.join(c.S, 'keep.txt'), 'keep\n');
+      runStart(c);
+      assert.strictEqual(fs.existsSync(path.join(c.S, 'keep.txt')), false, 'the mutant deletes S, which PL-58 rejects');
+    } finally { c.fx.cleanup(); }
+  });
+})();
 
 // ── PL-22..31: cleanup (work/worker-continuous-flow/brief.md §5/§8 K1-K9, AL-4) ──────────
 (function plCleanup() {

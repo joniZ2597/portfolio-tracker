@@ -1850,8 +1850,14 @@ const GU2_ASK_ADDED = [
 // work/worker-exec-permissions-1/brief.md §2.1 / §3.2: exactly one entry added to permissions.allow, the exact heavy-run process check (no wildcard).
 const WEP_WMIC_RULE = 'Bash(wmic process where "name=\'node.exe\'" get ProcessId,CommandLine)';
 const WEP_ALLOW_ADDED = [WEP_WMIC_RULE];
+// work/worker-permission-profile-1/brief.md §2.1 / §3.1 (declared re-baseline): two force-staging deny rules and four read-only Claude in Chrome allow rules
+// (read_network_requests is excluded by Owner ruling D-4; no server-wide rule).
+const WPP_DENY_ADDED = ['Bash(git add -f*)', 'Bash(git add --force*)'];
+const WPP_ALLOW_ADDED = [
+  'mcp__claude-in-chrome__read_page', 'mcp__claude-in-chrome__get_page_text', 'mcp__claude-in-chrome__find', 'mcp__claude-in-chrome__read_console_messages'
+];
 const EXPECT_ALLOW = [...BASE_ALLOW, ...RC5_ALLOW_ADDED, ...WCF_ALLOW_ADDED, ...OAG_ALLOW_ADDED]
-  .filter((x) => GU2_ALLOW_REMOVED.indexOf(x) === -1).concat(GU2_ALLOW_ADDED).concat(WEP_ALLOW_ADDED);
+  .filter((x) => GU2_ALLOW_REMOVED.indexOf(x) === -1).concat(GU2_ALLOW_ADDED).concat(WEP_ALLOW_ADDED).concat(WPP_ALLOW_ADDED);
 const HOOK_COMMAND = 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/pretooluse-guard.js"';
 // r10 R10-6: the Owner-applied matcher extends coverage to the file tools.
 const R10_MATCHER = 'Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit';
@@ -1870,7 +1876,7 @@ const R11_WRITE_REMOVED_TIER = {
   'Write(./qa/run-offline.js)': 'ask', 'Write(./work/*/brief.md)': 'ask', 'Write(./netlify.toml)': 'ask',
   'Write(./package.json)': 'ask', 'Write(./package-lock.json)': 'ask'
 };
-const EXPECT_DENY_R11 = [...BASE_DENY, ...ADD_DENY].filter((x) => R11_WRITE_REMOVED.indexOf(x) === -1);
+const EXPECT_DENY_R11 = [...BASE_DENY, ...ADD_DENY].filter((x) => R11_WRITE_REMOVED.indexOf(x) === -1).concat(WPP_DENY_ADDED);
 const EXPECT_ASK_R11 = EXPECT_ASK.filter((x) => R11_WRITE_REMOVED.indexOf(x) === -1).concat(GU2_ASK_ADDED);
 
 function sameSet(a, b) {
@@ -1972,7 +1978,7 @@ check('AH-8 control: §5-applied fixture has no problems', settingsProblems(appl
   check('AH-8 GU-2 anchors: the added/removed lists have 7 / 2 / 11 entries with no duplicates and EXPECT_* counts follow',
     GU2_ALLOW_ADDED.length === 7 && GU2_ALLOW_REMOVED.length === 2 && GU2_ASK_ADDED.length === 11 &&
     new Set(GU2_ASK_ADDED).size === 11 && new Set(GU2_ALLOW_ADDED).size === 7 &&
-    EXPECT_ALLOW.length === BASE_ALLOW.length + RC5_ALLOW_ADDED.length + WCF_ALLOW_ADDED.length + OAG_ALLOW_ADDED.length - 2 + 7 + WEP_ALLOW_ADDED.length &&
+    EXPECT_ALLOW.length === BASE_ALLOW.length + RC5_ALLOW_ADDED.length + WCF_ALLOW_ADDED.length + OAG_ALLOW_ADDED.length - 2 + 7 + WEP_ALLOW_ADDED.length + WPP_ALLOW_ADDED.length &&
     GU2_ALLOW_REMOVED.every((x) => BASE_ALLOW.indexOf(x) !== -1));
 }
 // WEP planted negatives (work/worker-exec-permissions-1/brief.md §3.2, N95 / N96); the positive control is the AH-8 control row above.
@@ -1996,6 +2002,27 @@ check('AH-8 control: §5-applied fixture has no problems', settingsProblems(appl
     const m = clone(appliedSettings()); m.permissions.allow = m.permissions.allow.filter((x) => x !== WEP_WMIC_RULE); m.permissions[tier].push(WEP_WMIC_RULE); return m;
   }));
   check('AH-8 WEP anchors: the added list is exactly the one exact wmic rule, with no wildcard', WEP_ALLOW_ADDED.length === 1 && WEP_ALLOW_ADDED[0] === WEP_WMIC_RULE && WEP_WMIC_RULE.indexOf('*') === -1);
+}
+// WPP planted negatives (work/worker-permission-profile-1/brief.md §3.1); the positive control is the AH-8 control row above.
+{
+  const wppNeg = (label, mutants) => check('AH-8 planted negative (WPP) ' + label + ': every mutated fixture is rejected',
+    mutants.length > 0 && mutants.every((m) => settingsProblems(m).length > 0));
+  const withAllow = (rule) => { const m = clone(appliedSettings()); m.permissions.allow.push(rule); return m; };
+  wppNeg('1 a broad git add allow rule', ['Bash(git add *)', 'Bash(git add -- *)', 'Bash(git add)', 'Bash(git add -A)'].map(withAllow));
+  wppNeg('2 a server-wide or wildcard Chrome rule', ['mcp__claude-in-chrome__*', 'mcp__claude-in-chrome'].map(withAllow));
+  wppNeg('3 an acting Chrome tool in allow', ['navigate', 'javascript_tool', 'computer', 'read_network_requests', 'tabs_context_mcp', 'form_input'].map((t) => withAllow('mcp__claude-in-chrome__' + t)));
+  wppNeg('4 any one of the four Chrome rules moved from allow to ask', WPP_ALLOW_ADDED.map((rule) => {
+    const m = clone(appliedSettings()); m.permissions.allow = m.permissions.allow.filter((x) => x !== rule); m.permissions.ask.push(rule); return m;
+  }));
+  wppNeg('5 any one of the four Chrome rules missing', WPP_ALLOW_ADDED.map((rule) => {
+    const m = clone(appliedSettings()); m.permissions.allow = m.permissions.allow.filter((x) => x !== rule); return m;
+  }));
+  wppNeg('6 either force-staging deny rule removed', WPP_DENY_ADDED.map((rule) => {
+    const m = clone(appliedSettings()); m.permissions.deny = m.permissions.deny.filter((x) => x !== rule); return m;
+  }));
+  check('AH-8 WPP anchors: the added lists are 2 deny / 4 allow rules, no duplicates, no wildcard server rule, and no read_network_requests',
+    WPP_DENY_ADDED.length === 2 && WPP_ALLOW_ADDED.length === 4 && new Set(WPP_ALLOW_ADDED).size === 4 &&
+    WPP_ALLOW_ADDED.every((r) => /^mcp__claude-in-chrome__[a-z_]+$/.test(r)) && WPP_ALLOW_ADDED.every((r) => r.indexOf('read_network_requests') === -1));
 }
 // AH-8-W (R11 Amendment 1, A1-1): the twelve Write(...) rules are gone, their Edit(...) twins stay in tier, and
 // no re-added Write(...), dropped Edit(...), tier-moved Edit(...) or allow-listed one of the 12 paths is accepted.
@@ -2995,7 +3022,11 @@ const AH23_FORBIDDEN_ALLOW_SUBSTRINGS = [
   'Bash(wmic', 'Bash(git -C',
   // owner-one-action-gates: protected-commit mutates and is record-gated - it stays prompting,
   // never allow-listed, same tier as land/push themselves.
-  'pt-land.js protected-commit'
+  'pt-land.js protected-commit',
+  // work/worker-permission-profile-1 §3.1: staging is granted by the R16 hook rule, never by an allow rule; only the four read-only Chrome tools are allowed.
+  'Bash(git add', '__tabs_context_mcp', '__read_network_requests', 'mcp__claude-in-chrome__navigate', '__computer', '__javascript_tool', '__form_input',
+  '__browser_batch', '__file_upload', '__upload_image', '__tabs_create_mcp', '__tabs_close_mcp', '__shortcuts_execute', '__resize_window',
+  '__switch_browser', '__select_browser', '__gif_creator'
 ];
 // The one pre-existing, narrow, read-only exception: 'git branch --show-current' prints the
 // current branch name - no mutation, no wildcard - and predates this brief by several ARCs.
@@ -3015,6 +3046,14 @@ check('AH-23 control: a planted forbidden entry is detected',
   ah23ForbiddenHits([...AH23_REAL_ALLOW, 'Bash(git push --force*)']).length > 0);
 check('AH-23 WEP: planted wmic / git -C allow entries are detected (call create, wildcard, git -C status)',
   ['Bash(wmic process call create x)', 'Bash(wmic *)', 'Bash(git -C x status)'].every((rule) => ah23ForbiddenHits([...AH23_REAL_ALLOW, rule]).length > 0));
+// WPP: no server-wide or wildcard MCP allow rule, and no staging or acting Chrome rule.
+const ah23ChromeWide = (allowList) => allowList.filter((rule) => rule === 'mcp__claude-in-chrome' || /__\*$/.test(rule));
+check('AH-23 WPP: the real allow list has no server-wide or "__*" MCP rule', ah23ChromeWide(AH23_REAL_ALLOW).length === 0);
+check('AH-23 WPP control: planted server-wide / wildcard Chrome rules are detected',
+  ['mcp__claude-in-chrome', 'mcp__claude-in-chrome__*', 'mcp__other__*'].every((rule) => ah23ChromeWide([...AH23_REAL_ALLOW, rule]).length > 0));
+check('AH-23 WPP control: planted git add / acting Chrome allow rules are detected',
+  ['Bash(git add *)', 'Bash(git add -- x)', 'mcp__claude-in-chrome__navigate', 'mcp__claude-in-chrome__javascript_tool', 'mcp__claude-in-chrome__computer',
+    'mcp__claude-in-chrome__read_network_requests', 'mcp__claude-in-chrome__tabs_context_mcp', 'mcp__claude-in-chrome__form_input'].every((rule) => ah23ForbiddenHits([...AH23_REAL_ALLOW, rule]).length > 0));
 
 // Differential: over a representative corpus (every AH-1 ALLOWED command, every R12 form/deny
 // form, and the R13 risky/control forms), the pre-R13 and post-R13 hook disagree on a decision
@@ -4340,8 +4379,9 @@ mutantCatches('runCli drops permission_mode (decide() sees null)',
 mutantCatches('runCli drops hook_cwd',
   "const hookCwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : null;", 'const hookCwd = null;',
   (m) => { let seen = null; m.runCli(JSON.stringify({ tool_name: 'Edit', tool_input: { file_path: R15_X }, cwd: SLOT_A, permission_mode: 'default' }), { decideFn(i) { seen = i; return { decision: 'allow', reason: 'x' }; } }); return !!seen && seen.hook_cwd === SLOT_A; });
+// WPP: this planted negative is narrowed, not removed - runCli now maps a Bash grant only with the R16 reason prefix (AH-31 mutants below).
 mutantCatches('runCli maps a grant for any tool (Bash granted)',
-  "(tool !== 'Edit' && tool !== 'Write' && tool !== 'MultiEdit')) return block(", 'false) return block(',
+  "(!fileGrant && !stageGrant)) return block(", 'false) return block(',
   (m) => m.runCli(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'git status' }, cwd: SLOT_A, permission_mode: 'default' }), { decideFn() { return { decision: 'grant', reason: 'x' }; } }).code === 2);
 mutantCatches('runCli grant JSON gains updatedInput',
   "permissionDecision: 'allow', permissionDecisionReason: r.reason } }) + '\\n',\n        stderr: ''\n      };\n    }\n    if (!r ||", "permissionDecision: 'allow', permissionDecisionReason: r.reason }, updatedInput: {} }) + '\\n',\n        stderr: ''\n      };\n    }\n    if (!r ||",
@@ -4358,6 +4398,185 @@ mutantCatches('R15 parser: protected-scope entries no longer excluded',
 mutantCatches('R15 parser: the whole-line marker requirement removed (a marker with trailing text is accepted)',
   "const bi = lines.indexOf(R15_BEGIN);\n  const ei = lines.indexOf(R15_END);", "const bi = lines.findIndex((l) => l.indexOf(R15_BEGIN) === 0);\n  const ei = lines.findIndex((l) => l.indexOf(R15_END) === 0);",
   (m) => r15Run(m, r15World({ brief: r15Brief().replace('<!-- auto-edit-scope:begin -->', '<!-- auto-edit-scope:begin --> x') }), {}) === 'NO');
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// AH-31 - R16 (work/worker-permission-profile-1/brief.md §2.3 / §3.2): the task-scoped staging grant. Hermetic: every dependency is injected through
+// r15World. GRANT = decision grant with reason "R16 stage grant <id> <n> paths"; NO-GRANT = anything else (no opinion, or an existing deny/ask stands).
+// ══════════════════════════════════════════════════════════════════════════════════════════
+const R16_REASON = 'R16 stage grant wx-1 ';
+const r16Lstat = (n) => (n.indexOf('/pt-wt-worker-a/') !== -1 ? r15Stat('file') : null);
+const r16Many = (n) => Array.from({ length: n }, (_, i) => 'qa/f' + i + '.js');
+const r16Run = (mod, cmd, wo, over) => r15Decide(mod, r15World(Object.assign({ lstat: r16Lstat }, wo || {})), Object.assign({ tool: 'Bash', command: cmd }, over || {}));
+const r16Kind = (cmd, wo, over) => r15Kind(r16Run(guard, cmd, wo, over));
+function r16Grants(label, cmd, n, wo, over) {
+  const r = r16Run(guard, cmd, wo, over);
+  check('AH-31 GRANT ' + label, r.decision === 'grant' && r.reason === R16_REASON + n + ' paths');
+}
+function r16NoGrant(label, cmd, wo, over) {
+  const k = r16Kind(cmd, wo, over);
+  check('AH-31 NO-GRANT ' + label + ' (got ' + k + ')', k !== 'GRANT');
+}
+const r16Enoent = () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; };
+const r16Lower = (p) => String(p).replace(/\//g, '\\').toLowerCase();
+const r16Bigland = r15Brief({ land: r16Many(65).concat(['qa/x_offline.js', 'index.html']) });
+
+if (guard) {
+  // the grant rows
+  r16Grants('one plain path', 'git add qa/x_offline.js', 1);
+  r16Grants('-- and two paths', 'git add -- qa/x_offline.js work/wx-1/review.md', 2);
+  r16Grants('a root-level land-scope file', 'git add index.html', 1);
+  r16Grants('64 paths', 'git add ' + r16Many(64).join(' '), 64, { brief: r16Bigland });
+  r16Grants('hook cwd in another case/separator (same slot root)', 'git add qa/x_offline.js', 1, {}, { hook_cwd: 'C:\\USERS\\OWNER\\DOCUMENTS\\PROJECT\\PT-WT-WORKER-A', cwd: SLOT_A });
+
+  // S2: the raw command form
+  const S2_ROWS = [
+    ['.', 'git add .'], ['-A', 'git add -A'], ['-u', 'git add -u'], ['-p', 'git add -p'], ['-N', 'git add -N qa/x_offline.js'], ['--all', 'git add --all'],
+    ['-f', 'git add -f qa/x_offline.js'], ['--force', 'git add --force qa/x_offline.js'], ['-- -f', 'git add -- -f'], ['bare --', 'git add --'], ['bare add', 'git add'],
+    ['glob', 'git add qa/*.js'], ['quoted path', 'git add "qa/x_offline.js"'], ['single-quoted path', "git add 'qa/x_offline.js'"], ['$VAR', 'git add $VAR'],
+    ['backtick', 'git add `x`'], ['backslash path', 'git add qa\\x_offline.js'], ['dot-dot', 'git add ../x'], ['dot-segment inside', 'git add qa/../qa/x_offline.js'],
+    ['leading ./', 'git add ./qa/x_offline.js'], ['pathspec magic', 'git add :(top)x'], ['ADS', 'git add x:y'], ['8.3 form', 'git add QA_X~1.JS'],
+    ['two spaces between paths', 'git add qa/x_offline.js  qa/y_offline.js'], ['two spaces after add', 'git add  qa/x_offline.js'], ['two spaces before add', 'git  add qa/x_offline.js'],
+    ['trailing space', 'git add qa/x_offline.js '], ['leading space', ' git add qa/x_offline.js'], ['leading cd &&', 'cd x && git add qa/x_offline.js'],
+    ['; true', 'git add qa/x_offline.js; true'], ['| cat', 'git add qa/x_offline.js | cat'], ['> f', 'git add qa/x_offline.js > f'], ['newline', 'git add qa/x_offline.js\ngit add qa/y_offline.js'],
+    ['trailing newline', 'git add qa/x_offline.js\n'], ['env prefix', 'GIT_DIR=x git add qa/x_offline.js'], ['git -C', 'git -C x add qa/x_offline.js'], ['dot-leading name', 'git add .gitignore'],
+    ['dot directory', 'git add .claude/x'], ['trailing dot', 'git add qa/x_offline.js.'], ['tab', 'git add\tqa/x_offline.js'], ['upper-case verb', 'GIT ADD qa/x_offline.js'],
+    ['git.exe', 'git.exe add qa/x_offline.js'], ['an option after paths', 'git add qa/x_offline.js -f']
+  ];
+  for (const [label, cmd] of S2_ROWS) r16NoGrant('S2 ' + label + ': ' + JSON.stringify(cmd), cmd);
+  r16NoGrant('S2 65 paths', 'git add ' + r16Many(65).join(' '), { brief: r16Bigland });
+  r16NoGrant('S3 a duplicate path', 'git add qa/x_offline.js qa/x_offline.js');
+  r16NoGrant('S3 a duplicate after --', 'git add -- qa/x_offline.js qa/y_offline.js qa/x_offline.js');
+  // S6 / S7: scope
+  r16NoGrant('S6 a path outside land-scope', 'git add qa/z_offline.js');
+  r16NoGrant('S6 a path outside land-scope among listed ones', 'git add qa/x_offline.js qa/z_offline.js');
+  r16NoGrant('S7 a path inside protected-scope', 'git add qa/y_offline.js', { brief: r15Brief({ prot: ['qa/y_offline.js'] }) });
+  r16NoGrant('S7 one protected path among listed ones', 'git add qa/x_offline.js qa/y_offline.js', { brief: r15Brief({ prot: ['qa/y_offline.js'] }) });
+  r16NoGrant('S7 AGENTS.md listed in land-scope and protected-scope', 'git add AGENTS.md', { brief: r15Brief({ land: ['AGENTS.md', 'qa/x_offline.js'] }) });
+  r16NoGrant('S7 CHECKPOINT.md listed in land-scope', 'git add CHECKPOINT.md', { brief: r15Brief({ land: ['CHECKPOINT.md', 'qa/x_offline.js'] }) });
+  r16NoGrant('S7 node_modules/x listed in land-scope', 'git add node_modules/x', { brief: r15Brief({ land: ['node_modules/x', 'qa/x_offline.js'] }) });
+  r16NoGrant('S7 the brief itself listed in land-scope', 'git add work/wx-1/brief.md', { brief: r15Brief({ land: ['work/wx-1/brief.md', 'qa/x_offline.js'] }) });
+  r16NoGrant('S7 the run-offline runner listed in land-scope', 'git add qa/run-offline.js', { brief: r15Brief({ land: ['qa/run-offline.js', 'qa/x_offline.js'] }) });
+  r16NoGrant('S6 land-scope block missing', 'git add qa/x_offline.js', { brief: r15Brief({ land: null }) });
+  r16NoGrant('S6 land-scope block duplicated', 'git add qa/x_offline.js', { brief: r15Brief({ tail: ['<!-- land-scope:begin -->', 'qa/x_offline.js', '<!-- land-scope:end -->'] }) });
+  r16NoGrant('S7 protected-scope marker without a closing marker', 'git add qa/x_offline.js', { brief: r15Brief({ tail: ['<!-- protected-scope:begin -->'] }) });
+  // S8: the file itself
+  r16NoGrant('S8 a missing path', 'git add qa/x_offline.js', { lstat: r16Enoent });
+  r16NoGrant('S8 a directory', 'git add qa/x_offline.js', { lstat: () => r15Stat('dir') });
+  r16NoGrant('S8 a symbolic link / junction', 'git add qa/x_offline.js', { lstat: () => r15Stat('link') });
+  r16NoGrant('S8 a hard link (nlink 2)', 'git add qa/x_offline.js', { lstat: () => r15Stat('file', 2) });
+  r16NoGrant('S8 a case variant whose real path differs', 'git add QA/x_offline.js', { brief: r15Brief({ land: ['QA/x_offline.js'] }), realpath: r16Lower });
+  r16NoGrant('S8 the real path is a different directory (a junction below the slot)', 'git add qa/x_offline.js', { realpath: (p) => (/qa[\\/]x_offline\.js$/i.test(p) ? 'C:\\elsewhere\\x_offline.js' : String(p)) });
+  // S4 / S5: the session
+  r16NoGrant('S5 cwd a subdirectory of the slot', 'git add qa/x_offline.js', {}, { hook_cwd: SLOT_A + '\\qa', cwd: SLOT_A + '\\qa' });
+  r16NoGrant('G4 project dir and hook cwd in different slots', 'git add qa/x_offline.js', {}, { hook_cwd: R15_SLOT_B, cwd: R15_SLOT_B });
+  r16NoGrant('G4 the canonical checkout as hook cwd', 'git add qa/x_offline.js', {}, { hook_cwd: MAIN, cwd: MAIN });
+  r16NoGrant('G4 the canonical checkout as project dir and cwd', 'git add qa/x_offline.js', { pd: MAIN }, { hook_cwd: MAIN, cwd: MAIN });
+  r16NoGrant('G3 mode acceptEdits (Manual brief)', 'git add qa/x_offline.js', {}, { mode: 'acceptEdits' });
+  r16NoGrant('G3 mode auto (Manual brief)', 'git add qa/x_offline.js', {}, { mode: 'auto' });
+  r16NoGrant('G3 mode absent (null)', 'git add qa/x_offline.js', {}, { mode: null });
+  r16NoGrant('G3 no permission_mode key at all', 'git add qa/x_offline.js', {}, { noMode: true });
+  r16NoGrant('G6 detached HEAD', 'git add qa/x_offline.js', { head: 'a'.repeat(40) });
+  r16NoGrant('G6 HEAD on branch-dev', 'git add qa/x_offline.js', { head: 'ref: refs/heads/branch-dev' });
+  r16NoGrant('G7 no record', 'git add qa/x_offline.js', { rec: { exists: false } });
+  r16NoGrant('G7 an invalid record', 'git add qa/x_offline.js', { rec: { exists: true, valid: false } });
+  r16NoGrant('G7 the record base is not an ancestor of the task ref', 'git add qa/x_offline.js', { ancestor: false });
+  r16NoGrant('G8 brief sha256 mismatch (tampered blob)', 'git add qa/x_offline.js', { blob: r15Brief() + '# edited\n' });
+  r16NoGrant('G5 slot identity fails', 'git add qa/x_offline.js', { ident: null });
+  r16NoGrant('PowerShell tool', 'git add qa/x_offline.js', {}, { tool: 'PowerShell' });
+  // SE: every exception is no opinion, never a deny and never a grant
+  for (const [label, wo] of [['lstat throws', { lstat: () => { throw new Error('planted'); } }], ['slot identity throws', { ident: () => { throw new Error('planted'); } }],
+    ['HEAD reader throws', { head: new Error('planted') }], ['record loader throws', { recordThrows: true }], ['brief blob reader throws', { blobThrows: true }],
+    ['project dir throws', { pdThrows: true }], ['realpath throws', { realpath: () => { throw new Error('planted'); } }]]) {
+    const k = r16Kind('git add qa/x_offline.js', wo);
+    check('AH-31 SE ' + label + ' -> no opinion (got ' + k + ')', k === 'NO');
+  }
+  { const k = r16Kind('git add qa/x_offline.js', { ancThrows: true }); check('AH-31 SE budget overrun (ancestry reader exhausts the r10 time budget) -> no opinion (got ' + k + ')', k === 'NO'); }
+
+  // rows that must keep their existing decision byte for byte: R16 adds a grant only, so each equals the same call without the permission_mode key
+  for (const cmd of ['git add x && git commit -m y', 'git add .git/x', 'git add pt-land.js', 'node .claude/hooks/pt-land.js land-request task/wx-1', 'git status --short --branch', 'git commit -m x', 'git push', 'git add -A && git commit -m y']) {
+    const a = r16Run(guard, cmd, {}, {});
+    const b = r16Run(guard, cmd, {}, { noMode: true });
+    check('AH-31 keeps its existing decision: ' + JSON.stringify(cmd) + ' (' + a.decision + ')', a.decision !== 'grant' && a.decision === b.decision && a.reason === b.reason);
+  }
+  check('AH-31 R12 text stays an R12 denial even when the file would be a land-scope file', (() => { const r = r16Run(guard, 'git add pt-land.js', { brief: r15Brief({ land: ['pt-land.js', 'qa/x_offline.js'] }) }, {}); return r.decision === 'deny' && /R12/.test(r.reason); })());
+  // a command that cannot be R16 makes zero grant-path reads; a grant reads only what R15 reads
+  { const w = r15World({ lstat: r16Lstat }); r15Decide(guard, w, { tool: 'Bash', command: 'git add .' });
+    check('AH-31 a non-R16 command makes zero grant-path reads', Object.keys(w.calls).every((k) => w.calls[k] === 0)); }
+  { const w = r15World({ lstat: r16Lstat }); r15Decide(guard, w, { tool: 'Bash', command: 'git add qa/x_offline.js', mode: 'acceptEdits' });
+    check('AH-31 mode != default makes no ancestry or file-stat read (R16 stops at G3; the lock\'s own record read is the only one)', w.calls.anc === 0 && w.calls.lstat === 0); }
+  // runCli plumbing: the grant is the R15 allow JSON with the R16 reason; any other Bash grant, and any PowerShell grant, still blocks
+  { const w = r15World({ lstat: r16Lstat });
+    const stdin = (o) => JSON.stringify(Object.assign({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git add qa/x_offline.js' }, cwd: SLOT_A, permission_mode: 'default' }, o));
+    const out = guard.runCli(stdin({}), { decideFn: (i) => guard.decide(i, Object.assign({}, TEST_DEPS, w.deps)) });
+    check('AH-31 runCli: an R16 grant is exit 0 with the exact allow JSON, empty stderr',
+      out.code === 0 && out.stderr === '' && out.stdout === '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"R16 stage grant wx-1 1 paths"}}\n');
+    const spyGrant = (reason) => ({ decideFn() { return { decision: 'grant', reason }; } });
+    check('AH-31 runCli: a Bash grant with the R16 reason is exit 0', guard.runCli(stdin({}), spyGrant('R16 stage grant wx-1 1 paths')).code === 0);
+    check('AH-31 runCli: a Bash grant with an R15 reason is exit 2 "invalid decision"', (() => { const r = guard.runCli(stdin({}), spyGrant('R15 grant wx-1 qa/x_offline.js')); return r.code === 2 && r.stdout === '' && /invalid decision/.test(r.stderr); })());
+    check('AH-31 runCli: a Bash grant with an arbitrary reason is exit 2', guard.runCli(stdin({}), spyGrant('x')).code === 2);
+    check('AH-31 runCli: a Bash grant whose reason merely contains the R16 text is exit 2', guard.runCli(stdin({}), spyGrant('x R16 stage grant wx-1 1 paths')).code === 2);
+    check('AH-31 runCli: a PowerShell grant with the R16 reason is exit 2', guard.runCli(stdin({ tool_name: 'PowerShell' }), spyGrant('R16 stage grant wx-1 1 paths')).code === 2);
+    check('AH-31 runCli: a NotebookEdit grant with the R16 reason is exit 2', guard.runCli(stdin({ tool_name: 'NotebookEdit', tool_input: { notebook_path: R15_X } }), spyGrant('R16 stage grant wx-1 1 paths')).code === 2);
+  }
+  const hookSrc31 = fs.readFileSync(HOOK_PATH, 'utf8').replace(/\r\n/g, '\n');
+  check('AH-31 the header names R15 and R16 as the only grants', /The only grants are R15/.test(hookSrc31.slice(0, 1500)) && /R16/.test(hookSrc31.slice(0, 1500)));
+  check('AH-31 the module exports the R16 entry point', typeof guard.r16Grant === 'function');
+  check('AH-31 SEVERITY is still unchanged', hookSrc31.indexOf('const SEVERITY = { allow: 1, ask: 2, deny: 3 };') !== -1);
+} else {
+  check('AH-31 guard loaded', false);
+}
+
+// AH-31 planted negatives: mutate the PRODUCTION guard source, the suite must notice (brief §3.2)
+const r16Probe = (cmd, wo, over) => (m) => r15Kind(r16Run(m, cmd, wo, over)) !== 'GRANT';
+mutantCatches('R16 S2 start anchor removed (a command with a leading part is accepted)',
+  'const R16_CMD_RE = /^git add ', 'const R16_CMD_RE = /git add ',
+  r16Probe('echo hi; git add qa/x_offline.js'));
+mutantCatches('R16 S2 end anchor removed (a command with a trailing part is accepted)',
+  '){0,63})$/;', '){0,63})/;',
+  r16Probe('git add qa/x_offline.js; true'));
+mutantCatches('R16 S2 option handling widened past the one optional "--"',
+  '(?:-- )?(', '(?:-{1,2}[a-z]* )?(',
+  r16Probe('git add -f qa/x_offline.js'));
+mutantCatches('R16 S3 duplicate-path check removed',
+  'if (new Set(paths).size !== paths.length) return null;', '',
+  r16Probe('git add qa/x_offline.js qa/x_offline.js'));
+mutantCatches('R16 S4 exact-"default" mode check removed (a non-default mode can stage)',
+  "if ('default' !== input.permission_mode) return null;", '',
+  (m) => r15Kind(r16Run(m, 'git add qa/x_offline.js', { brief: mutAuto }, { mode: 'acceptEdits' })) !== 'GRANT');
+mutantCatches('R16 S5 cwd-equals-slot-root check removed (a subdirectory cwd stages)',
+  'if (!sp || r15Ci(r15N(hc)) !== r15Ci(sp)) return null;', 'if (!sp) return null;',
+  r16Probe('git add qa/x_offline.js', {}, { hook_cwd: SLOT_A + '\\qa', cwd: SLOT_A + '\\qa' }));
+mutantCatches('R16 S6 land-scope membership check removed (a path outside land-scope stages)',
+  'if (land.paths.indexOf(p) === -1) return null;', '',
+  r16Probe('git add qa/z_offline.js'));
+mutantCatches('R16 S7 protected-scope / exclusion check removed (a protected path stages)',
+  'if (r15Excluded(p.toLowerCase(), protEntries)) return null;', '',
+  r16Probe('git add qa/y_offline.js', { brief: r15Brief({ prot: ['qa/y_offline.js'] }) }));
+mutantCatches('R16 S8 regular-file check removed (a directory stages)',
+  'if (!st.isFile() || st.nlink !== 1) return null;', 'if (st.nlink !== 1) return null;',
+  r16Probe('git add qa/x_offline.js', { lstat: () => r15Stat('dir') }));
+mutantCatches('R16 S8 nlink check removed (a hard link stages)',
+  'if (!st.isFile() || st.nlink !== 1) return null;', 'if (!st.isFile()) return null;',
+  r16Probe('git add qa/x_offline.js', { lstat: () => r15Stat('file', 2) }));
+mutantCatches('R16 S8 real-path equality check removed (a case variant / link stages)',
+  'if (relRt !== p) return null;', '',
+  r16Probe('git add QA/x_offline.js', { brief: r15Brief({ land: ['QA/x_offline.js'] }), realpath: r16Lower }));
+mutantCatches('R16 SE exception mapped to a grant (fail open)',
+  '    return null;\n  }\n}\n// end R16', "    return { decision: 'grant', reason: R16_REASON_PREFIX + 'x' };\n  }\n}\n// end R16",
+  (m) => r15Kind(r16Run(m, 'git add qa/x_offline.js', { lstat: () => { throw new Error('planted'); } }, {})) === 'NO');
+mutantCatches('R16 evaluated before the existing Bash rules (an R12 text denial is overtaken)',
+  "if (typeof command !== 'string') return { decision: 'deny', reason: 'missing or non-string command (fail closed)' };",
+  "if (typeof command !== 'string') return { decision: 'deny', reason: 'missing or non-string command (fail closed)' };\n  { const early = r16Grant(input, command, gateDeps); if (early) return early; }",
+  (m) => r15Kind(r16Run(m, 'git add pt-land.js', { brief: r15Brief({ land: ['pt-land.js', 'qa/x_offline.js'] }) }, {})) === 'DENY');
+mutantCatches('runCli accepts a Bash grant without the "R16 stage grant " reason prefix',
+  'r.reason.indexOf(R16_REASON_PREFIX) === 0', 'true',
+  (m) => m.runCli(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'git status' }, cwd: SLOT_A, permission_mode: 'default' }), { decideFn() { return { decision: 'grant', reason: 'R15 grant wx-1 qa/x_offline.js' }; } }).code === 2);
+mutantCatches('runCli accepts an R16 grant for the PowerShell tool',
+  "const stageGrant = tool === 'Bash' &&", "const stageGrant = (tool === 'Bash' || tool === 'PowerShell') &&",
+  (m) => m.runCli(JSON.stringify({ tool_name: 'PowerShell', tool_input: { command: 'git status' }, cwd: SLOT_A, permission_mode: 'default' }), { decideFn() { return { decision: 'grant', reason: 'R16 stage grant wx-1 1 paths' }; } }).code === 2);
+mutantCatches('an R15 file grant is accepted again for Bash (the R15 reason passes the R16 gate)',
+  "const fileGrant = tool === 'Edit' || tool === 'Write' || tool === 'MultiEdit';", "const fileGrant = tool === 'Edit' || tool === 'Write' || tool === 'MultiEdit' || tool === 'Bash';",
+  (m) => m.runCli(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'git status' }, cwd: SLOT_A, permission_mode: 'default' }), { decideFn() { return { decision: 'grant', reason: 'R15 grant wx-1 qa/x_offline.js' }; } }).code === 2);
 
 e1Finish();
 
