@@ -184,7 +184,7 @@ const MUST_HAVE_NO_DEFAULT = [
 ];
 // LB-R1 (Owner, 2026-10-11): a user-initiated, session-only Labs toggle is not a load-time default.
 // Exactly one strict write per listed gate is allowed, and only inside the named setter.
-const LABS_WRITERS = { PT_ENABLE_DEEP_DIVE: { fn: 'setLabsFlag', stmt: 'window.PT_ENABLE_DEEP_DIVE = (on === true);' } };
+const LABS_WRITERS = { PT_ENABLE_DEEP_DIVE: { fn: 'setLabsFlag', stmt: 'window.PT_ENABLE_DEEP_DIVE = (on === true);' }, PT_ENABLE_PORTFOLIO_LIVE_PRICES: { fn: '_pfSetLiveGate', stmt: 'window.PT_ENABLE_PORTFOLIO_LIVE_PRICES = (on === true);' }, PT_ENABLE_PORTFOLIO_FX: { fn: '_pfSetLiveGate', stmt: 'window.PT_ENABLE_PORTFOLIO_FX = (on === true);' } };
 function labsWriterSpan(src, fn) {
   const body = extractFunctionSource(src, fn);
   if (!body || src.split('function ' + fn + '(').length - 1 !== 1) return null;

@@ -763,6 +763,14 @@ select.edit-inp{appearance:none;cursor:pointer}
 .pf-pos-mkt-chg--zero{color:var(--text3)}
 .pf-pos-mkt-day-lbl{color:var(--text3);opacity:.65}
 .pf-pos-mkt-est{color:var(--text3);opacity:.65}
+.pf-fresh{font-family:var(--mono);font-size:9px;letter-spacing:.3px;padding:1px 5px;border-radius:2px;border:1px solid var(--border2);color:var(--text3);white-space:nowrap}
+.pf-fresh--today{color:var(--blue2);border-color:rgba(96,165,250,.35)}
+.pf-fresh--aged,.pf-fresh--unknown{color:var(--yellow2);border-color:rgba(244,184,96,.3)}
+.pf-fresh--failed{color:var(--red2);border-color:rgba(248,113,113,.3)}
+.pf-strip{display:flex;flex-wrap:wrap;align-items:center;gap:6px 18px;margin:10px 0 6px;padding:8px 10px;border:1px solid var(--border);border-radius:6px}
+.pf-strip-item{display:flex;align-items:baseline;gap:6px;font-family:var(--mono);font-size:11px}
+.pf-strip-sym{font-weight:700;color:var(--text)}
+.pf-strip-note{font-family:var(--mono);font-size:9px;color:var(--text3)}
 .pf-pos-research{display:flex;align-items:center;gap:5px;margin-top:4px;flex-wrap:wrap}
 .pf-res-state{font-family:var(--mono);font-size:9px;letter-spacing:.4px;padding:2px 5px;border-radius:2px;border:1px solid var(--border2);color:var(--text3)}
 .pf-res-state.found{color:var(--text2)}
@@ -11414,6 +11422,12 @@ function _renderPortfolioPanel() {
     return;
   }
 
+  // portfolio-today-1 (V1-2): market strip at the top of the panel. Cache-only - rendering never fetches; the strip symbols are
+  // fetched with the holdings by _pfEodAutoFetchIfDue / _pfEodManualRefresh.
+  if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true && count > 0) {
+    panel.appendChild(_pfBuildMarketStrip(_pfEodLoadCache(), new Date().toISOString()));
+  }
+
   if (count === 0) {
     var empty = document.createElement('div');
     empty.className = 'pf-empty';
@@ -11726,20 +11740,9 @@ function _renderPortfolioPanel() {
     reconStat.appendChild(reconActions);
     summary.appendChild(reconStat);
 
-    // Portfolio-level day estimate — see _pfPortfolioDayEstimate: strictly
-    // fresh-FX-only for USD holdings (stricter than the total's bar above),
-    // all-covered-fresh-or-suppress, never presented as full-portfolio when
-    // any holding was excluded from the covered set.
-    var dayEst = _pfPortfolioDayEstimate(holdings);
-    if (dayEst !== null) {
-      var estSign = dayEst.totalIls > 0 ? '+' : (dayEst.totalIls < 0 ? '-' : '');
-      var estLabel = 'Est. Daily Move' + (dayEst.partial ? ' (covered holdings only)' : '');
-      var estValText = estSign + '₪' + Math.abs(dayEst.totalIls).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      var estStat = _pfSummaryStat(estLabel, estValText);
-      var estValEl = estStat.querySelector('.pf-summary-val');
-      if (estValEl) estValEl.style.color = dayEst.totalIls > 0 ? 'var(--green2)' : dayEst.totalIls < 0 ? 'var(--red2)' : '';
-      summary.appendChild(estStat);
-    }
+    // portfolio-today-1 (V1-4): the portfolio-level daily money move built from typed (recorded) values is no longer shown - a figure
+    // derived from typed amounts must not read as a market move. Its pure helper stays for its own tests; each card states the basis
+    // of its own estimate instead.
 
     // ─── P-3: Unrealized P/L (ILS) — cost-basis-based money math ────────────
     // Pure aggregation lives entirely in _pfComputePortfolioPl; this block
@@ -11903,7 +11906,10 @@ function _renderPortfolioPanel() {
     // comment).
     var _pfCurrencyBucketsPresent = (usdSubtotal > 0 ? 1 : 0) + (ilsSubtotal > 0 ? 1 : 0) + (unknownCurrencyCount > 0 ? 1 : 0);
     var investedSortDisabled = _pfCurrencyBucketsPresent > 1;
-    if (investedSortDisabled && _portfolioSortMode !== 'symbol') _portfolioSortMode = 'symbol';
+    if (investedSortDisabled && (_portfolioSortMode === 'invested-desc' || _portfolioSortMode === 'invested-asc')) _portfolioSortMode = 'symbol';
+    // portfolio-today-1 (V1-3): the day-% modes exist only with live prices on; with it off they fall back to symbol order.
+    var _pfDayModes = (_portfolioSortMode === 'day-worst' || _portfolioSortMode === 'day-best');
+    if (_pfDayModes && window.PT_ENABLE_PORTFOLIO_LIVE_PRICES !== true) { _portfolioSortMode = 'symbol'; _pfDayModes = false; }
 
     var sortBar = document.createElement('div');
     sortBar.className = 'pf-sort-bar';
@@ -11911,11 +11917,16 @@ function _renderPortfolioPanel() {
     sortLbl.className   = 'pf-sort-lbl';
     sortLbl.textContent = 'Sort';
     sortBar.appendChild(sortLbl);
-    [
+    var _pfSortOpts = [
       { mode: 'symbol',        label: 'Symbol A–Z' },
       { mode: 'invested-desc', label: 'Recorded value ↓' },
       { mode: 'invested-asc',  label: 'Recorded value ↑' }
-    ].forEach(function(opt) {
+    ];
+    if (window.PT_ENABLE_PORTFOLIO_LIVE_PRICES === true) {
+      _pfSortOpts.push({ mode: 'day-worst', label: 'Day % — worst first' });
+      _pfSortOpts.push({ mode: 'day-best',  label: 'Day % — best first' });
+    }
+    _pfSortOpts.forEach(function(opt) {
       var isInvestedMode = opt.mode === 'invested-desc' || opt.mode === 'invested-asc';
       var btn = document.createElement('button');
       btn.className   = 'pf-sort-btn' + (_portfolioSortMode === opt.mode ? ' active' : '');
@@ -11934,6 +11945,12 @@ function _renderPortfolioPanel() {
       sortBar.appendChild(btn);
     });
     panel.appendChild(sortBar);
+    if (_pfDayModes) {
+      var dayHint = document.createElement('div');
+      dayHint.className   = 'pf-guidance';
+      dayHint.textContent = 'Sorted by day % — current rows first; other rows follow, grouped by state (Aged, Unknown date, Refresh failed, Not available).';
+      panel.appendChild(dayHint);
+    }
 
     // Allocation now always means "share of the full portfolio including
     // cash" (P-2B) — shown ONLY under completeness === true, using
@@ -11950,7 +11967,10 @@ function _renderPortfolioPanel() {
 
     var list = document.createElement('div');
     list.className = 'pf-positions-list';
-    _sortHoldingsEntries(Object.entries(holdings), _portfolioSortMode).forEach(function(entry) {
+    (_pfDayModes
+      ? _pfSortHoldingsByDay(Object.entries(holdings), _pfEodLoadCache(), _portfolioSortMode, new Date().toISOString())
+      : _sortHoldingsEntries(Object.entries(holdings), _portfolioSortMode)
+    ).forEach(function(entry) {
       var sym = entry[0];
       var h   = entry[1];
       var card = document.createElement('div');
@@ -12287,7 +12307,7 @@ function _renderPortfolioPanel() {
       var c = _pfEodCache[s];
       _updatePortfolioCard(s, c ? {
         price: c.price, change_percent: c.changePercent, currency: c.currency,
-        sessionEpoch: c.sessionEpoch, stale: _pfEodIsStale(c)
+        sessionEpoch: c.sessionEpoch, stale: _pfEodIsStale(c), market: c.market, sessionDate: c.sessionDate
       } : null);
     });
   }
@@ -12306,7 +12326,7 @@ let   _pfLiveServerDisabled = false;
 
 const _PF_LIVE_SUCCESS_TTL = 5 * 60 * 1000;
 const _PF_LIVE_FAIL_TTL    = 60 * 1000;
-const _PF_LIVE_BATCH_MAX   = 25;
+const _PF_LIVE_BATCH_MAX   = 27; // 25 holdings + the two market-strip symbols (portfolio-today-1)
 const _PF_LIVE_CONCURRENCY = 4;
 const _PF_LIVE_BUDGET_MS   = 10000;
 const _PF_LIVE_SYM_MS      = 8000;
@@ -12390,6 +12410,235 @@ function _pfEodIsStale(cacheEntry) {
   return !!(cacheEntry && cacheEntry.lastFailAt);
 }
 
+// ─── Portfolio Today v1 (portfolio-today-1): freshness labels, market strip, day-% sort, Labs switches ───────────
+// One pure classifier over a cached price row (pt_eod_cache entry). The calendar authority is TS1_POLICY_V1 (US / TASE) through
+// _ts1IsTradingSession / _ts1SessionCompleted / _ts1AgeSessions - never calendar-day age, never a weekday guess. Anything the calendar
+// cannot establish (no market, no session date, outside coverage) fails closed to 'unknown'.
+// States: today (the exchange-local session is open: delayed intraday) · last-close (the latest completed session) · aged (at least one
+// completed session since) · unknown · failed (a refresh failed; lastFailAt) · missing (no usable price). Current = today or last-close.
+var PT_STRIP_SYMBOLS = ['SPY', 'QQQ'];
+var PT_LIVE_SWITCHES = [
+  { flag: 'PT_ENABLE_PORTFOLIO_LIVE_PRICES', key: 'pt_enable_portfolio_live_prices', id: 'labs-pf-live' },
+  { flag: 'PT_ENABLE_PORTFOLIO_FX',          key: 'pt_enable_portfolio_fx',          id: 'labs-pf-fx' }
+];
+
+// 'YYYY-MM-DD' -> 'Oct 22' (the year is added when it differs from the year of nowIso); '' when it is not a real calendar date.
+function _pfDateLabel(ymd, nowIso) {
+  if (typeof ymd !== 'string') return '';
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return '';
+  var year = parseInt(m[1], 10), mon = parseInt(m[2], 10), day = parseInt(m[3], 10);
+  var probe = new Date(Date.UTC(year, mon - 1, day));
+  if (isNaN(probe.getTime()) || probe.getUTCFullYear() !== year || probe.getUTCMonth() !== mon - 1 || probe.getUTCDate() !== day) return '';
+  var names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var label = names[mon - 1] + ' ' + day;
+  if (typeof nowIso === 'string' && /^\d{4}/.test(nowIso) && nowIso.slice(0, 4) !== m[1]) label += ', ' + m[1];
+  return label;
+}
+
+function _pfFreshness(entry, nowIso) {
+  if (!entry || typeof entry !== 'object' || typeof entry.price !== 'number' || !isFinite(entry.price) || entry.price <= 0) {
+    return { state: 'missing', sessionDate: null, ageSessions: null };
+  }
+  var sd = (typeof entry.sessionDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(entry.sessionDate)) ? entry.sessionDate : null;
+  var res = { state: 'unknown', sessionDate: sd, ageSessions: null };
+  var cal = (entry.market === 'US' || entry.market === 'TASE') ? TS1_POLICY_V1.calendar[entry.market] : null;
+  if (cal && sd && _ts1IsTradingSession(sd, cal) === true) {
+    var done = _ts1SessionCompleted(sd, cal, nowIso);
+    if (done === false) {
+      var loc = _ts1ExchangeLocalParts(nowIso, cal.timeZone);
+      if (loc && loc.dateStr === sd) res.state = 'today';
+    } else if (done === true) {
+      var age = _ts1AgeSessions(sd, cal, nowIso);
+      if (age === 0) { res.state = 'last-close'; res.ageSessions = 0; }
+      else if (typeof age === 'number' && age >= 1) { res.state = 'aged'; res.ageSessions = age; }
+    }
+  }
+  if (entry.lastFailAt) res.state = 'failed';
+  return res;
+}
+
+function _pfFreshLabel(f, nowIso) {
+  var st = f && f.state;
+  var d = (f && f.sessionDate) ? _pfDateLabel(f.sessionDate, nowIso) : '';
+  if (st === 'today') return 'Today · in progress';
+  if (st === 'last-close') return 'Last close · ' + d;
+  if (st === 'aged') return 'Aged · ' + d + ' · ' + f.ageSessions + (f.ageSessions === 1 ? ' session old' : ' sessions old');
+  if (st === 'failed') return 'Refresh failed · showing ' + (d || 'date unknown');
+  if (st === 'unknown') return 'Unknown date';
+  return 'Not available';
+}
+
+function _pfIsCurrentFreshness(f) {
+  return !!f && (f.state === 'today' || f.state === 'last-close');
+}
+
+function _pfBuildFreshEl(f, nowIso) {
+  var el = document.createElement('span');
+  el.className = 'pf-fresh pf-fresh--' + ((f && f.state) || 'missing');
+  if (f && f.state === 'failed') {
+    // the failed label reads "Refresh failed · showing <date>": the existing red tag (shared wording) plus the date it is showing
+    var staleTag = document.createElement('span');
+    staleTag.textContent = 'Refresh failed';
+    el.appendChild(staleTag);
+    var shown = document.createElement('span');
+    shown.textContent = ' · showing ' + ((f.sessionDate ? _pfDateLabel(f.sessionDate, nowIso) : '') || 'date unknown');
+    el.appendChild(shown);
+    return el;
+  }
+  el.textContent = _pfFreshLabel(f, nowIso);
+  return el;
+}
+
+// Day-% ordering: only current rows (today / last close, with a usable day %) are ordered by it; every other row follows, grouped by
+// state (Aged, Unknown date, Refresh failed, Not available), each group by symbol. Pure: no mutation of its inputs.
+function _pfSortHoldingsByDay(entries, cache, mode, nowIso) {
+  var list = Array.isArray(entries) ? entries.slice() : [];
+  var bySymbol = function(a, b) { return a[0].localeCompare(b[0]); };
+  if (mode !== 'day-worst' && mode !== 'day-best') return list.sort(bySymbol);
+  var c = (cache && typeof cache === 'object') ? cache : {};
+  var current = [];
+  var groups = { aged: [], unknown: [], failed: [], missing: [] };
+  list.forEach(function(e) {
+    var row = c[e[0]];
+    var f = _pfFreshness(row, nowIso);
+    if (_pfIsCurrentFreshness(f)) {
+      if (typeof row.changePercent === 'number' && isFinite(row.changePercent)) current.push({ e: e, pct: row.changePercent });
+      else groups.unknown.push(e);
+    } else {
+      groups[f.state].push(e);
+    }
+  });
+  current.sort(function(a, b) {
+    var d = mode === 'day-best' ? b.pct - a.pct : a.pct - b.pct;
+    return d !== 0 ? d : a.e[0].localeCompare(b.e[0]);
+  });
+  return current.map(function(x) { return x.e; })
+    .concat(groups.aged.sort(bySymbol), groups.unknown.sort(bySymbol), groups.failed.sort(bySymbol), groups.missing.sort(bySymbol));
+}
+
+// The symbols fetched together: the market-strip symbols FIRST, then the holdings, each symbol once (same batch, same cache, same budget).
+// Strip first so the batch cap (_PF_LIVE_BATCH_MAX = 25 holdings + the two strip symbols) can never cut the strip: with more than 25
+// holdings it truncates the holdings exactly as before.
+function _pfWithStripSyms(syms) {
+  if (!Array.isArray(syms)) return [];
+  return PT_STRIP_SYMBOLS.concat(syms.filter(function(s) { return PT_STRIP_SYMBOLS.indexOf(s) === -1; }));
+}
+
+// Local wall-clock 'H:MM' of an ISO instant; '' when it is not one.
+function _pfFmtFetchTime(iso) {
+  if (typeof iso !== 'string') return '';
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  var m = d.getMinutes();
+  return d.getHours() + ':' + (m < 10 ? '0' + m : String(m));
+}
+
+// Market strip (SPY, QQQ): price, day %, freshness label, and the time of the newest fetch. Cache-only; an unavailable row says so.
+function _pfBuildMarketStrip(cache, nowIso) {
+  var c = (cache && typeof cache === 'object') ? cache : {};
+  var strip = document.createElement('div');
+  strip.className = 'pf-strip';
+  strip.id = 'pf-market-strip';
+  var newest = null;
+  PT_STRIP_SYMBOLS.forEach(function(sym) {
+    var row = c[sym];
+    var f = _pfFreshness(row, nowIso);
+    var item = document.createElement('div');
+    item.className = 'pf-strip-item';
+    var symEl = document.createElement('span');
+    symEl.className = 'pf-strip-sym';
+    symEl.textContent = sym;
+    item.appendChild(symEl);
+    if (f.state !== 'missing') {
+      var priceEl = document.createElement('span');
+      priceEl.className = 'pf-pos-mkt-price';
+      priceEl.textContent = (PF_CURRENCY_SYMBOLS[row.currency] || '') + row.price.toFixed(2);
+      item.appendChild(priceEl);
+      if (typeof row.changePercent === 'number' && isFinite(row.changePercent)) {
+        var chgEl = document.createElement('span');
+        chgEl.textContent = (row.changePercent > 0 ? '+' : '') + row.changePercent.toFixed(2) + '%';
+        chgEl.className = row.changePercent > 0 ? 'pf-pos-mkt-chg--pos' : row.changePercent < 0 ? 'pf-pos-mkt-chg--neg' : 'pf-pos-mkt-chg--zero';
+        item.appendChild(chgEl);
+      }
+      var at = Date.parse(row.fetchedAt);
+      if (!isNaN(at) && (newest === null || at > newest)) newest = at;
+    }
+    item.appendChild(_pfBuildFreshEl(f, nowIso));
+    strip.appendChild(item);
+  });
+  var t = newest === null ? '' : _pfFmtFetchTime(new Date(newest).toISOString());
+  if (t) {
+    var note = document.createElement('span');
+    note.className = 'pf-strip-note';
+    note.textContent = 'fetched ' + t;
+    strip.appendChild(note);
+  }
+  return strip;
+}
+
+// Local calendar date of a holding's updatedAt as a label ('Oct 5'); '' when it is missing or not a date.
+function _pfRecordedAsOf(h, nowIso) {
+  if (!h || typeof h.updatedAt !== 'string') return '';
+  var d = new Date(h.updatedAt);
+  if (isNaN(d.getTime())) return '';
+  var mm = d.getMonth() + 1, dd = d.getDate();
+  return _pfDateLabel(d.getFullYear() + '-' + (mm < 10 ? '0' + mm : mm) + '-' + (dd < 10 ? '0' + dd : dd), nowIso);
+}
+
+// Labs switches "Live prices" and "FX rate" (browser-local). Off by default; the stored value is only ever 'true'. They set the two
+// existing client gates (strict === true checks everywhere else are unchanged).
+// The only writer of the two gates: one strict assignment each, used by the load read and by the Labs setter.
+function _pfSetLiveGate(flag, on) {
+  if (flag === 'PT_ENABLE_PORTFOLIO_LIVE_PRICES') window.PT_ENABLE_PORTFOLIO_LIVE_PRICES = (on === true);
+  else if (flag === 'PT_ENABLE_PORTFOLIO_FX') window.PT_ENABLE_PORTFOLIO_FX = (on === true);
+}
+
+function _pfApplyStoredLiveSwitches() {
+  var live = false, fx = false;
+  try {
+    live = (localStorage.getItem('pt_enable_portfolio_live_prices') === 'true');
+    fx = (localStorage.getItem('pt_enable_portfolio_fx') === 'true');
+  } catch (_) {
+    live = false; fx = false;
+  }
+  _pfSetLiveGate('PT_ENABLE_PORTFOLIO_LIVE_PRICES', live);
+  _pfSetLiveGate('PT_ENABLE_PORTFOLIO_FX', fx);
+}
+
+function renderPortfolioLiveSwitches() {
+  PT_LIVE_SWITCHES.forEach(function(sw) {
+    var el = document.getElementById(sw.id);
+    if (el) el.checked = (window[sw.flag] === true);
+  });
+}
+
+function setPortfolioLiveSwitch(flag, on) {
+  var sw = null;
+  for (var i = 0; i < PT_LIVE_SWITCHES.length; i++) {
+    if (PT_LIVE_SWITCHES[i].flag === flag) sw = PT_LIVE_SWITCHES[i];
+  }
+  if (!sw) return;
+  var enabled = (on === true);
+  _pfSetLiveGate(flag, enabled);
+  try {
+    if (enabled) localStorage.setItem(sw.key, 'true');
+    else localStorage.removeItem(sw.key);
+  } catch (_) { /* a preference only: the gate above is already set for this page */ }
+  renderPortfolioLiveSwitches();
+  if (!_pfLiveRunCanceller && _pfIsPortfolioViewActive()) {
+    _renderPortfolioPanel();
+    if (enabled) {
+      if (flag === 'PT_ENABLE_PORTFOLIO_LIVE_PRICES') {
+        var syms = Object.keys(loadHoldings());
+        if (syms.length) _pfEodAutoFetchIfDue(syms);
+      } else {
+        _pfFxAutoFetchIfDue();
+      }
+    }
+  }
+}
+
 // Stamps lastFailAt only onto symbols that (a) already have a cached value
 // and (b) failed during THIS attempt (per-symbol, via the existing
 // _pfLiveFailAt bookkeeping _pfLiveSingle already maintains). A symbol with
@@ -12421,6 +12670,7 @@ function _pfIsPortfolioViewActive() {
 // holding). Manual refresh never calls this — it always fetches everything.
 async function _pfEodAutoFetchIfDue(syms) {
   if (!syms || !syms.length || _pfLiveFetching || _pfLiveTerminalReason) return;
+  syms = _pfWithStripSyms(syms); // Portfolio Today: SPY / QQQ ride the same batch, cache and budget
   var last = _pfEodLoadLastFetch();
   var cooldownMs = last.ok ? PF_EOD_AUTO_COOLDOWN_MS : PF_EOD_FAIL_COOLDOWN_MS;
   var targets = syms;
@@ -12438,6 +12688,7 @@ async function _pfEodAutoFetchIfDue(syms) {
 
 async function _pfEodManualRefresh(syms) {
   if (!syms || !syms.length || _pfLiveFetching) return;
+  syms = _pfWithStripSyms(syms); // Portfolio Today: SPY / QQQ ride the same batch, cache and budget
   var attemptStart = Date.now();
   await _pfLiveBatch(syms, syms);
   var anyFailed = _pfEodApplyAttemptOutcome(syms, attemptStart);
@@ -12922,9 +13173,10 @@ async function _portfolioFetchPrices(eligibleSyms, allSyms) {
 
 // P-2B: the .pf-pos-chg fallback element no longer exists (old scan-derived
 // day-change block removed) — no fallback branch to check anymore.
-function _updatePortfolioCard(sym, mkt) {
+function _updatePortfolioCard(sym, mkt, nowIso) {
   var el = document.getElementById('pf-mkt-' + sym);
   if (!el) return;
+  var nowStr = (typeof nowIso === 'string') ? nowIso : new Date().toISOString();
   while (el.firstChild) el.removeChild(el.firstChild);
   if (mkt && typeof mkt.price === 'number' && isFinite(mkt.price)) {
     el.style.display = '';
@@ -12965,32 +13217,21 @@ function _updatePortfolioCard(sym, mkt) {
         var estSign   = estMove > 0 ? '+' : (estMove < 0 ? '-' : '');
         var estSpan = document.createElement('span');
         estSpan.className   = 'pf-pos-mkt-est';
-        estSpan.textContent = '≈ ' + estSign + PF_CURRENCY_SYMBOLS[h.currency] + Math.abs(estMove).toFixed(2) + ' est.';
+        // portfolio-today-1 (V1-4): the amount is a figure on the RECORDED value, never a market move - say so, with its date.
+        estSpan.textContent = '≈ ' + estSign + PF_CURRENCY_SYMBOLS[h.currency] + Math.abs(estMove).toFixed(2)
+          + ' on recorded value (as of ' + (_pfRecordedAsOf(h, nowStr) || 'date unknown') + ')';
         el.appendChild(estSpan);
       }
     }
-    // P-2A: trading/session date, from Yahoo's own regularMarketTime — no
-    // calendar knowledge, purely a label of which session this data is.
-    if (typeof mkt.sessionEpoch === 'number' && isFinite(mkt.sessionEpoch)) {
-      var dateSpan = document.createElement('span');
-      dateSpan.className   = 'pf-pos-mkt-day-lbl';
-      dateSpan.textContent = new Date(mkt.sessionEpoch * 1000)
-        .toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      el.appendChild(dateSpan);
-    }
-    if (mkt.stale) {
-      var staleTag = document.createElement('span');
-      staleTag.className   = 'pf-res-state stale';
-      staleTag.textContent = 'Refresh failed';
-      el.appendChild(staleTag);
-    }
+    // portfolio-today-1 (F): one freshness label per row, from the cached session date and the market calendar - it replaces the
+    // bare session date and the "Refresh failed" tag.
+    el.appendChild(_pfBuildFreshEl(_pfFreshness({
+      price: mkt.price, changePercent: mkt.change_percent, market: mkt.market, sessionDate: mkt.sessionDate, lastFailAt: mkt.stale ? true : null
+    }, nowStr), nowStr));
     return;
   }
   el.style.display = '';
-  var dash = document.createElement('span');
-  dash.className   = 'pf-pos-mkt-price';
-  dash.textContent = '—';
-  el.appendChild(dash);
+  el.appendChild(_pfBuildFreshEl(_pfFreshness(null, nowStr), nowStr));
 }
 
 // ─── EG-07 Slice 1: Portfolio Research Detail Panel ──────────────────────────
@@ -17329,6 +17570,8 @@ function init() {
 
 // EDGAR Insider UI: set window.PT_ENABLE_EDGAR_FORM4 = true in DevTools to enable (branch-dev only).
 // Server gate (PT_ENABLE_EDGAR_FORM4_SERVER) remains the real safety boundary.
+// portfolio-today-1 (V1-1): the two Portfolio Labs switches are remembered in this browser; applied once per load, before init().
+_pfApplyStoredLiveSwitches();
 init();
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -17447,6 +17690,7 @@ function toggleApiStatus() {
   const isOpen = overlay.classList.contains('open');
   overlay.classList.toggle('open');
   if (!isOpen) { renderApiTable(); renderLabsToggles(); }
+  if (!isOpen) renderPortfolioLiveSwitches();
 }
 
 function renderApiTable() {
@@ -17616,6 +17860,14 @@ async function checkAllApis() {
         <span><b>Deep Dive</b> — adds the AI Deep Dive card to the ticker view. Each run is one paid AI call, only when you press its button.</span></label>
       <label class="labs-row"><input type="checkbox" id="labs-PT_ENABLE_PORTFOLIO_RESEARCH" onchange="setLabsFlag('PT_ENABLE_PORTFOLIO_RESEARCH', this.checked)">
         <span><b>Portfolio research</b> — shows research results you already have in the Portfolio view. Starts no new research.</span></label>
+    </div>
+    <div class="labs-box" id="labsBoxPortfolio">
+      <div class="labs-title">Portfolio — live market data</div>
+      <div class="labs-sub">These two switches are remembered in this browser. They only show data when the matching server setting is also on.</div>
+      <label class="labs-row"><input type="checkbox" id="labs-pf-live" onchange="setPortfolioLiveSwitch('PT_ENABLE_PORTFOLIO_LIVE_PRICES', this.checked)">
+        <span><b>Live prices</b> — shows each holding's price and day % with a freshness label, and the SPY / QQQ strip, on the Portfolio tab.</span></label>
+      <label class="labs-row"><input type="checkbox" id="labs-pf-fx" onchange="setPortfolioLiveSwitch('PT_ENABLE_PORTFOLIO_FX', this.checked)">
+        <span><b>FX rate</b> — fetches the Bank of Israel USD/ILS rate used for the Portfolio totals.</span></label>
     </div>
     <details class="labs-box" id="ehBox" ontoggle="if (this.open) _ehRender()">
       <summary class="labs-title">Research history</summary>
