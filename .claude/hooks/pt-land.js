@@ -1661,6 +1661,32 @@ function recordVerbPre(opts, verb, auditRefusals) {
   return { ok: true, G, task, canonicalRoot, commonDir, refuse, briefPath: 'work/' + task.replace(/^task\//, '') + '/brief.md' };
 }
 
+// worker-permission-profile-1 §2.2: the task's own scratch directory S = <realpath(tmpdir)>/pt-<id>, so the unchanged R15 scratch grant applies from the
+// first write. Never fails the verb and never deletes or empties S: anything unexpected is reported "NOT READY" and R15 stays fail-safe (no grant, a prompt).
+// opts.tmpDir and opts.mkdir are test seams; the CLI passes neither.
+function ensureTaskScratch(task, opts) {
+  const id = task.replace(/^task\//, '');
+  const tmp = opts && typeof opts.tmpDir === 'function' ? opts.tmpDir() : os.tmpdir();
+  const mkdirFn = opts && typeof opts.mkdir === 'function' ? opts.mkdir : fs.mkdirSync;
+  let S = path.join(String(tmp), 'pt-' + id);
+  const notReady = (code) => ({ state: 'not-ready', dir: S, line: 'scratch: NOT READY ' + S + ' (' + code + '); scratch writes will prompt' });
+  try {
+    S = path.join(fs.realpathSync.native(tmp), 'pt-' + id);
+    let st = null;
+    try { st = fs.lstatSync(S); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
+    if (st === null) {
+      mkdirFn(S);
+      return { state: 'created', dir: S, line: 'scratch: created ' + S };
+    }
+    if (st.isSymbolicLink()) return notReady('LINK');
+    if (!st.isDirectory()) return notReady('NOT_A_DIRECTORY');
+    if (fs.realpathSync.native(S).toLowerCase() !== S.toLowerCase()) return notReady('REALPATH');
+    return { state: 'present', dir: S, line: 'scratch: present ' + S };
+  } catch (e) {
+    return notReady(e && typeof e.code === 'string' && /^[A-Z_]{1,20}$/.test(e.code) ? e.code : 'ERROR');
+  }
+}
+
 function runTaskStartCore(opts) {
   const c = recordVerbPre(opts, 'task-start', true);
   if (!c.ok) return c;
@@ -1724,9 +1750,11 @@ function runTaskStartCore(opts) {
       try { fs.unlinkSync(recPath); } catch (e2) { /* best effort - nothing may stay recorded */ }
       return refuse('T5', 'audit log append failed (' + (e && e.message ? e.message : String(e)) + ') - nothing was recorded', tip);
     }
+    const scratchStart = ensureTaskScratch(task, opts);
     return {
       ok: true, exitCode: 0, verb: 'task-start', task, record, recordPath: recPath, canonicalRoot,
-      message: 'TASK-START ' + task + ' base ' + tip + ' started ' + startedAt
+      message: 'TASK-START ' + task + ' base ' + tip + ' started ' + startedAt,
+      scratch: scratchStart, scratchLine: scratchStart.line
     };
   } finally {
     releaseLock(lock.path);
@@ -1842,9 +1870,11 @@ function runAdoptCore(opts) {
       try { fs.unlinkSync(recPath); } catch (e2) { /* best effort - nothing may stay recorded */ }
       return refuse('A6', 'audit log append failed (' + (e && e.message ? e.message : String(e)) + ') - nothing was recorded', d.tip, d.base);
     }
+    const scratchAdopt = ensureTaskScratch(task, opts);
     return {
       ok: true, exitCode: 0, verb: 'adopt', task, record, recordPath: recPath,
-      message: 'ADOPTED ' + task + ' base ' + d.base + ' started ' + d.startedAt
+      message: 'ADOPTED ' + task + ' base ' + d.base + ' started ' + d.startedAt,
+      scratch: scratchAdopt, scratchLine: scratchAdopt.line
     };
   } finally {
     releaseLock(lock.path);
@@ -1862,6 +1892,7 @@ function printTaskStart(res) {
   process.stdout.write('  brief sha256: ' + r.briefSha256 + '\n');
   process.stdout.write('  record:    ' + toForwardSlash(res.recordPath) + '\n');
   process.stdout.write('  step 13:   node qa/guard_integrity_check.js --task ' + res.task + ' --root ' + toForwardSlash(res.canonicalRoot) + '\n');
+  if (res.scratchLine) process.stdout.write(res.scratchLine + '\n');
 }
 function printAdoptRequest(res) {
   process.stdout.write('ADOPT REQUEST for ' + res.task + '\n');
@@ -1936,7 +1967,10 @@ function output(res, verb) {
   else if (verb === 'resync') printResync(res);
   else if (verb === 'task-start') printTaskStart(res);
   else if (verb === 'adopt-request') printAdoptRequest(res);
-  else if (verb === 'adopt') process.stdout.write(res.message + '\n');
+  else if (verb === 'adopt') {
+    process.stdout.write(res.message + '\n');
+    if (res.scratchLine) process.stdout.write(res.scratchLine + '\n');
+  }
   if (res.recordWarning) process.stderr.write('pt-land: WARNING - ' + res.recordWarning + '\n');
   // The Owner reads the mutation result from CLI output; a successful merge/push/cleanup whose
   // audit append failed must still surface that warning here, not only in the module-API result

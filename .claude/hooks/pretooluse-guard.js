@@ -6,9 +6,11 @@
  * (work/auto-mode-hardening/brief.md §4, rulings R1-R5).
  *
  * decide({ tool_name, tool_input, cwd }) -> { decision: 'allow' | 'ask' | 'deny', reason }
- * 'allow' means "no opinion": the normal permission rules still apply. The only grant is R15
+ * 'allow' means "no opinion": the normal permission rules still apply. The only grants are R15
  * (work/worker-exec-permissions-1/brief.md §2.3): an Edit / Write / MultiEdit of a path the task's
- * committed brief lists, emitted as permissionDecision "allow"; `deny` and `ask` rules still win.
+ * committed brief lists, and R16 (work/worker-permission-profile-1/brief.md §2.3): one plain
+ * `git add [--] <paths>` call for existing files of the task's land-scope. Each is emitted as
+ * permissionDecision "allow"; `deny` and `ask` rules still win.
  * R15 also locks a Worker slot to Manual mode (§2.4). Node only, no dependencies.
  *
  * Fail closed: unparseable stdin, a missing / non-string command, any thrown error, and any
@@ -1939,6 +1941,59 @@ function fileToolDecision(input, deps) {
   }
 }
 
+// ── R16: task-scoped staging grant (work/worker-permission-profile-1/brief.md §2.3) ──
+// One plain "git add [--] <paths>" call is granted (permissionDecision "allow") only in the task's own Manual Worker slot, only for existing regular files
+// that the committed brief lists in its land-scope and not in its protected-scope or the R15 exclusions. It runs only after every other Bash rule of decide()
+// returned no opinion; a deny or ask from any of them stands. Anything uncertain, and every exception, is no opinion: never a deny and never a grant.
+// The command is matched as a raw string, so no quote, expansion, glob, option other than the one optional "--", operator, redirect or newline can match.
+const R16_REASON_PREFIX = 'R16 stage grant ';
+const R16_CMD_RE = /^git add (?:-- )?([A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*(?: [A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*){0,63})$/;
+function r16Grant(input, command, deps) {
+  try {
+    if (!input || input.tool_name !== 'Bash') return null;
+    const m = R16_CMD_RE.exec(command);
+    if (!m) return null;
+    const paths = m[1].split(' ');
+    if (new Set(paths).size !== paths.length) return null;
+    if ('default' !== input.permission_mode) return null;
+    const deadline = Date.now() + R15_BUDGET_MS;
+    const pd = deps.projectDir();
+    const hc = input.hook_cwd;
+    if (typeof pd !== 'string' || !pd || typeof hc !== 'string' || !hc) return null;
+    if (!R15_ABS_RE.test(r15N(pd)) || !R15_ABS_RE.test(r15N(hc))) return null;
+    const sp = r15SlotRoot(pd);
+    if (!sp || r15Ci(r15N(hc)) !== r15Ci(sp)) return null;
+    if (!deps.slotIdentity(sp)) return null;
+    const hm = R15_HEAD_TASK_RE.exec(String(deps.readHeadRef(sp)).trim());
+    if (!hm) return null;
+    const id = hm[1];
+    const ctx = r15TaskContext(sp, id, deps, deadline, true);
+    if (!ctx) return null;
+    const land = r15ParseLandScope(ctx.briefText);
+    if (!land) return null;
+    const prot = r15ParseProtectedScope(ctx.briefText);
+    if ((ctx.briefText.indexOf(R15_PROT_BEGIN) !== -1 || ctx.briefText.indexOf(R15_PROT_END) !== -1) && !prot) return null;
+    const protEntries = prot ? prot.paths : [];
+    for (const p of paths) {
+      if (Date.now() > deadline) return null;
+      if (land.paths.indexOf(p) === -1) return null;
+      if (r15Excluded(p.toLowerCase(), protEntries)) return null;
+      const abs = sp + '/' + p;
+      if (r15BadPath(abs)) return null;
+      const real = deps.realpathNative(abs);
+      if (r15BadPath(real)) return null;
+      const relRt = r15Rel(real, sp);
+      if (relRt !== p) return null;
+      const st = deps.lstatSync(abs);
+      if (!st.isFile() || st.nlink !== 1) return null;
+    }
+    return { decision: 'grant', reason: R16_REASON_PREFIX + id + ' ' + paths.length + ' paths' };
+  } catch (e) {
+    return null;
+  }
+}
+// end R16
+
 function decisionFor(cls, slot) {
   switch (cls) {
     case 'destructive':
@@ -2041,6 +2096,10 @@ function decide(input, deps) {
       best = { decision, reason: f.reason + (decision === 'deny' && slot && f.cls !== 'destructive' && f.cls !== 'git-program' ? ' - denied in Worker-slot sessions (R1)' : '') };
     }
   }
+  if (tool === 'Bash' && best.decision === 'allow' && Object.prototype.hasOwnProperty.call(input, 'permission_mode')) {
+    const stage = r16Grant(input, command, gateDeps);
+    if (stage) return stage;
+  }
   return best;
 }
 
@@ -2064,7 +2123,9 @@ function runCli(stdinText, opts) {
     const hookCwd = typeof input.cwd === 'string' && input.cwd ? input.cwd : null;
     const r = decideFn({ tool_name: tool, tool_input: toolInput, cwd, permission_mode: permissionMode, hook_cwd: hookCwd }, opts && opts.deps);
     if (r && r.decision === 'grant') {
-      if (typeof r.reason !== 'string' || (tool !== 'Edit' && tool !== 'Write' && tool !== 'MultiEdit')) return block('guard returned an invalid decision (fail closed)');
+      const fileGrant = tool === 'Edit' || tool === 'Write' || tool === 'MultiEdit';
+      const stageGrant = tool === 'Bash' && typeof r.reason === 'string' && r.reason.indexOf(R16_REASON_PREFIX) === 0;
+      if (typeof r.reason !== 'string' || (!fileGrant && !stageGrant)) return block('guard returned an invalid decision (fail closed)');
       return {
         code: 0,
         stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: r.reason } }) + '\n',
@@ -2090,7 +2151,7 @@ function runCli(stdinText, opts) {
 
 module.exports = {
   decide, runCli, isWorkerSlot, FAIL_CLOSED_EXIT, spawnBudgetMs, stripShellEscapes, KNOWN_GIT_SUBCOMMANDS,
-  r15LoadTaskRecord, r15ParseAutoEditScope, r15ParseLandScope, r15ParseProtectedScope, r15IsAutoBrief
+  r15LoadTaskRecord, r15ParseAutoEditScope, r15ParseLandScope, r15ParseProtectedScope, r15IsAutoBrief, r16Grant
 };
 
 if (require.main === module) {

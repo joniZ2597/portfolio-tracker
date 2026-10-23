@@ -65,7 +65,9 @@
       "PowerShell(pwsh *)",
       "PowerShell(Start-Process *)",
       "PowerShell(Invoke-Expression *)",
-      "PowerShell(iex *)"
+      "PowerShell(iex *)",
+      "Bash(git add -f*)",
+      "Bash(git add --force*)"
     ],
     "ask": [
       "Edit(./CLAUDE.md)",
@@ -167,7 +169,11 @@
       "Bash(node .claude/hooks/pt-land.js brief-request *)",
       "Bash(node .claude/hooks/pt-land.js protected-request *)",
       "Edit(//tmp/pt-*/**)",
-      "Bash(wmic process where \"name='node.exe'\" get ProcessId,CommandLine)"
+      "Bash(wmic process where \"name='node.exe'\" get ProcessId,CommandLine)",
+      "mcp__claude-in-chrome__read_page",
+      "mcp__claude-in-chrome__get_page_text",
+      "mcp__claude-in-chrome__find",
+      "mcp__claude-in-chrome__read_console_messages"
     ],
     "defaultMode": "default",
     "disableBypassPermissionsMode": "disable"
