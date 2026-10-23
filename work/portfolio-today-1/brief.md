@@ -1,6 +1,6 @@
 # Brief: portfolio-today-1 — Portfolio Today v1 (real daily market view on the Portfolio tab)
 
-DRAFT (MAIN, 2026-10-23) for Owner approval. Not committed. Owner-approved scope: Portfolio Today v1 (V1-1…V1-4) + clarifications F (freshness) and W (DEV walkthrough). Mode: Manual, current workflow (R11 brief commit, LAND, PUSH). Base: `branch-dev` at task-start (4899ed3 today).
+REV 2 (MAIN, 2026-10-23) for Owner approval. Supersedes rev 1 (R11 commit `18a3653`, blob sha256 `dbd38a0d…dab046`). **Objective, Scope, Not-in-scope, Files, land-scope, land-tests, Acceptance, Dependencies are unchanged from rev 1.** Rev 2 only adds: the auto-edit-scope block, the execution preflight block, the execution readiness line, the Backlog row and the Resume section. Mode: Manual, current workflow (R11 brief commit, LAND, PUSH). Base: `branch-dev` at task-start (the rev-2 R11 commit, after its PUSH).
 
 **What the Owner sees afterwards:** on the Portfolio tab, with "Live prices" and "FX rate" switched on in ⚙ Labs: a market strip (SPY, QQQ), every holding's price and day % with an explicit freshness label (today in progress / last close / aged / unknown / failed), sorting by day %, and no ₪ figure built from typed values presented as a market move.
 
@@ -18,6 +18,11 @@ DRAFT (MAIN, 2026-10-23) for Owner approval. Not committed. Owner-approved scope
 
 ## Files
 `index.html` (the changes above) · `qa/portfolio_today_offline.js` (new) · declared pin updates only: `qa/fixtures/index-pins.json` (via `node qa/tools/index-pins.js --update`), `qa/labs_panel_offline.js` (portfolio-panel pin), `qa/evidence_capture_offline.js` (CP-10 constant) · `work/portfolio-today-1/review.md`. Any other test needing an update → STOP and report.
+
+**Backlog:** entries 20 and 22, effect `none` for both. `BACKLOG.md` is not edited; `backlog-refresh-1` records the changes below later.
+- **20 Live prices activation (HOLD/EXTERNAL): `none`.** The new switch only sets the existing client gate. Activation stays blocked on the Owner's server env action (`PT_ENABLE_PORTFOLIO_LIVE_PRICES_SERVER`), so the entry stays accurate.
+- **22 (closed by `surface-1b`): `none` to its status.** Its Owner ruling of 2026-10-03, "Labs switches are session-only, never persisted", is **explicitly superseded by approving this brief, for the two new switches only** ("Live prices", "FX rate", persisted as in V1-1). The existing Deep Dive and Portfolio research switches stay session-only and unchanged.
+- `review.md` carries a `[backlog]` lesson for each of the two entries above, so `backlog-refresh-1` picks them up.
 
 ## Acceptance
 1. Switches persist across reload, are off by default, and with both server flags on make prices/day % appear without DevTools.
@@ -38,6 +43,40 @@ DRAFT (MAIN, 2026-10-23) for Owner approval. Not committed. Owner-approved scope
 ## Effort
 ~1 Worker day implementation + offline QA; ~1–2 h local walkthrough; ~30 min DEV walkthrough. Owner: R11 line, LAND line, PUSH line, the env change.
 
+## Resume (rev 2 restart of an in-progress task)
+Rev 1 implementation was paused on 2026-10-23 with uncommitted work in Worker slot A (`index.html` modified, `qa/portfolio_today_offline.js` new, ignored `plan.md` / `qa.log`). The rev-1 task record is closed by `cleanup` and a fresh record is made by `task-start` on the rev-2 base. Before that, the work is backed up outside the repository with a sha256 manifest. After task-start it is restored into the slot, and sha256 and size parity is proven against the manifest before the Worker resumes. The Worker resumes from the "Pause status" section of `plan.md`. It re-runs step 0 (`npm run qa:offline`) on the restored tree, records the count, and continues. No completed work is re-done unless the restored-tree step 0 or targeted run shows it failing. If restore parity fails, or `index.html` on the rev-2 base differs from rev-1 base `18a3653` outside `work/portfolio-today-1/brief.md`, that is a STOP.
+
+## Execution preflight
+Classes: **A** auto-approved by `.claude/settings.json` (or by the R15 grant for edits) · **B** permission prompt · **C** governance gate · **D** hook-denied (must not appear).
+
+| Stage | Command / tool | Class |
+|---|---|---|
+| Step 0 | `node qa/guard_integrity_check.js --task task/portfolio-today-1 --root <canonical checkout> --print-record` | A |
+| Step 0 / 10 | `npm run qa:offline` — run exactly this form, no redirect, pipe, `;` or `echo` suffix | A |
+| Slices | `node qa/portfolio_today_offline.js` (land test), and any existing `node qa/<name>_offline.js` re-check, exact form | A |
+| Slices | `node qa/labs_panel_offline.js`, `node qa/evidence_capture_offline.js`, `node qa/index_pins_offline.js` | A |
+| Pins | `node qa/tools/index-pins.js --check` / `--update` / `--diff <arg>` | A |
+| Edits | Edit / Write / MultiEdit on the auto-edit-scope paths below, and on `work/portfolio-today-1/plan.md`, `codex.md`, `qa.log` | A (R15 grant) |
+| Edits | scratch files only under `/tmp/pt-portfolio-today-1/` | A (R15 grant) |
+| Reading logs and output | Read / Grep tools only (never `tail`, `cut`, `cat` pipelines) | A |
+| Local walkthrough W | local dev server on port 7001 with the two server flags set locally; Chrome on `http://localhost:7001` | B (expected prompts: server start, browser tools) |
+| Codex review | `codex exec` foreground with `< /dev/null` | B |
+| Step 13 | r9 task-branch commit staging only land-scope paths | B (+ envelope (f) checks) |
+| Step 13 | integrity check, `land-request` | A / C |
+| LAND, PUSH, cleanup | R12 tool lines | C |
+
+Slice-to-slice continuation needs no Owner input when the gates PASS. Expected prompts (B) are listed above, separately from the C gates. No D items are on the path. Any other command form that prompts is not improvised around: use the listed form.
+
+**Execution readiness:** ATTENDED-ONLY.
+
+<!-- auto-edit-scope:begin -->
+index.html
+qa/portfolio_today_offline.js
+qa/fixtures/index-pins.json
+qa/labs_panel_offline.js
+qa/evidence_capture_offline.js
+work/portfolio-today-1/review.md
+<!-- auto-edit-scope:end -->
 <!-- land-scope:begin -->
 index.html
 qa/portfolio_today_offline.js
