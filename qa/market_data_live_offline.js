@@ -458,6 +458,113 @@ test('LB-5 the lib is pure: no require, no network, no clock, no environment (st
   assert.ok(!/process\.env|Date\.now|new Date/.test(code), 'no environment or clock read');
 });
 
+// The runtime context of the legacy handler: connectLambda gives no uncachedEdgeURL, so a strong-consistency read throws.
+function makeLambdaCtxStore() {
+  const base = makeStore();
+  const store = {
+    data: base.data,
+    log: base.log,
+    async get(key, opts) {
+      if (opts && opts.consistency === 'strong') {
+        const e = new Error('Netlify Blobs has failed to perform a read using strong consistency because the environment has not been configured with a uncachedEdgeURL property');
+        e.name = 'MissingBlobsEnvironmentError';
+        throw e;
+      }
+      return base.get(key);
+    },
+    set: base.set
+  };
+  return store;
+}
+async function lambdaCtxAdmits(lib) {
+  const store = makeLambdaCtxStore();
+  if (await lib.take(store, T.REGULAR, 1) !== true) return 'the first request of the hour was refused under the connectLambda context';
+  if (store.data.get(KEY(T.REGULAR)) !== '1') return 'the first unit was not counted: ' + store.data.get(KEY(T.REGULAR));
+  if (await lib.take(store, T.REGULAR, 2) !== true) return 'the second request was refused';
+  if (store.data.get(KEY(T.REGULAR)) !== '3') return 'counter is ' + store.data.get(KEY(T.REGULAR)) + ', expected 3';
+  return true;
+}
+// Runs fn() with console.log / warn / error collected; returns { value, lines }.
+async function captureConsole(fn) {
+  const saved = { log: console.log, warn: console.warn, error: console.error };
+  const lines = [];
+  console.log = console.warn = console.error = function () { lines.push(Array.prototype.map.call(arguments, String).join(' ')); };
+  try { return { value: await fn(), lines }; } finally { Object.assign(console, saved); }
+}
+function throwingStore(name, message) {
+  return {
+    async get() { const e = new Error(message); e.name = name; throw e; },
+    async set() { throw new Error('unreachable'); }
+  };
+}
+const LEAK_MESSAGE = 'GET https://api.example.test/v1/AAPL?token=sk-live-abc123 failed for AAPL';
+const PREFIX = '[market-data-live-budget] refused: ';
+async function diagnosticsSanitized(lib) {
+  const full = makeStore();
+  full.data.set(KEY(T.REGULAR), '300');
+  const bad = makeStore();
+  bad.data.set(KEY(T.REGULAR), 'abc');
+  const unsafe = makeStore();
+  unsafe.data.set(KEY(T.REGULAR), '9'.repeat(30));
+  const cases = [
+    ['BAD_UNITS', () => lib.take(makeStore(), T.REGULAR, 0)],
+    ['BAD_TIME', () => lib.take(makeStore(), 'garbage', 1)],
+    ['NO_STORE', () => lib.take(null, T.REGULAR, 1)],
+    ['BAD_COUNTER', () => lib.take(bad, T.REGULAR, 1)],
+    ['BAD_COUNTER', () => lib.take(unsafe, T.REGULAR, 1)],
+    ['CAP_REACHED', () => lib.take(full, T.REGULAR, 1)],
+    ['STORE_ERROR:Error', () => lib.take(makeStore({ failGet: true }), T.REGULAR, 1)],
+    ['STORE_ERROR:Error', () => lib.take(makeStore({ failSet: true }), T.REGULAR, 1)],
+    ['STORE_ERROR:TypeError', () => lib.take(throwingStore('TypeError', LEAK_MESSAGE), T.REGULAR, 1)],
+    ['STORE_ERROR:Error', () => lib.take(throwingStore('My-Error_1', LEAK_MESSAGE), T.REGULAR, 1)],
+    ['STORE_ERROR:Error', () => lib.take(throwingStore('A'.repeat(41), LEAK_MESSAGE), T.REGULAR, 1)],
+    ['STORE_ERROR:Error', () => lib.take(throwingStore('', LEAK_MESSAGE), T.REGULAR, 1)]
+  ];
+  for (const [category, run] of cases) {
+    const r = await captureConsole(run);
+    if (r.value !== false) return category + ': the request was not refused';
+    if (r.lines.length !== 1 || r.lines[0] !== PREFIX + category) return category + ': logged ' + JSON.stringify(r.lines);
+  }
+  const leak = await captureConsole(() => lib.take(throwingStore('TypeError', LEAK_MESSAGE), T.REGULAR, 1));
+  const all = leak.lines.join('\n');
+  for (const secret of ['https', 'example.test', 'sk-live', 'abc123', 'AAPL', 'token', 'failed for']) {
+    if (all.indexOf(secret) !== -1) return 'the log leaked "' + secret + '": ' + JSON.stringify(leak.lines);
+  }
+  const cnt = await captureConsole(() => lib.take(full, T.REGULAR, 1));
+  if (/\d/.test(cnt.lines.join('')) && /300/.test(cnt.lines.join(''))) return 'the log leaked the counter value: ' + JSON.stringify(cnt.lines);
+  const ok = await captureConsole(() => lib.take(makeStore(), T.REGULAR, 1));
+  if (ok.value !== true || ok.lines.length !== 0) return 'the admitted path must log nothing: ' + JSON.stringify(ok.lines);
+  // a failing logger still yields a refusal, never a throw
+  const savedWarn = console.warn;
+  console.warn = function () { throw new Error('logger unavailable'); };
+  try {
+    for (const run of [() => lib.take(null, T.REGULAR, 1), () => lib.take(makeStore({ failGet: true }), T.REGULAR, 1), () => lib.take(full, T.REGULAR, 1)]) {
+      let value;
+      try { value = await run(); } catch (e) { return 'take() threw when the logger failed: ' + String(e && e.message); }
+      if (value !== false) return 'a refusal with a failing logger returned ' + String(value);
+    }
+  } finally { console.warn = savedWarn; }
+  return true;
+}
+test('LB-6 root cause: under the connectLambda context (a strong read throws MissingBlobsEnvironmentError) the first request is admitted and counted', async () => {
+  assert.strictEqual(await lambdaCtxAdmits(loadFresh(LIB_PATH)), true);
+  // fail closed is kept under the same context: a throwing set, a malformed counter, a full hour
+  const s1 = makeLambdaCtxStore();
+  s1.set = async () => { throw new Error('planted set failure'); };
+  assert.strictEqual(await (await captureConsole(() => loadFresh(LIB_PATH).take(s1, T.REGULAR, 1))).value, false);
+  const s2 = makeLambdaCtxStore();
+  s2.data.set(KEY(T.REGULAR), '300');
+  assert.strictEqual(await (await captureConsole(() => loadFresh(LIB_PATH).take(s2, T.REGULAR, 1))).value, false);
+});
+test('LB-7 diagnostics are sanitized: each refusal path logs exactly one fixed-category line; an error message is never logged; the admitted path logs nothing', async () => {
+  assert.strictEqual(await diagnosticsSanitized(loadFresh(LIB_PATH)), true);
+});
+test('LB-8 no strong-consistency option remains: the counter read passes only the key', () => {
+  const code = fs.readFileSync(LIB_PATH, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/consistency|strong/i.test(code), 'no consistency option in the code');
+  assert.ok(/store\.get\(key\)/.test(code), 'the read is store.get(key)');
+});
+
 test('MB-1 the 300th unit in an hour is allowed, the next answers 429 BUDGET_EXHAUSTED with zero upstream requests (daily and historical ranges)', async () => {
   const mod = loadFresh(HANDLER_PATH);
   assert.strictEqual(await budgetBoundary(mod, '5d'), true);
@@ -545,7 +652,7 @@ test('MB-N1 negative: the budget guard placed after the first upstream request -
 });
 test('MB-N2 negative: the counter is not checked against the limit -> MB-1 is violated', async () => {
   assert.strictEqual(await budgetBoundary(loadFresh(HANDLER_PATH), '5d'), true, 'the real source passes the scenario');
-  const mut = mutantHandler('counter not checked', [], [['    if (used + units > BUDGET_PER_HOUR) { return false; }\n', '']]);
+  const mut = mutantHandler('counter not checked', [], [["    if (used + units > BUDGET_PER_HOUR) { return refuse('CAP_REACHED'); }\n", '']]);
   assert.notStrictEqual(await budgetBoundary(mut, '5d'), true);
 });
 test('MB-N3 negative: the scan path counted against the budget -> MB-5 is violated', async () => {
@@ -555,12 +662,49 @@ test('MB-N3 negative: the scan path counted against the budget -> MB-5 is violat
 });
 test('MB-N4 negative: fail-open on a store error -> MB-4 is violated', async () => {
   assert.strictEqual(await failClosed(loadFresh(HANDLER_PATH)), true, 'the real source passes the scenario');
-  const mut = mutantHandler('fail open', [], [['  } catch (_) { return false; }\n', '  } catch (_) { return true; }\n']]);
+  const mut = mutantHandler('fail open', [], [["    return refuse('STORE_ERROR:' + name);\n", '    return true;\n']]);
   assert.notStrictEqual(await failClosed(mut), true);
+});
+// A mutated copy of the budget lib alone (every anchor must occur exactly once).
+function mutantLib(label, reps) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ptmd-mutlib-'));
+  TMP_DIRS.push(dir);
+  fs.writeFileSync(path.join(dir, 'market-data-live-budget.js'), applyOnce(label, fs.readFileSync(LIB_PATH, 'utf8'), reps));
+  return loadFresh(path.join(dir, 'market-data-live-budget.js'));
+}
+test('MB-N8 negative: the thrown error message is logged -> LB-7 is violated', async () => {
+  assert.strictEqual(await diagnosticsSanitized(loadFresh(LIB_PATH)), true, 'the real source passes the scenario');
+  const mut = mutantLib('message logged', [["    return refuse('STORE_ERROR:' + name);\n", "    return refuse('STORE_ERROR:' + name + ' ' + err.message);\n"]]);
+  assert.notStrictEqual(await diagnosticsSanitized(mut), true);
+});
+test('MB-N9 negative: the strong-consistency read restored -> LB-6 is violated', async () => {
+  assert.strictEqual(await lambdaCtxAdmits(loadFresh(LIB_PATH)), true, 'the real source passes the scenario');
+  const mut = mutantLib('strong read restored', [["    const raw = await store.get(key);\n", "    const raw = await store.get(key, { consistency: 'strong' });\n"]]);
+  assert.notStrictEqual(await lambdaCtxAdmits(mut), true);
+});
+test('MB-N10 negative: the counter value logged on a cap refusal -> LB-7 is violated', async () => {
+  assert.strictEqual(await diagnosticsSanitized(loadFresh(LIB_PATH)), true, 'the real source passes the scenario');
+  const mut = mutantLib('counter logged', [["return refuse('CAP_REACHED');", "return refuse('CAP_REACHED ' + used);"]]);
+  assert.notStrictEqual(await diagnosticsSanitized(mut), true);
+});
+test('MB-N11 negative: an unsanitized error name logged -> LB-7 is violated', async () => {
+  assert.strictEqual(await diagnosticsSanitized(loadFresh(LIB_PATH)), true, 'the real source passes the scenario');
+  const mut = mutantLib('raw name logged', [["if (err && typeof err.name === 'string' && ERROR_NAME_RE.test(err.name)) { name = err.name; }", "if (err && typeof err.name === 'string') { name = err.name; }"]]);
+  assert.notStrictEqual(await diagnosticsSanitized(mut), true);
+});
+test('MB-N13 negative: the refusal log not guarded -> LB-7 (failing logger) is violated', async () => {
+  assert.strictEqual(await diagnosticsSanitized(loadFresh(LIB_PATH)), true, 'the real source passes the scenario');
+  const mut = mutantLib('log unguarded', [["  try { console.warn('[market-data-live-budget] refused: ' + category); } catch (_) { /* a failing logger must not turn a refusal into a throw */ }\n", "  console.warn('[market-data-live-budget] refused: ' + category);\n"]]);
+  assert.notStrictEqual(await diagnosticsSanitized(mut), true);
+});
+test('MB-N12 negative: an admitted request that logs -> LB-7 is violated', async () => {
+  assert.strictEqual(await diagnosticsSanitized(loadFresh(LIB_PATH)), true, 'the real source passes the scenario');
+  const mut = mutantLib('admit logs', [["    await store.set(key, String(used + units));\n    return true;\n", "    await store.set(key, String(used + units));\n    console.warn('[market-data-live-budget] admitted');\n    return true;\n"]]);
+  assert.notStrictEqual(await diagnosticsSanitized(mut), true);
 });
 test('MB-N5 negative: a malformed counter read leniently (parseInt) -> MB-4 is violated', async () => {
   assert.strictEqual(await failClosed(loadFresh(HANDLER_PATH)), true, 'the real source passes the scenario');
-  const mut = mutantHandler('lenient counter', [], [["      if (!/^\\d+$/.test(text)) { return false; }\n", '']]);
+  const mut = mutantHandler('lenient counter', [], [["      if (!/^\\d+$/.test(text)) { return refuse('BAD_COUNTER'); }\n", '']]);
   assert.notStrictEqual(await failClosed(mut), true);
 });
 test('MB-N7 negative: the Blobs context never connected -> MB-9 is violated', async () => {
