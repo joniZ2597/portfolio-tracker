@@ -1,6 +1,10 @@
 # Brief: portfolio-today-1 — Portfolio Today v1 (real daily market view on the Portfolio tab)
 
-REV 2 (MAIN, 2026-10-23) for Owner approval. Supersedes rev 1 (R11 commit `18a3653`, blob sha256 `dbd38a0d…dab046`). **Objective, Scope, Not-in-scope, Files, land-scope, land-tests, Acceptance, Dependencies are unchanged from rev 1.** Rev 2 only adds: the auto-edit-scope block, the execution preflight block, the execution readiness line, the Backlog row and the Resume section. Mode: Manual, current workflow (R11 brief commit, LAND, PUSH). Base: `branch-dev` at task-start (the rev-2 R11 commit, after its PUSH).
+REV 3 (MAIN, 2026-10-23) for Owner approval. Supersedes rev 2 (R11 commit `d9880bb`, blob sha256 `bd196074…30ea`), which superseded rev 1 (R11 commit `18a3653`, blob sha256 `dbd38a0d…dab046`). **Objective, Scope, Not-in-scope, Acceptance, Dependencies are unchanged from rev 1.**
+- Rev 2 added the auto-edit-scope block, the execution preflight block, the execution readiness line, the Backlog row and the Resume section.
+- Rev 3 adds one declared test update, `qa/ts1_default_exposure_offline.js` (TX-5 `LABS_WRITERS`, see Files), to Files, auto-edit-scope, land-scope and land-tests, and updates the Resume and preflight sections.
+
+Mode: Manual, current workflow (R11 brief commit, LAND, PUSH). Base: `branch-dev` at task-start (the rev-3 R11 commit, after its PUSH).
 
 **What the Owner sees afterwards:** on the Portfolio tab, with "Live prices" and "FX rate" switched on in ⚙ Labs: a market strip (SPY, QQQ), every holding's price and day % with an explicit freshness label (today in progress / last close / aged / unknown / failed), sorting by day %, and no ₪ figure built from typed values presented as a market move.
 
@@ -17,7 +21,7 @@ REV 2 (MAIN, 2026-10-23) for Owner approval. Supersedes rev 1 (R11 commit `18a36
 **Not in scope:** quantity, valuation, ₪ P/L, FX day effect, VIX/breadth/sectors, attention list, any default-on change, scoring / scan / Actionable Take / `pt_results` / `pt_holdings` writes, new endpoints or providers, `netlify/**`, `services/**`.
 
 ## Files
-`index.html` (the changes above) · `qa/portfolio_today_offline.js` (new) · declared pin updates only: `qa/fixtures/index-pins.json` (via `node qa/tools/index-pins.js --update`), `qa/labs_panel_offline.js` (portfolio-panel pin), `qa/evidence_capture_offline.js` (CP-10 constant) · `work/portfolio-today-1/review.md`. Any other test needing an update → STOP and report.
+`index.html` (the changes above) · `qa/portfolio_today_offline.js` (new) · declared pin updates only: `qa/fixtures/index-pins.json` (via `node qa/tools/index-pins.js --update`), `qa/labs_panel_offline.js` (portfolio-panel pin), `qa/evidence_capture_offline.js` (CP-10 constant) · `qa/ts1_default_exposure_offline.js` (TX-5 only: two entries added to `LABS_WRITERS`, each one strict write inside one named setter, exactly `PT_ENABLE_PORTFOLIO_LIVE_PRICES: { fn: '_pfSetLiveGate', stmt: 'window.PT_ENABLE_PORTFOLIO_LIVE_PRICES = (on === true);' }` and `PT_ENABLE_PORTFOLIO_FX: { fn: '_pfSetLiveGate', stmt: 'window.PT_ENABLE_PORTFOLIO_FX = (on === true);' }`; nothing else in the file changes — no comment, `ALLOWED_DEFAULTS` or other row edit) · `work/portfolio-today-1/review.md`. Any other test needing an update → STOP and report.
 
 **Backlog:** entries 20 and 22, effect `none` for both. `BACKLOG.md` is not edited; `backlog-refresh-1` records the changes below later.
 - **20 Live prices activation (HOLD/EXTERNAL): `none`.** The new switch only sets the existing client gate. Activation stays blocked on the Owner's server env action (`PT_ENABLE_PORTFOLIO_LIVE_PRICES_SERVER`), so the entry stays accurate.
@@ -43,8 +47,29 @@ REV 2 (MAIN, 2026-10-23) for Owner approval. Supersedes rev 1 (R11 commit `18a36
 ## Effort
 ~1 Worker day implementation + offline QA; ~1–2 h local walkthrough; ~30 min DEV walkthrough. Owner: R11 line, LAND line, PUSH line, the env change.
 
-## Resume (rev 2 restart of an in-progress task)
-Rev 1 implementation was paused on 2026-10-23 with uncommitted work in Worker slot A (`index.html` modified, `qa/portfolio_today_offline.js` new, ignored `plan.md` / `qa.log`). The rev-1 task record is closed by `cleanup` and a fresh record is made by `task-start` on the rev-2 base. Before that, the work is backed up outside the repository with a sha256 manifest. After task-start it is restored into the slot, and sha256 and size parity is proven against the manifest before the Worker resumes. The Worker resumes from the "Pause status" section of `plan.md`. It re-runs step 0 (`npm run qa:offline`) on the restored tree, records the count, and continues. No completed work is re-done unless the restored-tree step 0 or targeted run shows it failing. If restore parity fails, or `index.html` on the rev-2 base differs from rev-1 base `18a3653` outside `work/portfolio-today-1/brief.md`, that is a STOP.
+## Resume (rev 3 restart of an in-progress task)
+History:
+- Rev 1 was paused on 2026-10-23 and restarted as rev 2, with the files restored and parity proven.
+- Under rev 2 the Worker finished all in-scope work. `npm run qa:offline` then ran 105 suites with exactly one hard failure, `qa/ts1_default_exposure_offline.js` TX-5, which is outside rev 2's file set. `node qa/portfolio_today_offline.js` passed 39 (PT-1..PT-25 and PT-N1..N14).
+- MAIN proved the TX-5 change listed under Files on a scratch copy outside the repository: 72/72 asserts PASS, against 1 failure unmodified.
+
+Restart steps:
+1. The work is backed up outside the repository with a sha256 manifest: `index.html`, `qa/portfolio_today_offline.js`, `qa/fixtures/index-pins.json`, `qa/labs_panel_offline.js`, `qa/evidence_capture_offline.js`, plus the ignored `plan.md` / `qa.log`.
+2. The rev-2 task record is closed by `cleanup`.
+3. A fresh record is made by `task-start` on the rev-3 base.
+4. The files are restored, with sha256 and size parity proven against the manifest, before the Worker resumes.
+
+After the restore, the Worker:
+1. makes only the TX-5 edit listed under Files;
+2. runs `node qa/ts1_default_exposure_offline.js`;
+3. re-runs step 0 (`npm run qa:offline`) on the restored tree and records the count;
+4. continues with the PENDING items in `plan.md` (self-review, Codex, step 10, `review.md`, walkthrough W, step 13).
+
+No completed work is re-done unless a run shows it failing.
+
+STOP if restore parity fails, or if any restored file at the rev-3 base differs from rev-2 base `d9880bb` outside `work/portfolio-today-1/brief.md`.
+
+After any later `index.html` edit, re-run `node qa/tools/index-pins.js --update` and re-set the CP-10 constant. Re-set the LB-8 digest only if `_renderPortfolioPanel` changes.
 
 ## Execution preflight
 Classes: **A** auto-approved by `.claude/settings.json` (or by the R15 grant for edits) · **B** permission prompt · **C** governance gate · **D** hook-denied (must not appear).
@@ -54,10 +79,10 @@ Classes: **A** auto-approved by `.claude/settings.json` (or by the R15 grant for
 | Step 0 | `node qa/guard_integrity_check.js --task task/portfolio-today-1 --root <canonical checkout> --print-record` | A |
 | Step 0 / 10 | `npm run qa:offline` — run exactly this form, no redirect, pipe, `;` or `echo` suffix | A |
 | Slices | `node qa/portfolio_today_offline.js` (land test), and any existing `node qa/<name>_offline.js` re-check, exact form | A |
-| Slices | `node qa/labs_panel_offline.js`, `node qa/evidence_capture_offline.js`, `node qa/index_pins_offline.js` | A |
+| Slices | `node qa/labs_panel_offline.js`, `node qa/evidence_capture_offline.js`, `node qa/index_pins_offline.js`, `node qa/ts1_default_exposure_offline.js` | A |
 | Pins | `node qa/tools/index-pins.js --check` / `--update` / `--diff <arg>` | A |
 | Edits | Edit / Write / MultiEdit on the auto-edit-scope paths below, and on `work/portfolio-today-1/plan.md`, `codex.md`, `qa.log` | A (R15 grant) |
-| Edits | scratch files only under `/tmp/pt-portfolio-today-1/` | A (R15 grant) |
+| Edits | scratch files only under `/tmp/pt-portfolio-today-1/`, created with the Write tool, which makes the folder itself (no `mkdir`, which prompts) | A (R15 grant) |
 | Reading logs and output | Read / Grep tools only (never `tail`, `cut`, `cat` pipelines) | A |
 | Local walkthrough W | local dev server on port 7001 with the two server flags set locally; Chrome on `http://localhost:7001` | B (expected prompts: server start, browser tools) |
 | Codex review | `codex exec` foreground with `< /dev/null` | B |
@@ -75,6 +100,7 @@ qa/portfolio_today_offline.js
 qa/fixtures/index-pins.json
 qa/labs_panel_offline.js
 qa/evidence_capture_offline.js
+qa/ts1_default_exposure_offline.js
 work/portfolio-today-1/review.md
 <!-- auto-edit-scope:end -->
 <!-- land-scope:begin -->
@@ -83,8 +109,10 @@ qa/portfolio_today_offline.js
 qa/fixtures/index-pins.json
 qa/labs_panel_offline.js
 qa/evidence_capture_offline.js
+qa/ts1_default_exposure_offline.js
 work/portfolio-today-1/review.md
 <!-- land-scope:end -->
 <!-- land-tests:begin -->
 node qa/portfolio_today_offline.js
+node qa/ts1_default_exposure_offline.js
 <!-- land-tests:end -->
