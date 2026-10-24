@@ -279,7 +279,7 @@ if (!fs.existsSync(TOOL_PATH)) {
 const FPLIB = require('./lib/exec-env-fingerprint');
 const e1crypto = require('crypto');
 const TB_CONTRACT_PIN = {
-  source: 'fa5f20c702f153b7bc9f635c5398babf63d6e68c77c0ec94efdee2f288ff59c7',
+  source: '0bbf3befb4a32151e420272b9c7c15326658faaf57c930a715f9c615bf4993fe',
   environments: ['5257c227140204f038c0ec7eb724abb44dbf4e31a2c6d3c5e8a6f07727f1aeb0']
 };
 const E1_LABEL = 'task-base';

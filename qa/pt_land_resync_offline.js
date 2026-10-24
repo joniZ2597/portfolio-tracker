@@ -255,7 +255,7 @@ if (!fs.existsSync(TOOL_PATH)) {
 const FPLIB = require('./lib/exec-env-fingerprint');
 const e1crypto = require('crypto');
 const RESYNC_CONTRACT_PIN = {
-  source: '3bd1e8d09bc1e717391c41e3b146c18be21eca7a14e22605369d01dab4be601c',
+  source: 'db3c5f690e2f7660b617f7a2b8f13f67e500bf6b454da37c142706756f019300',
   environments: ['5257c227140204f038c0ec7eb724abb44dbf4e31a2c6d3c5e8a6f07727f1aeb0']
 };
 const E1_LABEL = 'pt-land-resync';

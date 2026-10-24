@@ -726,6 +726,22 @@ registry, claim, or mutex exists anywhere in this convention.
   - Task-start sequencing (by the Owner, or by MAIN under an execution envelope) is an additional
     safeguard, not a substitute for the check.
   - A brief approved before this rule keeps its own heavy-run requirements.
+- **QA lifecycle (mandatory vs redundant runs).**
+  - Mandatory per task: one full `npm run qa:offline` at step 0 (or the allowed baseline reuse); the
+    targeted tests for the changed area; and the step-10 run on the final synchronised tree, which is
+    the plain `npm run qa:offline` (the LAND-evidence run: PASS, all pinned suites SKIP, `Stale pins: none`).
+  - If a pinned suite's digest part changed since the last full run, step 10 is two runs: **10a** a
+    `npm run qa:offline -- --allow-stale` full run (also at step 0 when PC-1 says pins are stale) (replays the stale suites once; it PASSes, so V4 is not triggered), then
+    re-pin from its record (`node qa/tools/pin-from-run.js`), then **10b** the plain run. Otherwise
+    step 10 is the plain run alone. An `--allow-stale` record never qualifies as LAND evidence.
+  - Redundant (do not run): a forced replay of a suite the previous full run already replayed on
+    the same bytes (use `node qa/tools/pin-from-run.js`); a second full run on an unchanged tree;
+    a heavy suite run alone after it was just replayed by a full run.
+  - A pin is set from a forced replay, or from a recorded full-run PASS replay that passes all six
+    checks of `pin-from-run.js`. Re-pin at the earliest safe step so later full runs SKIP.
+  - At LAND no pinned suite may print a stale-pin or environment note: the plain run shows SKIP
+    for every pinned suite, otherwise LAND STOP. The runner summary lists any stale suite
+    (E1, FT, GC) and flags a total above twice the stored baseline.
 
 ## Codex as diff reviewer
 

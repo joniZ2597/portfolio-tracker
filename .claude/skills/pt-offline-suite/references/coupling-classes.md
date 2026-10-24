@@ -1,4 +1,4 @@
-# Coupling classes (a)–(e)
+# Coupling classes (a)–(f)
 
 How an existing offline suite can be coupled to a function, region or file a task edits. For each
 class: what it looks like, how to find it with Grep, the instances known when this file was
@@ -147,9 +147,28 @@ a line-count delta ("line count = base + 3"), or a negative scan ("no `_techCach
 **Trips on:** wording, markup, order or line-count changes inside the edited function, even when
 every pin is re-pinned.
 
+## (f) digest-part lists
+
+**Looks like:** a named array of repo paths that a suite hashes together with its own text to form
+a source digest, compared with a `*_CONTRACT_PIN` constant: `E1_PART_NAMES = [`, a
+`for (const rel of [` loop, `parts.push(`, `digestParts(`, `_SOURCES = [` (the shapes
+`pin-deps.js` `PARTS_HINT` matches).
+
+**Grep:** those shapes across `qa/*.js`.
+
+**Known instances (re-verify):** `qa/auto_mode_hardening_offline.js` (4 parts + own),
+`qa/pt_land_offline.js` (7 parts + own), and the part lists of `qa/fixture_template_offline.js`,
+`qa/git_contract_offline.js`, `qa/task_base_offline.js` and `qa/pt_land_resync_offline.js`.
+
+**Trips on:** any byte change in a listed file, including a comment, turns the suite's pin stale
+and its next full run into a replay (about 4.5–24 minutes each on the Owner's host). Procedure:
+list every pinned suite; run `pin-deps.js` on the planned file set; give each STALE row a
+disposition (PC-1 as amended); a pinned suite that is in scope needs its re-pin step ordered
+before the first post-change full run (PC-2).
+
 ## Reporting a hit
 
 suite · symbol · class · what trips it · tripped by the planned edit? (yes / no / only if …) ·
-covered by the brief? (yes: which line / no) · ASK-tier? — one row per coupling, using the block
+covered by the brief? (yes: which line / no) · ASK-tier? · stale if tripped? (suite · pin) — one row per coupling, using the block
 in `templates/plan-sections.md`. Explain every hit that is not tripped; an unexplained hit is an
 incomplete sweep.

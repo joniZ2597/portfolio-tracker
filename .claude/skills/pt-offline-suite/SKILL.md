@@ -1,6 +1,6 @@
 ---
 name: pt-offline-suite
-description: Use when the approved brief lists pt-offline-suite as Required or Recommended — a Pulse task that edits index.html or another surface pinned by an offline QA suite, or that adds an offline suite. Runs the coupling sweep (five classes), points at the existing harness patterns, and records planted negatives and re-pins with a revert proof. Read-only procedures; decides nothing the brief or AGENTS.md owns.
+description: Use when the approved brief lists pt-offline-suite as Required or Recommended — a Pulse task that edits index.html or another surface pinned by an offline QA suite, or that adds an offline suite. Runs the coupling sweep (six classes), points at the existing harness patterns, and records planted negatives and re-pins with a revert proof. Read-only procedures; decides nothing the brief or AGENTS.md owns.
 ---
 
 # pt-offline-suite
@@ -10,7 +10,7 @@ Modes, STOP conditions, approvals) lives in `AGENTS.md` and `CLAUDE.md`; suite r
 `.claude/rules/qa-suites.md`. This Skill references them and never restates them.
 
 Supporting files (all in this folder):
-- `references/coupling-classes.md` — the five coupling classes, their search patterns and the
+- `references/coupling-classes.md` — the six coupling classes, their search patterns and the
   instances known at the time of writing (re-verify at your baseline).
 - `references/suite-patterns.md` — pointers to the existing harness patterns (no copies).
 - `templates/plan-sections.md` — copy-ready blocks for `plan.md` and `review.md`.
@@ -59,7 +59,13 @@ command allowlist entry. For a historical replay, read each file through `git sh
    fragments and regex extractions a suite applies to the edited function: `indexOf('…')`,
    `countOf(…) === 1`, `split('…').length`, `.exec(fnSource)` with a literal shape, line-count
    deltas, signature regexes. These trip on wording, order or line-count changes.
-7. **Output.** One table — suite · symbol · class · what trips it · tripped by the planned edit?
+7. **Class (f) — digest-part lists.** Grep `qa/*.js` for `E1_PART_NAMES = [`, `for (const rel of [`,
+   `parts.push(`, `digestParts(` and `_SOURCES = [`. A file named in such a list is hashed together
+   with the suite's own text, so any byte change in it, including a comment, turns that suite's
+   pin stale and its next full run into a replay. List every pinned suite, run `pin-deps.js` on the
+   planned file set, and give each STALE row a disposition (PC-1); a pinned suite that is in scope
+   needs its re-pin step ordered before the first post-change full run (PC-2).
+8. **Output.** One table — suite · symbol · class · what trips it · tripped by the planned edit?
    · covered by the brief? · ASK-tier? — using the block in `templates/plan-sections.md`, and the
    line "sweep matches brief: yes / no".
 
@@ -102,7 +108,7 @@ from memory or from the brief.
 
 ## Outputs
 
-- `plan.md`: the coupling-sweep table (all five classes); the requirement → assertion map; the
+- `plan.md`: the coupling-sweep table (all six classes); the requirement → assertion map; the
   planted-negative list with positive controls; "sweep matches brief: yes / no".
 - `review.md`: the per-pin re-pin ledger (old, new, revert-proof result); the RED → GREEN record
   for new assertions; the sweep re-run at the end with no new hits.

@@ -4,7 +4,13 @@
  * QA-1 offline validation entry point.
  *
  * Pure Node, no new dependencies, no network, no browser, no live services.
- * This runner only reads repo files and spawns child node processes.
+ * This runner reads repo files and spawns child node processes. It writes nothing inside the repo. On a run that ends
+ * PASS (exit 0, no override variable set) it also writes persistent state OUTSIDE the repo, on the GC-4 precedent:
+ * run-record.json and runtime-baseline.json in PT_QA_RECORD_DIR (default ..\pt-work-artifacts\qa-lifecycle\).
+ *
+ * Pinned suites (qa-lifecycle-v2): a stale contract pin, or a pinned suite without SKIP evidence, FAILS the plain run
+ * ("stale-pin: <suite> (<kind>)", exit 1). `--allow-stale` (an argv flag, never an environment variable) is for explicitly
+ * identified intermediate runs only; its run record has mode "allow-stale" and never qualifies as LAND evidence.
  *
  * Hard checks:
  *   1. Syntax check JS files with node --check.
@@ -22,6 +28,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const QL = require('./lib/qa-lifecycle');
 
 const ROOT = path.resolve(__dirname, '..');
 const NODE = process.execPath;
@@ -390,6 +397,10 @@ function phaseOfflineTests() {
     });
     const suiteMs = Date.now() - suiteStarted;
 
+    if (QL.PINNED_SUITES.some(function (s) { return s.file === testFile; })) {
+      pinnedRun[testFile] = { ok: result.status === 0, stdout: String(result.stdout || '') };
+    }
+
     if (result.status === 0) {
       pass(testFile);
       // A passing sub-suite's stdout is otherwise discarded entirely. Echo only the lines a suite
@@ -423,6 +434,8 @@ const QA_SURFACE_MARKER = '@@QA-SURFACE@@ ';
 const QA_TIMING_MARKER = '@@QA-TIMING@@ ';
 const phaseTimings = [];
 const suiteTimings = [];
+// qa-lifecycle-v2 (R1/R2): the stdout of each pinned suite, kept so the stale-pin section can read the lines the loop above otherwise discards.
+const pinnedRun = {};
 
 async function timedPhase(name, fn) {
   const started = Date.now();
@@ -453,6 +466,67 @@ function printTimingSummary() {
   }
   for (const s of slowest) {
     console.log('    ' + s.ms + ' ms  ' + s.file);
+  }
+}
+
+// ── qa-lifecycle-v2: stale-pin section (R1), default-fail (R2), runtime flag (R4) ─────────────
+// Additive: printed after the timing summary and before "=== Summary ===". Returns what the record needs.
+function printLifecycle(flags) {
+  const results = [];
+  for (const suite of QL.PINNED_SUITES) {
+    const ran = pinnedRun[suite.file];
+    // a pinned suite that itself failed is already a hard failure of the offline-test phase; it is not reported twice
+    if (ran && !ran.ok) continue;
+    results.push(QL.classifySuite(suite, ran ? ran.stdout : ''));
+  }
+  const verdict = QL.staleVerdict(results, { allowStale: flags.allowStale === true });
+  header('Stale pins');
+  for (const l of verdict.sectionLines) console.log(l);
+  for (const f of verdict.hardFailures) hardFailures.push(f);
+
+  const totalMs = phaseTimings.reduce(function (sum, p) { return sum + p.ms; }, 0);
+  let envKey = null;
+  let baselineMs = null;
+  const dir = QL.recordDir(process.env);
+  try {
+    envKey = require('./lib/exec-env-fingerprint').collect().digest;
+    baselineMs = QL.readBaseline(dir, envKey);
+  } catch (e) {
+    console.log('  runtime baseline: unavailable (' + (e && e.message ? e.message : e) + ')');
+  }
+  const rt = QL.runtimeVerdict({ totalMs: totalMs, baselineMs: baselineMs, staleCount: verdict.staleCount });
+  if (envKey !== null) {
+    if (rt.flag) console.log(rt.line);
+    else if (baselineMs === null) console.log('  ' + rt.line);
+    else console.log('  runtime baseline: ' + Math.round(baselineMs / 1000) + ' s, this run ' + Math.round(totalMs / 1000) + ' s');
+  }
+  return { results: results, verdict: verdict, totalMs: totalMs, envKey: envKey, dir: dir, rt: rt };
+}
+
+// Only a run that ends PASS (exit 0, no override variable set) writes anything; the write is the last step before the verdict line.
+function writeLifecycleState(state, flags) {
+  const overrides = QL.OVERRIDE_VARS.filter(function (k) { return process.env[k] !== undefined && process.env[k] !== ''; });
+  if (overrides.length > 0) {
+    console.log('  run record: not written (override variable set: ' + overrides.join(', ') + ')');
+    return;
+  }
+  try {
+    const git = function (args) { return spawnSync('git', args, { encoding: 'utf8', cwd: ROOT }); };
+    const head = git(['rev-parse', 'HEAD']);
+    const status = git(['status', '--porcelain']);
+    const partHashes = {};
+    for (const suite of QL.PINNED_SUITES) partHashes[suite.file] = QL.hashParts(suite, ROOT);
+    const runId = QL.newRunId();
+    const record = QL.buildRecord({
+      runId: runId, mode: state.verdict.mode, head: head.status === 0 ? String(head.stdout).trim() : null,
+      clean: status.status === 0 && String(status.stdout).trim() === '', suiteCount: OFFLINE_TESTS.length,
+      totalMs: state.totalMs, envKey: state.envKey, overrides: overrides, results: state.results, partHashes: partHashes
+    });
+    QL.writeRecord(state.dir, record);
+    if (state.envKey !== null && state.rt.writeBaseline) QL.writeBaseline(state.dir, state.envKey, state.totalMs);
+    console.log('  run record: run=' + runId + ' mode=' + state.verdict.mode + ' suites=' + OFFLINE_TESTS.length + ' file=' + path.join(state.dir, 'run-record.json'));
+  } catch (e) {
+    console.log('  run record: not written (' + (e && e.message ? e.message : e) + ')');
   }
 }
 
@@ -4053,6 +4127,11 @@ async function phaseProviderPolicy() {
 }
 
 async function main() {
+  const argv = QL.parseArgv(process.argv.slice(2));
+  if (argv.errors.length > 0) {
+    console.log('OFFLINE VALIDATION: FAIL (runner error: ' + argv.errors.join('; ') + ')');
+    process.exit(1);
+  }
   console.log('OFFLINE VALIDATION - portfolio-tracker');
   console.log('read-only, no network, no browser, no live services');
 
@@ -4072,6 +4151,7 @@ async function main() {
   await timedPhase('Phase 14 - provider policy', phaseProviderPolicy);
 
   printTimingSummary();
+  const lifecycle = printLifecycle(argv.flags);
 
   console.log('\n=== Summary ===');
 
@@ -4085,10 +4165,14 @@ async function main() {
     for (const item of hardFailures) {
       console.log('  - ' + item);
     }
+    for (const l of lifecycle.verdict.landStop) {
+      console.log(l);
+    }
 
     process.exit(1);
   }
 
+  writeLifecycleState(lifecycle, argv.flags);
   console.log('OFFLINE VALIDATION: PASS');
 }
 
