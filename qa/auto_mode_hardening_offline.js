@@ -89,7 +89,7 @@ function expectAll(label, rows, cwd, expected, tool) {
 const FPLIB = require('./lib/exec-env-fingerprint');
 const e1crypto = require('crypto');
 const AH_CONTRACT_PIN = {
-  source: '7e2484b69f76416ced46aad3d51abe1a12abdb58eef797983eab516d59761b07',
+  source: '5c3fae45117124d54f444fc4e4f4177e7fddae94cba254aa8f4ee93410737e0c',
   environments: ['5257c227140204f038c0ec7eb724abb44dbf4e31a2c6d3c5e8a6f07727f1aeb0']
 };
 const E1_LABEL = 'auto-mode-hardening';

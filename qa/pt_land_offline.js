@@ -223,7 +223,7 @@ if (!fs.existsSync(REAL_TOOL_PATH)) {
 const FPLIB = require('./lib/exec-env-fingerprint');
 const e1crypto = require('crypto');
 const LAND_CONTRACT_PIN = {
-  source: '49dd76219c7896d28e38b4917f08c231aac8ec3c2e24596a2941a5a19e388795',
+  source: '72a8c0b66d0e721533177eb4cae2e209d1058fabbe1b27f2a44875c420e0888e',
   environments: ['5257c227140204f038c0ec7eb724abb44dbf4e31a2c6d3c5e8a6f07727f1aeb0']
 };
 const E1_LABEL = 'pt-land';
