@@ -1,6 +1,6 @@
 {
   "schema": "index-pins/v1",
-  "fileSha256": "3a40335c68203a2ab3ccb16487481480cee4a96d9403f4b3c61e22871de1b2dd",
+  "fileSha256": "30abfa24e76a8fd82b81b690b0b888bbf6f9382504dffd61518ecdd1be41b9ef",
   "functions": {
     "_applyCloudDoc": "97163297aa8577472e41ee39bbc72226b809a46957d6c6fc822a175c41b6d62d",
     "_athAccept": "02bb7e3a237e4dd285ba4795978e126798ba39ce76ada7ccdfb701d59c5b0f24",
@@ -393,7 +393,7 @@
     "renderApiTable": "6ab781fd896bb61a4120a7b6c3529e93e0adf16fb844fd7ba25e5c5d4b245c12",
     "renderChips": "5419165553a4459a6e14d1e39f200ce24d87229b30914685aeafdd4f327bd167",
     "renderLabsToggles": "1c1eef23e6bd00d30cd8bda43f9246643deea275b157c32827e5f50d7c89d94d",
-    "renderMainPanel": "61e663bf2e3a734df928a4a8f59e6cc01691782edd0e51467caa5baebdeaecd1",
+    "renderMainPanel": "bbaafdd6c7fee70cb4aee8f5d1ef35c8ae097f0d412daed4c490574fab0ca997",
     "renderPortfolioLiveSwitches": "4cbfa1883668f4280228c94edc6f38cd90c779ead2f51f681a8e39abfdde1b36",
     "renderResearchSourceMeta": "7925a95484bde4aab61d18b2454c15803b3568c61f6ff19fc130e48cbea4c459",
     "renderResults": "3e5e77b063e3712741ef28fe2a63143eabf882f2f88cb27a0cdb7aeb2ba286b1",
@@ -595,5 +595,5 @@
       "sha256": "79b78d1ed91f3d6f8c2b867378a1a228f83399c8931ddd150eea31143bb3a31e"
     }
   },
-  "remainderSha256": "af3436073bfb38f89c19bc3a7a6a11d6a672b4d7b2e7215d7ed1f518e35822c3"
+  "remainderSha256": "91d30aa444859da4ddb597a36055147c975d019a116e498192f65cf5ca322eb5"
 }

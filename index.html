@@ -338,6 +338,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 .dc-dot.pos{background:var(--green2)}.dc-dot.warn{background:var(--yellow2)}.dc-dot.neg{background:var(--red2)}
 .dc-lbl{font-weight:600;letter-spacing:.4px}.dc-lbl.pos{color:var(--green2)}.dc-lbl.warn{color:var(--yellow2)}.dc-lbl.neg{color:var(--red2)}.dc-lbl.neutral-v{color:var(--text3)}
 .dc-reason{color:var(--text3)}
+.src-tag{font-family:var(--mono);font-size:9px;letter-spacing:.3px;margin-top:4px}
+.src-tag.unv{color:#F4B860}.src-tag.sourced{color:#22C58B}
+.src-cite{font-family:var(--mono);font-size:10px;color:var(--text3);margin-top:3px}.src-cite a{color:var(--blue2)}
 /* 7A-2: Position Context card — render-only, derived from local watchlist position data */
 .mp-pos{display:flex;flex-direction:column;gap:6px;padding:12px 22px;border-top:1px solid var(--border);background:rgba(96,165,250,.04);border-left:4px solid var(--blue2)}
 .mp-pos.mode-fresh,.mp-pos.mode-unknown{border-left-color:var(--text3);background:transparent;opacity:.75}
@@ -9876,10 +9879,15 @@ function renderMainPanel(item) {
 
   // R-6 (Entry 14, slice 1; D9-3): one compact Consistency line under the Actionable Take — display only; it never alters
   // the AI text, the score, the action, the grouping or any stored field, and a failed analysis gets no line.
-  const _nlmLine = (() => {
-    if (item._aiUnavailable === true) return '';
+  // cop-display-fix-1 (C-1): the K1–K6 result is computed once; the coverage badge and this line read the same array.
+  const _nlmKs = (item._aiUnavailable === true) ? [] : (() => {
     const _h = _srHeldMap();
     const _ks = _nlmConsistencyChecks(item, { price: hasData ? _techPanelPrice(item) : null, mas: _panelSnap, held: (_h && typeof _h === 'object') ? Object.prototype.hasOwnProperty.call(_h, String(item.ticker || '').trim().toUpperCase()) : null });
+    return _ks;
+  })();
+  const _nlmLine = (() => {
+    if (item._aiUnavailable === true) return '';
+    const _ks = _nlmKs;
     return (Array.isArray(_ks) && _ks.length) ? `\n        <div class="mp-act-row mp-nlm"><span class="mp-act-lbl">Consistency</span><span class="mp-act-val" style="color:var(--yellow2)">${_esc(_ks.map(k => k.text).join(' · '))}</span></div>` : '';
   })();
   const _crn = item._crNudge;
@@ -9911,8 +9919,37 @@ function renderMainPanel(item) {
       return { level: 'MODERATE',       label: 'Moderate confidence', reason: 'Core analysis exists, but supporting catalyst richness is limited.', cls: 'warn' };
     return   { level: 'MODERATE',       label: 'Moderate confidence', reason: 'Stored analysis is available; source detail is limited.', cls: 'warn' };
   }
-  const _dc    = deriveDataConfidence(item);
-  const _dcHtml = `<div class="dc-row"><div class="dc-dot ${_dc.cls}"></div><span class="dc-lbl ${_dc.cls}">${_esc(_dc.label.toUpperCase())}</span><span class="dc-reason">${_esc(_dc.reason)}</span></div>`;
+  // cop-display-fix-1 (C-1): the badge says what it measures — data coverage, not agreement. deriveDataConfidence is untouched;
+  // a conflict or a K1–K6 warning only changes the presentation (never green) and adds a note. Display only, no side effects.
+  function _dcCoverage(dc, item, ks) {
+    const _lbl = { HIGH: 'Data coverage: high', MODERATE: 'Data coverage: moderate', LIMITED: 'Data coverage: limited' };
+    const _warnCov = (typeof item.conflict === 'string' && item.conflict.length > 0) || (Array.isArray(ks) && ks.length > 0);
+    const _out = { label: _lbl[dc.level] || dc.label, reason: dc.reason, cls: dc.cls, note: '' };
+    if (_warnCov) {
+      if (_out.cls === 'pos') _out.cls = 'warn';
+      _out.note = 'Coverage is not agreement: this result carries a conflict or consistency warning (see below).';
+    }
+    return _out;
+  }
+  const _dc    = _dcCoverage(deriveDataConfidence(item), item, _nlmKs);
+  const _dcHtml = `<div class="dc-row"><div class="dc-dot ${_dc.cls}"></div><span class="dc-lbl ${_dc.cls}">${_esc(_dc.label.toUpperCase())}</span><span class="dc-reason">${_esc(_dc.reason)}</span>${_dc.note ? `<span class="dc-reason">${_esc(_dc.note)}</span>` : ''}</div>`;
+  // cop-display-fix-1 (C-2): cited sources (Perplexity) — shown from item._catalysts.sources only; links only for http(s).
+  const _srcBlockHtml = (() => {
+    if (!_c) return '';
+    const _list = Array.isArray(_c.sources) ? _c.sources.slice(0, 8) : [];
+    const _hdr = '<div class="cat-hdr">Cited sources · Perplexity</div>';
+    const _anNote = (Array.isArray(_c.analystActions) && _c.analystActions.length) ? '<div class="src-tag sourced">Analyst rows above are Perplexity-sourced actions</div>' : '';
+    if (!_list.length) return `<div class="src-list" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">${_hdr}${_anNote}<div class="src-cite">No citations stored for this result</div></div>`;
+    const _rows = _list.map(s => {
+      const _u = (s && typeof s.url === 'string') ? s.url : '';
+      let _host = '', _ok = false;
+      try { const _p = new URL(_u); _ok = /^https?:$/.test(_p.protocol); _host = _ok ? _p.hostname : ''; } catch (e) { _ok = false; }
+      const _ttl = _esc(_trunc70((s && s.title) || _host || 'Source'));
+      const _tt = _ok ? `<a href="${_esc(_u)}" rel="noopener noreferrer" target="_blank">${_ttl}</a>` : _ttl;
+      return `<div class="src-cite">${_tt}${_host ? ` · ${_esc(_host)}` : ''}${(s && s.date) ? ` · ${_esc(s.date)}` : ''}</div>`;
+    }).join('');
+    return `<div class="src-list" style="margin-top:8px;border-top:1px solid var(--border2);padding-top:8px">${_hdr}${_anNote}${_rows}</div>`;
+  })();
 
   panel.innerHTML = `
     <!-- PULSE v1.1 TICKER HEADER -->
@@ -10046,6 +10083,7 @@ function renderMainPanel(item) {
                     : `<div class="cat-row"><div class="cat-dot warn"></div><span class="cat-lbl">Catalysts present</span><span class="cat-state warn">DETECTED</span></div>`)
               : `<div class="cat-row"><div class="cat-dot neutral-v"></div><span class="cat-lbl">No verified catalysts</span><span class="cat-state neutral-v">MONITORING</span></div>`}
         </div>
+        ${_srcBlockHtml}
       </div>
 
       <!-- AI SUMMARY (Actionable Take) — span 12 -->
@@ -10054,7 +10092,7 @@ function renderMainPanel(item) {
         ${(item.action || actionable) ? '<div class="pc-card-sub">AI-generated analysis · Verify independently</div>' : ''}
         ${_dcHtml}
         ${_dialHtml}
-        ${rating ? `<div class="at-analyst-line" style="margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--text3)">Analyst view · ${rating.toUpperCase()} · PT ${pt}</div>` : ''}
+        ${rating ? `<div class="at-analyst-line" style="margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--text3)">Analyst view · ${rating.toUpperCase()} · PT ${pt}</div><div class="src-tag unv">Read from the AI's own summary text · not a sourced analyst feed</div>` : ''}
         ${_crNudgeHtml}
         ${item.action ? `
           <div>
@@ -10064,6 +10102,7 @@ function renderMainPanel(item) {
             ${item.conflict        ? `<div class="mp-act-row mp-act-conflict"><span class="mp-act-lbl">⚠ Conflict</span><span class="mp-act-val" style="color:var(--yellow2)">${_esc(item.conflict)}</span></div>` : ''}
             ${item.entry_zone      ? `<div class="mp-act-row"><span class="mp-act-lbl">Entry Zone</span><span class="mp-act-val">${_esc(item.entry_zone)}</span></div>` : ''}
             ${item.invalidation    ? `<div class="mp-act-row"><span class="mp-act-lbl">Invalidation</span><span class="mp-act-val">${_esc(item.invalidation)}</span></div>` : ''}
+            ${(item.entry_zone || item.invalidation) ? '<div class="src-tag unv">AI-written level · not sourced</div>' : ''}
             ${item.key_risk        ? `<div class="mp-act-row"><span class="mp-act-lbl">Key Risk</span><span class="mp-act-val">${_esc(item.key_risk)}</span></div>` : ''}
           </div>` : actionable ? `
           <div class="mp-action-text">${actionable.replace(/Rating:.*$/s,'').replace(/\*\*/g,'').replace(/^[\]\[:\-"'\s]+/,'').trim()}</div>

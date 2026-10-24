@@ -66,7 +66,7 @@ const BASE_DIGESTS = {
   _ts1SessionCompleted: '790ce9afcaaf001e06cf657eb328fbe24fb59c12afa3f01fd205ab81e2c60790',
   analyzeChunk: 'e9303a0690a6fad433918ee02772dcc63e0ad9d65f431f4dd7ee007b3c9ea703',
   orchestrate: '490d522b4714fe08d4e7030eb05594b07734f6dd7dbb8d6750efd972d66263e2',
-  renderMainPanel: '61e663bf2e3a734df928a4a8f59e6cc01691782edd0e51467caa5baebdeaecd1',
+  renderMainPanel: 'bbaafdd6c7fee70cb4aee8f5d1ef35c8ae097f0d412daed4c490574fab0ca997',
   init: '588e95f019465d9c2a15fd1d5786121a5356ee947a16c32c56d032e759608828',
   renderApiTable: '6ab781fd896bb61a4120a7b6c3529e93e0adf16fb844fd7ba25e5c5d4b245c12',
   renderLabsToggles: '1c1eef23e6bd00d30cd8bda43f9246643deea275b157c32827e5f50d7c89d94d',

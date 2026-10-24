@@ -44,7 +44,7 @@ const BASE_DIGESTS = {
   repairJSON: '9a8db71f54bd5b191e671a26c9838c44a785c5b6eaa29b06896b6945dd4d9eaa',
   formatNewsContext: '2690087b1a615637b8c1f8175cae1ab2180bbf874ca94ba6c3f6d0cc99d3409c',
   buildTechSnapshotBlock: 'ee1528756a40c24ed1647b889ff13c06002c87e12ee4eb0c7c01cef5000289a1',
-  renderMainPanel: '61e663bf2e3a734df928a4a8f59e6cc01691782edd0e51467caa5baebdeaecd1',
+  renderMainPanel: 'bbaafdd6c7fee70cb4aee8f5d1ef35c8ae097f0d412daed4c490574fab0ca997',
   fetchPerplexityContext: '08c0d05765e5f07c138559978312bf6806dae72d5a16194cec2fbc93cb1b8e0d',
   parsePerplexityContext: '54a2feda31d3a7d4c3072f85dd10bb1e0ae5a1cd7d79cb1f87ab6bf5a367f6c5',
   _p5RequestSynthesis: '8152ce42c87fe272e5a9fa07f0af807c5d42c0564ea4187d19d196b94597e428',
